@@ -1,0 +1,200 @@
+name: vulkan-verification
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/vulkan-verification.yml'
+      - 'meson.build'
+      - 'meson_options.txt'
+      - 'code/renderercommon/**'
+      - 'code/renderervk/**'
+      - 'docs/fnquake3/TECHNICAL.md'
+      - 'docs/fnquake3/VK_*.md'
+      - 'scripts/vk_runtime_sweep.py'
+      - 'scripts/stringify_shader.py'
+      - 'tests/vulkan/**'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/vulkan-verification.yml'
+      - 'meson.build'
+      - 'meson_options.txt'
+      - 'code/renderercommon/**'
+      - 'code/renderervk/**'
+      - 'docs/fnquake3/TECHNICAL.md'
+      - 'docs/fnquake3/VK_*.md'
+      - 'scripts/vk_runtime_sweep.py'
+      - 'scripts/stringify_shader.py'
+      - 'tests/vulkan/**'
+  workflow_dispatch:
+    inputs:
+      run_runtime_sweep:
+        description: Run the selected Vulkan gate on a self-hosted GPU runner with retail assets.
+        required: true
+        default: false
+        type: boolean
+      runtime_runner_labels:
+        description: JSON array of self-hosted runner labels.
+        required: true
+        default: '["self-hosted","vulkan"]'
+        type: string
+      runtime_gate:
+        description: Vulkan RC gate to execute on the runtime runner.
+        required: true
+        default: vk-smoke
+        type: choice
+        options:
+          - vk-smoke
+          - vk-modern
+          - vk-hdr
+      runtime_exe:
+        description: Path to the built FnQuake3 client executable on the runtime runner.
+        required: false
+        default: ''
+        type: string
+      runtime_basepath:
+        description: Path containing retail baseq3 assets on the runtime runner.
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  vulkan-renderer-build:
+    name: Vulkan Meson renderer build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install build tools
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get install -y meson ninja-build gcc g++ libx11-dev libxext-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev mesa-common-dev
+
+      - name: Configure focused Meson Vulkan build
+        run: |
+          meson setup .tmp/meson-vk-verification \
+            --buildtype=debugoptimized \
+            -Dsdl=disabled \
+            -Dcurl=disabled \
+            -Drenderer-dlopen=true \
+            -Drenderers=vulkan \
+            -Dbuild-client=false \
+            -Dbuild-server=false \
+            -Daudio-tests=false \
+            -Dglx-tests=false
+
+      - name: Build Vulkan renderer
+        run: meson compile -C .tmp/meson-vk-verification fnquake3_vulkan_x86_64
+
+  vulkan-gate-plans:
+    name: Vulkan RC gate plans
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: List Vulkan RC gates
+        run: python scripts/vk_runtime_sweep.py --list-gates
+
+      - name: Run Vulkan sweep Python tests
+        run: python tests/vulkan/vk_runtime_sweep_tests.py
+
+      - name: Generate dry-run gate artifacts
+        run: |
+          mkdir -p .tmp/vk-gate-plans
+          for gate in vk-smoke vk-modern vk-hdr; do
+            python scripts/vk_runtime_sweep.py \
+              --gate "$gate" \
+              --dry-run \
+              --exe ".tmp/vk-gate-plans/fnquake3" \
+              --basepath ".tmp/vk-gate-plans/basepath" \
+              --output-dir ".tmp/vk-gate-plans" \
+              --summary-markdown ".tmp/vk-gate-plans/${gate}.md"
+            cat ".tmp/vk-gate-plans/${gate}.md" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Upload dry-run gate artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: vulkan-gate-plans
+          path: .tmp/vk-gate-plans
+          if-no-files-found: error
+          retention-days: 14
+
+  vulkan-runtime-sweep:
+    name: Vulkan runtime sweep
+    if: github.event_name == 'workflow_dispatch' && inputs.run_runtime_sweep
+    runs-on: ${{ fromJSON(inputs.runtime_runner_labels || '["self-hosted","vulkan"]') }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate runtime inputs
+        shell: python
+        env:
+          FNQ3_VK_RUNTIME_EXE: ${{ inputs.runtime_exe }}
+          FNQ3_VK_RUNTIME_BASEPATH: ${{ inputs.runtime_basepath }}
+        run: |
+          import os
+          import sys
+
+          missing = [
+              name
+              for name in ("FNQ3_VK_RUNTIME_EXE", "FNQ3_VK_RUNTIME_BASEPATH")
+              if not os.environ.get(name)
+          ]
+          if missing:
+              for name in missing:
+                  print(f"{name} is required when run_runtime_sweep is true.", file=sys.stderr)
+              sys.exit(2)
+
+      - name: Run Vulkan runtime gate
+        shell: python
+        env:
+          FNQ3_VK_RUNTIME_GATE: ${{ inputs.runtime_gate }}
+          FNQ3_VK_RUNTIME_EXE: ${{ inputs.runtime_exe }}
+          FNQ3_VK_RUNTIME_BASEPATH: ${{ inputs.runtime_basepath }}
+        run: |
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          gate = os.environ["FNQ3_VK_RUNTIME_GATE"]
+          output_dir = Path(".tmp") / "vk-runtime-sweeps"
+          summary_path = output_dir / f"{gate}.md"
+          command = [
+              sys.executable,
+              "scripts/vk_runtime_sweep.py",
+              "--gate",
+              gate,
+              "--exe",
+              os.environ["FNQ3_VK_RUNTIME_EXE"],
+              "--basepath",
+              os.environ["FNQ3_VK_RUNTIME_BASEPATH"],
+              "--output-dir",
+              str(output_dir),
+              "--summary-markdown",
+              str(summary_path),
+          ]
+
+          subprocess.check_call(command)
+
+          github_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if github_summary:
+              with open(github_summary, "a", encoding="utf-8") as handle:
+                  handle.write(summary_path.read_text(encoding="utf-8"))
+
+      - name: Upload runtime gate artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: vulkan-runtime-sweep-${{ inputs.runtime_gate }}
+          path: .tmp/vk-runtime-sweeps
+          if-no-files-found: error
+          retention-days: 30

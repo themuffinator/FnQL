@@ -1,0 +1,151 @@
+{
+  "duplicate_close_confidence": 0.93,
+  "duplicate_review_confidence": 0.78,
+  "max_open_issues": 50,
+  "max_duplicate_candidates": 8,
+  "response_style": "Concise, appreciative, conservative, and non-committal. Acknowledge reporters without promising implementation.",
+  "managed_labels": [
+    {
+      "name": "type:bug",
+      "color": "d73a4a",
+      "description": "Confirmed or suspected defect in current behavior."
+    },
+    {
+      "name": "type:feature-request",
+      "color": "a2eeef",
+      "description": "Request for a new feature or capability."
+    },
+    {
+      "name": "type:support",
+      "color": "cfd3d7",
+      "description": "Usage, troubleshooting, or support request."
+    },
+    {
+      "name": "type:documentation",
+      "color": "0075ca",
+      "description": "Documentation issue or request."
+    },
+    {
+      "name": "type:performance",
+      "color": "fbca04",
+      "description": "Performance regression or optimization request."
+    },
+    {
+      "name": "type:security",
+      "color": "b60205",
+      "description": "Security-sensitive report that needs careful handling."
+    },
+    {
+      "name": "type:regression",
+      "color": "e99695",
+      "description": "Behavior that previously worked and now appears broken."
+    },
+    {
+      "name": "type:compatibility",
+      "color": "5319e7",
+      "description": "Compatibility issue with retail content, demos, mods, or platforms."
+    },
+    {
+      "name": "type:build-install",
+      "color": "0e8a16",
+      "description": "Build, packaging, install, or dependency issue."
+    },
+    {
+      "name": "type:question",
+      "color": "d4c5f9",
+      "description": "Question that may not require a code change."
+    },
+    {
+      "name": "type:enhancement",
+      "color": "84b6eb",
+      "description": "Improvement to an existing capability."
+    },
+    {
+      "name": "type:refactor",
+      "color": "bfdadc",
+      "description": "Internal cleanup or refactor request."
+    },
+    {
+      "name": "duplicate",
+      "color": "cfd3d7",
+      "description": "Issue appears fully or partially covered elsewhere."
+    },
+    {
+      "name": "invalid",
+      "color": "ffffff",
+      "description": "Report does not describe an actionable repository issue."
+    },
+    {
+      "name": "needs-info",
+      "color": "f9d0c4",
+      "description": "More information is required before maintainers can act."
+    },
+    {
+      "name": "needs-human-review",
+      "color": "fef2c0",
+      "description": "Automation could not safely make the final call."
+    },
+    {
+      "name": "component:audio",
+      "color": "1d76db",
+      "description": "Audio backend, devices, mixing, or sound diagnostics."
+    },
+    {
+      "name": "component:build",
+      "color": "0e8a16",
+      "description": "Build system, dependencies, packaging, or installation."
+    },
+    {
+      "name": "component:console",
+      "color": "0052cc",
+      "description": "Console UI, input, or console interaction behavior."
+    },
+    {
+      "name": "component:display",
+      "color": "5319e7",
+      "description": "Display, HDR, scaling, fullscreen, or presentation behavior."
+    },
+    {
+      "name": "component:docs",
+      "color": "0366d6",
+      "description": "Project documentation or guides."
+    },
+    {
+      "name": "component:renderer-glx",
+      "color": "c2e0c6",
+      "description": "GLx renderer behavior or diagnostics."
+    },
+    {
+      "name": "component:renderer-vulkan",
+      "color": "bfd4f2",
+      "description": "Vulkan renderer behavior or diagnostics."
+    },
+    {
+      "name": "component:screenshots",
+      "color": "fef2c0",
+      "description": "Screenshot, levelshot, or cubemap capture behavior."
+    },
+    {
+      "name": "component:tools",
+      "color": "ededed",
+      "description": "Scripts, tooling, or maintainer automation."
+    }
+  ],
+  "issue_type_to_label": {
+    "bug": "type:bug",
+    "feature request": "type:feature-request",
+    "support request": "type:support",
+    "documentation": "type:documentation",
+    "performance": "type:performance",
+    "security": "type:security",
+    "regression": "type:regression",
+    "compatibility": "type:compatibility",
+    "build/install": "type:build-install",
+    "question": "type:question",
+    "enhancement": "type:enhancement",
+    "refactor": "type:refactor",
+    "duplicate": "duplicate",
+    "invalid": "invalid",
+    "other": ""
+  }
+}

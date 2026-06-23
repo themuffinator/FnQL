@@ -1,0 +1,21 @@
+#ifndef FNQL_VERSION_H_
+#define FNQL_VERSION_H_
+
+#define FNQL_PROJECT_NAME "FnQL"
+#define FNQL_PROJECT_NAME_SHORT "FnQL"
+#define FNQL_DISPLAY_NAME "Fappin' Quake Live"
+#define FNQL_COMPATIBILITY_TARGET "Retail Quake Live (Steam)"
+
+#define FNQL_VERSION_MAJOR 0
+#define FNQL_VERSION_MINOR 1
+#define FNQL_VERSION_PATCH 0
+#define FNQL_VERSION_TWEAK 0
+#define FNQL_VERSION_STRING "0.1.0"
+
+#define FNQL_TAG_PREFIX "v"
+#define FNQL_ARTIFACT_PREFIX "fnql"
+
+#define FNQL_WINDOWS_FILE_VERSION 0,1,0,0
+#define FNQL_WINDOWS_PRODUCT_VERSION 0,1,0,0
+
+#endif

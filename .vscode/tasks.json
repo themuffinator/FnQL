@@ -1,0 +1,92 @@
+{
+  "version": "2.0.0",
+  "options": {
+    "cwd": "${workspaceFolder}"
+  },
+  "tasks": [
+    {
+      "label": "meson: setup",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\.vscode\\build-release.ps1",
+        "-SetupOnly"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "meson: build",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\.vscode\\build-release.ps1",
+        "-Target",
+        "both",
+        "-Renderers",
+        "opengl,glx,vulkan,opengl2",
+        "-Archive"
+      ],
+      "problemMatcher": [
+        "$gcc",
+        "$msCompile"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "meson: test",
+      "type": "shell",
+      "command": "meson",
+      "args": [
+        "test",
+        "-C",
+        "meson/build",
+        "--print-errorlogs"
+      ],
+      "dependsOn": [
+        "meson: build"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Release: Build FnQuake3 Full",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "meson: build"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Release: Runtime Sweep x64 GLx",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "${workspaceFolder}\\scripts\\glx_runtime_sweep.py",
+        "--exe",
+        "${workspaceFolder}\\meson\\build\\fnquake3.x64.exe",
+        "--renderers",
+        "opengl,glx",
+        "--switch-sequence",
+        "opengl,glx,opengl,glx",
+        "--maps",
+        "q3dm1",
+        "--profile",
+        "glx-parity"
+      ],
+      "dependsOn": [
+        "meson: build"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}

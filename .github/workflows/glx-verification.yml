@@ -1,0 +1,392 @@
+name: glx-verification
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/glx-verification.yml'
+      - 'meson.build'
+      - 'meson_options.txt'
+      - 'code/renderer/**'
+      - 'code/renderercommon/**'
+      - 'code/rendererglx/**'
+      - 'docs/fnquake3/GLX_*.md'
+      - 'scripts/glx_promotion.py'
+      - 'scripts/glx_runtime_sweep.py'
+      - 'scripts/stringify_shader.py'
+      - 'tests/glx/**'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/glx-verification.yml'
+      - 'meson.build'
+      - 'meson_options.txt'
+      - 'code/renderer/**'
+      - 'code/renderercommon/**'
+      - 'code/rendererglx/**'
+      - 'docs/fnquake3/GLX_*.md'
+      - 'scripts/glx_promotion.py'
+      - 'scripts/glx_runtime_sweep.py'
+      - 'scripts/stringify_shader.py'
+      - 'tests/glx/**'
+  schedule:
+    - cron: '35 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      run_runtime_sweep:
+        description: Run the selected GLx gate on a self-hosted GPU runner with retail assets.
+        required: true
+        default: false
+        type: boolean
+      runtime_runner_labels:
+        description: JSON array of self-hosted runner labels.
+        required: true
+        default: '["self-hosted","glx"]'
+        type: string
+      runtime_gate:
+        description: GLx RC gate to execute on the runtime runner.
+        required: true
+        default: rc-smoke
+        type: choice
+        options:
+          - rc-smoke
+          - rc-parity
+          - rc-proof
+          - rc-stress
+      proof_platform:
+        description: Stable proof platform id written to the manifest.
+        required: true
+        default: local
+        type: string
+      proof_dir:
+        description: Optional directory containing approved screenshot and performance proof baselines.
+        required: false
+        default: ''
+        type: string
+      runtime_exe:
+        description: Path to the built FnQuake3 client executable on the runtime runner.
+        required: false
+        default: ''
+        type: string
+      runtime_basepath:
+        description: Path containing retail baseq3 assets on the runtime runner.
+        required: false
+        default: ''
+        type: string
+      screenshot_baseline_dir:
+        description: Optional approved screenshot baseline directory on the runtime runner.
+        required: false
+        default: ''
+        type: string
+      approve_screenshot_baselines:
+        description: Write current captures into screenshot_baseline_dir instead of comparing.
+        required: true
+        default: false
+        type: boolean
+      screenshot_max_rms:
+        description: Maximum allowed RGB RMS screenshot difference.
+        required: true
+        default: '2.0'
+        type: string
+      screenshot_max_pixel_ratio:
+        description: Maximum allowed ratio of changed screenshot pixels.
+        required: true
+        default: '0.005'
+        type: string
+      performance_budget:
+        description: Optional GLx performance budget JSON on the runtime runner.
+        required: false
+        default: ''
+        type: string
+      performance_baseline:
+        description: Optional approved GLx performance baseline JSON on the runtime runner.
+        required: false
+        default: ''
+        type: string
+      approve_performance_baseline:
+        description: Write current aggregate performance samples into performance_baseline instead of comparing.
+        required: true
+        default: false
+        type: boolean
+      performance_max_growth_ratio:
+        description: Maximum allowed counter growth versus the performance baseline.
+        required: true
+        default: '0.20'
+        type: string
+
+jobs:
+  glx-logic-tests:
+    name: GLx Meson logic and boundary tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install build tools
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get install -y meson ninja-build g++ libx11-dev libxext-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev mesa-common-dev
+
+      - name: Configure focused Meson test build
+        run: |
+          meson setup .tmp/meson-glx-verification \
+            --buildtype=debugoptimized \
+            -Dsdl=disabled \
+            -Dcurl=disabled \
+            -Drenderer-dlopen=true \
+            -Drenderers=opengl,glx \
+            -Dbuild-client=false \
+            -Dbuild-server=false \
+            -Daudio-tests=false \
+            -Dglx-tests=true
+
+      - name: Build GLx logic tests
+        run: meson compile -C .tmp/meson-glx-verification fnq3_glx_logic_tests
+
+      - name: Run GLx logic and boundary tests
+        run: meson test -C .tmp/meson-glx-verification fnq3_glx_logic fnq3_glx_header_boundary --print-errorlogs
+
+  glx-gate-plans:
+    name: GLx RC gate plans
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: List GLx RC gates
+        run: |
+          mkdir -p .tmp
+          python scripts/glx_runtime_sweep.py --list-gates
+          python scripts/glx_runtime_sweep.py --list-profiles
+          python scripts/glx_runtime_sweep.py --list-corpus
+          python scripts/glx_promotion.py --json | tee .tmp/glx-promotion.json
+
+      - name: Run GLx sweep Python tests
+        run: python tests/glx/glx_runtime_sweep_tests.py
+
+      - name: Generate dry-run gate artifacts
+        run: |
+          mkdir -p .tmp/glx-gate-plans
+          cp .tmp/glx-promotion.json .tmp/glx-gate-plans/glx-promotion.json
+          cp docs/fnquake3/GLX_PROOF_CORPUS.md .tmp/glx-gate-plans/GLX_PROOF_CORPUS.md
+          cp docs/fnquake3/GLX_PROMOTION.md .tmp/glx-gate-plans/GLX_PROMOTION.md
+          cp docs/fnquake3/GLX_ROLLBACK_PACKAGE.md .tmp/glx-gate-plans/GLX_ROLLBACK_PACKAGE.md
+          cp docs/fnquake3/GLX_VISUAL_DOSSIER.md .tmp/glx-gate-plans/GLX_VISUAL_DOSSIER.md
+          for gate in rc-smoke rc-parity rc-proof rc-stress; do
+            proof_args=""
+            if [ "$gate" = "rc-proof" ]; then
+              proof_args="--proof-dir .tmp/glx-gate-plans/proof"
+            fi
+            python scripts/glx_runtime_sweep.py \
+              --gate "$gate" \
+              --dry-run \
+              --exe ".tmp/glx-gate-plans/fnquake3" \
+              --basepath ".tmp/glx-gate-plans/basepath" \
+              --output-dir ".tmp/glx-gate-plans" \
+              --summary-markdown ".tmp/glx-gate-plans/${gate}.md" \
+              $proof_args
+            cat ".tmp/glx-gate-plans/${gate}.md" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Upload dry-run gate artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: glx-gate-plans
+          path: .tmp/glx-gate-plans
+          if-no-files-found: error
+          retention-days: 14
+
+  glx-runtime-sweep:
+    name: GLx runtime sweep
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_runtime_sweep)
+    runs-on: ${{ fromJSON(inputs.runtime_runner_labels || vars.FNQ3_GLX_RUNTIME_RUNNER_LABELS || '["self-hosted","glx"]') }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate runtime inputs
+        shell: python
+        env:
+          FNQ3_GLX_RUNTIME_GATE: ${{ github.event_name == 'schedule' && 'rc-parity' || inputs.runtime_gate }}
+          FNQ3_GLX_PROOF_DIR: ${{ inputs.proof_dir || vars.FNQ3_GLX_PROOF_DIR }}
+          FNQ3_GLX_RUNTIME_EXE: ${{ inputs.runtime_exe || vars.FNQ3_GLX_RUNTIME_EXE }}
+          FNQ3_GLX_RUNTIME_BASEPATH: ${{ inputs.runtime_basepath || vars.FNQ3_GLX_RUNTIME_BASEPATH }}
+          FNQ3_GLX_SCREENSHOT_BASELINE_DIR: ${{ inputs.screenshot_baseline_dir || vars.FNQ3_GLX_SCREENSHOT_BASELINE_DIR }}
+          FNQ3_GLX_APPROVE_SCREENSHOT_BASELINES: ${{ inputs.approve_screenshot_baselines || false }}
+          FNQ3_GLX_PERFORMANCE_BASELINE: ${{ inputs.performance_baseline || vars.FNQ3_GLX_PERFORMANCE_BASELINE }}
+          FNQ3_GLX_APPROVE_PERFORMANCE_BASELINE: ${{ inputs.approve_performance_baseline || false }}
+        run: |
+          import os
+          import sys
+
+          missing = [
+              name
+              for name in ("FNQ3_GLX_RUNTIME_EXE", "FNQ3_GLX_RUNTIME_BASEPATH")
+              if not os.environ.get(name)
+          ]
+          if missing:
+              for name in missing:
+                  print(f"{name} is required for the GLx runtime sweep.", file=sys.stderr)
+              sys.exit(2)
+          if (
+              os.environ.get("FNQ3_GLX_APPROVE_SCREENSHOT_BASELINES") == "true" and
+              not (
+                  os.environ.get("FNQ3_GLX_SCREENSHOT_BASELINE_DIR") or
+                  os.environ.get("FNQ3_GLX_PROOF_DIR")
+              )
+          ):
+              print(
+                  "screenshot_baseline_dir or proof_dir is required when approving screenshot baselines.",
+                  file=sys.stderr,
+              )
+              sys.exit(2)
+          if (
+              os.environ.get("FNQ3_GLX_APPROVE_PERFORMANCE_BASELINE") == "true" and
+              not (
+                  os.environ.get("FNQ3_GLX_PERFORMANCE_BASELINE") or
+                  os.environ.get("FNQ3_GLX_PROOF_DIR")
+              )
+          ):
+              print(
+                  "performance_baseline or proof_dir is required when approving performance baselines.",
+                  file=sys.stderr,
+              )
+              sys.exit(2)
+          if (
+              os.environ.get("FNQ3_GLX_RUNTIME_GATE") == "rc-proof" and
+              (
+                  os.environ.get("FNQ3_GLX_APPROVE_SCREENSHOT_BASELINES") == "true" or
+                  os.environ.get("FNQ3_GLX_APPROVE_PERFORMANCE_BASELINE") == "true"
+              )
+          ):
+              print(
+                  "rc-proof compares reviewed baselines; approve refreshed baselines in a separate rc-parity run.",
+                  file=sys.stderr,
+              )
+              sys.exit(2)
+          if (
+              os.environ.get("FNQ3_GLX_RUNTIME_GATE") == "rc-proof" and
+              not os.environ.get("FNQ3_GLX_PROOF_DIR") and
+              not (
+                  os.environ.get("FNQ3_GLX_SCREENSHOT_BASELINE_DIR") and
+                  os.environ.get("FNQ3_GLX_PERFORMANCE_BASELINE")
+              )
+          ):
+              print(
+                  "rc-proof requires proof_dir or both screenshot_baseline_dir and performance_baseline.",
+                  file=sys.stderr,
+              )
+              sys.exit(2)
+
+      - name: Run GLx runtime gate
+        shell: python
+        env:
+          FNQ3_GLX_RUNTIME_GATE: ${{ github.event_name == 'schedule' && 'rc-parity' || inputs.runtime_gate }}
+          FNQ3_GLX_PROOF_PLATFORM: ${{ github.event_name == 'schedule' && (vars.FNQ3_GLX_PROOF_PLATFORM || 'linux-x86_64') || inputs.proof_platform }}
+          FNQ3_GLX_PROOF_DIR: ${{ inputs.proof_dir || vars.FNQ3_GLX_PROOF_DIR }}
+          FNQ3_GLX_RUNTIME_EXE: ${{ inputs.runtime_exe || vars.FNQ3_GLX_RUNTIME_EXE }}
+          FNQ3_GLX_RUNTIME_BASEPATH: ${{ inputs.runtime_basepath || vars.FNQ3_GLX_RUNTIME_BASEPATH }}
+          FNQ3_GLX_SCREENSHOT_BASELINE_DIR: ${{ inputs.screenshot_baseline_dir || vars.FNQ3_GLX_SCREENSHOT_BASELINE_DIR }}
+          FNQ3_GLX_APPROVE_SCREENSHOT_BASELINES: ${{ inputs.approve_screenshot_baselines || false }}
+          FNQ3_GLX_SCREENSHOT_MAX_RMS: ${{ inputs.screenshot_max_rms || '2.0' }}
+          FNQ3_GLX_SCREENSHOT_MAX_PIXEL_RATIO: ${{ inputs.screenshot_max_pixel_ratio || '0.005' }}
+          FNQ3_GLX_PERFORMANCE_BUDGET: ${{ inputs.performance_budget || vars.FNQ3_GLX_PERFORMANCE_BUDGET }}
+          FNQ3_GLX_PERFORMANCE_BASELINE: ${{ inputs.performance_baseline || vars.FNQ3_GLX_PERFORMANCE_BASELINE }}
+          FNQ3_GLX_APPROVE_PERFORMANCE_BASELINE: ${{ inputs.approve_performance_baseline || false }}
+          FNQ3_GLX_PERFORMANCE_MAX_GROWTH_RATIO: ${{ inputs.performance_max_growth_ratio || '0.20' }}
+        run: |
+          import os
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          gate = os.environ["FNQ3_GLX_RUNTIME_GATE"]
+          output_dir = Path(".tmp") / "glx-runtime-sweeps"
+          summary_path = output_dir / f"{gate}.md"
+          command = [
+              sys.executable,
+              "scripts/glx_runtime_sweep.py",
+              "--gate",
+              gate,
+              "--exe",
+              os.environ["FNQ3_GLX_RUNTIME_EXE"],
+              "--basepath",
+              os.environ["FNQ3_GLX_RUNTIME_BASEPATH"],
+              "--proof-platform",
+              os.environ["FNQ3_GLX_PROOF_PLATFORM"],
+              "--output-dir",
+              str(output_dir),
+              "--summary-markdown",
+              str(summary_path),
+          ]
+          proof_dir = os.environ.get("FNQ3_GLX_PROOF_DIR", "")
+          if proof_dir:
+              command.extend(["--proof-dir", proof_dir])
+
+          baseline_dir = os.environ.get("FNQ3_GLX_SCREENSHOT_BASELINE_DIR", "")
+          if baseline_dir:
+              command.extend(
+                  [
+                      "--screenshot-baseline-dir",
+                      baseline_dir,
+                  ]
+              )
+              if not proof_dir:
+                  command.extend(
+                      [
+                          "--screenshot-diff-dir",
+                          str(output_dir / "diffs"),
+                      ]
+                  )
+          if baseline_dir or proof_dir:
+              command.extend(
+                  [
+                      "--screenshot-max-rms",
+                      os.environ["FNQ3_GLX_SCREENSHOT_MAX_RMS"],
+                      "--screenshot-max-pixel-ratio",
+                      os.environ["FNQ3_GLX_SCREENSHOT_MAX_PIXEL_RATIO"],
+                  ]
+              )
+          if os.environ.get("FNQ3_GLX_APPROVE_SCREENSHOT_BASELINES") == "true":
+              command.append("--approve-screenshot-baselines")
+
+          performance_budget = os.environ.get("FNQ3_GLX_PERFORMANCE_BUDGET", "")
+          if performance_budget:
+              command.extend(["--performance-budget", performance_budget])
+
+          performance_baseline = os.environ.get("FNQ3_GLX_PERFORMANCE_BASELINE", "")
+          if performance_baseline:
+              command.extend(
+                  [
+                      "--performance-baseline",
+                      performance_baseline,
+                  ]
+              )
+          if performance_baseline or proof_dir:
+              command.extend(
+                  [
+                      "--performance-max-growth-ratio",
+                      os.environ["FNQ3_GLX_PERFORMANCE_MAX_GROWTH_RATIO"],
+                  ]
+              )
+          if os.environ.get("FNQ3_GLX_APPROVE_PERFORMANCE_BASELINE") == "true":
+              command.append("--approve-performance-baseline")
+
+          subprocess.check_call(command)
+
+          github_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+          if github_summary:
+              with open(github_summary, "a", encoding="utf-8") as handle:
+                  handle.write(summary_path.read_text(encoding="utf-8"))
+
+      - name: Upload runtime gate artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: glx-runtime-sweep-${{ github.event_name == 'schedule' && 'rc-parity' || inputs.runtime_gate }}
+          path: .tmp/glx-runtime-sweeps
+          if-no-files-found: error
+          retention-days: 30

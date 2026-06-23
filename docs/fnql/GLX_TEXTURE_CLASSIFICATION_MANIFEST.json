@@ -1,0 +1,65 @@
+{
+  "version": "2026-05-10-p0",
+  "document": "docs/fnql/GLX_COLORSPACE_AUDIT.md",
+  "rows": [
+    {
+      "id": "authored-color",
+      "declaredSpace": "srgb",
+      "sceneLinearDecode": "srgb-once",
+      "examples": [
+        "map textures",
+        "model skins",
+        "sky images",
+        "UI images",
+        "cinematic scratch frames",
+        "replacement default image"
+      ],
+      "codePath": "code/renderer/tr_image.c:R_ImageColorSpaceForFlags"
+    },
+    {
+      "id": "lightmap",
+      "declaredSpace": "linear",
+      "sceneLinearDecode": "never",
+      "examples": [
+        "BSP lightmaps",
+        "merged lightmap atlases",
+        "external maps/<map>/lm_* atlases"
+      ],
+      "codePath": "code/renderer/tr_image.c:R_ImageColorSpaceForFlags"
+    },
+    {
+      "id": "procedural-linear",
+      "declaredSpace": "linear",
+      "sceneLinearDecode": "never",
+      "examples": [
+        "*dlight",
+        "*identityLight"
+      ],
+      "codePath": "code/renderer/tr_image.c:R_ImageColorSpaceForFlags"
+    },
+    {
+      "id": "data",
+      "declaredSpace": "data",
+      "sceneLinearDecode": "never",
+      "examples": [
+        "*fog",
+        "*white",
+        "*black",
+        "3D LUT atlases"
+      ],
+      "codePath": "code/renderer/tr_image.c:R_ImageColorSpaceForFlags"
+    },
+    {
+      "id": "capture-target",
+      "declaredSpace": "linear-or-output-declared",
+      "sceneLinearDecode": "not-authored-srgb",
+      "examples": [
+        "main scene FBO",
+        "bloom chain",
+        "screen-map buffers",
+        "screenshot/video capture buffers"
+      ],
+      "codePath": "code/renderer/tr_arb.c:FBO_Create"
+    }
+  ]
+}

@@ -1,0 +1,333 @@
+// FnQL OpenAL weapon sound tuning.
+// Syntax follows the idTech4/Q4 sound shader shape: sound <name> { ... sample ... }.
+
+sound fnql_q3a_bfg_fire
+{
+	description "BFG fire with a heavier attack and longer arena throw"
+	minDistance 112
+	maxDistance 1950
+	volumeDb 3.5
+	shakes 0.16
+	reverb 0.12, 1.0
+	frequencyShift 0.98 1.00
+	sound/weapons/bfg/bfg_fire.wav
+}
+
+sound fnql_q3a_bfg_hum
+{
+	minDistance 96
+	maxDistance 1650
+	volumeDb 1.5
+	shakes 0.03
+	reverb 0.06, 1.0
+	sound/weapons/bfg/bfg_hum.wav
+}
+
+sound fnql_q3a_weapon_change
+{
+	minDistance 80
+	maxDistance 1450
+	volumeDb 1.0
+	shakes 0.02
+	sound/weapons/change.wav
+}
+
+sound fnql_q3a_grenade_fire
+{
+	description "Grenade launcher fire with a firmer tube thump"
+	minDistance 100
+	maxDistance 1750
+	volumeDb 2.5
+	shakes 0.10
+	reverb 0.10, 1.0
+	sound/weapons/grenade/grenlf1a.wav
+}
+
+sound fnql_q3a_grenade_explode_a
+{
+	minDistance 128
+	maxDistance 2050
+	volumeDb 3.5
+	shakes 0.18
+	reverb 0.16, 1.0
+	frequencyShift 0.97 1.00
+	sound/weapons/grenade/hgrenb1a.wav
+}
+
+sound fnql_q3a_grenade_explode_b
+{
+	minDistance 128
+	maxDistance 2050
+	volumeDb 3.5
+	shakes 0.18
+	reverb 0.16, 1.0
+	frequencyShift 0.97 1.00
+	sound/weapons/grenade/hgrenb2a.wav
+}
+
+sound fnql_q3a_lightning_fire
+{
+	description "Lightning gun fire with a sharper electrical body"
+	minDistance 96
+	maxDistance 1700
+	volumeDb 2.0
+	shakes 0.08
+	reverb 0.10, 1.0
+	sound/weapons/lightning/lg_fire.wav
+}
+
+sound fnql_q3a_lightning_hit
+{
+	minDistance 104
+	maxDistance 1800
+	volumeDb 3.0
+	shakes 0.12
+	reverb 0.12, 1.0
+	sound/weapons/lightning/lg_hit.wav
+}
+
+sound fnql_q3a_lightning_hit2
+{
+	minDistance 104
+	maxDistance 1800
+	volumeDb 3.0
+	shakes 0.12
+	reverb 0.12, 1.0
+	sound/weapons/lightning/lg_hit2.wav
+}
+
+sound fnql_q3a_lightning_hit3
+{
+	minDistance 104
+	maxDistance 1800
+	volumeDb 3.0
+	shakes 0.12
+	reverb 0.12, 1.0
+	sound/weapons/lightning/lg_hit3.wav
+}
+
+sound fnql_q3a_lightning_hum
+{
+	minDistance 96
+	maxDistance 1550
+	volumeDb 1.2
+	shakes 0.03
+	reverb 0.06, 1.0
+	sound/weapons/lightning/lg_hum.wav
+}
+
+sound fnql_q3a_machinegun_bulletby
+{
+	minDistance 96
+	maxDistance 1600
+	volumeDb 2.0
+	shakes 0.06
+	reverb 0.08, 1.0
+	sound/weapons/machinegun/buletby1.wav
+}
+
+sound fnql_q3a_machinegun_fire1
+{
+	description "Machinegun fire variant with extra crack and distance"
+	minDistance 104
+	maxDistance 1700
+	volumeDb 2.8
+	shakes 0.10
+	reverb 0.08, 1.0
+	sound/weapons/machinegun/machgf1b.wav
+}
+
+sound fnql_q3a_machinegun_fire2
+{
+	description "Machinegun fire variant with extra crack and distance"
+	minDistance 104
+	maxDistance 1700
+	volumeDb 2.8
+	shakes 0.10
+	reverb 0.08, 1.0
+	sound/weapons/machinegun/machgf2b.wav
+}
+
+sound fnql_q3a_machinegun_fire3
+{
+	description "Machinegun fire variant with extra crack and distance"
+	minDistance 104
+	maxDistance 1700
+	volumeDb 2.8
+	shakes 0.10
+	reverb 0.08, 1.0
+	sound/weapons/machinegun/machgf3b.wav
+}
+
+sound fnql_q3a_machinegun_fire4
+{
+	description "Machinegun fire variant with extra crack and distance"
+	minDistance 104
+	maxDistance 1700
+	volumeDb 2.8
+	shakes 0.10
+	reverb 0.08, 1.0
+	sound/weapons/machinegun/machgf4b.wav
+}
+
+sound fnql_q3a_machinegun_ricochet1
+{
+	minDistance 96
+	maxDistance 1600
+	volumeDb 2.2
+	shakes 0.08
+	reverb 0.10, 1.0
+	sound/weapons/machinegun/ric1.wav
+}
+
+sound fnql_q3a_machinegun_ricochet2
+{
+	minDistance 96
+	maxDistance 1600
+	volumeDb 2.2
+	shakes 0.08
+	reverb 0.10, 1.0
+	sound/weapons/machinegun/ric2.wav
+}
+
+sound fnql_q3a_machinegun_ricochet3
+{
+	minDistance 96
+	maxDistance 1600
+	volumeDb 2.2
+	shakes 0.08
+	reverb 0.10, 1.0
+	sound/weapons/machinegun/ric3.wav
+}
+
+sound fnql_q3a_gauntlet_attack
+{
+	description "Gauntlet attack with a close-range metal bite"
+	minDistance 96
+	maxDistance 1500
+	volumeDb 2.5
+	shakes 0.08
+	sound/weapons/melee/fstatck.wav
+}
+
+sound fnql_q3a_gauntlet_hum
+{
+	minDistance 80
+	maxDistance 1450
+	volumeDb 1.2
+	shakes 0.03
+	sound/weapons/melee/fsthum.wav
+}
+
+sound fnql_q3a_gauntlet_run
+{
+	minDistance 80
+	maxDistance 1450
+	volumeDb 1.2
+	shakes 0.03
+	sound/weapons/melee/fstrun.wav
+}
+
+sound fnql_q3a_noammo
+{
+	minDistance 80
+	maxDistance 1400
+	volumeDb 1.0
+	shakes 0.02
+	sound/weapons/noammo.wav
+}
+
+sound fnql_q3a_plasma_fire
+{
+	description "Plasma gun fire with a brighter launch punch"
+	minDistance 96
+	maxDistance 1700
+	volumeDb 2.2
+	shakes 0.08
+	reverb 0.08, 1.0
+	sound/weapons/plasma/hyprbf1a.wav
+}
+
+sound fnql_q3a_plasma_fly
+{
+	minDistance 80
+	maxDistance 1500
+	volumeDb 1.2
+	shakes 0.03
+	sound/weapons/plasma/lasfly.wav
+}
+
+sound fnql_q3a_plasma_explode
+{
+	minDistance 112
+	maxDistance 1900
+	volumeDb 3.2
+	shakes 0.14
+	reverb 0.12, 1.0
+	sound/weapons/plasma/plasmx1a.wav
+}
+
+sound fnql_q3a_rail_fire
+{
+	description "Railgun fire with a heavy snap and long carry"
+	minDistance 128
+	maxDistance 2200
+	volumeDb 4.0
+	shakes 0.20
+	reverb 0.18, 1.0
+	frequencyShift 0.98 1.00
+	sound/weapons/railgun/railgf1a.wav
+}
+
+sound fnql_q3a_rail_hum
+{
+	minDistance 88
+	maxDistance 1600
+	volumeDb 1.4
+	shakes 0.03
+	sound/weapons/railgun/rg_hum.wav
+}
+
+sound fnql_q3a_rocket_fly
+{
+	minDistance 88
+	maxDistance 1600
+	volumeDb 1.5
+	shakes 0.04
+	sound/weapons/rocket/rockfly.wav
+}
+
+sound fnql_q3a_rocket_fire
+{
+	description "Rocket launcher fire with a heavier shoulder thump"
+	minDistance 128
+	maxDistance 2050
+	volumeDb 3.5
+	shakes 0.16
+	reverb 0.14, 1.0
+	frequencyShift 0.98 1.00
+	sound/weapons/rocket/rocklf1a.wav
+}
+
+sound fnql_q3a_rocket_explode
+{
+	minDistance 128
+	maxDistance 2200
+	volumeDb 4.0
+	shakes 0.20
+	reverb 0.18, 1.0
+	frequencyShift 0.97 1.00
+	sound/weapons/rocket/rocklx1a.wav
+}
+
+sound fnql_q3a_shotgun_fire
+{
+	description "Shotgun fire with a wider, harder muzzle blast"
+	minDistance 128
+	maxDistance 1900
+	volumeDb 3.8
+	shakes 0.18
+	reverb 0.10, 1.0
+	frequencyShift 0.98 1.00
+	sound/weapons/shotgun/sshotf1b.wav
+}

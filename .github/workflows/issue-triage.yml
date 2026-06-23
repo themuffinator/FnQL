@@ -1,0 +1,36 @@
+name: issue-triage
+
+on:
+  issues:
+    types:
+      - opened
+
+permissions:
+  contents: read
+  issues: write
+  models: read
+
+concurrency:
+  group: issue-triage-${{ github.event.issue.node_id }}
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Triage new issue
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FNQ3_ISSUE_TRIAGE_MODEL: ${{ vars.FNQ3_ISSUE_TRIAGE_MODEL }}
+          FNQ3_RELEASE_NOTES_MODEL: ${{ vars.FNQ3_RELEASE_NOTES_MODEL }}
+          FNQ3_ISSUE_TRIAGE_DUPLICATE_CLOSE_THRESHOLD: ${{ vars.FNQ3_ISSUE_TRIAGE_DUPLICATE_CLOSE_THRESHOLD }}
+          FNQ3_ISSUE_TRIAGE_DUPLICATE_REVIEW_THRESHOLD: ${{ vars.FNQ3_ISSUE_TRIAGE_DUPLICATE_REVIEW_THRESHOLD }}
+          FNQ3_ISSUE_TRIAGE_MAX_OPEN_ISSUES: ${{ vars.FNQ3_ISSUE_TRIAGE_MAX_OPEN_ISSUES }}
+          FNQ3_ISSUE_TRIAGE_DRY_RUN: ${{ vars.FNQ3_ISSUE_TRIAGE_DRY_RUN }}
+        run: |
+          python .github/scripts/issue_triage.py triage \
+            --repo "${{ github.repository }}" \
+            --issue-number "${{ github.event.issue.number }}"

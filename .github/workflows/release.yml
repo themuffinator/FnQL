@@ -1,0 +1,479 @@
+name: release
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FNQ3_LINUX_GLIBC_MAX: "2.31"
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      build_number: ${{ steps.meta.outputs.build_number }}
+      build_date: ${{ steps.meta.outputs.build_date }}
+      base_version: ${{ steps.meta.outputs.base_version }}
+      version_string: ${{ steps.meta.outputs.version_string }}
+      head_commit: ${{ steps.meta.outputs.head_commit }}
+      head_commit_short: ${{ steps.meta.outputs.head_commit_short }}
+      previous_release_commit: ${{ steps.meta.outputs.previous_release_commit }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Fetch tags
+        run: git fetch --force --tags origin
+
+      - name: Resolve release metadata
+        id: meta
+        run: |
+          python scripts/manual_release.py github-output --build-date "$(date -u +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize
+        run: |
+          echo "Release build metadata resolved"
+          echo "Base version: ${{ steps.meta.outputs.base_version }}"
+          echo "Build version: ${{ steps.meta.outputs.version_string }}"
+          echo "Head commit: ${{ steps.meta.outputs.head_commit }}"
+          echo "Previous release commit: ${{ steps.meta.outputs.previous_release_commit }}"
+
+  windows-msys32:
+    needs: [prepare]
+    name: Build Windows-msys32 ${{ matrix.arch }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86, x86_64]
+        include:
+          - arch: x86
+            msystem: MINGW32
+          - arch: x86_64
+            msystem: MINGW64
+    steps:
+      - name: Checkout current repo
+        uses: actions/checkout@v6
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+          update: true
+          install: git
+          pacboy: >-
+            toolchain:p
+            meson:p
+            ninja:p
+
+      - name: Stamp release build version
+        shell: msys2 {0}
+        run: python scripts/manual_release.py stamp-version --build-number ${{ needs.prepare.outputs.build_number }}
+
+      - name: Build
+        shell: msys2 {0}
+        run: |
+          mkdir -p bin
+          meson setup meson/build-${{ matrix.arch }} \
+            --buildtype=release \
+            --prefix "$PWD/bin" \
+            -Dcurl=enabled \
+            -Dcurl-dlopen=false \
+            -Dsdl=disabled \
+            -Drenderer-dlopen=true \
+            -Drenderers=opengl,glx,vulkan \
+            -Drenderer-default=opengl \
+            -Daudio-tests=false \
+            -Dglx-tests=false \
+            -Dlibjpeg-turbo:simd=disabled
+          meson compile -C meson/build-${{ matrix.arch }}
+          meson install -C meson/build-${{ matrix.arch }} --no-rebuild
+
+      - name: Verify release layout
+        shell: msys2 {0}
+        run: python scripts/verify_release_layout.py bin
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-mingw-${{ matrix.arch }}
+          path: bin
+          if-no-files-found: error
+          retention-days: 5
+
+  windows-msvc:
+    needs: [prepare]
+    name: Build Windows-MSVC ${{ matrix.arch }}
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x86, x64]
+        include:
+          - arch: arm64
+            vs_arch: arm64
+            pkg_suffix: arm64
+
+          - arch: x86
+            vs_arch: x86
+            pkg_suffix: x86
+
+          - arch: x64
+            vs_arch: x64
+            pkg_suffix: x86_64
+    steps:
+      - uses: microsoft/setup-msbuild@v3
+
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Stamp release build version
+        run: python scripts/manual_release.py stamp-version --build-number ${{ needs.prepare.outputs.build_number }}
+
+      - name: Install Meson
+        run: python -m pip install meson ninja
+
+      - name: Build
+        shell: cmd
+        run: |
+          if not exist bin mkdir bin
+
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=${{ matrix.vs_arch }} -host_arch=x64 || exit /b
+          if /I "${{ matrix.arch }}"=="arm64" (
+            meson setup meson\build-${{ matrix.arch }} --cross-file scripts\windows-arm64-cross.ini --buildtype=release --prefix "%CD%\bin" -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=opengl,glx,vulkan -Drenderer-default=opengl -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
+          ) else (
+            meson setup meson\build-${{ matrix.arch }} --buildtype=release --prefix "%CD%\bin" -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=opengl,glx,vulkan -Drenderer-default=opengl -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
+          )
+          meson compile -C meson\build-${{ matrix.arch }} || exit /b
+          meson install -C meson\build-${{ matrix.arch }} --no-rebuild || exit /b
+
+      - name: Verify release layout
+        run: python scripts/verify_release_layout.py bin
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-msvc-${{ matrix.pkg_suffix }}
+          path: bin
+          if-no-files-found: error
+          retention-days: 5
+
+  meson-validation:
+    needs: [prepare]
+    name: Meson build validation
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Install tools
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -y install meson ninja-build gcc g++ libcurl4-openssl-dev libjpeg-dev libogg-dev libvorbis-dev mesa-common-dev libx11-dev libxext-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev libasound2-dev libopenal-dev
+
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Stamp release build version
+        run: python scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
+
+      - name: Configure Meson build
+        run: |
+          meson setup meson/build \
+            --buildtype=release \
+            -Dsdl=disabled \
+            -Dcurl=disabled \
+            -Drenderer-dlopen=true \
+            -Drenderers=opengl,glx,vulkan,opengl2 \
+            -Drenderer-default=opengl
+
+      - name: Build Meson targets
+        run: meson compile -C meson/build
+
+      - name: Run Meson tests
+        run: meson test -C meson/build --print-errorlogs
+
+  ubuntu-x86:
+    needs: [prepare]
+    name: Build Ubuntu ${{ matrix.arch }}
+    runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:20.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86, x86_64]
+        include:
+          - arch: x86
+            rule: install
+            use_sdl: USE_SDL=0
+
+          - arch: x86_64
+            rule: install
+            use_sdl: USE_SDL=0
+    steps:
+      - name: Install tools
+        run: |
+          if [ "${{ matrix.arch }}" = "x86" ]; then
+            dpkg --add-architecture i386
+            apt-get -qq update
+            apt-get -y install git make python3 binutils gcc-multilib g++-multilib libcurl4-openssl-dev:i386 libjpeg-dev:i386 libogg-dev:i386 libvorbis-dev:i386 mesa-common-dev:i386 libxxf86dga-dev:i386 libxrandr-dev:i386 libxxf86vm-dev:i386 libasound2-dev:i386 libopenal-dev:i386
+          else
+            apt-get -qq update
+            apt-get -y install git make python3 binutils gcc g++ libcurl4-openssl-dev libjpeg-dev libogg-dev libvorbis-dev mesa-common-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev libasound2-dev libopenal-dev
+          fi
+
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Stamp release build version
+        run: python3 scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
+
+      - name: Build
+        run: |
+          make ${{ matrix.rule }} -j$(nproc) ARCH=${{ matrix.arch }} COMPILE_ARCH=${{ matrix.arch }} CC=gcc DESTDIR=bin ${{ matrix.use_sdl }} USE_RENDERER_DLOPEN=1 USE_OPENGL=1 USE_GLX=1 USE_VULKAN=1
+
+      - name: Check glibc baseline
+        run: python3 scripts/check_elf_glibc.py --max-glibc "$FNQ3_LINUX_GLIBC_MAX" --require-elf bin
+
+      - name: Verify release layout
+        run: python3 scripts/verify_release_layout.py bin
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-${{ matrix.arch }}
+          path: bin
+          if-no-files-found: error
+          retention-days: 5
+
+  ubuntu-arm64:
+    needs: [prepare]
+    name: Build Ubuntu arm64
+    runs-on: ubuntu-22.04-arm
+    container:
+      image: ubuntu:20.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install tools
+        run: |
+          apt-get -qq update
+          apt-get install -y git make python3 binutils gcc g++
+          apt-get -y install libcurl4-openssl-dev libjpeg-dev libogg-dev libvorbis-dev mesa-common-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev libasound2-dev libopenal-dev
+
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Stamp release build version
+        run: python3 scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
+
+      - name: Build
+        run: |
+          make install -j$(nproc) ARCH=aarch64 COMPILE_ARCH=aarch64 CC=gcc DESTDIR=bin USE_SDL=0 USE_RENDERER_DLOPEN=1 USE_OPENGL=1 USE_GLX=1 USE_VULKAN=1
+
+      - name: Check glibc baseline
+        run: python3 scripts/check_elf_glibc.py --max-glibc "$FNQ3_LINUX_GLIBC_MAX" --require-elf bin
+
+      - name: Verify release layout
+        run: python3 scripts/verify_release_layout.py bin
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-arm64
+          path: bin
+          if-no-files-found: error
+          retention-days: 5
+
+  macos-x86:
+    needs: [prepare]
+    name: Build macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: macos-15-intel
+
+          - arch: aarch64
+            runner: macos-14
+    steps:
+      - name: Install tools
+        run: |
+          for pkg in coreutils jpeg libogg libvorbis make openal-soft pkg-config sdl3; do
+            brew list --versions "$pkg" >/dev/null 2>&1 || brew install "$pkg"
+          done
+
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Stamp release build version
+        run: python3 scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
+
+      - name: Build
+        run: |
+          BREW_PREFIX="$(brew --prefix)"
+          export PKG_CONFIG_PATH="${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
+          OPENAL_CFLAGS="$(pkg-config --cflags openal 2>/dev/null || true)"
+          if [ -z "${OPENAL_CFLAGS}" ]; then
+            OPENAL_CFLAGS="-I$(brew --prefix openal-soft)/include"
+          fi
+          OPENAL_CFLAGS="${OPENAL_CFLAGS}" \
+          SDL_INCLUDE="$(pkg-config --cflags-only-I sdl3)" \
+          SDL_LIBS="$(pkg-config --libs sdl3)" \
+          JPEG_CFLAGS="$(pkg-config --cflags libjpeg)" \
+          JPEG_LIBS="$(pkg-config --libs libjpeg)" \
+          OGG_CFLAGS="$(pkg-config --cflags ogg)" \
+          OGG_LIBS="$(pkg-config --libs ogg)" \
+          VORBIS_CFLAGS="$(pkg-config --cflags vorbisfile)" \
+          VORBIS_LIBS="$(pkg-config --libs vorbisfile)" \
+            gmake install -j$(sysctl -n hw.logicalcpu) ARCH=${{ matrix.arch }} CC=clang DESTDIR=bin INSTALL=ginstall USE_LOCAL_HEADERS=0 USE_SYSTEM_JPEG=1 USE_SYSTEM_OGG=1 USE_SYSTEM_VORBIS=1 USE_RENDERER_DLOPEN=1 USE_OPENGL=1 USE_GLX=1 USE_VULKAN=1 STRIP=echo
+
+      - name: Verify release layout
+        run: python3 scripts/verify_release_layout.py bin
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos-${{ matrix.arch }}
+          path: bin
+          if-no-files-found: error
+          retention-days: 5
+
+  push-build-validation:
+    if: github.event_name == 'push' && always()
+    needs: [prepare, windows-msys32, windows-msvc, meson-validation, ubuntu-x86, ubuntu-arm64, macos-x86]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check platform build results
+        env:
+          NEEDS_JSON: ${{ toJson(needs) }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          needs = json.loads(os.environ["NEEDS_JSON"])
+          failed = {
+              name: data["result"]
+              for name, data in needs.items()
+              if data["result"] != "success"
+          }
+
+          if failed:
+              for name, result in failed.items():
+                  print(f"{name}: {result}")
+              sys.exit(1)
+
+          print("All push build validations passed.")
+          PY
+
+  publish:
+    if: github.event_name == 'workflow_dispatch'
+    needs: [prepare, windows-msys32, windows-msvc, meson-validation, ubuntu-x86, ubuntu-arm64, macos-x86]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      models: read
+      pull-requests: read
+    env:
+      HAS_COPILOT_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Fetch tags
+        run: git fetch --force --tags origin
+
+      - name: Stamp release build version
+        run: python scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Resolve release version metadata
+        run: |
+          python scripts/version.py github-env --channel manual --build-number "${{ needs.prepare.outputs.build_number }}" --build-date "${{ needs.prepare.outputs.build_date }}" --commit "${{ needs.prepare.outputs.head_commit }}" >> "$GITHUB_ENV"
+
+      - name: Package release archives
+        run: |
+          python scripts/release.py --channel manual --artifact-root artifacts --build-number "${{ needs.prepare.outputs.build_number }}" --build-date "${{ needs.prepare.outputs.build_date }}" --commit "${{ needs.prepare.outputs.head_commit }}"
+
+      - name: Build Copilot changelog cleanup
+        id: copilot_notes
+        if: ${{ env.HAS_COPILOT_TOKEN == 'true' && needs.prepare.outputs.previous_release_commit != '' }}
+        uses: github/copilot-release-notes@v1.0.1
+        with:
+          base-ref: ${{ needs.prepare.outputs.previous_release_commit }}
+          head-ref: ${{ needs.prepare.outputs.head_commit }}
+          instructions: .github/release-notes-instructions.md
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+
+      - name: Save Copilot highlights
+        if: ${{ steps.copilot_notes.outputs.release-notes != '' }}
+        env:
+          COPILOT_RELEASE_NOTES: ${{ steps.copilot_notes.outputs.release-notes }}
+        run: |
+          mkdir -p .tmp
+          printf '%s\n' "$COPILOT_RELEASE_NOTES" > .tmp/copilot-release-notes.md
+
+      - name: Build release notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FROM_ARGS=()
+          if [ -n "${{ needs.prepare.outputs.previous_release_commit }}" ]; then
+            FROM_ARGS+=(--from-commit "${{ needs.prepare.outputs.previous_release_commit }}")
+          fi
+          HIGHLIGHTS_ARGS=()
+          if [ -s .tmp/copilot-release-notes.md ]; then
+            HIGHLIGHTS_ARGS+=(--highlights-file .tmp/copilot-release-notes.md)
+          fi
+          python scripts/manual_release.py release-notes \
+            --build-number "${{ needs.prepare.outputs.build_number }}" \
+            --build-date "${{ needs.prepare.outputs.build_date }}" \
+            --to-commit "${{ needs.prepare.outputs.head_commit }}" \
+            "${FROM_ARGS[@]}" \
+            "${HIGHLIGHTS_ARGS[@]}" \
+            --output .tmp/release-notes.md
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${FNQ3_RELEASE_TAG}" \
+            .install/packages/*.zip \
+            .install/release-manifest.json \
+            .install/SHA256SUMS.txt \
+            --target "${{ needs.prepare.outputs.head_commit }}" \
+            --title "${FNQ3_RELEASE_TITLE}" \
+            --notes-file .tmp/release-notes.md
+
+      - name: Clear pending changelog
+        if: ${{ github.ref_type == 'branch' }}
+        run: |
+          python scripts/changelog.py clear-unreleased
+          if git diff --quiet -- docs/fnquake3/CHANGELOG.md; then
+            echo "Pending changelog already clean."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/fnquake3/CHANGELOG.md
+          git commit -m "Reset pending changelog after release"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

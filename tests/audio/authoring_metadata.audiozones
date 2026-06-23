@@ -1,0 +1,42 @@
+audiozones 1
+
+zone "atrium" {
+  bounds 0 0 0 256 256 128
+  environment hall
+  material stone
+  flag outdoor
+  reverbGain 1.10
+  occlusionMultiplier 0.85
+  lpfBias 0.95
+  hpfBias 1.00
+  transitionMs 900
+  priority 10
+
+  portal "connector" {
+    bounds 256 64 0 256 192 128
+    openness 0.80
+    blendDistance 96
+    minBlend 0.03
+    maxBlend 0.35
+    curve ease-out
+  }
+}
+
+zone "connector" {
+  bounds 256 0 0 512 256 128
+  environment hallway
+  material metal
+  directHF 0.92
+  wetHF 0.82
+  transitionMs 700
+  priority 5
+
+  portal "atrium" {
+    bounds 256 64 0 256 192 128
+    openness 0.80
+    blendDistance 96
+    minBlend 0.03
+    maxBlend 0.35
+    curve ease-out
+  }
+}

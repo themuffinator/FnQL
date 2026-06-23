@@ -1,0 +1,42 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "OpenGLx",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\meson\\build\\fnquake3.x64.exe",
+      "args": [
+        "+set",
+        "cl_renderer",
+        "glx"
+      ],
+      "cwd": "${workspaceFolder}\\meson\\build",
+      "stopAtEntry": false,
+      "console": "internalConsole"
+    },
+    {
+      "name": "Vulkan",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\meson\\build\\fnquake3.x64.exe",
+      "args": [
+        "+set",
+        "cl_renderer",
+        "vulkan"
+      ],
+      "cwd": "${workspaceFolder}\\meson\\build",
+      "stopAtEntry": false,
+      "console": "internalConsole"
+    },
+    {
+      "name": "Dedicated",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\meson\\build\\fnquake3.ded.x64.exe",
+      "cwd": "${workspaceFolder}\\meson\\build",
+      "stopAtEntry": false,
+      "console": "internalConsole"
+    }
+  ]
+}

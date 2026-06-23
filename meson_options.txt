@@ -1,0 +1,71 @@
+option('build-client',
+  type: 'boolean',
+  value: true,
+  description: 'Build the unified FnQL client executable')
+
+option('build-server',
+  type: 'boolean',
+  value: true,
+  description: 'Build the dedicated server executable')
+
+option('renderer-dlopen',
+  type: 'boolean',
+  value: true,
+  description: 'Build one client executable and load renderers from external shared libraries')
+
+option('renderers',
+  type: 'array',
+  choices: ['opengl', 'glx', 'vulkan', 'opengl2'],
+  value: ['opengl', 'glx', 'vulkan'],
+  description: 'Renderer modules to build when renderer-dlopen is enabled')
+
+option('renderer-default',
+  type: 'combo',
+  choices: ['opengl', 'glx', 'vulkan', 'opengl2'],
+  value: 'opengl',
+  description: 'Default cl_renderer value, or the linked renderer for static renderer builds')
+
+option('sdl',
+  type: 'feature',
+  value: 'auto',
+  description: 'SDL3 video, input, and audio backend')
+
+option('curl',
+  type: 'feature',
+  value: 'auto',
+  description: 'cURL support for HTTP/FTP downloads')
+
+option('curl-dlopen',
+  type: 'boolean',
+  value: true,
+  description: 'Resolve cURL at runtime instead of linking libcurl')
+
+option('system-jpeg',
+  type: 'boolean',
+  value: false,
+  description: 'Require the system JPEG library instead of allowing the libjpeg-turbo subproject fallback')
+
+option('ogg-vorbis',
+  type: 'boolean',
+  value: true,
+  description: 'Enable Ogg Vorbis codec support using system vorbisfile or the subproject fallback')
+
+option('local-headers',
+  type: 'boolean',
+  value: true,
+  description: 'Define USE_LOCAL_HEADERS for compatibility include conventions')
+
+option('default-basedir',
+  type: 'string',
+  value: '',
+  description: 'Compile-time DEFAULT_BASEDIR override')
+
+option('audio-tests',
+  type: 'boolean',
+  value: true,
+  description: 'Build audio tools and deterministic audio tests')
+
+option('glx-tests',
+  type: 'boolean',
+  value: true,
+  description: 'Build deterministic GLx renderer logic tests')

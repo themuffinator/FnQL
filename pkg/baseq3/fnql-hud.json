@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "name": "upper_right_text",
+      "match": {
+        "textLike": 1,
+        "region": { "x": 168.000, "y": 2.000, "w": 469.000, "h": 76.000 }
+      },
+      "mode": "uniform",
+      "align": {
+        "x": "right",
+        "y": "top"
+      }
+    },
+    {
+      "name": "mini_scores_flags",
+      "match": {
+        "shader": "icons/*",
+        "textLike": 0,
+        "region": { "x": 560.000, "y": 380.000, "w": 80.000, "h": 24.000 }
+      },
+      "mode": "uniform",
+      "align": {
+        "x": "right",
+        "y": "bottom"
+      }
+    },
+    {
+      "name": "mini_scores_backing",
+      "match": {
+        "textLike": 0,
+        "region": { "x": 560.000, "y": 404.000, "w": 80.000, "h": 24.000 }
+      },
+      "mode": "uniform",
+      "align": {
+        "x": "right",
+        "y": "bottom"
+      }
+    },
+    {
+      "name": "mini_scores_text",
+      "match": {
+        "textLike": 1,
+        "region": { "x": 540.000, "y": 408.000, "w": 98.000, "h": 18.000 }
+      },
+      "mode": "uniform",
+      "align": {
+        "x": "right",
+        "y": "bottom"
+      }
+    },
+    {
+      "name": "pickup_icon",
+      "match": {
+        "shader": "icons/*",
+        "textLike": 0,
+        "region": { "x": 8.000, "y": 384.000, "w": 48.000, "h": 48.000 }
+      },
+      "mode": "uniform",
+      "align": {
+        "x": "left",
+        "y": "bottom"
+      }
+    },
+    {
+      "name": "pickup_text",
+      "match": {
+        "textLike": 1,
+        "region": { "x": 64.000, "y": 400.000, "w": 242.000, "h": 18.000 }
+      },
+      "mode": "uniform",
+      "align": {
+        "x": "left",
+        "y": "bottom"
+      }
+    },
+    {
+      "name": "right_item_icons",
+      "match": {
+        "shader": "icons/*",
+        "textLike": 0,
+        "region": { "x": 568.000, "y": 136.000, "w": 72.000, "h": 240.000 }
+      },
+      "mode": "uniform",
+      "align": {
+        "x": "right",
+        "y": "center"
+      }
+    },
+    {
+      "name": "right_powerup_timer_digits",
+      "match": {
+        "shader": "gfx/2d/numbers/*",
+        "textLike": 0,
+        "region": { "x": 530.000, "y": 136.000, "w": 64.000, "h": 240.000 }
+      },
+      "mode": "uniform",
+      "align": {
+        "x": "right",
+        "y": "center"
+      }
+    },
+    {
+      "name": "hud_team_background",
+      "match": {
+        "shader": "gfx/2d/colorbar.tga",
+        "textLike": 0,
+        "region": { "x": 0.000, "y": 420.000, "w": 640.000, "h": 60.000 }
+      },
+      "mode": "stretch",
+      "align": {
+        "x": "center",
+        "y": "center"
+      }
+    }
+  ]
+}

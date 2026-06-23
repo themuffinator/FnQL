@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FnQL Distribution Notes</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --panel: rgba(10, 16, 32, 0.88);
+      --panel-alt: rgba(15, 23, 42, 0.78);
+      --line: rgba(148, 163, 184, 0.22);
+      --text: #e5edf7;
+      --muted: #9db0ca;
+      --accent: #4ade80;
+      --accent-2: #38bdf8;
+      --accent-3: #a78bfa;
+      --accent-4: #f59e0b;
+      --shadow: 0 24px 60px rgba(2, 6, 23, 0.45);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI Variable Display", "Aptos", "Trebuchet MS", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at top left, rgba(56, 189, 248, 0.18), transparent 28%),
+        radial-gradient(circle at top right, rgba(74, 222, 128, 0.12), transparent 24%),
+        linear-gradient(160deg, #060913 0%, #0b1020 48%, #121a30 100%);
+    }
+
+    main {
+      width: min(1040px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 40px 0 56px;
+    }
+
+    .hero,
+    .section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(14px);
+    }
+
+    .hero {
+      padding: 36px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -120px -120px auto;
+      width: 280px;
+      height: 280px;
+      border-radius: 999px;
+      background: radial-gradient(circle, rgba(245, 158, 11, 0.24), rgba(245, 158, 11, 0));
+      pointer-events: none;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: rgba(56, 189, 248, 0.12);
+      border: 1px solid rgba(56, 189, 248, 0.2);
+      color: var(--accent-2);
+      font-size: 0.82rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 18px 0 8px;
+      font-size: clamp(2.4rem, 5vw, 4.2rem);
+      line-height: 0.95;
+    }
+
+    .tagline {
+      margin: 0 0 14px;
+      color: #f8fafc;
+      font-size: 1.05rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .subtitle,
+    .lead,
+    li,
+    .card p,
+    .footer {
+      color: var(--muted);
+      line-height: 1.72;
+    }
+
+    .subtitle {
+      max-width: 780px;
+      margin: 0;
+      font-size: 1.06rem;
+    }
+
+    .buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 28px;
+    }
+
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 170px;
+      padding: 12px 18px;
+      border-radius: 999px;
+      text-decoration: none;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+    }
+
+    .button:hover {
+      transform: translateY(-1px);
+    }
+
+    .button-primary {
+      color: #07111f;
+      background: linear-gradient(135deg, var(--accent), #86efac);
+      box-shadow: 0 12px 28px rgba(74, 222, 128, 0.18);
+    }
+
+    .button-secondary {
+      color: var(--text);
+      background: rgba(15, 23, 42, 0.72);
+      border: 1px solid rgba(148, 163, 184, 0.24);
+    }
+
+    .stats,
+    .feature-grid,
+    .doc-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+    }
+
+    .stats {
+      margin-top: 22px;
+    }
+
+    .section {
+      margin-top: 22px;
+      padding: 28px 30px;
+    }
+
+    .section-header {
+      margin-bottom: 16px;
+    }
+
+    h2 {
+      margin: 0;
+      font-size: 1.2rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--accent-4);
+    }
+
+    h3 {
+      margin: 0 0 10px;
+      color: #f8fafc;
+      font-size: 1.02rem;
+    }
+
+    .lead {
+      margin: 10px 0 0;
+      max-width: 820px;
+    }
+
+    .card,
+    .feature-group,
+    .doc-column {
+      padding: 18px;
+      border-radius: 18px;
+      background: var(--panel-alt);
+      border: 1px solid rgba(148, 163, 184, 0.16);
+    }
+
+    .card strong,
+    .feature-group strong,
+    .doc-column strong {
+      display: block;
+      margin-bottom: 8px;
+      color: #f8fafc;
+      font-size: 1rem;
+    }
+
+    ol,
+    ul {
+      margin: 14px 0 0;
+      padding-left: 22px;
+    }
+
+    .feature-grid,
+    .doc-grid {
+      margin-top: 18px;
+    }
+
+    .doc-column ul,
+    .feature-group ul {
+      margin-top: 10px;
+    }
+
+    a {
+      color: var(--accent-2);
+    }
+
+    code {
+      padding: 0.15rem 0.45rem;
+      border-radius: 8px;
+      background: rgba(15, 23, 42, 0.82);
+      color: #dbeafe;
+      font-family: "Cascadia Code", "Consolas", monospace;
+    }
+
+    .footer {
+      margin-top: 18px;
+      font-size: 0.95rem;
+    }
+
+    @media (max-width: 640px) {
+      main {
+        width: min(100% - 20px, 1040px);
+        padding-top: 18px;
+      }
+
+      .hero,
+      .section {
+        border-radius: 18px;
+        padding: 24px 20px;
+      }
+
+      .button {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <div class="eyebrow">FnQL distribution notes</div>
+      <h1>FnQL</h1>
+      <p class="tagline">Fappin' Quake Live</p>
+      <p class="subtitle">
+        <strong>FnQL</strong> is the Quake Live branch of FnQ3: a modernized engine targeting retail <em>Quake Live</em> under Steam.
+      </p>
+      <div class="buttons">
+        <a class="button button-primary" href="https://github.com/themuffinator/FnQL">Project home</a>
+        <a class="button button-secondary" href="#status">Status</a>
+        <a class="button button-secondary" href="#workflow">Workflow</a>
+        <a class="button button-secondary" href="#documentation">Documentation</a>
+        <a class="button button-secondary" href="https://github.com/themuffinator/FnQL/blob/main/BUILD.md">Build guide</a>
+        <a class="button button-secondary" href="LICENSE">License</a>
+      </div>
+      <div class="stats">
+        <article class="card">
+          <strong>Compatibility target</strong>
+          <p>Retail Quake Live (Steam)</p>
+        </article>
+        <article class="card">
+          <strong>Base version</strong>
+          <p>0.1.0</p>
+        </article>
+        <article class="card">
+          <strong>Current build</strong>
+          <p>0.1.0</p>
+        </article>
+        <article class="card">
+          <strong>Tagged release format</strong>
+          <p><code>v0.1.0</code></p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="introduction">
+      <div class="section-header">
+        <h2>1. Introduction</h2>
+        <p class="lead"><strong>FnQL</strong> is an engine project for retail Quake Live compatibility. It uses FnQ3 as the imported technology baseline and QLSRP as the reconstruction reference.</p>
+      </div>
+      <p class="lead">The goal is not to rebuild Quake Live game code. FnQL should load and serve retail-compatible content and module boundaries, preserve Quake Live engine behavior, and carry FnQ3's renderer, audio, platform, and tooling improvements forward where they remain compatible.</p>
+    </section>
+
+    <section class="section" id="scope">
+      <div class="section-header">
+        <h2>2. Scope</h2>
+        <p class="lead">FnQL is scoped as a modern Quake Live engine, with retail assets and game modules remaining external.</p>
+      </div>
+      <div class="feature-grid">
+        <article class="feature-group">
+          <h3>In scope</h3>
+          <ul>
+            <li>Retail Quake Live Steam installation compatibility, including practical default-path discovery and <code>baseq3</code> data expectations.</li>
+            <li>Engine compatibility reconstructed from QLSRP evidence: filesystem behavior, pak/pk3 loading, protocol and demo paths, VM/native module ABI, server and client glue, renderer data formats, platform services, and runtime identity.</li>
+            <li>Modernized engine features inherited from FnQ3, including SDL3, OpenAL, modular OpenGL-lineage/GLx/Vulkan renderers, console and screenshot improvements, and deterministic release tooling.</li>
+            <li>Compatibility validation against a legitimate retail Quake Live installation.</li>
+          </ul>
+        </article>
+        <article class="feature-group">
+          <h3>Out of scope</h3>
+          <ul>
+            <li>Reconstructing or shipping Quake Live <code>qagame</code>, <code>cgame</code>, or UI game code in FnQL.</li>
+            <li>Bundling retail Quake Live assets.</li>
+            <li>Claiming live Quake Live online-service replacement before an explicit, documented, default-off compatibility path exists.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="status">
+      <div class="section-header">
+        <h2>3. Development Status</h2>
+        <p class="lead">FnQL is at the initial migration stage.</p>
+      </div>
+      <ul>
+        <li>FnQ3 has been imported and rebranded to FnQL.</li>
+        <li>The canonical project identity now targets retail Quake Live on Steam.</li>
+        <li>Maintainer docs identify QLSRP and FnQ3 as the two primary reference repositories.</li>
+        <li>The next development phase is subsystem comparison against QLSRP, followed by focused compatibility reconstruction in modern C++.</li>
+      </ul>
+      <p class="footer">For build commands, use the <a href="https://github.com/themuffinator/FnQL/blob/main/BUILD.md">Build Guide</a>.</p>
+    </section>
+
+    <section class="section" id="workflow">
+      <div class="section-header">
+        <h2>4. Reference Workflow</h2>
+        <p class="lead">Use QLSRP before making compatibility claims.</p>
+      </div>
+      <ol>
+        <li>Locate the owning subsystem in <code>E:\Repositories\QuakeLive-SRP</code>.</li>
+        <li>Compare FnQL's inherited FnQ3 implementation against QLSRP source and reference evidence.</li>
+        <li>Record observed behavior separately from inferred intent.</li>
+        <li>Reconstruct the engine-side compatibility needed by retail Quake Live.</li>
+        <li>Validate against a legitimate Steam install, normally <code>C:\Program Files (x86)\Steam\steamapps\common\Quake Live</code>.</li>
+      </ol>
+    </section>
+
+    <section class="section" id="documentation">
+      <div class="section-header">
+        <h2>5. Documentation</h2>
+        <p class="lead">The main guides are split between the current build and maintainer references, plus inherited FnQ3 feature docs that will be updated as Quake Live work lands.</p>
+      </div>
+      <div class="doc-grid">
+        <article class="doc-column">
+          <h3>Inherited feature guides</h3>
+          <ul>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/DISPLAY.md">Display Guide</a> for renderer choice, video modes, render scaling, texture picmip, HDR, anti-aliasing, bloom, soft particles, dynamic lighting, shadow maps, and cel shading.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/VISUALS.md">Visuals Guide</a> for player highlighting and other presentation controls.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/ASPECT_CORRECTION.md">Aspect Correction Guide</a> for HUD, menu, and cinematic layout options.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/AUDIO.md">Audio Guide</a> for backend selection, devices, HRTF, fallback behavior, and troubleshooting.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/CONSOLE.md">Console Guide</a> for console layout, scaling, completion, and interaction.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/SCREENSHOTS.md">Screenshot Guide</a> for capture commands, naming, metadata sidecars, watermarks, and cube-map export.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/releases">Release History</a> for published changelogs and downloads.</li>
+          </ul>
+        </article>
+        <article class="doc-column">
+          <h3>Technical and build docs</h3>
+          <ul>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/BUILD.md">Build Guide</a> for compiling FnQL locally.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/GLX.md">GLx Renderer Guide</a> for the canonical OpenGL-lineage renderer, migration notes, and troubleshooting.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/fnql/AUDIO_ENGINE.md">Modern Audio Engine Notes</a> for engine architecture and compatibility boundaries.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/fnql/TECHNICAL.md">Technical Notes</a> for repository structure, release flow, and maintainer conventions.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="credits">
+      <div class="section-header">
+        <h2>6. Credits</h2>
+        <p class="lead">FnQL follows a clear upstream lineage from the Quake III Arena SDK, through ioquake3, Quake3e, FnQ3, and QLSRP.</p>
+      </div>
+      <p class="lead">Additional compatibility and feature work draws from projects and references such as <a href="https://bitbucket.org/CPMADevs/cnq3">CNQ3</a>, <a href="https://github.com/zturtleman/spearmint">Spearmint</a>, <a href="https://github.com/brugal/wolfcamql">WolfcamQL</a>, Luigi Auriemma's <a href="https://aluigi.altervista.org/papers.htm#qldec">qldec</a>, and <a href="https://github.com/Paril/DarkMatter-Q2">DarkMatter-Q2</a>.</p>
+      <p class="footer">See the full upstream chain and acknowledgements in <a href="https://github.com/themuffinator/FnQL/blob/main/CREDITS.md">CREDITS.md</a>.</p>
+    </section>
+  </main>
+</body>
+</html>
