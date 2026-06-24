@@ -412,6 +412,14 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\client\cl_webpak.cpp"
+				>
+			</File>
+			<File
+				RelativePath="..\..\client\cl_webui.cpp"
+				>
+			</File>
+			<File
 				RelativePath="..\..\qcommon\cm_load.c"
 				>
 			</File>

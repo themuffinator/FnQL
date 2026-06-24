@@ -33,6 +33,8 @@ extern "C" {
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <direct.h>
 #include <io.h>
 #include <conio.h>
@@ -156,62 +158,154 @@ const char *Sys_DefaultHomePath( void )
 Sys_SteamPath
 ================
 */
+static qboolean Sys_RegularFileExists( const char *path )
+{
+	DWORD attributes;
+
+	if ( !path || !path[0] ) {
+		return qfalse;
+	}
+
+	attributes = GetFileAttributesA( path );
+	return ( attributes != INVALID_FILE_ATTRIBUTES && !( attributes & FILE_ATTRIBUTE_DIRECTORY ) ) ? qtrue : qfalse;
+}
+
+
+#define SYS_STEAM_PATH_SEPARATOR_CHAR '\\'
+#define SYS_STEAM_PATH_ALTERNATE_SEPARATOR_CHAR '/'
+#include "../qcommon/steam_path_shared.h"
+#undef SYS_STEAM_PATH_SEPARATOR_CHAR
+#undef SYS_STEAM_PATH_ALTERNATE_SEPARATOR_CHAR
+
+
+static qboolean Sys_QueryRegistryString( HKEY root, const char *keyPath, REGSAM viewFlags, const char *valueName, char *out, int outSize )
+{
+	fnql::win::ScopedRegistryKey key;
+	DWORD type;
+	DWORD dataSize;
+	char buffer[MAX_OSPATH];
+
+	if ( RegOpenKeyExA( root, keyPath, 0, KEY_QUERY_VALUE | viewFlags, key.receive() ) != ERROR_SUCCESS ) {
+		return qfalse;
+	}
+
+	dataSize = sizeof( buffer );
+	if ( RegQueryValueExA( key.get(), valueName, NULL, &type, (LPBYTE)buffer, &dataSize ) != ERROR_SUCCESS ) {
+		return qfalse;
+	}
+
+	if ( type != REG_SZ && type != REG_EXPAND_SZ ) {
+		return qfalse;
+	}
+
+	buffer[sizeof( buffer ) - 1] = '\0';
+	if ( type == REG_EXPAND_SZ ) {
+		char expanded[MAX_OSPATH];
+		DWORD expandedSize;
+
+		expandedSize = ExpandEnvironmentStringsA( buffer, expanded, sizeof( expanded ) );
+		if ( expandedSize > 0 && expandedSize < sizeof( expanded ) ) {
+			Q_strncpyz( buffer, expanded, sizeof( buffer ) );
+		}
+	}
+
+	Q_strncpyz( out, buffer, outSize );
+	Sys_NormalizeSteamPath( out );
+	return out[0] ? qtrue : qfalse;
+}
+
+
+static qboolean Sys_FindSteamAppInstallFromRegistry( char *out, int outSize )
+{
+	const char *appKey = "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Steam App " STEAMPATH_APPID;
+	const HKEY roots[] = { HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER };
+	const REGSAM views[] = { KEY_WOW64_32KEY, KEY_WOW64_64KEY, 0 };
+	size_t rootIndex;
+	size_t viewIndex;
+	char candidate[MAX_OSPATH];
+
+	for ( rootIndex = 0; rootIndex < ARRAY_LEN( roots ); rootIndex++ ) {
+		for ( viewIndex = 0; viewIndex < ARRAY_LEN( views ); viewIndex++ ) {
+			if ( Sys_QueryRegistryString( roots[rootIndex], appKey, views[viewIndex], "InstallLocation", candidate, sizeof( candidate ) )
+				&& Sys_CopyValidQuakeLiveSteamInstall( candidate, out, outSize ) ) {
+				return qtrue;
+			}
+		}
+	}
+
+	return qfalse;
+}
+
+
+static qboolean Sys_FindSteamRootFromRegistry( char *out, int outSize )
+{
+	const HKEY roots[] = { HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE };
+	const REGSAM views[] = { 0, KEY_WOW64_32KEY, KEY_WOW64_64KEY };
+	const char *values[] = { "SteamPath", "InstallPath" };
+	size_t rootIndex;
+	size_t viewIndex;
+	size_t valueIndex;
+
+	for ( rootIndex = 0; rootIndex < ARRAY_LEN( roots ); rootIndex++ ) {
+		for ( viewIndex = 0; viewIndex < ARRAY_LEN( views ); viewIndex++ ) {
+			for ( valueIndex = 0; valueIndex < ARRAY_LEN( values ); valueIndex++ ) {
+				if ( Sys_QueryRegistryString( roots[rootIndex], "Software\\Valve\\Steam", views[viewIndex], values[valueIndex], out, outSize ) ) {
+					return qtrue;
+				}
+			}
+		}
+	}
+
+	return qfalse;
+}
+
+
+static qboolean Sys_FindSteamRootFromKnownPaths( char *out, int outSize )
+{
+	const char *programFilesX86;
+	const char *programFiles;
+	char candidate[MAX_OSPATH];
+
+	programFilesX86 = getenv( "ProgramFiles(x86)" );
+	if ( programFilesX86 && programFilesX86[0] ) {
+		Sys_SteamJoinPath( candidate, sizeof( candidate ), programFilesX86, "Steam" );
+		if ( Sys_SteamAppPathFromRoot( candidate, out, outSize ) ) {
+			return qtrue;
+		}
+	}
+
+	programFiles = getenv( "ProgramFiles" );
+	if ( programFiles && programFiles[0] ) {
+		Sys_SteamJoinPath( candidate, sizeof( candidate ), programFiles, "Steam" );
+		if ( Sys_SteamAppPathFromRoot( candidate, out, outSize ) ) {
+			return qtrue;
+		}
+	}
+
+	return Sys_SteamAppPathFromRoot( "C:\\Program Files (x86)\\Steam", out, outSize );
+}
+
+
 const char *Sys_SteamPath( void )
 {
-	static TCHAR steamPath[ MAX_OSPATH ]; // will be converted from TCHAR to ANSI
+	static char steamPath[ MAX_OSPATH ];
+	char steamRoot[MAX_OSPATH];
 
-#if defined(STEAMPATH_NAME) || defined(STEAMPATH_APPID)
-	DWORD pathLen = MAX_OSPATH;
-	qboolean finishPath = qfalse;
-#endif
-
-#ifdef STEAMPATH_APPID
-	// Assuming Steam is a 32-bit app
-	{
-		fnql::win::ScopedRegistryKey steamRegKey;
-		if ( !steamPath[0] && RegOpenKeyEx( HKEY_LOCAL_MACHINE, AtoW( "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Steam App " STEAMPATH_APPID ), 0, KEY_QUERY_VALUE | KEY_WOW64_32KEY, steamRegKey.receive() ) == ERROR_SUCCESS ) 
-		{
-			pathLen = sizeof( steamPath );
-			if ( RegQueryValueEx( steamRegKey.get(), AtoW("InstallLocation"), NULL, NULL, (LPBYTE)steamPath, &pathLen ) != ERROR_SUCCESS )
-				steamPath[ 0 ] = '\0';
-		}
-
+	if ( steamPath[0] ) {
+		return steamPath;
 	}
 
-#ifdef STEAMPATH_NAME
-	{
-		fnql::win::ScopedRegistryKey steamRegKey;
-		if ( !steamPath[0] && RegOpenKeyEx( HKEY_CURRENT_USER, AtoW("Software\\Valve\\Steam"), 0, KEY_QUERY_VALUE, steamRegKey.receive() ) == ERROR_SUCCESS )
-		{
-			pathLen = sizeof( steamPath );
-			if ( RegQueryValueEx( steamRegKey.get(), AtoW("SteamPath"), NULL, NULL, (LPBYTE)steamPath, &pathLen ) != ERROR_SUCCESS ) {
-				pathLen = sizeof( steamPath );
-				if ( RegQueryValueEx( steamRegKey.get(), AtoW("InstallPath"), NULL, NULL, (LPBYTE)steamPath, &pathLen ) != ERROR_SUCCESS )
-					steamPath[ 0 ] = '\0';
-			}
-
-			if ( steamPath[ 0 ] )
-				finishPath = qtrue;
-		}
-
+	if ( Sys_FindSteamAppInstallFromRegistry( steamPath, sizeof( steamPath ) ) ) {
+		return steamPath;
 	}
-#endif
 
-	if ( steamPath[ 0 ] )
-	{
-		if ( pathLen == sizeof( steamPath ) )
-			pathLen--;
-
-		*( ((char*)steamPath) + pathLen )  = '\0';
-#ifdef UNICODE
-		strcpy( (char*)steamPath, WtoA( steamPath ) );
-#endif
-		if ( finishPath )
-			Q_strcat( (char*)steamPath, MAX_OSPATH, "\\SteamApps\\common\\" STEAMPATH_NAME );
+	if ( Sys_FindSteamRootFromRegistry( steamRoot, sizeof( steamRoot ) )
+		&& Sys_SteamAppPathFromRoot( steamRoot, steamPath, sizeof( steamPath ) ) ) {
+		return steamPath;
 	}
-#endif
 
-	return (const char*)steamPath;
+	Sys_FindSteamRootFromKnownPaths( steamPath, sizeof( steamPath ) );
+	return steamPath;
 }
 
 

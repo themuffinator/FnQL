@@ -459,6 +459,179 @@ int SCR_GetBigStringWidth( const char *str ) {
 }
 
 
+static qboolean SCR_IsHostTextColorEscape( const char *s, const char *end ) {
+	return ( s && *s == Q_COLOR_ESCAPE && ( !end || s + 1 < end ) && s[1] && s[1] != Q_COLOR_ESCAPE ) ? qtrue : qfalse;
+}
+
+
+static float SCR_HostTextHeight( float scale ) {
+	return scale > 0.0f ? scale : 0.0f;
+}
+
+
+static float SCR_HostTextAdvance( float scale ) {
+	return SCR_HostTextHeight( scale ) * 0.6f;
+}
+
+
+static void SCR_DrawHostScaledChar( float x, float y, float width, float height, int ch ) {
+	int row, col;
+	float frow, fcol;
+	float size;
+
+	ch &= 255;
+	if ( ch == ' ' || width <= 0.0f || height <= 0.0f ) {
+		return;
+	}
+
+	row = ch >> 4;
+	col = ch & 15;
+	frow = row * 0.0625f;
+	fcol = col * 0.0625f;
+	size = 0.0625f;
+
+	re.DrawStretchPic( x, y, width, height, fcol, frow, fcol + size, frow + size, cls.charSetShader );
+}
+
+
+/*
+=================
+RE_DrawScaledText
+
+Quake Live native UI/cgame pass screen-space coordinates and a host text scale.
+FnQL does not yet carry QL's retained host-font atlas, so draw through the
+existing client charset while preserving QL import semantics.
+=================
+*/
+void RE_DrawScaledText( int x, int y, const char *text, int fontHandle, float scale, int maxX, float *outMaxX, qboolean forceColor, const float *baseColor ) {
+	vec4_t color;
+	const char *s;
+	float penX;
+	float advance;
+	float height;
+	qboolean hasMaxX;
+
+	(void)fontHandle;
+
+	if ( outMaxX ) {
+		*outMaxX = static_cast<float>( x );
+	}
+	if ( !text || !text[0] ) {
+		return;
+	}
+
+	if ( baseColor ) {
+		std::copy_n( baseColor, 4, color );
+	} else {
+		Vector4Set( color, 1.0f, 1.0f, 1.0f, 1.0f );
+	}
+
+	height = SCR_HostTextHeight( scale );
+	advance = SCR_HostTextAdvance( scale );
+	if ( height <= 0.0f || advance <= 0.0f ) {
+		return;
+	}
+
+	penX = static_cast<float>( x );
+	hasMaxX = maxX > 0 ? qtrue : qfalse;
+
+	ScopedRenderColor scopedColor( color );
+	for ( s = text; *s; ++s ) {
+		float glyphMaxX;
+
+		if ( SCR_IsHostTextColorEscape( s, nullptr ) ) {
+			if ( !forceColor ) {
+				vec4_t escapedColor;
+
+				std::copy_n( g_color_table[ ColorIndexFromChar( s[1] ) ], 4, escapedColor );
+				escapedColor[3] = color[3];
+				re.SetColor( escapedColor );
+			}
+			++s;
+			continue;
+		}
+
+		glyphMaxX = penX + advance;
+		if ( hasMaxX && glyphMaxX > static_cast<float>( maxX ) ) {
+			if ( outMaxX ) {
+				*outMaxX = 0.0f;
+			}
+			break;
+		}
+
+		SCR_DrawHostScaledChar( penX, static_cast<float>( y ), advance, height, *s );
+		penX = glyphMaxX;
+		if ( outMaxX ) {
+			*outMaxX = glyphMaxX;
+		}
+	}
+}
+
+
+/*
+=================
+RE_MeasureScaledText
+=================
+*/
+void RE_MeasureScaledText( const char *text, const char *end, int fontHandle, float scale, int maxX, float *outWidth, float *outHeight, float *outLeft ) {
+	const char *s;
+	float width;
+	float height;
+	float advance;
+	qboolean drewGlyph;
+	qboolean hasMaxX;
+
+	(void)fontHandle;
+
+	if ( outWidth ) {
+		*outWidth = 0.0f;
+	}
+	if ( outHeight ) {
+		*outHeight = 0.0f;
+	}
+	if ( outLeft ) {
+		*outLeft = 0.0f;
+	}
+	if ( !text ) {
+		return;
+	}
+
+	height = SCR_HostTextHeight( scale );
+	advance = SCR_HostTextAdvance( scale );
+	if ( height <= 0.0f || advance <= 0.0f ) {
+		return;
+	}
+
+	width = 0.0f;
+	drewGlyph = qfalse;
+	hasMaxX = maxX > 0 ? qtrue : qfalse;
+
+	for ( s = text; *s && ( !end || s < end ); ++s ) {
+		float glyphMaxX;
+
+		if ( SCR_IsHostTextColorEscape( s, end ) ) {
+			++s;
+			continue;
+		}
+
+		glyphMaxX = width + advance;
+		if ( hasMaxX && glyphMaxX > static_cast<float>( maxX ) ) {
+			break;
+		}
+
+		width = glyphMaxX;
+		drewGlyph = qtrue;
+	}
+
+	if ( outWidth ) {
+		*outWidth = width;
+	}
+	if ( outHeight && drewGlyph ) {
+		*outHeight = height;
+	}
+}
+
+
 //===============================================================================
 
 /*
@@ -706,12 +879,31 @@ This will be called twice if rendering in stereo mode
 static void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 	bool uiFullscreen;
 	bool uiVisible;
+	bool browserOverlayRequested;
+	bool browserPendingSurface;
+	bool browserDrawableSurface;
+	bool browserSuppressUiRefresh;
 	float menuDepthOfFieldAmount;
 
 	re.BeginFrame( stereoFrame );
 
 	uiFullscreen = uivm && VM_Call( uivm, 0, UI_IS_FULLSCREEN );
 	uiVisible = ( Key_GetCatcher() & KEYCATCH_UI ) && uivm;
+	browserOverlayRequested = ( Key_GetCatcher() & KEYCATCH_BROWSER )
+		|| Cvar_VariableIntegerValue( "web_browserActive" )
+		|| Cvar_VariableIntegerValue( "ui_browserAwesomiumPending" );
+	browserDrawableSurface = browserOverlayRequested && CL_WebHost_HasDrawableSurface();
+	browserPendingSurface = browserOverlayRequested && !browserDrawableSurface;
+	browserSuppressUiRefresh = browserDrawableSurface || ( Key_GetCatcher() & KEYCATCH_BROWSER );
+
+	if ( browserSuppressUiRefresh && cls.state == CA_DISCONNECTED ) {
+		uiFullscreen = true;
+	} else if ( browserPendingSurface && uiFullscreen ) {
+		uiFullscreen = false;
+	}
+	if ( browserDrawableSurface ) {
+		uiFullscreen = true;
+	}
 
 	// wide aspect ratio screens need to have the sides cleared
 	// unless they are displaying game renderings
@@ -774,9 +966,11 @@ static void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 	}
 
 	// the menu draws next
-	if ( uiVisible ) {
+	if ( uiVisible && !browserSuppressUiRefresh ) {
 		VM_Call( uivm, 1, UI_REFRESH, cls.realtime );
 	}
+
+	CL_WebHost_DrawBrowserSurface();
 
 	// console draws next
 	Con_DrawConsole ();

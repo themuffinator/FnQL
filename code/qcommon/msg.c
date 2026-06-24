@@ -621,7 +621,9 @@ void MSG_WriteDeltaUsercmdKey( msg_t *msg, int key, const usercmd_t *from, const
 		from->rightmove == to->rightmove &&
 		from->upmove == to->upmove &&
 		from->buttons == to->buttons &&
-		from->weapon == to->weapon) {
+		from->weapon == to->weapon &&
+		from->weaponPrimary == to->weaponPrimary &&
+		from->fov == to->fov) {
 			MSG_WriteBits( msg, 0, 1 );				// no change
 			return;
 	}
@@ -635,6 +637,8 @@ void MSG_WriteDeltaUsercmdKey( msg_t *msg, int key, const usercmd_t *from, const
 	MSG_WriteDeltaKey( msg, key, from->upmove, to->upmove, 8 );
 	MSG_WriteDeltaKey( msg, key, from->buttons, to->buttons, 16 );
 	MSG_WriteDeltaKey( msg, key, from->weapon, to->weapon, 8 );
+	MSG_WriteDeltaKey( msg, key, from->weaponPrimary, to->weaponPrimary, 8 );
+	MSG_WriteDeltaKey( msg, key, from->fov, to->fov, 8 );
 }
 
 
@@ -665,6 +669,8 @@ void MSG_ReadDeltaUsercmdKey( msg_t *msg, int key, const usercmd_t *from, usercm
 			to->upmove = -127;
 		to->buttons = MSG_ReadDeltaKey( msg, key, from->buttons, 16);
 		to->weapon = MSG_ReadDeltaKey( msg, key, from->weapon, 8);
+		to->weaponPrimary = MSG_ReadDeltaKey( msg, key, from->weaponPrimary, 8);
+		to->fov = MSG_ReadDeltaKey( msg, key, from->fov, 8);
 	} else {
 		to->angles[0] = from->angles[0];
 		to->angles[1] = from->angles[1];
@@ -674,6 +680,8 @@ void MSG_ReadDeltaUsercmdKey( msg_t *msg, int key, const usercmd_t *from, usercm
 		to->upmove = from->upmove;
 		to->buttons = from->buttons;
 		to->weapon = from->weapon;
+		to->weaponPrimary = from->weaponPrimary;
+		to->fov = from->fov;
 	}
 }
 
@@ -721,6 +729,7 @@ static const netField_t entityStateFields[] =
 { NETF(apos.trBase[1]), 0 },
 { NETF(pos.trDelta[2]), 0 },
 { NETF(apos.trBase[0]), 0 },
+{ NETF(pos.gravity), 32 },
 { NETF(event), 10 },
 { NETF(angles2[1]), 0 },
 { NETF(eType), 8 },
@@ -740,7 +749,7 @@ static const netField_t entityStateFields[] =
 { NETF(origin[1]), 0 },
 { NETF(origin[2]), 0 },
 { NETF(solid), 24 },
-{ NETF(powerups), MAX_POWERUPS },
+{ NETF(powerups), 16 },
 { NETF(modelindex), 8 },
 { NETF(otherEntityNum2), GENTITYNUM_BITS },
 { NETF(loopSound), 8 },
@@ -757,12 +766,18 @@ static const netField_t entityStateFields[] =
 { NETF(apos.trDelta[0]), 0 },
 { NETF(apos.trDelta[1]), 0 },
 { NETF(apos.trDelta[2]), 0 },
+{ NETF(apos.gravity), 32 },
 { NETF(time2), 32 },
 { NETF(angles[2]), 0 },
 { NETF(angles2[0]), 0 },
 { NETF(angles2[2]), 0 },
 { NETF(constantLight), 32 },
-{ NETF(frame), 16 }
+{ NETF(frame), 16 },
+{ NETF(jumpTime), 32 },
+{ NETF(doubleJumped), 1 },
+{ NETF(health), 16 },
+{ NETF(armor), 16 },
+{ NETF(location), 8 }
 };
 
 typedef struct {
@@ -1010,14 +1025,18 @@ void MSG_WriteDeltaEntity( msg_t *msg, const entityState_t *from, const entitySt
 	int			trunc;
 	float		fullFloat;
 	const int	*fromF, *toF;
+	int			serializedBytes;
 
 	numFields = ARRAY_LEN( entityStateFields );
 
-	// all fields should be 32 bits to avoid any compiler packing issues
-	// the "number" field is not part of the field list
-	// if this assert fails, someone added a field to the entityState_t
-	// struct without updating the message fields
-	assert( numFields + 1 == sizeof( *from )/4 );
+	serializedBytes = sizeof( from->number );
+	for ( i = 0; i < numFields; i++ ) {
+		assert( ( entityStateFields[i].offset & 3 ) == 0 );
+		if ( entityStateFields[i].offset + 4 > serializedBytes ) {
+			serializedBytes = entityStateFields[i].offset + 4;
+		}
+	}
+	assert( serializedBytes <= (int)sizeof( *from ) );
 
 	// a NULL to is a delta remove message
 	if ( to == NULL ) {
@@ -1322,7 +1341,8 @@ plyer_state_t communication
 */
 
 // using the stringizing operator to save typing...
-#define	PSF(x) #x,(size_t)&((playerState_t*)0)->x
+#define	PSF_OFFSET(x) ((int)(size_t)&((playerState_t*)0)->x)
+#define	PSF(x) #x,PSF_OFFSET(x)
 
 static const netField_t playerStateFields[] = 
 {
@@ -1345,7 +1365,7 @@ static const netField_t playerStateFields[] =
 { PSF(events[0]), 8 },
 { PSF(legsAnim), 8 },
 { PSF(events[1]), 8 },
-{ PSF(pm_flags), 16 },
+{ PSF(pm_flags), 24 },
 { PSF(groundEntityNum), GENTITYNUM_BITS },
 { PSF(weaponstate), 4 },
 { PSF(eFlags), 16 },
@@ -1368,13 +1388,77 @@ static const netField_t playerStateFields[] =
 { PSF(eventParms[1]), 8 },
 { PSF(clientNum), 8 },
 { PSF(weapon), 5 },
+{ PSF(weaponPrimary), 8 },
 { PSF(viewangles[2]), 0 },
 { PSF(grapplePoint[0]), 0 },
 { PSF(grapplePoint[1]), 0 },
 { PSF(grapplePoint[2]), 0 },
-{ PSF(jumppad_ent), GENTITYNUM_BITS },
-{ PSF(loopSound), 16 }
+{ PSF(jumppad_ent), 10 },
+{ PSF(loopSound), 16 },
+{ PSF(jumpTime), 32 },
+{ PSF(doubleJumped), 1 },
+{ PSF(crouchTime), 32 },
+{ PSF(crouchSlideTime), 32 },
+{ PSF(location), 8 },
+{ PSF(fov), 8 },
+{ PSF(forwardmove), 8 },
+{ PSF(rightmove), 8 },
+{ PSF(upmove), 8 }
 };
+
+/*
+===================
+MSG_PlayerStateFieldIsSignedByte
+===================
+*/
+static qboolean MSG_PlayerStateFieldIsSignedByte( const netField_t *field ) {
+	return (qboolean)(
+		field->offset == PSF_OFFSET(forwardmove) ||
+		field->offset == PSF_OFFSET(rightmove) ||
+		field->offset == PSF_OFFSET(upmove) );
+}
+
+/*
+===================
+MSG_PlayerStateFieldValue
+===================
+*/
+static int MSG_PlayerStateFieldValue( const playerState_t *ps, const netField_t *field ) {
+	if ( MSG_PlayerStateFieldIsSignedByte( field ) ) {
+		return *(const signed char *)( (const byte *)ps + field->offset );
+	}
+
+	return *(const int *)( (const byte *)ps + field->offset );
+}
+
+/*
+===================
+MSG_PlayerStateFieldNetworkValue
+===================
+*/
+static int MSG_PlayerStateFieldNetworkValue( const playerState_t *ps, const netField_t *field ) {
+	const int value = MSG_PlayerStateFieldValue( ps, field );
+
+	if ( MSG_PlayerStateFieldIsSignedByte( field ) && field->bits > 0 ) {
+		return (unsigned char)value;
+	}
+
+	return value;
+}
+
+/*
+===================
+MSG_SetPlayerStateFieldValue
+===================
+*/
+static void MSG_SetPlayerStateFieldValue( playerState_t *ps, const netField_t *field, int value ) {
+	if ( MSG_PlayerStateFieldIsSignedByte( field ) ) {
+		*(signed char *)( (byte *)ps + field->offset ) = (signed char)value;
+		return;
+	}
+
+	*(int *)( (byte *)ps + field->offset ) = value;
+}
 
 static const netField_t legacyPlayerStateFields43[] =
 {
@@ -1556,7 +1640,8 @@ void MSG_WriteDeltaPlayerstate( msg_t *msg, const playerState_t *from, const pla
 	int				powerupbits;
 	int				numFields;
 	const netField_t *field;
-	const int		*fromF, *toF;
+	const int		*toF;
+	int				fromValue, toValue;
 	float			fullFloat;
 	int				trunc, lc;
 
@@ -1568,9 +1653,9 @@ void MSG_WriteDeltaPlayerstate( msg_t *msg, const playerState_t *from, const pla
 
 	lc = 0;
 	for ( i = 0, field = playerStateFields ; i < numFields ; i++, field++ ) {
-		fromF = (const int *)( (byte *)from + field->offset );
-		toF = (const int *)( (byte *)to + field->offset );
-		if ( *fromF != *toF ) {
+		fromValue = MSG_PlayerStateFieldValue( from, field );
+		toValue = MSG_PlayerStateFieldValue( to, field );
+		if ( fromValue != toValue ) {
 			lc = i+1;
 		}
 	}
@@ -1578,10 +1663,10 @@ void MSG_WriteDeltaPlayerstate( msg_t *msg, const playerState_t *from, const pla
 	MSG_WriteByte( msg, lc );	// # of changes
 
 	for ( i = 0, field = playerStateFields ; i < lc ; i++, field++ ) {
-		fromF = (const int *)( (byte *)from + field->offset );
-		toF = (const int *)( (byte *)to + field->offset );
+		fromValue = MSG_PlayerStateFieldValue( from, field );
+		toValue = MSG_PlayerStateFieldValue( to, field );
 
-		if ( *fromF == *toF ) {
+		if ( fromValue == toValue ) {
 			MSG_WriteBits( msg, 0, 1 );	// no change
 			continue;
 		}
@@ -1591,6 +1676,7 @@ void MSG_WriteDeltaPlayerstate( msg_t *msg, const playerState_t *from, const pla
 
 		if ( field->bits == 0 ) {
 			// float
+			toF = (const int *)( (byte *)to + field->offset );
 			fullFloat = *(const float *)toF;
 			trunc = (int)fullFloat;
 
@@ -1606,7 +1692,7 @@ void MSG_WriteDeltaPlayerstate( msg_t *msg, const playerState_t *from, const pla
 			}
 		} else {
 			// integer
-			MSG_WriteBits( msg, *toF, field->bits );
+			MSG_WriteBits( msg, MSG_PlayerStateFieldNetworkValue( to, field ), field->bits );
 		}
 	}
 
@@ -1702,8 +1788,8 @@ void MSG_ReadDeltaPlayerstate( msg_t *msg, const playerState_t *from, playerStat
 	int			numFields;
 	int			startBit, endBit;
 	int			print;
-	const int	*fromF;
 	int			*toF;
+	int			value;
 	int			trunc;
 	playerState_t	dummy;
 
@@ -1740,15 +1826,13 @@ void MSG_ReadDeltaPlayerstate( msg_t *msg, const playerState_t *from, playerStat
 	}
 
 	for ( i = 0, field = playerStateFields ; i < lc ; i++, field++ ) {
-		fromF = (int *)( (byte *)from + field->offset );
-		toF = (int *)( (byte *)to + field->offset );
-
 		if ( ! MSG_ReadBits( msg, 1 ) ) {
 			// no change
-			*toF = *fromF;
+			MSG_SetPlayerStateFieldValue( to, field, MSG_PlayerStateFieldValue( from, field ) );
 		} else {
 			if ( field->bits == 0 ) {
 				// float
+				toF = (int *)( (byte *)to + field->offset );
 				if ( MSG_ReadBits( msg, 1 ) == 0 ) {
 					// integral float
 					trunc = MSG_ReadBits( msg, FLOAT_INT_BITS );
@@ -1767,18 +1851,17 @@ void MSG_ReadDeltaPlayerstate( msg_t *msg, const playerState_t *from, playerStat
 				}
 			} else {
 				// integer
-				*toF = MSG_ReadBits( msg, field->bits );
+				value = MSG_ReadBits( msg, field->bits );
+				MSG_SetPlayerStateFieldValue( to, field, value );
 				if ( print ) {
-					Com_Printf( "%s:%i ", field->name, *toF );
+					Com_Printf( "%s:%i ", field->name, MSG_PlayerStateFieldValue( to, field ) );
 				}
 			}
 		}
 	}
 	for ( i=lc,field = &playerStateFields[lc];i<numFields; i++, field++) {
-		fromF = (int *)( (byte *)from + field->offset );
-		toF = (int *)( (byte *)to + field->offset );
 		// no change
-		*toF = *fromF;
+		MSG_SetPlayerStateFieldValue( to, field, MSG_PlayerStateFieldValue( from, field ) );
 	}
 
 

@@ -3821,6 +3821,92 @@ static const void *RB_DrawSurfs( const void *data ) {
 	return (const void *)(cmd + 1);
 }
 
+/*
+==============================
+RB_DrawAdvertisementQueryQuad
+==============================
+*/
+static void RB_DrawAdvertisementQueryQuad( const vec3_t points[4] ) {
+	qglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
+	GL_ClientState( 0, CLS_NONE );
+	qglVertexPointer( 3, GL_FLOAT, 0, points );
+#ifdef RENDERER_GLX
+	GLX_CompatDrawArrays( GL_TRIANGLE_FAN, 0, 4,
+		GLX_LEGACY_DELEGATION_DRAW_ARRAY, GLX_DRAW_DEBUG );
+#else
+	qglDrawArrays( GL_TRIANGLE_FAN, 0, 4 );
+#endif
+}
+
+/*
+==========================
+RB_DrawAdvertisementQueries
+==========================
+*/
+static const void *RB_DrawAdvertisementQueries( const void *data ) {
+	const advertisementQueryCommand_t	*cmd;
+	GLboolean							colorMask[4];
+	GLboolean							depthMaskEnabled;
+	GLboolean							blendEnabled;
+	GLboolean							depthTestEnabled;
+	GLint								depthFunc;
+	cullType_t							cullType;
+	int									i;
+
+	cmd = (const advertisementQueryCommand_t *)data;
+	if ( !qglBeginQueryARB || !qglEndQueryARB || cmd->numEntries <= 0 ) {
+		return (const void *)(cmd + 1);
+	}
+
+	RB_EndSurface();
+
+	GL_GetColorMask( colorMask );
+	qglGetBooleanv( GL_DEPTH_WRITEMASK, &depthMaskEnabled );
+	qglGetBooleanv( GL_BLEND, &blendEnabled );
+	qglGetBooleanv( GL_DEPTH_TEST, &depthTestEnabled );
+	qglGetIntegerv( GL_DEPTH_FUNC, &depthFunc );
+	cullType = glState.faceCulling;
+
+	GL_Bind( tr.whiteImage );
+	GL_Cull( CT_TWO_SIDED );
+	qglDisable( GL_BLEND );
+	qglDepthMask( GL_FALSE );
+	GL_ColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
+
+	if ( !depthTestEnabled ) {
+		qglEnable( GL_DEPTH_TEST );
+	}
+
+	for ( i = 0 ; i < cmd->numEntries ; i++ ) {
+		qglDepthFunc( GL_EQUAL );
+		qglBeginQueryARB( GL_SAMPLES_PASSED_ARB, cmd->entries[i].occlusionQueryIds[0] );
+		RB_DrawAdvertisementQueryQuad( cmd->entries[i].points );
+		qglEndQueryARB( GL_SAMPLES_PASSED_ARB );
+
+		qglDepthFunc( GL_LEQUAL );
+		qglBeginQueryARB( GL_SAMPLES_PASSED_ARB, cmd->entries[i].occlusionQueryIds[1] );
+		RB_DrawAdvertisementQueryQuad( cmd->entries[i].points );
+		qglEndQueryARB( GL_SAMPLES_PASSED_ARB );
+	}
+
+	GL_Cull( cullType );
+	GL_ColorMask( colorMask[0], colorMask[1], colorMask[2], colorMask[3] );
+	if ( blendEnabled ) {
+		qglEnable( GL_BLEND );
+	}
+	if ( depthMaskEnabled ) {
+		qglDepthMask( GL_TRUE );
+	}
+	if ( !depthTestEnabled ) {
+		qglDisable( GL_DEPTH_TEST );
+	}
+	if ( depthFunc != GL_LEQUAL ) {
+		qglDepthFunc( depthFunc );
+	}
+
+	return (const void *)(cmd + 1);
+}
+
 
 /*
 =============
@@ -4241,6 +4327,9 @@ void RB_ExecuteRenderCommands( const void *data ) {
 			break;
 		case RC_SWAP_BUFFERS:
 			data = RB_SwapBuffers( data );
+			break;
+		case RC_ADVERTISEMENT_QUERIES:
+			data = RB_DrawAdvertisementQueries( data );
 			break;
 #ifdef USE_FBO
 		case RC_FINISHBLOOM:

@@ -1183,6 +1183,92 @@ static const void	*RB_DrawSurfs( const void *data ) {
 	return (const void *)(cmd + 1);
 }
 
+/*
+==============================
+RB_DrawAdvertisementQueryQuad
+==============================
+*/
+static void RB_DrawAdvertisementQueryQuad( const vec3_t points[4] ) {
+	int		i;
+
+	qglColor3f( 1.0f, 1.0f, 1.0f );
+	qglBegin( GL_QUADS );
+	for ( i = 0 ; i < 4 ; i++ ) {
+		qglVertex3fv( points[i] );
+	}
+	qglEnd();
+}
+
+/*
+==========================
+RB_DrawAdvertisementQueries
+==========================
+*/
+static const void *RB_DrawAdvertisementQueries( const void *data ) {
+	const advertisementQueryCommand_t	*cmd;
+	GLboolean							colorMask[4];
+	GLboolean							depthMaskEnabled;
+	GLboolean							blendEnabled;
+	GLboolean							depthTestEnabled;
+	GLint								depthFunc;
+	int									cullType;
+	int									i;
+
+	cmd = (const advertisementQueryCommand_t *)data;
+	if ( !glRefConfig.occlusionQuery || !qglBeginQuery || !qglEndQuery || cmd->numEntries <= 0 ) {
+		return (const void *)(cmd + 1);
+	}
+
+	if ( tess.numIndexes ) {
+		RB_EndSurface();
+	}
+
+	qglGetBooleanv( GL_COLOR_WRITEMASK, colorMask );
+	qglGetBooleanv( GL_DEPTH_WRITEMASK, &depthMaskEnabled );
+	qglGetBooleanv( GL_BLEND, &blendEnabled );
+	qglGetBooleanv( GL_DEPTH_TEST, &depthTestEnabled );
+	qglGetIntegerv( GL_DEPTH_FUNC, &depthFunc );
+	cullType = glState.faceCulling;
+
+	GL_Cull( CT_TWO_SIDED );
+	qglDisable( GL_BLEND );
+	qglDepthMask( GL_FALSE );
+	qglColorMask( GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE );
+
+	if ( !depthTestEnabled ) {
+		qglEnable( GL_DEPTH_TEST );
+	}
+
+	for ( i = 0 ; i < cmd->numEntries ; i++ ) {
+		qglDepthFunc( GL_EQUAL );
+		qglBeginQuery( GL_SAMPLES_PASSED, cmd->entries[i].occlusionQueryIds[0] );
+		RB_DrawAdvertisementQueryQuad( cmd->entries[i].points );
+		qglEndQuery( GL_SAMPLES_PASSED );
+
+		qglDepthFunc( GL_LEQUAL );
+		qglBeginQuery( GL_SAMPLES_PASSED, cmd->entries[i].occlusionQueryIds[1] );
+		RB_DrawAdvertisementQueryQuad( cmd->entries[i].points );
+		qglEndQuery( GL_SAMPLES_PASSED );
+	}
+
+	GL_Cull( cullType );
+	qglColorMask( colorMask[0], colorMask[1], colorMask[2], colorMask[3] );
+	if ( blendEnabled ) {
+		qglEnable( GL_BLEND );
+	}
+	if ( depthMaskEnabled ) {
+		qglDepthMask( GL_TRUE );
+	}
+	if ( !depthTestEnabled ) {
+		qglDisable( GL_DEPTH_TEST );
+	}
+	if ( depthFunc != GL_LEQUAL ) {
+		qglDepthFunc( depthFunc );
+	}
+
+	return (const void *)(cmd + 1);
+}
+
 
 /*
 =============
@@ -1852,6 +1938,9 @@ void RB_ExecuteRenderCommands( const void *data ) {
 			break;
 		case RC_SCREENSHOT:
 			data = RB_TakeScreenshotCmd( data );
+			break;
+		case RC_ADVERTISEMENT_QUERIES:
+			data = RB_DrawAdvertisementQueries( data );
 			break;
 		case RC_VIDEOFRAME:
 			data = RB_TakeVideoFrameCmd( data );

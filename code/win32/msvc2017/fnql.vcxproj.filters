@@ -46,6 +46,12 @@
     <ClCompile Include="..\..\client\cl_ui.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\client\cl_webpak.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\client\cl_webui.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\qcommon\cm_load.c">
       <Filter>Source Files</Filter>
     </ClCompile>

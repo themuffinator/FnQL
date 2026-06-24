@@ -7,8 +7,7 @@ executables.
 
 FnQL is currently an early Quake Live migration baseline. A successful build is
 not yet proof of full retail Quake Live compatibility; runtime work should be
-validated against a legitimate Steam installation, normally
-`C:\Program Files (x86)\Steam\steamapps\common\Quake Live`.
+validated against a legitimate Steam installation.
 
 ### meson/ninja
 

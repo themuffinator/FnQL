@@ -8,8 +8,8 @@ public:
 	bool Init( soundInterface_t *si );
 	void Shutdown();
 
-	void StartSound( const float *origin, int entnum, int entchannel, sfxHandle_t sfxHandle );
-	void StartLocalSound( sfxHandle_t sfxHandle, int channelNum );
+	void StartSound( const float *origin, int entnum, int entchannel, sfxHandle_t sfxHandle, float volume );
+	void StartLocalSound( sfxHandle_t sfxHandle, int channelNum, float volume );
 	void StartBackgroundTrack( const char *intro, const char *loop );
 	void StopBackgroundTrack();
 	void RawSamples( int samples, int rate, int width, int channels, const byte *data, float volume );
@@ -300,8 +300,8 @@ bool AudioSystem::Init( soundInterface_t *si ) {
 	deviceRecovery_ = {};
 
 	si->Shutdown = []() { AudioSystem::Get().Shutdown(); };
-	si->StartSound = []( const vec3_t origin, int entnum, int entchannel, sfxHandle_t sfxHandle ) { AudioSystem::Get().StartSound( origin, entnum, entchannel, sfxHandle ); };
-	si->StartLocalSound = []( sfxHandle_t sfxHandle, int channelNum ) { AudioSystem::Get().StartLocalSound( sfxHandle, channelNum ); };
+	si->StartSound = []( const vec3_t origin, int entnum, int entchannel, sfxHandle_t sfxHandle, float volume ) { AudioSystem::Get().StartSound( origin, entnum, entchannel, sfxHandle, volume ); };
+	si->StartLocalSound = []( sfxHandle_t sfxHandle, int channelNum, float volume ) { AudioSystem::Get().StartLocalSound( sfxHandle, channelNum, volume ); };
 	si->StartBackgroundTrack = []( const char *intro, const char *loop ) { AudioSystem::Get().StartBackgroundTrack( intro, loop ); };
 	si->StopBackgroundTrack = []() { AudioSystem::Get().StopBackgroundTrack(); };
 	si->RawSamples = []( int samples, int rate, int width, int channels, const byte *data, float volume ) { AudioSystem::Get().RawSamples( samples, rate, width, channels, data, volume ); };
@@ -449,7 +449,7 @@ sfxHandle_t AudioSystem::RegisterSound( const char *sample, qboolean /*compresse
 	return handle;
 }
 
-void AudioSystem::StartSound( const float *origin, int entnum, int entchannel, sfxHandle_t sfxHandle ) {
+void AudioSystem::StartSound( const float *origin, int entnum, int entchannel, sfxHandle_t sfxHandle, float volume ) {
 	if ( !started_ || hardMuted_ ) {
 		return;
 	}
@@ -466,10 +466,10 @@ void AudioSystem::StartSound( const float *origin, int entnum, int entchannel, s
 		return;
 	}
 
-	world_.StartSound( entnum, entchannel, sfxHandle, sample, origin );
+	world_.StartSound( entnum, entchannel, sfxHandle, sample, origin, volume );
 }
 
-void AudioSystem::StartLocalSound( sfxHandle_t sfxHandle, int channelNum ) {
+void AudioSystem::StartLocalSound( sfxHandle_t sfxHandle, int channelNum, float volume ) {
 	if ( !started_ || hardMuted_ ) {
 		return;
 	}
@@ -477,7 +477,7 @@ void AudioSystem::StartLocalSound( sfxHandle_t sfxHandle, int channelNum ) {
 		Com_Printf( S_COLOR_YELLOW "S_StartLocalSound: handle %i out of range\n", sfxHandle );
 		return;
 	}
-	StartSound( nullptr, world_.ListenerNumber(), channelNum, sfxHandle );
+	StartSound( nullptr, world_.ListenerNumber(), channelNum, sfxHandle, volume );
 }
 
 void AudioSystem::CloseBackgroundStream() {

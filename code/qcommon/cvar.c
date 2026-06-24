@@ -24,6 +24,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "q_shared.h"
 #include "qcommon.h"
 
+#ifndef DEDICATED
+void CL_WebView_PublishCvarChange( const char *name, const char *value, qboolean replicate );
+#endif
+
 static cvar_t	*cvar_vars = NULL;
 static cvar_t	*cvar_cheats;
 static cvar_t	*cvar_developer;
@@ -38,6 +42,54 @@ static int	cvar_group[ CVG_MAX ];
 #define FILE_HASH_SIZE		256
 static	cvar_t	*hashTable[FILE_HASH_SIZE];
 static	qboolean cvar_sort = qfalse;
+
+#ifndef DEDICATED
+/*
+================
+Cvar_ShouldReplicateChange
+
+Returns whether a changed cvar should be marked replicated for the WebUI cvar
+event bridge.
+================
+*/
+static qboolean Cvar_ShouldReplicateChange( const cvar_t *var ) {
+	if ( !var ) {
+		return qfalse;
+	}
+
+	if ( var->flags & ( CVAR_PROTECTED | CVAR_USER_CREATED ) ) {
+		return qtrue;
+	}
+
+	if ( (unsigned int)var->flags & 0x80000000u ) {
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
+/*
+================
+Cvar_PublishChange
+
+Publishes a cvar change using the latched value when retail would expose one.
+================
+*/
+static void Cvar_PublishChange( const cvar_t *var ) {
+	const char	*value;
+
+	if ( !var ) {
+		return;
+	}
+
+	value = var->string ? var->string : "";
+	if ( ( var->flags & CVAR_LATCH ) && var->latchedString ) {
+		value = var->latchedString;
+	}
+
+	CL_WebView_PublishCvarChange( var->name, value, Cvar_ShouldReplicateChange( var ) );
+}
+#endif
 
 /*
 ================
@@ -648,10 +700,15 @@ cvar_t *Cvar_Set2( const char *var_name, const char *value, qboolean force ) {
 		if ( !value )
 			return NULL;
 		// create it
-		if ( !force )
-			return Cvar_Get( var_name, value, CVAR_USER_CREATED );
-		else
+		if ( !force ) {
+			var = Cvar_Get( var_name, value, CVAR_USER_CREATED );
+#ifndef DEDICATED
+			Cvar_PublishChange( var );
+#endif
+			return var;
+		} else {
 			return Cvar_Get( var_name, value, 0 );
+		}
 	}
 
 	if ( var->flags & (CVAR_ROM | CVAR_INIT | CVAR_CHEAT | CVAR_DEVELOPER) && !force )
@@ -725,6 +782,9 @@ cvar_t *Cvar_Set2( const char *var_name, const char *value, qboolean force ) {
 			var->modified = qtrue;
 			var->modificationCount++;
 			cvar_group[ var->group ] = 1;
+#ifndef DEDICATED
+			Cvar_PublishChange( var );
+#endif
 			return var;
 		}
 	}
@@ -749,6 +809,9 @@ cvar_t *Cvar_Set2( const char *var_name, const char *value, qboolean force ) {
 	var->string = CopyString( value );
 	var->value = Q_atof( var->string );
 	var->integer = atoi( var->string );
+#ifndef DEDICATED
+	Cvar_PublishChange( var );
+#endif
 
 	return var;
 }
@@ -1025,6 +1088,32 @@ static void Cvar_Toggle_f( void ) {
 
 	// fallback
 	Cvar_Set2( Cmd_Argv( 1 ), Cmd_Argv( 2 ), qfalse );
+}
+
+
+/*
+============
+Cvar_Add_f
+
+Adds a floating-point amount to a cvar. Retail Quake Live binds demo playback
+controls through this command.
+============
+*/
+static void Cvar_Add_f( void ) {
+	cvar_t	*var;
+	float	currentValue;
+	float	amount;
+
+	if ( Cmd_Argc() != 3 ) {
+		Com_Printf( "usage: cvarAdd <variable> <amount>\n" );
+		return;
+	}
+
+	var = Cvar_FindVar( Cmd_Argv( 1 ) );
+	currentValue = var ? var->value : 0.0f;
+	amount = Q_atof( Cmd_Argv( 2 ) );
+
+	Cvar_Set2( Cmd_Argv( 1 ), va( "%0.3f", currentValue + amount ), qfalse );
 }
 
 
@@ -2037,6 +2126,57 @@ void Cvar_Register( vmCvar_t *vmCvar, const char *varName, const char *defaultVa
 
 /*
 =====================
+Cvar_RegisterBounded
+
+basically a slightly modified Cvar_Get for native modules that need QL-style
+numeric bounds and the affected host cvar pointer
+=====================
+*/
+cvar_t *Cvar_RegisterBounded( vmCvar_t *vmCvar, const char *varName, const char *defaultValue,
+	const char *minimumValue, const char *maximumValue, int flags, int privateFlag )
+{
+	cvar_t	*cv;
+
+	if ((flags & (CVAR_ARCHIVE | CVAR_ROM)) == (CVAR_ARCHIVE | CVAR_ROM)) {
+		Com_DPrintf( S_COLOR_YELLOW "WARNING: Unsetting CVAR_ROM from cvar '%s', "
+			"since it is also CVAR_ARCHIVE\n", varName );
+		flags &= ~CVAR_ROM;
+	}
+
+	if ( flags & INVALID_FLAGS ) {
+		Com_DPrintf( S_COLOR_YELLOW "WARNING: VM tried to set invalid flags 0x%02x on cvar '%s'\n", ( flags & INVALID_FLAGS ), varName );
+		flags &= ~INVALID_FLAGS;
+	}
+
+	cv = Cvar_FindVar( varName );
+
+	if ( cv && ( cv->flags & ( CVAR_PROTECTED | CVAR_PRIVATE ) ) ) {
+		Com_DPrintf( S_COLOR_YELLOW "WARNING: VM tried to register protected cvar '%s' with value '%s'%s\n",
+			varName, defaultValue, ( flags & ~cv->flags ) != 0 ? " and new flags" : "" );
+		if ( cv->flags & CVAR_PRIVATE ) {
+			if ( privateFlag ) {
+				return cv;
+			}
+		}
+	} else {
+		cv = Cvar_Get( varName, defaultValue, flags | CVAR_VM_CREATED );
+		Cvar_CheckRange( cv, minimumValue, maximumValue, CV_FLOAT );
+	}
+
+	if (!vmCvar)
+		return cv;
+
+	vmCvar->handle = cv - cvar_indexes;
+	vmCvar->modificationCount = -1;
+
+	Cvar_Update( vmCvar, 0 );
+
+	return cv;
+}
+
+
+/*
+=====================
 Cvar_Update
 
 updates an interpreted modules' version of a cvar
@@ -2117,6 +2257,8 @@ void Cvar_Init (void)
 	Cmd_AddCommand ("print", Cvar_Print_f);
 	Cmd_AddCommand ("toggle", Cvar_Toggle_f);
 	Cmd_SetCommandCompletionFunc( "toggle", Cvar_CompleteCvarName );
+	Cmd_AddCommand( "cvarAdd", Cvar_Add_f );
+	Cmd_SetCommandCompletionFunc( "cvarAdd", Cvar_CompleteCvarName );
 	Cmd_AddCommand ("set", Cvar_Set_f);
 	Cmd_SetCommandCompletionFunc( "set", Cvar_CompleteCvarName );
 	Cmd_AddCommand ("sets", Cvar_Set_f);

@@ -183,9 +183,8 @@ qboolean AAS_EntityCollision(int entnum,
 	} //end if
 	return qfalse;
 } //end of the function AAS_EntityCollision
-#if 0
 //===========================================================================
-// returns true if in Potentially Hearable Set
+// returns true if in Potentially Visible Set
 //
 // Parameter:				-
 // Returns:					-
@@ -193,10 +192,11 @@ qboolean AAS_EntityCollision(int entnum,
 //===========================================================================
 qboolean AAS_inPVS(vec3_t p1, vec3_t p2)
 {
-	return botimport.inPVS(p1, p2);
+	return botimport.inPVS(p1, p2) ? qtrue : qfalse;
 } //end of the function AAS_InPVS
+#if 0
 //===========================================================================
-// returns true if in Potentially Visible Set
+// returns true if in Potentially Hearable Set
 //
 // Parameter:				-
 // Returns:					-

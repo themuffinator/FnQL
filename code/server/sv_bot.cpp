@@ -84,6 +84,7 @@ int SV_BotAllocateClient( void ) {
 	cl->snapshotMsec = 1000 / sv_fps->integer;
 	cl->netchan.remoteAddress.type = NA_BOT;
 	cl->rate = 0;
+	cl->platformSteamId[0] = '\0';
 
 	cl->tld[0] = '\0';
 	cl->country = "BOT";
@@ -107,6 +108,7 @@ void SV_BotFreeClient( int clientNum ) {
 	cl = &SV_ClientForIndex( clientNum );
 	cl->state = CS_FREE;
 	cl->name[0] = '\0';
+	cl->platformSteamId[0] = '\0';
 	if ( cl->gentity ) {
 		cl->gentity->r.svFlags &= ~SVF_BOT;
 	}

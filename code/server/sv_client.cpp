@@ -810,6 +810,222 @@ void SV_RecordDemoMessage( client_t *client, const msg_t *msg )
 
 /*
 ==================
+SV_ClientSteamIdFromUserinfo
+
+Returns a decimal SteamID supplied by the connecting client, preferring the
+retail QL key name while keeping the older shorthand as a compatibility source.
+==================
+*/
+static const char *SV_ClientSteamIdFromUserinfo( const char *userinfo ) {
+	const char *steamId;
+
+	steamId = Info_ValueForKey( userinfo, "steamid" );
+	if ( steamId[0] ) {
+		return steamId;
+	}
+
+	return Info_ValueForKey( userinfo, "steam" );
+}
+
+
+/*
+==================
+SV_IsClientSteamIdString
+==================
+*/
+static qboolean SV_IsClientSteamIdString( const char *steamId ) {
+	int length;
+
+	if ( !steamId || !steamId[0] ) {
+		return qfalse;
+	}
+
+	for ( length = 0; steamId[length]; ++length ) {
+		if ( steamId[length] < '0' || steamId[length] > '9' ) {
+			return qfalse;
+		}
+	}
+
+	return SV_QBool( length > 0 && length < SV_PLATFORM_STEAM_ID_SIZE );
+}
+
+
+/*
+==================
+SV_CaptureClientSteamId
+==================
+*/
+static void SV_CaptureClientSteamId( client_t *client, const char *userinfo ) {
+	const char *steamId;
+
+	client->platformSteamId[0] = '\0';
+
+	steamId = SV_ClientSteamIdFromUserinfo( userinfo );
+	if ( SV_IsClientSteamIdString( steamId ) ) {
+		Q_strncpyz( client->platformSteamId, steamId, SV_ArraySize( client->platformSteamId ) );
+	}
+}
+
+
+/*
+==================
+SV_MirrorClientSteamIdToUserinfo
+==================
+*/
+static void SV_MirrorClientSteamIdToUserinfo( const client_t *client, char *userinfo, int userinfoSize ) {
+	std::array<char, MAX_INFO_STRING> mirrored{};
+
+	if ( !client->platformSteamId[0] ) {
+		return;
+	}
+
+	Q_strncpyz( mirrored.data(), userinfo, SV_ArraySize( mirrored ) );
+	if ( Info_SetValueForKey_s( mirrored.data(), userinfoSize, "steam", client->platformSteamId ) &&
+		Info_SetValueForKey_s( mirrored.data(), userinfoSize, "steamid", client->platformSteamId ) ) {
+		Q_strncpyz( userinfo, mirrored.data(), userinfoSize );
+	}
+}
+
+
+/*
+==================
+SV_VerifyClientSteamAuth
+
+FnQL has no live Steam auth owner yet. Keep the retained QL native import
+explicitly offline-compatible by accepting local/LAN clients and failing remote
+clients closed.
+==================
+*/
+qboolean SV_VerifyClientSteamAuth( int clientNum ) {
+	if ( !SV_IsClientIndex( clientNum ) ) {
+		Com_DPrintf( "Server auth validate client %d via %s [%s]: invalid client slot\n",
+			clientNum, SV_GetPlatformAuthProviderLabel(), SV_GetPlatformAuthPolicyLabel() );
+		return qfalse;
+	}
+
+	const client_t &client = SV_ClientForIndex( clientNum );
+	if ( client.state == CS_FREE || client.state == CS_ZOMBIE ) {
+		Com_DPrintf( "Server auth validate client %d via %s [%s]: inactive client slot\n",
+			clientNum, SV_GetPlatformAuthProviderLabel(), SV_GetPlatformAuthPolicyLabel() );
+		return qfalse;
+	}
+
+	if ( Sys_IsLANAddress( &client.netchan.remoteAddress ) ) {
+		Com_DPrintf( "Server auth validate client %d via %s [%s]: accepted local/LAN client\n",
+			clientNum, SV_GetPlatformAuthProviderLabel(), SV_GetPlatformAuthPolicyLabel() );
+		return qtrue;
+	}
+
+	Com_DPrintf( "Server auth validate client %d via %s [%s]: rejected remote client\n",
+		clientNum, SV_GetPlatformAuthProviderLabel(), SV_GetPlatformAuthPolicyLabel() );
+	return qfalse;
+}
+
+static void SV_LogSteamStatsStubLifecycle( const char *stage, const char *detail ) {
+	Com_DPrintf( "Server stats %s via %s [%s]: %s\n",
+		stage ? stage : "update",
+		SV_GetServerStatsProviderLabel(),
+		SV_GetServerStatsPolicyLabel(),
+		detail ? detail : "no detail" );
+}
+
+
+/*
+==================
+SV_SteamStats_AddFieldValue
+==================
+*/
+void SV_SteamStats_AddFieldValue( int clientNum, int statIndex, int delta ) {
+	char detail[128];
+
+	if ( delta == 0 ) {
+		return;
+	}
+
+	Com_sprintf( detail, sizeof( detail ),
+		"ignored stat index %d delta %d for client %d", statIndex, delta, clientNum );
+	SV_LogSteamStatsStubLifecycle( "field-delta", detail );
+
+	(void)clientNum;
+	(void)statIndex;
+	(void)delta;
+}
+
+
+/*
+==================
+SV_SteamStats_UnlockAchievement
+==================
+*/
+void SV_SteamStats_UnlockAchievement( int clientNum, int achievementId ) {
+	char detail[128];
+
+	Com_sprintf( detail, sizeof( detail ),
+		"ignored achievement %d for client %d", achievementId, clientNum );
+	SV_LogSteamStatsStubLifecycle( "achievement-unlock", detail );
+
+	(void)clientNum;
+	(void)achievementId;
+}
+
+
+/*
+==================
+SV_SteamStats_HasAchievement
+==================
+*/
+qboolean SV_SteamStats_HasAchievement( int clientNum, int achievementId ) {
+	char detail[128];
+
+	Com_sprintf( detail, sizeof( detail ),
+		"query unavailable for achievement %d on client %d", achievementId, clientNum );
+	SV_LogSteamStatsStubLifecycle( "achievement-query", detail );
+
+	(void)clientNum;
+	(void)achievementId;
+	return qfalse;
+}
+
+
+/*
+==================
+SV_SteamStats_ProcessMatchReport
+==================
+*/
+const void *SV_SteamStats_ProcessMatchReport( const void *report, char *buffer, int bufferSize ) {
+	SV_LogSteamStatsStubLifecycle( "match-report", "ignored MATCH_REPORT for disabled Steam stats owner" );
+
+	(void)buffer;
+	(void)bufferSize;
+	return report;
+}
+
+
+/*
+==================
+SV_SteamStats_ProcessEvent
+==================
+*/
+void SV_SteamStats_ProcessEvent( unsigned int steamIdLow, unsigned int steamIdHigh,
+		const void *clientStats, const char *eventName, const void *payload ) {
+	char detail[128];
+
+	Com_sprintf( detail, sizeof( detail ),
+		"ignored %s event for %llu",
+		eventName && eventName[0] ? eventName : "unnamed",
+		( (unsigned long long)steamIdHigh << 32 ) | steamIdLow );
+	SV_LogSteamStatsStubLifecycle( "event-process", detail );
+
+	(void)steamIdLow;
+	(void)steamIdHigh;
+	(void)clientStats;
+	(void)eventName;
+	(void)payload;
+}
+
+
+/*
+==================
 SV_DirectConnect
 
 A "connect" OOB command has been received
@@ -1127,6 +1343,9 @@ gotnewcl:
 	// init the netchan queue
 	newcl->netchan_end_queue = &newcl->netchan_start_queue;
 
+	SV_CaptureClientSteamId( newcl, userinfo.data() );
+	SV_MirrorClientSteamIdToUserinfo( newcl, userinfo.data(), SV_ArraySize( userinfo ) );
+
 	// save the userinfo
 	Q_strncpyz( newcl->userinfo, userinfo.data(), SV_ArraySize(newcl->userinfo) );
 
@@ -1252,6 +1471,7 @@ void SV_DropClient( client_t *drop, const char *reason ) {
 
 	// nuke user info
 	SV_SetUserinfo( SV_ClientIndex( drop ), "" );
+	drop->platformSteamId[0] = '\0';
 
 	drop->justConnected = qfalse;
 
@@ -1980,24 +2200,19 @@ static int SV_MixedClientChecksumFeed( const std::array<int, 512> &checksums, in
 
 
 static void SV_VerifyPaks_f( client_t *cl ) {
-	int nChkSum1, nChkSum2, nClientPaks, i, nCurArg;
+	int nBinChkSum, nChkSum1, nClientPaks, i, nCurArg;
 	std::array<int, 512> nClientChkSum{};
 	const char *pArg;
 	bool bGood = true;
 
 	// if we are pure, we "expect" the client to load certain things from
 	// certain pk3 files, namely we want the client to have loaded the
-	// ui and cgame that we think should be loaded based on the pure setting
+	// retail cgame binary that we think should be loaded based on the pure setting
 	//
 	if ( sv.pure != 0 ) {
 
-		nChkSum1 = nChkSum2 = 0;
-
-		// we run the game, so determine which cgame and ui the client "should" be running
-		bGood = FS_FileIsInPAK( "vm/cgame.qvm", &nChkSum1, nullptr );
-		if ( !FS_FileIsInPAK( "vm/ui.qvm", &nChkSum2, nullptr ) ) {
-			bGood = false;
-		}
+		nBinChkSum = nChkSum1 = 0;
+		bGood = FS_FileIsInPAK( QL_NATIVE_CGAME_DLL, &nBinChkSum, nullptr );
 
 		nClientPaks = Cmd_Argc();
 
@@ -2023,21 +2238,15 @@ static void SV_VerifyPaks_f( client_t *cl ) {
 		// we basically use this while loop to avoid using 'goto' :)
 		while (bGood) {
 
-			// must be at least 6: "cl_paks cgame ui @ firstref ... numChecksums"
+			// must be at least 6: "cl_paks serverId bin @ firstref ... numChecksums"
 			// numChecksums is encoded
 			if (nClientPaks < 6) {
 				bGood = false;
 				break;
 			}
-			// verify first to be the cgame checksum
+			// verify first to be the binary checksum
 			pArg = Cmd_Argv(nCurArg++);
-			if ( !*pArg || *pArg == '@' || SV_ParseInt(pArg) != nChkSum1 ) {
-				bGood = false;
-				break;
-			}
-			// verify the second to be the ui checksum
-			pArg = Cmd_Argv(nCurArg++);
-			if ( !*pArg || *pArg == '@' || SV_ParseInt(pArg) != nChkSum2 ) {
+			if ( !*pArg || *pArg == '@' || SV_ParseInt(pArg) != nBinChkSum ) {
 				bGood = false;
 				break;
 			}
@@ -2174,6 +2383,8 @@ void SV_UserinfoChanged( client_t *cl, qboolean updateUserinfo, qboolean runFilt
 
 	if ( !updateUserinfo )
 		return;
+
+	SV_MirrorClientSteamIdToUserinfo( cl, cl->userinfo, SV_ArraySize( cl->userinfo ) );
 
 	// name for C code
 	val = Info_ValueForKey( cl->userinfo, "name" );
@@ -2682,6 +2893,10 @@ void SV_ExecuteClientMessage( client_t *cl, msg_t *msg ) {
 	cl->reliableAcknowledge = reliableAcknowledge;
 
 	cl->justConnected = qfalse;
+
+	if ( com_protocol && com_protocol->integer == QL_RETAIL_PROTOCOL_VERSION ) {
+		(void)MSG_ReadByte( msg );
+	}
 
 	// cl->serverId = serverId;
 

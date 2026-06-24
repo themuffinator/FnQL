@@ -43,6 +43,15 @@ static	byte		*fileBase;
 
 static int	c_gridVerts;
 
+#define	LUMP_ADVERTISEMENTS_QL	17
+
+typedef struct {
+	int		cellId;
+	float	normal[3];
+	float	points[4][3];
+	char	model[MAX_QPATH];
+} dAdvertisement_t;
+
 //===============================================================================
 
 static void HSVtoRGB( float h, float s, float v, float rgb[3] )
@@ -1861,6 +1870,90 @@ static	void R_LoadSubmodels( const lump_t *l ) {
 	}
 }
 
+/*
+=================
+R_LoadAdvertisements
+=================
+*/
+static void R_LoadAdvertisements( const lump_t *l ) {
+	const dAdvertisement_t	*in;
+	qlAdvertisement_t		*out;
+	bmodel_t				*bmodel;
+	int						count;
+	int						i;
+	int						j;
+	int						modelNum;
+
+	s_worldData.numAdvertisements = 0;
+	s_worldData.advertisements = NULL;
+
+	if ( !l->filelen ) {
+		return;
+	}
+
+	if ( l->filelen % sizeof( *in ) ) {
+		ri.Error( ERR_DROP, "R_LoadAdvertisements: funny lump size\n" );
+	}
+
+	count = l->filelen / sizeof( *in );
+	if ( count >= MAX_MAP_ADVERTISEMENTS ) {
+		ri.Error( ERR_DROP, "R_LoadAdvertisements: number of advertisements exceeds level limit.\n" );
+	}
+
+	in = (const dAdvertisement_t *)( fileBase + l->fileofs );
+	out = ri.Hunk_Alloc( count * sizeof( *out ), h_low );
+	s_worldData.advertisements = out;
+
+	for ( i = 0; i < count; i++, in++ ) {
+		modelNum = in->model[0] == '*' ? atoi( in->model + 1 ) : -1;
+		if ( modelNum < 0 || modelNum >= s_worldData.numBModels ) {
+			bmodel = NULL;
+		} else {
+			bmodel = &s_worldData.bmodels[modelNum];
+		}
+
+		if ( !bmodel ) {
+			ri.Printf( PRINT_DEVELOPER,
+				"cell ID %d has no brush model. It has been ignored.\n",
+				LittleLong( in->cellId ) );
+			continue;
+		}
+
+		if ( bmodel->numSurfaces > 1 ) {
+			ri.Printf( PRINT_DEVELOPER,
+				"cell ID %d has multiple surfaces. It has been ignored.\n",
+				LittleLong( in->cellId ) );
+			continue;
+		}
+
+		out[s_worldData.numAdvertisements].cellId = LittleLong( in->cellId );
+		out[s_worldData.numAdvertisements].bmodel = bmodel;
+		VectorAdd( bmodel->bounds[0], bmodel->bounds[1], out[s_worldData.numAdvertisements].center );
+		VectorScale( out[s_worldData.numAdvertisements].center, 0.5f, out[s_worldData.numAdvertisements].center );
+		for ( j = 0; j < 3; j++ ) {
+			out[s_worldData.numAdvertisements].normal[j] = LittleFloat( in->normal[j] );
+		}
+		for ( j = 0; j < 4; j++ ) {
+			out[s_worldData.numAdvertisements].points[j][0] = LittleFloat( in->points[j][0] );
+			out[s_worldData.numAdvertisements].points[j][1] = LittleFloat( in->points[j][1] );
+			out[s_worldData.numAdvertisements].points[j][2] = LittleFloat( in->points[j][2] );
+		}
+		out[s_worldData.numAdvertisements].cullState = CULL_OUT;
+		out[s_worldData.numAdvertisements].occlusionQueryIds[0] = 0;
+		out[s_worldData.numAdvertisements].occlusionQueryIds[1] = 0;
+		if ( glRefConfig.occlusionQuery && qglGenQueries ) {
+			qglGenQueries( 2, out[s_worldData.numAdvertisements].occlusionQueryIds );
+		}
+		out[s_worldData.numAdvertisements].queryListIndex = -1;
+		out[s_worldData.numAdvertisements].viewArea = 0;
+		out[s_worldData.numAdvertisements].projectedNormalX = 0.0f;
+		out[s_worldData.numAdvertisements].projectedNormalY = 0.0f;
+		out[s_worldData.numAdvertisements].sourceIndex = i;
+
+		s_worldData.numAdvertisements++;
+	}
+}
+
 
 
 //==================================================================
@@ -2715,6 +2808,7 @@ void RE_LoadWorldMap( const char *name ) {
 		void *v;
 	} buffer;
 	byte		*startMarker;
+	lump_t		qlAdvertisementsLump = { 0, 0 };
 
 	if ( tr.worldMapLoaded ) {
 		ri.Error( ERR_DROP, "ERROR: attempted to redundantly load world map" );
@@ -2750,6 +2844,9 @@ void RE_LoadWorldMap( const char *name ) {
 	if ( !buffer.b ) {
 		ri.Error (ERR_DROP, "RE_LoadWorldMap: %s not found", name);
 	}
+	if ( size < (int)sizeof( dheader_t ) ) {
+		ri.Error( ERR_DROP, "%s: %s has truncated header", __func__, name );
+	}
 	if ( size >= (int)sizeof( dheader43_t ) ) {
 		const dheader43_t *rawHeader = (const dheader43_t *)buffer.b;
 
@@ -2769,6 +2866,7 @@ void RE_LoadWorldMap( const char *name ) {
 
 	// clear tr.world so if the level fails to load, the next
 	// try will not look at the partially loaded version
+	R_ShutdownAdvertisements();
 	tr.world = NULL;
 
 	Com_Memset( &s_worldData, 0, sizeof( s_worldData ) );
@@ -2784,14 +2882,40 @@ void RE_LoadWorldMap( const char *name ) {
 	fileBase = (byte *)header;
 
 	i = LittleLong (header->version);
-	if ( i != BSP_VERSION ) {
-		ri.Error (ERR_DROP, "RE_LoadWorldMap: %s has wrong version number (%i should be %i)", 
-			name, i, BSP_VERSION);
+	if ( i != BSP_VERSION && i != BSP_VERSION_QL ) {
+		ri.Error (ERR_DROP, "RE_LoadWorldMap: %s has wrong version number (%i should be %i or %i)",
+			name, i, BSP_VERSION, BSP_VERSION_QL);
 	}
 
 	// swap all the lumps
 	for (i=0 ; i<sizeof(dheader_t)/4 ; i++) {
 		((int *)header)[i] = LittleLong ( ((int *)header)[i]);
+	}
+
+	for ( i = 0; i < HEADER_LUMPS; i++ ) {
+		int32_t ofs = header->lumps[i].fileofs;
+		int32_t len = header->lumps[i].filelen;
+		if ( (uint32_t)ofs > MAX_QINT || (uint32_t)len > MAX_QINT || ofs + len > size || ofs + len < 0 ) {
+			ri.Error( ERR_DROP, "%s: %s has wrong lump[%i] size/offset", __func__, name, i );
+		}
+	}
+
+	if ( header->version == BSP_VERSION_QL ) {
+		const lump_t *extraLump;
+
+		if ( size < (int)( sizeof( dheader_t ) + sizeof( lump_t ) ) ) {
+			ri.Error( ERR_DROP, "%s: %s has truncated QL extra lump header", __func__, name );
+		}
+
+		extraLump = (const lump_t *)( (byte *)header + sizeof( dheader_t ) );
+		qlAdvertisementsLump.fileofs = LittleLong( extraLump[LUMP_ADVERTISEMENTS_QL - HEADER_LUMPS].fileofs );
+		qlAdvertisementsLump.filelen = LittleLong( extraLump[LUMP_ADVERTISEMENTS_QL - HEADER_LUMPS].filelen );
+		if ( (uint32_t)qlAdvertisementsLump.fileofs > MAX_QINT ||
+			(uint32_t)qlAdvertisementsLump.filelen > MAX_QINT ||
+			qlAdvertisementsLump.fileofs + qlAdvertisementsLump.filelen > size ||
+			qlAdvertisementsLump.fileofs + qlAdvertisementsLump.filelen < 0 ) {
+			ri.Error( ERR_DROP, "%s: %s has wrong QL advertisement lump size/offset", __func__, name );
+		}
 	}
 
 	// load into heap
@@ -2804,6 +2928,9 @@ void RE_LoadWorldMap( const char *name ) {
 	R_LoadMarksurfaces (&header->lumps[LUMP_LEAFSURFACES]);
 	R_LoadNodesAndLeafs (&header->lumps[LUMP_NODES], &header->lumps[LUMP_LEAFS]);
 	R_LoadSubmodels (&header->lumps[LUMP_MODELS]);
+	if ( header->version == BSP_VERSION_QL ) {
+		R_LoadAdvertisements( &qlAdvertisementsLump );
+	}
 	R_LoadVisibility( &header->lumps[LUMP_VISIBILITY] );
 	R_LoadLightGrid( &header->lumps[LUMP_LIGHTGRID] );
 

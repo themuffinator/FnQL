@@ -297,6 +297,10 @@ PROTOCOL
 #define	OLD_PROTOCOL_VERSION	68
 // new protocol with UDP spoofing protection:
 #define	NEW_PROTOCOL_VERSION	71
+// Quake Live retail protocol. Kept opt-in until the remaining protocol deltas
+// are migrated and validated against retail Steam assets.
+#define	QL_RETAIL_PROTOCOL_VERSION	91
+#define	QL_NATIVE_CGAME_DLL	"cgamex86.dll"
 // 1.31 - 67
 
 #define DEFAULT_PROTOCOL_VERSION	OLD_PROTOCOL_VERSION
@@ -386,6 +390,13 @@ typedef enum {
 	TRAP_COS,
 	TRAP_ATAN2,
 	TRAP_SQRT,
+	TRAP_MATRIXMULTIPLY,
+	TRAP_ANGLEVECTORS,
+	TRAP_PERPENDICULARVECTOR,
+	TRAP_FLOOR,
+	TRAP_CEIL,
+	TRAP_TESTPRINTINT,
+	TRAP_TESTPRINTFLOAT,
 } sharedTraps_t;
 
 typedef enum {
@@ -398,17 +409,20 @@ typedef enum {
 	VM_COUNT
 } vmIndex_t;
 
-// we don't need more than 4 arguments (counting callnum) for vmMain, at least in Vanilla Quake3
-#define MAX_VMMAIN_CALL_ARGS 4
+// Quake Live native cgame exports and some compatibility VMs use more than
+// Vanilla Quake3's four vmMain arguments.
+#define MAX_VMMAIN_CALL_ARGS 16
 
-typedef intptr_t (QDECL *vmMainFunc_t)( int command, int arg0, int arg1, int arg2 );
+typedef intptr_t (QDECL *vmMainFunc_t)( int command, ... );
 
 typedef intptr_t (*syscall_t)( intptr_t *parms );
 typedef intptr_t (QDECL *dllSyscall_t)( intptr_t callNum, ... );
 typedef void (QDECL *dllEntry_t)( dllSyscall_t syscallptr );
+typedef void (QDECL *dllEntryNative_t)( void **exports, void *imports, int *apiVersion );
 
 void	VM_Init( void );
 vm_t	*VM_Create( vmIndex_t index, syscall_t systemCalls, dllSyscall_t dllSyscalls, vmInterpret_t interpret );
+vm_t	*VM_CreateNative( vmIndex_t index, syscall_t systemCalls, dllSyscall_t dllSyscalls, vmInterpret_t interpret, void *dllImports, int dllApiVersion );
 
 void	VM_Free( vm_t *vm );
 void	VM_Clear(void);
@@ -417,6 +431,8 @@ void	VM_Forced_Unload_Done(void);
 vm_t	*VM_Restart( vm_t *vm );
 
 intptr_t	QDECL VM_Call( vm_t *vm, int nargs, int callNum, ... );
+qboolean	VM_CallGameRegisterCvars( vm_t *vm );
+qboolean	VM_CallCGameRegisterCvars( vm_t *vm );
 
 void	VM_Debug( int level );
 void	VM_CheckBounds( const vm_t *vm, unsigned int address, unsigned int length );
@@ -583,6 +599,10 @@ cvar_t *Cvar_Get( const char *var_name, const char *value, int flags );
 
 void	Cvar_Register( vmCvar_t *vmCvar, const char *varName, const char *defaultValue, int flags, int privateFlag );
 // basically a slightly modified Cvar_Get for the interpreted modules
+
+cvar_t *Cvar_RegisterBounded( vmCvar_t *vmCvar, const char *varName, const char *defaultValue,
+	const char *minimumValue, const char *maximumValue, int flags, int privateFlag );
+// Cvar_Register plus Quake Live numeric bounds for native modules.
 
 void	Cvar_Update( vmCvar_t *vmCvar, int privateFlag );
 // updates an interpreted modules' version of a cvar
@@ -1164,6 +1184,7 @@ qboolean CL_Disconnect( qboolean showMainMenu );
 void CL_ResetOldGame( void );
 void CL_Shutdown( const char *finalmsg, qboolean quit );
 void CL_Frame( int msec, int realMsec );
+void CL_WebHost_Frame( void );
 qboolean CL_GameCommand( void );
 void CL_KeyEvent (int key, qboolean down, unsigned time);
 
@@ -1204,6 +1225,9 @@ void CL_FlushMemory( void );
 void CL_StartHunkUsers( void );
 // start all the client stuff using the hunk
 
+void CL_RegisterCGameCvars( void );
+// register cgame-owned native startup cvars without initializing a level
+
 void CL_Snd_Restart(void);
 // Restart sound subsystem
 
@@ -1226,6 +1250,7 @@ qboolean CL_GameSwitch( void );
 // server interface
 //
 void SV_Init( void );
+void SV_RegisterGameCvars( void );
 void SV_Shutdown( const char *finalmsg );
 void SV_Frame( int msec, int realMsec );
 void SV_TrackCvarChanges( void );

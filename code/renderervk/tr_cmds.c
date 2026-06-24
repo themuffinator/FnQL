@@ -275,6 +275,10 @@ static void R_PerformanceCounters( void ) {
 	surfaceLightDebug = ( r_surfaceLightProxyDebug && r_surfaceLightProxyDebug->integer ) ? qtrue : qfalse;
 	shadowCorrectnessDebug = ( r_shadowCorrectness && r_shadowCorrectness->integer ) ? qtrue : qfalse;
 
+	if ( ri.SetClientMessageRendererNodeCount ) {
+		ri.SetClientMessageRendererNodeCount( tr.pc.c_leafs );
+	}
+
 	if ( !r_speeds->integer && !shadowDebug && !csmDebug && !spotShadowDebug && !staticLightDebug && !surfaceLightDebug && !shadowCorrectnessDebug ) {
 		// clear the counters even if we aren't printing
 		Com_Memset( &tr.pc, 0, sizeof( tr.pc ) );

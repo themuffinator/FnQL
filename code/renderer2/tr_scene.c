@@ -284,6 +284,19 @@ void RE_AddAdditiveLightToScene( const vec3_t org, float intensity, float r, flo
 	RE_AddDynamicLightToScene( org, intensity, r, g, b, qtrue );
 }
 
+/*
+=====================
+AdvertisementBridge_UpdateLoadingViewParameters
+
+Mirrors the retail no-argument renderer export used by loading-screen updates.
+=====================
+*/
+void AdvertisementBridge_UpdateLoadingViewParameters( void ) {
+	if ( ri.AdvertisementBridge_RefreshLoadingViewParameters ) {
+		ri.AdvertisementBridge_RefreshLoadingViewParameters();
+	}
+}
+
 
 void RE_BeginScene(const refdef_t *fd)
 {

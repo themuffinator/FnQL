@@ -744,6 +744,274 @@ void R_AddBrushModelSurfaces ( trRefEntity_t *ent ) {
 #endif
 }
 
+/*
+=================
+R_CullAdvertisementQuad
+=================
+*/
+static int R_CullAdvertisementQuad( const vec3_t points[4] ) {
+	cplane_t	*frust;
+	float		dist;
+	int			anyBack;
+	int			front;
+	int			back;
+	int			i;
+	int			j;
+
+	if ( r_nocull->integer ) {
+		return CULL_CLIP;
+	}
+
+	anyBack = 0;
+	for ( i = 0 ; i < 4 ; i++ ) {
+		frust = &tr.viewParms.frustum[i];
+		front = 0;
+		back = 0;
+
+		for ( j = 0 ; j < 4 ; j++ ) {
+			dist = DotProduct( points[j], frust->normal ) - frust->dist;
+			if ( dist > 0.0f ) {
+				front = 1;
+				if ( back ) {
+					break;
+				}
+			} else {
+				back = 1;
+			}
+		}
+
+		if ( !front ) {
+			return CULL_OUT;
+		}
+
+		anyBack |= back;
+	}
+
+	if ( !anyBack ) {
+		return CULL_IN;
+	}
+
+	return CULL_CLIP;
+}
+
+/*
+=================
+R_AddAdvertisementSurface
+=================
+*/
+static int R_AddAdvertisementSurface( qlAdvertisement_t *advertisement ) {
+	msurface_t	*surface;
+	vec3_t		viewDelta;
+	int			cull;
+
+	if ( !advertisement->bmodel || advertisement->bmodel->numSurfaces <= 0 ) {
+		return CULL_OUT;
+	}
+
+	surface = advertisement->bmodel->firstSurface;
+	if ( surface->viewCount == tr.viewCount ) {
+		return advertisement->cullState;
+	}
+
+	VectorSubtract( tr.refdef.vieworg, advertisement->center, viewDelta );
+	if ( DotProduct( advertisement->normal, viewDelta ) <= 0.0f ) {
+		return CULL_OUT;
+	}
+
+	surface->viewCount = tr.viewCount;
+	cull = R_CullAdvertisementQuad( advertisement->points );
+	if ( cull == CULL_OUT ) {
+		return cull;
+	}
+
+	R_AddDrawSurf( surface->data, surface->shader, surface->fogIndex, 0 );
+	return cull;
+}
+
+static advertisementQueryEntry_t	r_advertisementQueryEntries[MAX_MAP_ADVERTISEMENTS];
+static int							r_numAdvertisementQueryEntries;
+
+/*
+=================
+R_UpdateAdvertisements
+=================
+*/
+void R_UpdateAdvertisements( void ) {
+	qlAdvertisement_t	*advertisement;
+	int					cull;
+	int					i;
+
+	r_numAdvertisementQueryEntries = 0;
+
+	if ( !tr.world || tr.world->numAdvertisements <= 0 ) {
+		return;
+	}
+
+	if ( tr.refdef.rdflags & ( RDF_NOWORLDMODEL | RDF_HYPERSPACE ) ) {
+		return;
+	}
+
+	tr.currentEntity = &tr.worldEntity;
+	tr.currentEntityNum = REFENTITYNUM_WORLD;
+	tr.shiftedEntityNum = tr.currentEntityNum << QSORT_REFENTITYNUM_SHIFT;
+
+	for ( i = 0 ; i < tr.world->numAdvertisements ; i++ ) {
+		advertisement = &tr.world->advertisements[i];
+		if ( tr.viewParms.frameSceneNum == 1 ) {
+			advertisement->cullState = CULL_OUT;
+			advertisement->queryListIndex = -1;
+			advertisement->viewArea = 0;
+			advertisement->projectedNormalX = 0.0f;
+			advertisement->projectedNormalY = 0.0f;
+		}
+
+		if ( !advertisement->bmodel ) {
+			continue;
+		}
+
+		if ( !R_inPVS( tr.refdef.vieworg, advertisement->center ) ) {
+			continue;
+		}
+
+		cull = R_AddAdvertisementSurface( advertisement );
+		if ( tr.viewParms.frameSceneNum != 1 || cull == CULL_OUT ) {
+			continue;
+		}
+
+		advertisement->cullState = cull;
+		advertisement->viewArea = tr.refdef.width * tr.refdef.height;
+		advertisement->projectedNormalX = DotProduct( tr.refdef.viewaxis[1], advertisement->normal );
+		advertisement->projectedNormalY = DotProduct( tr.refdef.viewaxis[2], advertisement->normal );
+
+		if ( !qglBeginQueryARB || !qglEndQueryARB || cull != CULL_IN ||
+			advertisement->occlusionQueryIds[0] == 0 ||
+			r_numAdvertisementQueryEntries >= MAX_MAP_ADVERTISEMENTS ) {
+			continue;
+		}
+
+		r_advertisementQueryEntries[r_numAdvertisementQueryEntries].occlusionQueryIds[0] =
+			advertisement->occlusionQueryIds[0];
+		r_advertisementQueryEntries[r_numAdvertisementQueryEntries].occlusionQueryIds[1] =
+			advertisement->occlusionQueryIds[1];
+		Com_Memcpy( r_advertisementQueryEntries[r_numAdvertisementQueryEntries].points,
+			advertisement->points,
+			sizeof( r_advertisementQueryEntries[r_numAdvertisementQueryEntries].points ) );
+
+		advertisement->queryListIndex = r_numAdvertisementQueryEntries;
+		r_numAdvertisementQueryEntries++;
+	}
+}
+
+/*
+=================
+R_QueueAdvertisementQueryCmd
+=================
+*/
+void R_QueueAdvertisementQueryCmd( void ) {
+	if ( r_numAdvertisementQueryEntries <= 0 ) {
+		return;
+	}
+
+	R_AddAdvertisementQueryCmd( r_advertisementQueryEntries, r_numAdvertisementQueryEntries );
+}
+
+/*
+=================
+R_ShutdownAdvertisements
+=================
+*/
+void R_ShutdownAdvertisements( void ) {
+	qlAdvertisement_t	*advertisement;
+	int					i;
+
+	r_numAdvertisementQueryEntries = 0;
+
+	if ( !tr.world || !tr.world->advertisements || tr.world->numAdvertisements <= 0 ) {
+		return;
+	}
+
+	for ( i = 0 ; i < tr.world->numAdvertisements ; i++ ) {
+		advertisement = &tr.world->advertisements[i];
+		if ( qglDeleteQueriesARB && advertisement->occlusionQueryIds[0] != 0 ) {
+			qglDeleteQueriesARB( 2, advertisement->occlusionQueryIds );
+		}
+
+		advertisement->cullState = CULL_OUT;
+		advertisement->occlusionQueryIds[0] = 0;
+		advertisement->occlusionQueryIds[1] = 0;
+		advertisement->queryListIndex = -1;
+		advertisement->viewArea = 0;
+		advertisement->projectedNormalX = 0.0f;
+		advertisement->projectedNormalY = 0.0f;
+	}
+}
+
+/*
+=================
+R_AdvertisementList_f
+=================
+*/
+void R_AdvertisementList_f( void ) {
+	qlAdvertisement_t	*advertisement;
+	bmodel_t			*bmodel;
+	msurface_t			*surface;
+	const char			*shaderName;
+	int					bmodelIndex;
+	int					i;
+
+	if ( !tr.world ) {
+		ri.Printf( PRINT_ALL, "advertlist: no world model loaded\n" );
+		return;
+	}
+
+	if ( tr.world->numAdvertisements <= 0 ) {
+		ri.Printf( PRINT_ALL, "advertlist: world=%s loaded=0\n", tr.world->name );
+		return;
+	}
+
+	ri.Printf( PRINT_ALL, "advertlist: world=%s loaded=%d\n",
+		tr.world->name,
+		tr.world->numAdvertisements );
+
+	for ( i = 0; i < tr.world->numAdvertisements; i++ ) {
+		advertisement = &tr.world->advertisements[i];
+		bmodel = advertisement->bmodel;
+		surface = ( bmodel && bmodel->numSurfaces > 0 ) ? bmodel->firstSurface : NULL;
+		shaderName = ( surface && surface->shader && surface->shader->name[0] ) ? surface->shader->name : "<null>";
+		bmodelIndex = bmodel ? (int)( bmodel - tr.world->bmodels ) : -1;
+
+		ri.Printf( PRINT_ALL,
+			"advertlist: [%d] cellId=%d sourceIndex=%d model=*%d surfaces=%d shader=%s center=(%.1f %.1f %.1f) normal=(%.3f %.3f %.3f)\n",
+			i,
+			advertisement->cellId,
+			advertisement->sourceIndex,
+			bmodelIndex,
+			bmodel ? bmodel->numSurfaces : 0,
+			shaderName,
+			advertisement->center[0],
+			advertisement->center[1],
+			advertisement->center[2],
+			advertisement->normal[0],
+			advertisement->normal[1],
+			advertisement->normal[2] );
+
+		ri.Printf( PRINT_ALL,
+			"advertlist:      points=(%.1f %.1f %.1f) (%.1f %.1f %.1f) (%.1f %.1f %.1f) (%.1f %.1f %.1f)\n",
+			advertisement->points[0][0],
+			advertisement->points[0][1],
+			advertisement->points[0][2],
+			advertisement->points[1][0],
+			advertisement->points[1][1],
+			advertisement->points[1][2],
+			advertisement->points[2][0],
+			advertisement->points[2][1],
+			advertisement->points[2][2],
+			advertisement->points[3][0],
+			advertisement->points[3][1],
+			advertisement->points[3][2] );
+	}
+}
+
 
 /*
 =============================================================

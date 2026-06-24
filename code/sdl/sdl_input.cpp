@@ -427,7 +427,9 @@ IN_ActivateMouse
 static void IN_ActivateMouse( void )
 {
 	const qboolean consoleActive = ( Key_GetCatcher() & KEYCATCH_CONSOLE ) ? qtrue : qfalse;
+	const qboolean browserActive = ( Key_GetCatcher() & KEYCATCH_BROWSER ) ? qtrue : qfalse;
 	const qboolean grabMouse = ( !in_nograb->integer || consoleActive ) ? qtrue : qfalse;
+	const qboolean relativeMouse = ( in_mouse->integer == 1 && grabMouse && !browserActive ) ? qtrue : qfalse;
 
 	if ( !mouseAvailable )
 		return;
@@ -436,10 +438,10 @@ static void IN_ActivateMouse( void )
 	{
 		IN_GobbleMouseEvents();
 
-		SDL_SetWindowRelativeMouseMode( SDL_window, ( in_mouse->integer == 1 && grabMouse ) ? true : false );
+		SDL_SetWindowRelativeMouseMode( SDL_window, relativeMouse ? true : false );
 		SDL_SetWindowMouseGrab( SDL_window, grabMouse ? true : false );
 
-		if ( glw_state.isFullscreen )
+		if ( glw_state.isFullscreen && !browserActive )
 			IN_ShowCursor( qfalse );
 
 		SDL_WarpMouseInWindow( SDL_window, glw_state.window_width / 2, glw_state.window_height / 2 );
@@ -458,7 +460,7 @@ static void IN_ActivateMouse( void )
 				SDL_SetWindowRelativeMouseMode( SDL_window, false );
 				SDL_SetWindowMouseGrab( SDL_window, false );
 			} else {
-				SDL_SetWindowRelativeMouseMode( SDL_window, in_mouse->integer == 1 ? true : false );
+				SDL_SetWindowRelativeMouseMode( SDL_window, relativeMouse ? true : false );
 				SDL_SetWindowMouseGrab( SDL_window, true );
 			}
 
@@ -1181,6 +1183,7 @@ static void IN_HandleWindowEvent( Uint32 type, const SDL_WindowEvent *window, in
 		case SDL_EVENT_WINDOW_MINIMIZED:
 			gw_active = qfalse;
 			gw_minimized = qtrue;
+			CL_WebHost_NotifyAppActivation( qfalse );
 			mouse_focus = qfalse;
 			break;
 
@@ -1209,6 +1212,7 @@ static void IN_HandleWindowEvent( Uint32 type, const SDL_WindowEvent *window, in
 			if ( glw_state.isFullscreen ) {
 				gw_minimized = qtrue;
 			}
+			CL_WebHost_NotifyAppActivation( qfalse );
 			mouse_focus = qfalse;
 			break;
 
@@ -1218,6 +1222,7 @@ static void IN_HandleWindowEvent( Uint32 type, const SDL_WindowEvent *window, in
 			IN_SyncModifiers();
 			gw_active = qtrue;
 			gw_minimized = qfalse;
+			CL_WebHost_NotifyAppActivation( qtrue );
 			mouse_focus = qtrue;
 			GLW_UpdateWindowState();
 			if ( re.SetColorMappings ) {
@@ -1404,7 +1409,7 @@ void HandleEvents( void )
 				break;
 
 			case SDL_EVENT_MOUSE_MOTION:
-				if( mouseActive )
+				if( mouseActive || ( Key_GetCatcher() & KEYCATCH_BROWSER ) )
 				{
 					if( !e.motion.xrel && !e.motion.yrel )
 						break;
@@ -1423,7 +1428,14 @@ void HandleEvents( void )
 						case SDL_BUTTON_RIGHT:  b = K_MOUSE2;     break;
 						case SDL_BUTTON_X1:     b = K_MOUSE4;     break;
 						case SDL_BUTTON_X2:     b = K_MOUSE5;     break;
-						default:                b = K_AUX1 + ( e.button.button - SDL_BUTTON_X2 + 1 ) % 16; break;
+						default:
+							if ( e.button.button >= SDL_BUTTON_X2 + 1 && e.button.button <= SDL_BUTTON_X2 + 4 ) {
+								b = K_MOUSE6 + ( e.button.button - ( SDL_BUTTON_X2 + 1 ) );
+							} else {
+								const int auxOffset = e.button.button > SDL_BUTTON_X2 + 4 ? e.button.button - ( SDL_BUTTON_X2 + 5 ) : 0;
+								b = K_AUX1 + ( auxOffset % 16 );
+							}
+							break;
 					}
 					Com_QueueEvent( in_eventTime, SE_KEY, b,
 						( e.type == SDL_EVENT_MOUSE_BUTTON_DOWN ? qtrue : qfalse ), 0, NULL );

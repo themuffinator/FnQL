@@ -79,6 +79,7 @@ cvar_t	*cl_showTimeDelta;
 
 cvar_t	*cl_shownet;
 cvar_t	*cl_autoRecordDemo;
+cvar_t	*cl_freezeDemo;
 cvar_t	*cl_drawRecording;
 cvar_t	*cl_menuAspect;
 cvar_t	*cl_menuDepthOfField;
@@ -783,9 +784,9 @@ static void CL_Record_f( void ) {
 		return;
 	}
 
-	clc.demorecording = qtrue;
-
 	Com_TruncateLongString( clc.recordNameShort, clc.recordName );
+	clc.demorecording = qtrue;
+	CL_WebView_PublishGameDemo( clc.recordName, clc.recordNameShort );
 
 	if ( Cvar_VariableIntegerValue( "ui_recordSPDemo" ) ) {
 	  clc.spDemoRecording = qtrue;
@@ -1274,6 +1275,7 @@ void CL_MapLoading( void ) {
 		return;
 	}
 
+	CL_WebHost_Shutdown();
 	Con_Close();
 	Key_SetCatcher( 0 );
 
@@ -1297,6 +1299,7 @@ void CL_MapLoading( void ) {
 		SCR_UpdateScreen();
 		clc.connectTime = -RETRANSMIT_TIMEOUT;
 		NET_StringToAdr( cls.servername, &clc.serverAddress, NA_UNSPEC );
+		CL_WebView_PublishGameStartForAddress( &clc.serverAddress );
 		// we don't need a challenge on the localhost
 		CL_CheckForResend();
 	}
@@ -1315,6 +1318,301 @@ void CL_ClearState( void ) {
 //	S_StopAllSounds();
 
 	cl = {};
+}
+
+/*
+====================
+CL_ParseUnsignedLongLongString
+====================
+*/
+static qboolean CL_ParseUnsignedLongLongString( const char *text, unsigned long long *outValue ) {
+	const char *ch;
+	unsigned long long value;
+
+	if ( outValue ) {
+		*outValue = 0ull;
+	}
+
+	if ( !text || !text[0] || !outValue ) {
+		return qfalse;
+	}
+
+	value = 0ull;
+	for ( ch = text; *ch; ++ch ) {
+		unsigned int digit;
+
+		if ( *ch < '0' || *ch > '9' ) {
+			return qfalse;
+		}
+
+		digit = static_cast<unsigned int>( *ch - '0' );
+		if ( value > ( ULLONG_MAX - digit ) / 10ull ) {
+			return qfalse;
+		}
+
+		value = value * 10ull + digit;
+	}
+
+	*outValue = value;
+	return qtrue;
+}
+
+/*
+====================
+CL_ParseSteamIdString
+
+Parses the decimal retail SteamID transport into low/high identity words.
+====================
+*/
+static qboolean CL_ParseSteamIdString( const char *steamId, unsigned int *steamIdLow, unsigned int *steamIdHigh ) {
+	unsigned long long value;
+
+	if ( steamIdLow ) {
+		*steamIdLow = 0;
+	}
+	if ( steamIdHigh ) {
+		*steamIdHigh = 0;
+	}
+
+	if ( !steamId || !steamId[0] || !steamIdLow || !steamIdHigh ) {
+		return qfalse;
+	}
+
+	if ( !CL_ParseUnsignedLongLongString( steamId, &value ) ) {
+		return qfalse;
+	}
+
+	*steamIdLow = static_cast<unsigned int>( value & 0xffffffffull );
+	*steamIdHigh = static_cast<unsigned int>( ( value >> 32 ) & 0xffffffffull );
+	return qtrue;
+}
+
+/*
+====================
+CL_GetConfigStringValue
+====================
+*/
+static const char *CL_GetConfigStringValue( int index ) {
+	int offset;
+
+	if ( index < 0 || index >= MAX_CONFIGSTRINGS ) {
+		return "";
+	}
+
+	offset = cl.gameState.stringOffsets[index];
+	if ( offset <= 0 || offset >= cl.gameState.dataCount ||
+		offset >= static_cast<int>( sizeof( cl.gameState.stringData ) ) ) {
+		return "";
+	}
+
+	return cl.gameState.stringData + offset;
+}
+
+/*
+====================
+CL_CopyClientIdentity
+
+Returns the native cgame identity sidecar when available, with a configstring
+fallback for the safe data already replicated through CS_PLAYERS.
+====================
+*/
+qboolean CL_CopyClientIdentity( int clientNum, cgameClientIdentity_t *identity ) {
+	char info[MAX_INFO_STRING];
+	char generatedCleanName[CG_CLIENT_IDENTITY_NAME_CHARS];
+	const char *configstring;
+	const char *steamId;
+	const char *name;
+	const char *cleanName;
+	qboolean hasIdentity;
+
+	if ( !identity ) {
+		return qfalse;
+	}
+
+	Com_Memset( identity, 0, sizeof( *identity ) );
+
+	if ( clientNum < 0 || clientNum >= MAX_CLIENTS ) {
+		return qfalse;
+	}
+
+	if ( cgvm && cgvm->dllExports &&
+		VM_Call( cgvm, 2, CG_COPY_CLIENT_IDENTITY,
+			static_cast<intptr_t>( clientNum ), reinterpret_cast<intptr_t>( identity ) ) ) {
+		return ( identity->identityLow || identity->identityHigh ||
+			identity->displayName[0] || identity->cleanName[0] ) ? qtrue : qfalse;
+	}
+
+	configstring = CL_GetConfigStringValue( CS_PLAYERS + clientNum );
+	if ( !configstring[0] ) {
+		return qfalse;
+	}
+
+	Q_strncpyz( info, configstring, sizeof( info ) );
+
+	identity->clientNum = clientNum;
+	hasIdentity = qfalse;
+
+	steamId = Info_ValueForKey( info, "steamid" );
+	if ( !steamId[0] ) {
+		steamId = Info_ValueForKey( info, "steam" );
+	}
+	if ( CL_ParseSteamIdString( steamId, &identity->identityLow, &identity->identityHigh ) &&
+		( identity->identityLow || identity->identityHigh ) ) {
+		hasIdentity = qtrue;
+	}
+
+	name = Info_ValueForKey( info, "n" );
+	if ( !name[0] ) {
+		name = Info_ValueForKey( info, "name" );
+	}
+	if ( name[0] ) {
+		Q_strncpyz( identity->displayName, name, sizeof( identity->displayName ) );
+		hasIdentity = qtrue;
+	}
+
+	cleanName = Info_ValueForKey( info, "cn" );
+	if ( !cleanName[0] ) {
+		cleanName = Info_ValueForKey( info, "cleanName" );
+	}
+	if ( cleanName[0] ) {
+		Q_strncpyz( identity->cleanName, cleanName, sizeof( identity->cleanName ) );
+		hasIdentity = qtrue;
+	} else if ( identity->displayName[0] ) {
+		Q_strncpyz( generatedCleanName, identity->displayName, sizeof( generatedCleanName ) );
+		Q_CleanStr( generatedCleanName );
+		Q_strncpyz( identity->cleanName,
+			generatedCleanName[0] ? generatedCleanName : identity->displayName, sizeof( identity->cleanName ) );
+	}
+
+	return hasIdentity;
+}
+
+/*
+====================
+CL_GetClientSteamId
+====================
+*/
+qboolean CL_GetClientSteamId( int clientNum, unsigned int *steamIdLow, unsigned int *steamIdHigh ) {
+	cgameClientIdentity_t identity;
+
+	if ( steamIdLow ) {
+		*steamIdLow = 0;
+	}
+	if ( steamIdHigh ) {
+		*steamIdHigh = 0;
+	}
+
+	if ( !steamIdLow || !steamIdHigh ) {
+		return qfalse;
+	}
+
+	if ( !CL_CopyClientIdentity( clientNum, &identity ) ) {
+		return qfalse;
+	}
+
+	if ( !identity.identityLow && !identity.identityHigh ) {
+		return qfalse;
+	}
+
+	*steamIdLow = identity.identityLow;
+	*steamIdHigh = identity.identityHigh;
+	return qtrue;
+}
+
+/*
+====================
+CL_GetWorkshopDownloadInfo
+
+Mirrors the retained UI download-info bridge using the active QL-style
+download cvars until a full Steam workshop queue exists locally.
+====================
+*/
+qboolean CL_GetWorkshopDownloadInfo( unsigned int itemIdLow, unsigned int itemIdHigh, unsigned long long *outDownloaded, unsigned long long *outTotal ) {
+	char itemText[32];
+	char downloadedText[32];
+	char totalText[32];
+	unsigned long long itemId;
+	unsigned long long requestedItemId;
+	unsigned long long downloaded;
+	unsigned long long total;
+
+	if ( outDownloaded ) {
+		*outDownloaded = 0ull;
+	}
+	if ( outTotal ) {
+		*outTotal = 0ull;
+	}
+
+	Cvar_VariableStringBuffer( "cl_downloadItem", itemText, sizeof( itemText ) );
+	if ( !itemText[0] || !CL_ParseUnsignedLongLongString( itemText, &itemId ) ) {
+		return qfalse;
+	}
+
+	requestedItemId = ( static_cast<unsigned long long>( itemIdHigh ) << 32 ) | itemIdLow;
+	if ( requestedItemId && requestedItemId != itemId ) {
+		return qfalse;
+	}
+
+	Cvar_VariableStringBuffer( "cl_downloadCount", downloadedText, sizeof( downloadedText ) );
+	Cvar_VariableStringBuffer( "cl_downloadSize", totalText, sizeof( totalText ) );
+	if ( !CL_ParseUnsignedLongLongString( downloadedText, &downloaded ) ) {
+		downloaded = 0ull;
+	}
+	if ( !CL_ParseUnsignedLongLongString( totalText, &total ) ) {
+		total = 0ull;
+	}
+
+	if ( outDownloaded ) {
+		*outDownloaded = downloaded;
+	}
+	if ( outTotal ) {
+		*outTotal = total;
+	}
+
+	return qtrue;
+}
+
+/*
+====================
+CL_IsVoiceSenderMuted
+====================
+*/
+qboolean CL_IsVoiceSenderMuted( int clientNum ) {
+	unsigned int steamIdLow;
+	unsigned int steamIdHigh;
+
+	if ( !CL_GetClientSteamId( clientNum, &steamIdLow, &steamIdHigh ) ) {
+		return qfalse;
+	}
+
+	return CL_IsSteamIdentityMuted( steamIdLow, steamIdHigh );
+}
+
+/*
+====================
+CL_SetClientSpeakingState
+====================
+*/
+void CL_SetClientSpeakingState( int clientNum, qboolean speaking ) {
+	if ( !cgvm || !cgvm->dllExports || cls.state != CA_ACTIVE || !cl.snap.valid ) {
+		return;
+	}
+
+	if ( clientNum < 0 || clientNum >= MAX_CLIENTS ) {
+		return;
+	}
+
+	VM_Call( cgvm, 2, CG_SET_CLIENT_SPEAKING_STATE,
+		static_cast<intptr_t>( clientNum ), static_cast<intptr_t>( speaking ? 1 : 0 ) );
+}
+
+/*
+====================
+CL_SetLocalSpeakingState
+====================
+*/
+void CL_SetLocalSpeakingState( qboolean speaking ) {
+	CL_SetClientSpeakingState( cl.snap.ps.clientNum, speaking );
 }
 
 
@@ -1390,6 +1688,7 @@ This is also called on Com_Error and Com_Quit, so it shouldn't cause any errors
 qboolean CL_Disconnect( qboolean showMainMenu ) {
 	static bool cl_disconnecting = false;
 	bool cl_restarted = false;
+	const qboolean publishGameEnd = ( cls.state >= CA_CONNECTED || clc.demoplaying || clc.demorecording ) ? qtrue : qfalse;
 
 	if ( !com_cl_running || !com_cl_running->integer ) {
 		return ToQboolean( cl_restarted );
@@ -1400,6 +1699,10 @@ qboolean CL_Disconnect( qboolean showMainMenu ) {
 	}
 
 	cl_disconnecting = true;
+
+	if ( publishGameEnd ) {
+		CL_WebView_PublishGameEnd();
+	}
 
 	// Stop demo recording
 	if ( clc.demorecording ) {
@@ -1854,6 +2157,7 @@ static void CL_Connect_f( void ) {
 
 	// server connection string
 	Cvar_Set( "cl_currentServerAddress", server );
+	CL_WebView_PublishGameStartForAddress( &clc.serverAddress );
 }
 
 #define MAX_RCON_MESSAGE (MAX_STRING_CHARS+4)
@@ -1937,14 +2241,21 @@ CL_SendPureChecksums
 */
 static void CL_SendPureChecksums( void ) {
 	std::array<char, MAX_STRING_CHARS - 1> cMsg;
+	const char *pChecksums;
+	int binChecksum;
 	int len;
 
 	if ( !cl_connectedToPureServer || clc.demoplaying )
 		return;
 
 	// if we are pure we need to send back a command with our referenced pk3 checksums
-	len = Com_sprintf( cMsg.data(), static_cast<int>( cMsg.size() ), "cp %d ", cl.serverId );
-	Q_strncpyz( cMsg.data() + len, FS_ReferencedPakPureChecksums( static_cast<int>( cMsg.size() ) - len - 1 ), static_cast<int>( cMsg.size() ) - len );
+	if ( !FS_FileIsInPAK( QL_NATIVE_CGAME_DLL, &binChecksum, nullptr ) ) {
+		Com_Error( ERR_FATAL, "CL_SendPureChecksums: no pak file for %s", QL_NATIVE_CGAME_DLL );
+	}
+
+	len = Com_sprintf( cMsg.data(), static_cast<int>( cMsg.size() ), "cp %d %d ", cl.serverId, binChecksum );
+	pChecksums = FS_ReferencedPakPureChecksums( static_cast<int>( cMsg.size() ) - len - 1 );
+	Q_strncpyz( cMsg.data() + len, pChecksums, static_cast<int>( cMsg.size() ) - len );
 
 	CL_AddReliableCommand( cMsg.data(), qfalse );
 }
@@ -2317,6 +2628,7 @@ static void CL_BeginDownload( const char *localName, const char *remoteName ) {
 
 	// Set so UI gets access to it
 	Cvar_Set( "cl_downloadName", remoteName );
+	Cvar_Set( "cl_downloadItem", "" );
 	Cvar_Set( "cl_downloadSize", "0" );
 	Cvar_Set( "cl_downloadCount", "0" );
 	Cvar_SetIntegerValue( "cl_downloadTime", cls.realtime );
@@ -3220,6 +3532,8 @@ CL_Frame
 void CL_Frame( int msec, int realMsec ) {
 	int gameMsec = msec;
 	int audioMsec = realMsec;
+	float oldViewYaw;
+	float oldViewPitch;
 
 #ifdef USE_CURL
 	if ( download.cURL ) {
@@ -3326,6 +3640,9 @@ void CL_Frame( int msec, int realMsec ) {
 	}
 
 	// decide the simulation time
+	if ( clc.demoplaying && cl_freezeDemo && cl_freezeDemo->integer ) {
+		gameMsec = 0;
+	}
 	cls.frametime = realMsec;
 	cls.gameFrametime = gameMsec;
 	cls.realtime += realMsec;
@@ -3349,12 +3666,21 @@ void CL_Frame( int msec, int realMsec ) {
 	// resend a connection request if necessary
 	CL_CheckForResend();
 
+	CL_CheckCGameNativeImportIntegrity();
+
 	// decide on the serverTime to render
 	CL_SetCGameTime();
+
+	oldViewYaw = cl.viewangles[YAW];
+	oldViewPitch = cl.viewangles[PITCH];
 
 	// update the screen
 	cls.framecount++;
 	SCR_UpdateScreen();
+
+	if ( oldViewYaw != cl.viewangles[YAW] || oldViewPitch != cl.viewangles[PITCH] ) {
+		CL_SetRetailClientMessageViewangleDeltaFlag();
+	}
 
 	// update audio
 	S_Update( audioMsec );
@@ -3738,6 +4064,15 @@ static void CL_InitRef( void ) {
 	rimp.Sys_SetClipboardBitmap = Sys_SetClipboardBitmap;
 	rimp.Sys_LowPhysicalMemory = Sys_LowPhysicalMemory;
 	rimp.Com_RealTime = Com_RealTime;
+	rimp.SetClientMessageRendererNodeCount = CL_SetRetailClientMessageRendererNodeCount;
+	rimp.PublishGameScreenshot = CL_WebView_PublishGameScreenshot;
+	rimp.AdvertisementBridge_RefreshLoadingViewParameters = CL_AdvertisementBridge_RefreshLoadingViewParameters;
+	rimp.AdvertisementBridge_GetCellDisplayState = CL_AdvertisementBridge_GetCellDisplayState;
+	rimp.AdvertisementBridge_GetCellLabel = CL_AdvertisementBridge_GetCellLabel;
+	rimp.AdvertisementBridge_GetLabelList1Count = CL_AdvertisementBridge_GetLabelList1Count;
+	rimp.AdvertisementBridge_GetLabelList1Entry = CL_AdvertisementBridge_GetLabelList1Entry;
+	rimp.AdvertisementBridge_GetLabelList2Count = CL_AdvertisementBridge_GetLabelList2Count;
+	rimp.AdvertisementBridge_GetLabelList2Entry = CL_AdvertisementBridge_GetLabelList2Entry;
 
 	rimp.GLimp_InitGamma = GLimp_InitGamma;
 	rimp.GLimp_SetGamma = GLimp_SetGamma;
@@ -4172,6 +4507,8 @@ void CL_Init( void ) {
 
 	cl_autoRecordDemo = Cvar_Get ("cl_autoRecordDemo", "0", CVAR_ARCHIVE);
 	Cvar_SetDescription( cl_autoRecordDemo, "Auto-record demos when starting or joining a game." );
+	cl_freezeDemo = Cvar_Get( "cl_freezeDemo", "0", CVAR_TEMP );
+	Cvar_SetDescription( cl_freezeDemo, "Hold demo simulation time while preserving client input and UI frame timing." );
 	cl_drawRecording = Cvar_Get("cl_drawRecording", "1", CVAR_ARCHIVE);
 	Cvar_SetDescription( cl_drawRecording, "Hide (0) or shorten (1) \"RECORDING\" HUD message when recording demo." );
 	cl_menuAspect = Cvar_Get( "cl_menuAspect", "0", CVAR_ARCHIVE );
@@ -4346,6 +4683,8 @@ void CL_Init( void ) {
 	// Make sure cg_stereoSeparation is zero as that variable is deprecated and should not be used anymore.
 	Cvar_Get ("cg_stereoSeparation", "0", CVAR_ROM);
 
+	CL_WebHost_Init();
+
 	//
 	// register client commands
 	//
@@ -4358,6 +4697,7 @@ void CL_Init( void ) {
 	Cmd_AddCommand ("renderer_switch", CL_RendererSwitch_f);
 #endif
 	Cmd_AddCommand ("disconnect", CL_Disconnect_f);
+	Cmd_AddCommand( "togglemenu", CL_ToggleMenu_f );
 	Cmd_AddCommand ("record", CL_Record_f);
 	Cmd_SetCommandCompletionFunc( "record", CL_CompleteRecordName );
 	Cmd_AddCommand ("demo", CL_PlayDemo_f);
@@ -4389,6 +4729,9 @@ void CL_Init( void ) {
 	Cmd_SetCommandCompletionFunc( "dlmap", CL_CompleteDownloadMap );
 #endif
 	Cmd_AddCommand( "modelist", CL_ModeList_f );
+	QLWebHost_RegisterCommands();
+	CL_WebPak_Init();
+	CL_WebHost_BootstrapAwesomiumMenu();
 
 	Cvar_Set( "cl_running", "1" );
 #ifdef USE_MD5
@@ -4425,6 +4768,8 @@ void CL_Shutdown( const char *finalmsg, qboolean quit ) {
 
 	noGameRestart = quit != qfalse;
 	CL_Disconnect( qfalse );
+	CL_WebHost_Shutdown();
+	CL_WebPak_Shutdown();
 	CL_HudShutdown();
 
 	// clear and mute all sounds until next registration
@@ -4466,6 +4811,7 @@ void CL_Shutdown( const char *finalmsg, qboolean quit ) {
 	Cmd_RemoveCommand ("serverinfo");
 	Cmd_RemoveCommand ("systeminfo");
 	Cmd_RemoveCommand ("modelist");
+	QLWebHost_UnregisterCommands();
 
 #ifdef USE_CURL
 	Com_DL_Cleanup( &download );
@@ -4745,6 +5091,7 @@ static void CL_ServerStatusResponse( const netadr_t *from, msg_t *msg ) {
 	char	*v[2];
 	int		i, l, score, ping;
 	int		len;
+	qboolean publishBrowserDetails;
 	serverStatus_t *serverStatus;
 
 	serverStatus = nullptr;
@@ -4760,6 +5107,7 @@ static void CL_ServerStatusResponse( const netadr_t *from, msg_t *msg ) {
 	}
 
 	s = MSG_ReadStringLine( msg );
+	publishBrowserDetails = CL_WebHost_OnServerStatusResponseInfo( from, s );
 
 	len = 0;
 	Com_sprintf(serverStatus->string.data() + len, static_cast<int>( serverStatus->string.size() ) - len, "%s", s);
@@ -4803,6 +5151,9 @@ static void CL_ServerStatusResponse( const netadr_t *from, msg_t *msg ) {
 
 		len = strlen(serverStatus->string.data());
 		Com_sprintf(serverStatus->string.data() + len, static_cast<int>( serverStatus->string.size() ) - len, "\\%s", s);
+		if ( publishBrowserDetails ) {
+			CL_WebHost_OnServerStatusResponsePlayer( from, s );
+		}
 
 		if (serverStatus->print) {
 			//score = ping = 0;
@@ -4829,6 +5180,9 @@ static void CL_ServerStatusResponse( const netadr_t *from, msg_t *msg ) {
 	serverStatus->pending = false;
 	if (serverStatus->print) {
 		serverStatus->retrieved = true;
+	}
+	if ( publishBrowserDetails ) {
+		CL_WebHost_OnServerStatusResponseComplete( from );
 	}
 }
 

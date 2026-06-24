@@ -139,8 +139,8 @@ struct wavinfo_t {
 // Interface between Q3 sound "api" and the sound backend
 struct soundInterface_t {
 	void (*Shutdown)(void);
-	void (*StartSound)( const vec3_t origin, int entnum, int entchannel, sfxHandle_t sfx );
-	void (*StartLocalSound)( sfxHandle_t sfx, int channelNum );
+	void (*StartSound)( const vec3_t origin, int entnum, int entchannel, sfxHandle_t sfx, float volume );
+	void (*StartLocalSound)( sfxHandle_t sfx, int channelNum, float volume );
 	void (*StartBackgroundTrack)( const char *intro, const char *loop );
 	void (*StopBackgroundTrack)( void );
 	void (*RawSamples)(int samples, int rate, int width, int channels, const byte *data, float volume);

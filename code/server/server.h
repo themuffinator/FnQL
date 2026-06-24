@@ -153,6 +153,8 @@ struct leakyBucket_s {
 	leakyBucket_t *prev, *next;
 };
 
+#define SV_PLATFORM_STEAM_ID_SIZE	32
+
 typedef enum {
 	GSA_INIT = 0,	// gamestate never sent with current sv.serverId
 	GSA_SENT_ONCE,	// gamestate sent once, client can reply with any (messageAcknowledge - gamestateMessageNum) >= 0 and correct serverId
@@ -177,6 +179,7 @@ typedef struct client_s {
 	char			lastClientCommandString[MAX_STRING_CHARS];
 	sharedEntity_t	*gentity;			// SV_GentityNum(clientnum)
 	char			name[MAX_NAME_LENGTH];			// extracted from userinfo, high bits masked
+	char			platformSteamId[SV_PLATFORM_STEAM_ID_SIZE];	// server-owned QL SteamID
 
 	gameStateAck_t	gamestateAck;
 	qboolean		downloading;		// set at "download", reset at gamestate retransmission
@@ -319,6 +322,8 @@ extern	cvar_t	*sv_dlRate;
 extern	cvar_t	*sv_gametype;
 extern	cvar_t	*sv_pure;
 extern	cvar_t	*sv_floodProtect;
+extern	cvar_t	*sv_enableRankings;
+extern	cvar_t	*sv_rankingsActive;
 extern	cvar_t	*sv_lanForceRate;
 extern	cvar_t	*sv_autoRecordDemos;
 extern	cvar_t	*sv_cheats;
@@ -424,8 +429,31 @@ playerState_t *SV_GameClientNum( int num );
 svEntity_t	*SV_SvEntityForGentity( sharedEntity_t *gEnt );
 sharedEntity_t *SV_GEntityForSvEntity( svEntity_t *svEnt );
 void		SV_InitGameProgs ( void );
+void		SV_RegisterGameCvars( void );
+const char	*SV_GetPlatformAuthProviderLabel( void );
+const char	*SV_GetPlatformAuthPolicyLabel( void );
+const char	*SV_GetSteamServerProviderLabel( void );
+const char	*SV_GetSteamServerPolicyLabel( void );
+const char	*SV_GetWorkshopProviderLabel( void );
+const char	*SV_GetWorkshopPolicyLabel( void );
+const char	*SV_GetServerStatsProviderLabel( void );
+const char	*SV_GetServerStatsPolicyLabel( void );
+void		SV_RefreshPlatformServiceCvars( void );
+void		SV_GameRefreshRankingsPolicyCvars( void );
 void		SV_ShutdownGameProgs ( void );
 void		SV_RestartGameProgs( void );
+qboolean	SV_ClientSteamId( int clientNum, unsigned int *steamIdLow, unsigned int *steamIdHigh );
+qboolean	SV_VerifyClientSteamAuth( int clientNum );
+void		SV_SteamStats_AddFieldValue( int clientNum, int statIndex, int delta );
+void		SV_SteamStats_UnlockAchievement( int clientNum, int achievementId );
+qboolean	SV_SteamStats_HasAchievement( int clientNum, int achievementId );
+const void	*SV_SteamStats_ProcessMatchReport( const void *report, char *buffer, int bufferSize );
+void		SV_SteamStats_ProcessEvent( unsigned int steamIdLow, unsigned int steamIdHigh,
+				const void *clientStats, const char *eventName, const void *payload );
+qboolean	SV_GameShouldSuppressVoiceToClient( int senderClientNum, int recipientClientNum );
+qboolean	SV_GameIsClientAdmin( int clientNum );
+qboolean	SV_GameAreEnemyClients( int clientNumA, int clientNumB );
+int		SV_GameGetClientScore( int clientNum, int fallbackScore );
 qboolean	SV_inPVS (const vec3_t p1, const vec3_t p2);
 
 //

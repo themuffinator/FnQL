@@ -302,6 +302,7 @@ qboolean framebufferSrgbAvailable = qfalse;
 	QGL_Ext_PROCS;
 	QGL_ARB_PROGRAM_PROCS;
 	QGL_VBO_PROCS;
+	QGL_OCCLUSION_QUERY_PROCS;
 	QGL_FBO_PROCS;
 	QGL_FBO_OPT_PROCS;
 #undef GLE
@@ -316,6 +317,7 @@ static sym_t core_procs[] = { QGL_Core_PROCS };
 static sym_t ext_procs[] = { QGL_Ext_PROCS };
 static sym_t arb_procs[] = { QGL_ARB_PROGRAM_PROCS };
 static sym_t vbo_procs[] = { QGL_VBO_PROCS };
+static sym_t occlusion_query_procs[] = { QGL_OCCLUSION_QUERY_PROCS };
 static sym_t fbo_procs[] = { QGL_FBO_PROCS };
 static sym_t fbo_opt_procs[] = { QGL_FBO_OPT_PROCS };
 #undef GLE
@@ -359,6 +361,7 @@ static void R_ClearSymTables( void )
 	R_ClearSymbols( ext_procs, ARRAY_LEN( ext_procs ) );
 	R_ClearSymbols( arb_procs, ARRAY_LEN( arb_procs ) );
 	R_ClearSymbols( vbo_procs, ARRAY_LEN( vbo_procs ) );
+	R_ClearSymbols( occlusion_query_procs, ARRAY_LEN( occlusion_query_procs ) );
 	R_ClearSymbols( fbo_procs, ARRAY_LEN( fbo_procs ) );
 	R_ClearSymbols( fbo_opt_procs, ARRAY_LEN( fbo_opt_procs ) );
 }
@@ -672,6 +675,27 @@ static void R_InitExtensions( void )
 		}
 	}
 #endif // USE_VBO
+
+	if ( R_HaveExtension( "GL_ARB_occlusion_query" ) )
+	{
+		err = R_ResolveSymbols( occlusion_query_procs, ARRAY_LEN( occlusion_query_procs ) );
+		if ( err )
+		{
+			ri.Printf( PRINT_WARNING, "Error resolving occlusion query function '%s'\n", err );
+			qglGenQueriesARB = NULL;
+			qglDeleteQueriesARB = NULL;
+			qglBeginQueryARB = NULL;
+			qglEndQueryARB = NULL;
+		}
+		else
+		{
+			ri.Printf( PRINT_ALL, "...using ARB occlusion queries\n" );
+		}
+	}
+	else
+	{
+		ri.Printf( PRINT_ALL, "...GL_ARB_occlusion_query not found\n" );
+	}
 
 #ifdef USE_FBO
 	if ( R_HaveExtension( "GL_EXT_framebuffer_object" ) && R_HaveExtension( "GL_EXT_framebuffer_blit" ) )
@@ -2091,6 +2115,10 @@ static void R_ScreenShot_f( void ) {
 
 	// we will make screenshot right at the end of RE_EndFrame()
 	backEnd.screenshotMask |= typeMask;
+	if ( ri.PublishGameScreenshot && checkname[0] ) {
+		ri.PublishGameScreenshot( checkname, checkname );
+	}
+
 	if ( typeMask == SCREENSHOT_PNG ) {
 		backEnd.screenShotPNGsilent = silent;
 		Q_strncpyz( backEnd.screenshotPNG, checkname, sizeof( backEnd.screenshotPNG ) );
@@ -2430,6 +2458,7 @@ static void R_Register( void )
 	ri.Cmd_AddCommand( "shaderlist", R_ShaderList_f );
 	ri.Cmd_AddCommand( "skinlist", R_SkinList_f );
 	ri.Cmd_AddCommand( "modellist", R_Modellist_f );
+	ri.Cmd_AddCommand( "advertlist", R_AdvertisementList_f );
 	ri.Cmd_AddCommand( "screenshot", R_ScreenShot_f );
 	ri.Cmd_AddCommand( "screenshotPNG", R_ScreenShot_f );
 	ri.Cmd_AddCommand( "screenshotTGA", R_ScreenShot_f );
@@ -3271,6 +3300,7 @@ static void RE_Shutdown( refShutdownCode_t code ) {
 	ri.Printf( PRINT_ALL, "RE_Shutdown( %i )\n", code );
 
 	ri.Cmd_RemoveCommand( "modellist" );
+	ri.Cmd_RemoveCommand( "advertlist" );
 	ri.Cmd_RemoveCommand( "screenshotBMP" );
 	ri.Cmd_RemoveCommand( "screenshotJPEG" );
 	ri.Cmd_RemoveCommand( "screenshotTGA" );
@@ -3289,6 +3319,7 @@ static void RE_Shutdown( refShutdownCode_t code ) {
 
 	//if ( tr.registered ) {
 		//R_IssuePendingRenderCommands();
+		R_ShutdownAdvertisements();
 		R_DeleteTextures();
 	//}
 
@@ -3393,6 +3424,7 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 	re.AddLinearLightToScene = RE_AddLinearLightToScene;
 
 	re.RenderScene = RE_RenderScene;
+	re.AdvertisementBridge_UpdateLoadingViewParameters = AdvertisementBridge_UpdateLoadingViewParameters;
 
 	re.SetColor = RE_SetColor;
 	re.DrawStretchPic = RE_StretchPic;

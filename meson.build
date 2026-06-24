@@ -235,6 +235,8 @@ client_src = [
   'code/client/cl_parse.cpp',
   'code/client/cl_scrn.cpp',
   'code/client/cl_ui.cpp',
+  'code/client/cl_webpak.cpp',
+  'code/client/cl_webui.cpp',
   'code/client/audio/snd_main.cpp',
   'code/client/audio/legacy/snd_adpcm.cpp',
   'code/client/audio/legacy/snd_dma.cpp',
@@ -984,6 +986,12 @@ if get_option('glx-tests')
   )
   test('fnql_vid_restart_fast_source', python,
     args: files('tests/vid_restart_fast_source_tests.py'),
+  )
+  test('fnql_cgame_native_bridge_source', python,
+    args: files('tests/cgame_native_bridge_source_tests.py'),
+  )
+  test('fnql_ui_native_bridge_source', python,
+    args: files('tests/ui_native_bridge_source_tests.py'),
   )
 endif
 

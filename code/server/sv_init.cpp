@@ -24,6 +24,62 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include <array>
 
+static constexpr const char *SV_ONLINE_SERVICES_MODE = "Build-disabled (FnQL engine-only)";
+static constexpr const char *SV_ONLINE_SERVICES_POLICY = "compatibility-disabled (retail Steam install only)";
+static constexpr const char *SV_PLATFORM_AUTH_PROVIDER = "Build-disabled (FnQL engine-only)";
+static constexpr const char *SV_PLATFORM_AUTH_POLICY = "compatibility-disabled (LAN/local auth only)";
+static constexpr const char *SV_STEAM_SERVER_PROVIDER = "Build-disabled (FnQL engine-only)";
+static constexpr const char *SV_STEAM_SERVER_POLICY = "compatibility-disabled (no Steam GameServer owner)";
+static constexpr const char *SV_WORKSHOP_PROVIDER = "Build-disabled (FnQL engine-only)";
+static constexpr const char *SV_WORKSHOP_POLICY = "compatibility-disabled (retail assets only)";
+static constexpr const char *SV_SERVER_STATS_PROVIDER = "Build-disabled (FnQL engine-only)";
+static constexpr const char *SV_SERVER_STATS_POLICY = "compatibility-disabled (no live Steam stats owner)";
+
+const char *SV_GetPlatformAuthProviderLabel( void ) {
+	return SV_PLATFORM_AUTH_PROVIDER;
+}
+
+const char *SV_GetPlatformAuthPolicyLabel( void ) {
+	return SV_PLATFORM_AUTH_POLICY;
+}
+
+const char *SV_GetSteamServerProviderLabel( void ) {
+	return SV_STEAM_SERVER_PROVIDER;
+}
+
+const char *SV_GetSteamServerPolicyLabel( void ) {
+	return SV_STEAM_SERVER_POLICY;
+}
+
+const char *SV_GetWorkshopProviderLabel( void ) {
+	return SV_WORKSHOP_PROVIDER;
+}
+
+const char *SV_GetWorkshopPolicyLabel( void ) {
+	return SV_WORKSHOP_POLICY;
+}
+
+const char *SV_GetServerStatsProviderLabel( void ) {
+	return SV_SERVER_STATS_PROVIDER;
+}
+
+const char *SV_GetServerStatsPolicyLabel( void ) {
+	return SV_SERVER_STATS_POLICY;
+}
+
+void SV_RefreshPlatformServiceCvars( void ) {
+	Cvar_Set( "sv_onlineServicesMode", SV_ONLINE_SERVICES_MODE );
+	Cvar_Set( "sv_onlineServicesPolicy", SV_ONLINE_SERVICES_POLICY );
+	Cvar_Set( "sv_platformAuthProvider", SV_GetPlatformAuthProviderLabel() );
+	Cvar_Set( "sv_platformAuthPolicy", SV_GetPlatformAuthPolicyLabel() );
+	Cvar_Set( "sv_steamServerProvider", SV_GetSteamServerProviderLabel() );
+	Cvar_Set( "sv_steamServerPolicy", SV_GetSteamServerPolicyLabel() );
+	Cvar_Set( "sv_workshopProvider", SV_GetWorkshopProviderLabel() );
+	Cvar_Set( "sv_workshopPolicy", SV_GetWorkshopPolicyLabel() );
+	Cvar_Set( "sv_statsProvider", SV_GetServerStatsProviderLabel() );
+	Cvar_Set( "sv_statsPolicy", SV_GetServerStatsPolicyLabel() );
+}
+
 /*
 ===============
 SV_SendConfigstring
@@ -609,19 +665,15 @@ void SV_SpawnServer( const char *mapname, qboolean killBots ) {
 	SV_BotFrame( sv.time );
 	svs.time += 100;
 
-	// we need to touch the cgame and ui qvm because they could be in
-	// separate pk3 files and the client will need to download the pk3
-	// files with the latest cgame and ui qvm to pass the pure check
-	FS_TouchFileInPak( "vm/cgame.qvm" );
-	FS_TouchFileInPak( "vm/ui.qvm" );
+	// Retail QL pure validation keys off the native cgame binary pak.
+	FS_TouchFileInPak( QL_NATIVE_CGAME_DLL );
 
 	// the server sends these to the clients so they can figure
 	// out which pk3s should be auto-downloaded
 	p = FS_ReferencedPakNames();
 	if ( FS_ExcludeReference() ) {
-		// \fs_excludeReference may mask our current ui/cgame qvms
-		FS_TouchFileInPak( "vm/cgame.qvm" );
-		FS_TouchFileInPak( "vm/ui.qvm" );
+		// \fs_excludeReference may mask our current native cgame binary.
+		FS_TouchFileInPak( QL_NATIVE_CGAME_DLL );
 		// rebuild referenced paks list
 		p = FS_ReferencedPakNames();
 	}
@@ -739,6 +791,11 @@ void SV_Init( void )
 	Cvar_SetDescription( sv_dlRate, "Bandwidth allotted to pack archive downloads via UDP, in kbyte/s." );
 	sv_floodProtect = Cvar_Get( "sv_floodProtect", "1", CVAR_ARCHIVE | CVAR_SERVERINFO );
 	Cvar_SetDescription( sv_floodProtect, "Toggle server flood protection to keep players from bringing the server down." );
+	sv_enableRankings = Cvar_Get( "sv_enableRankings", "0", CVAR_ARCHIVE | CVAR_SERVERINFO );
+	Cvar_CheckRange( sv_enableRankings, "0", "1", CV_INTEGER );
+	Cvar_SetDescription( sv_enableRankings, "Retained Quake Live rankings compatibility toggle. FnQL keeps this disabled because no live rankings service is owned by the engine." );
+	sv_rankingsActive = Cvar_Get( "sv_rankingsActive", "0", CVAR_SERVERINFO );
+	Cvar_SetDescription( sv_rankingsActive, "Reports whether the retained Quake Live rankings compatibility surface is active." );
 
 	// systeminfo
 	sv_cheats = Cvar_Get( "sv_cheats", "1", CVAR_SYSTEMINFO | CVAR_ROM );
@@ -750,6 +807,20 @@ void SV_Init( void )
 	Cvar_Get( "sv_referencedPaks", "", CVAR_SYSTEMINFO | CVAR_ROM );
 	sv_referencedPakNames = Cvar_Get( "sv_referencedPakNames", "", CVAR_SYSTEMINFO | CVAR_ROM );
 	Cvar_SetDescription( sv_referencedPakNames, "Variable holds a list of all the pack archives the server loaded data from." );
+	Cvar_Get( "sv_onlineServicesMode", "Unavailable", CVAR_ROM );
+	Cvar_Get( "sv_onlineServicesPolicy", "compatibility-unavailable", CVAR_ROM );
+	Cvar_Get( "sv_platformAuthProvider", "Unavailable", CVAR_ROM );
+	Cvar_Get( "sv_platformAuthPolicy", "compatibility-unavailable", CVAR_ROM );
+	Cvar_Get( "sv_steamServerProvider", "Unavailable", CVAR_ROM );
+	Cvar_Get( "sv_steamServerPolicy", "compatibility-unavailable", CVAR_ROM );
+	Cvar_Get( "sv_workshopProvider", "Unavailable", CVAR_ROM );
+	Cvar_Get( "sv_workshopPolicy", "compatibility-unavailable", CVAR_ROM );
+	Cvar_Get( "sv_statsProvider", "Unavailable", CVAR_ROM );
+	Cvar_Get( "sv_statsPolicy", "compatibility-unavailable", CVAR_ROM );
+	Cvar_Get( "sv_rankingsProvider", "Unavailable", CVAR_ROM );
+	Cvar_Get( "sv_rankingsPolicy", "compatibility-unavailable", CVAR_ROM );
+	SV_RefreshPlatformServiceCvars();
+	SV_GameRefreshRankingsPolicyCvars();
 
 	// server vars
 	sv_rconPassword = Cvar_Get ("rconPassword", "", CVAR_TEMP );
@@ -831,6 +902,8 @@ void SV_Init( void )
 	Cvar_SetGroup( sv_minRate, CVG_SERVER );
 	Cvar_SetGroup( sv_maxRate, CVG_SERVER );
 	Cvar_SetGroup( sv_fps, CVG_SERVER );
+	Cvar_SetGroup( sv_enableRankings, CVG_SERVER );
+	Cvar_SetGroup( sv_rankingsActive, CVG_SERVER );
 	Cvar_SetGroup( sv_audioPVS, CVG_SERVER );
 	Cvar_SetGroup( sv_audioPVSRange, CVG_SERVER );
 	Cvar_SetGroup( sv_audioPVSMaxEntities, CVG_SERVER );

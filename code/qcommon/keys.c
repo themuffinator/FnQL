@@ -24,6 +24,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/qcommon.h"
 #include "../client/keys.h"
 
+#ifndef DEDICATED
+void CL_WebView_PublishBindChanged( const char *name, const char *value );
+#endif
+
 int		 anykeydown;
 qkey_t	 keys[MAX_KEYS];
 
@@ -124,6 +128,10 @@ static const keyname_t keynames[] =
 	{"MOUSE3", K_MOUSE3},
 	{"MOUSE4", K_MOUSE4},
 	{"MOUSE5", K_MOUSE5},
+	{"MOUSE6", K_MOUSE6},
+	{"MOUSE7", K_MOUSE7},
+	{"MOUSE8", K_MOUSE8},
+	{"MOUSE9", K_MOUSE9},
 
 	{"MWHEELUP",	K_MWHEELUP },
 	{"MWHEELDOWN",	K_MWHEELDOWN },
@@ -409,6 +417,10 @@ void Key_SetBinding( int keynum, const char *binding ) {
 	// consider this like modifying an archived cvar, so the
 	// file write will be triggered at the next opportunity
 	cvar_modifiedFlags |= CVAR_ARCHIVE;
+
+#ifndef DEDICATED
+	CL_WebView_PublishBindChanged( Key_KeynumToString( keynum ), keys[ keynum ].binding ? keys[ keynum ].binding : "" );
+#endif
 }
 
 

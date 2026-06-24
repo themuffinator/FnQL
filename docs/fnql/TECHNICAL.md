@@ -30,16 +30,16 @@ Compatibility-sensitive areas include:
 
 ## Reference Baselines
 
-- FnQ3 import baseline: `E:\Repositories\FnQuake3`, remote
-  `https://github.com/themuffinator/FnQ3.git`, commit
-  `91c28d77878302ae67119fc3a29643cc20ce8489`. The initial import copied the
-  local working tree, which had uncommitted changes.
-- QLSRP reference baseline: `E:\Repositories\QuakeLive-SRP`, remote
-  `https://github.com/themuffinator/QL-SRP.git`, commit
-  `94bdd7acdce0c90bf890416e23e704795eac716e`. Use this repository as the
+Local checkout and install paths are intentionally kept in [`AGENTS.md`](../../AGENTS.md)
+so this maintainer document stays portable.
+
+- FnQ3 import baseline: remote `https://github.com/themuffinator/FnQ3.git`,
+  commit `91c28d77878302ae67119fc3a29643cc20ce8489`. The initial import copied
+  the local working tree named in `AGENTS.md`, which had uncommitted changes.
+- QLSRP reference baseline: remote `https://github.com/themuffinator/QL-SRP.git`,
+  commit `94bdd7acdce0c90bf890416e23e704795eac716e`. Use this repository as the
   first stop for Quake Live behavior before inferring from Quake III code.
-- Retail runtime target: a legitimate Steam install of Quake Live, normally
-  `C:\Program Files (x86)\Steam\steamapps\common\Quake Live`.
+- Retail runtime target: a legitimate Steam install of Quake Live.
 
 Current migration rule: compare first, reconstruct second, validate third.
 Keep observed QLSRP or retail facts distinct from inferred design intent.

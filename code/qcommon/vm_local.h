@@ -185,6 +185,9 @@ struct vm_s {
 	void		*dllHandle;
 	vmMainFunc_t entryPoint;
 	dllSyscall_t dllSyscall;
+	void		*dllExports;
+	void		*dllImports;
+	int			dllApiVersion;
 	void (*destroy)(vm_t* self);
 
 	// for interpreted modules

@@ -157,6 +157,7 @@ static void VID_AppActivate( qboolean active )
 {
 	Key_ClearStates();
 
+	CL_WebHost_NotifyAppActivation( active );
 	IN_Activate( active );
 
 	if ( active ) {
@@ -540,6 +541,16 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 
 	switch (uMsg)
 	{
+	case WM_SETCURSOR:
+		if ( LOWORD( lParam ) == HTCLIENT ) {
+			HCURSOR browserCursor = (HCURSOR)CL_WebHost_GetCursorHandle();
+			if ( browserCursor ) {
+				SetCursor( browserCursor );
+				return TRUE;
+			}
+		}
+		break;
+
 	case WM_MOUSEWHEEL:
 		// http://msdn.microsoft.com/library/default.asp?url=/library/en-us/winui/winui/windowsuserinterface/userinput/mouseinput/aboutmouseinput.asp
 		// Windows 98/Me, Windows NT 4.0 and later - uses WM_MOUSEWHEEL

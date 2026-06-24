@@ -589,6 +589,7 @@ public:
 	SoundSample *sample = nullptr;
 	Vec3f origin;
 	Vec3f velocity;
+	float volumeScale = 1.0f;
 	float occlusion = 0.0f;
 	float occlusionTarget = 0.0f;
 	int lastOcclusionSmoothTime = 0;
@@ -629,6 +630,7 @@ public:
 		sample = nullptr;
 		origin = Vec3f();
 		velocity = Vec3f();
+		volumeScale = 1.0f;
 		occlusion = 0.0f;
 		occlusionTarget = 0.0f;
 		lastOcclusionSmoothTime = 0;
@@ -1009,7 +1011,7 @@ public:
 	void ClearLoopingSounds( qboolean killall );
 	void StopLoopingSound( int entityNum );
 	void AddLoopingSound( int entityNum, const float *origin, const float *velocity, sfxHandle_t handle, SoundSample *sample, qboolean realLoop );
-	void StartSound( int entityNum, int entchannel, sfxHandle_t handle, SoundSample *sample, const float *origin );
+	void StartSound( int entityNum, int entchannel, sfxHandle_t handle, SoundSample *sample, const float *origin, float volume );
 	void UpdateEntityPosition( int entityNum, const float *origin );
 	void Respatialize( int entityNum, const float *origin, float axis[3][3] );
 	void Update( qboolean softMuted );
@@ -1203,7 +1205,7 @@ SoundVoice *Q3SoundWorld::FindEvictionCandidate() {
 	return chosen;
 }
 
-void Q3SoundWorld::StartSound( int entityNum, int entchannel, sfxHandle_t handle, SoundSample *sample, const float *origin ) {
+void Q3SoundWorld::StartSound( int entityNum, int entchannel, sfxHandle_t handle, SoundSample *sample, const float *origin, float volume ) {
 	if ( sample == nullptr ) {
 		return;
 	}
@@ -1278,6 +1280,7 @@ void Q3SoundWorld::StartSound( int entityNum, int entchannel, sfxHandle_t handle
 	voice->fixedOrigin = ( origin != nullptr );
 	voice->origin.Set( origin );
 	voice->velocity = Vec3f();
+	voice->volumeScale = ClampFloat( volume, 0.0f, 2.0f );
 	voice->doppler = qfalse;
 	voice->looping = qfalse;
 	voice->killWhenUnrefreshed = qfalse;
@@ -1517,7 +1520,7 @@ void Q3SoundWorld::ApplyVoice( SoundVoice &voice, qboolean softMuted ) {
 	} else if ( voice.doppler ) {
 		pitch = ComputeDopplerPitch( listenerOrigin_.Data(), voiceOrigin, sourceVelocity );
 	}
-	gain = ClampFloat( gain * gainScale, 0.0f, 2.0f );
+	gain = ClampFloat( gain * gainScale * voice.volumeScale, 0.0f, 2.0f );
 	pitch = ClampFloat( pitch * pitchScale, 0.5f, 2.0f );
 
 	const VoiceToneSettings toneSettings = BuildVoiceToneSettings( voice, environment_, listenerAttached, localOnly, stereoSample, positionalSource, occlusion, directToneHF, wetGain, wetGainHF );

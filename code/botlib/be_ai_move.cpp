@@ -741,6 +741,27 @@ void BotAddAvoidSpot(int movestate, const vec3_t origin, float radius, int type)
 // Returns:				-
 // Changes Globals:		-
 //===========================================================================
+void BotDrawAvoidSpots(int movestate)
+{
+	bot_movestate_t *ms;
+	int i;
+
+	ms = BotMoveStateFromHandle(movestate);
+	if (!ms) {
+		return;
+	} //end if
+
+	AAS_ClearShownDebugLines();
+	for (i = 0; i < ms->numavoidspots; i++) {
+		AAS_DrawCross(ms->avoidspots[i].origin, ms->avoidspots[i].radius, LINECOLOR_RED);
+	} //end for
+} //end of the function BotDrawAvoidSpots
+//===========================================================================
+//
+// Parameter:			-
+// Returns:				-
+// Changes Globals:		-
+//===========================================================================
 int BotGetReachabilityToGoal(vec3_t origin, int areanum,
 									  int lastgoalareanum, int lastareanum,
 									  int *avoidreach, float *avoidreachtimes, int *avoidreachtries,

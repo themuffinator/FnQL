@@ -530,6 +530,9 @@ static void Message_Key( int key ) {
 
 	if (key == K_ESCAPE) {
 		Key_SetCatcher( Key_GetCatcher( ) & ~KEYCATCH_MESSAGE );
+		if ( cgvm && cgvm->dllExports ) {
+			VM_Call( cgvm, 0, CG_CHAT_UP );
+		}
 		Field_Clear( &chatField );
 		return;
 	}
@@ -550,6 +553,9 @@ static void Message_Key( int key ) {
 			CL_AddReliableCommand( buffer.data(), qfalse );
 		}
 		Key_SetCatcher( Key_GetCatcher( ) & ~KEYCATCH_MESSAGE );
+		if ( cgvm && cgvm->dllExports ) {
+			VM_Call( cgvm, 0, CG_CHAT_UP );
+		}
 		Field_Clear( &chatField );
 		return;
 	}
@@ -558,6 +564,162 @@ static void Message_Key( int key ) {
 }
 
 //============================================================================
+
+/*
+=============
+CL_DispatchBrowserKeyEvent
+
+Routes captured key events through the retained browser bridge only when the
+browser keycatcher owns input.
+=============
+*/
+static void CL_DispatchBrowserKeyEvent( int key, qboolean down ) {
+	if ( key >= K_MOUSE1 && key <= K_MOUSE9 ) {
+		CL_WebView_OnMouseButtonEvent( key, down );
+	} else if ( key == K_MWHEELUP ) {
+		if ( down ) {
+			CL_WebView_OnMouseWheelEvent( 1 );
+		}
+	} else if ( key == K_MWHEELDOWN ) {
+		if ( down ) {
+			CL_WebView_OnMouseWheelEvent( -1 );
+		}
+	} else {
+		CL_WebView_OnKeyEvent( key, down );
+	}
+}
+
+
+/*
+=============
+CL_ToggleMenuInternal
+
+Routes Quake Live-style menu toggles through the same path as the hard-coded
+Escape key, optionally synthesizing a release event for command-triggered use.
+=============
+*/
+static void CL_ToggleMenuInternal( int key, qboolean sendKeyUp, unsigned time ) {
+#ifdef USE_CURL
+	if ( Com_DL_InProgress( &download ) && download.mapAutoDownload ) {
+		Com_DL_Cleanup( &download );
+	}
+#endif
+
+	if ( Key_GetCatcher() & KEYCATCH_CONSOLE ) {
+		// escape always closes console
+		Con_ToggleConsole_f();
+		Key_ClearStates();
+		return;
+	}
+
+	if ( Key_GetCatcher() & KEYCATCH_BROWSER ) {
+		return;
+	}
+
+	if ( Key_GetCatcher( ) & KEYCATCH_MESSAGE ) {
+		// clear message mode
+		Message_Key( K_ESCAPE );
+		return;
+	}
+
+	// escape always gets out of CGAME stuff
+	if ( Key_GetCatcher( ) & KEYCATCH_CGAME ) {
+		Key_SetCatcher( Key_GetCatcher( ) & ~KEYCATCH_CGAME );
+		if ( cgvm ) {
+			VM_Call( cgvm, 1, CG_EVENT_HANDLING, CGAME_EVENT_NONE );
+		}
+		return;
+	}
+
+	if ( !( Key_GetCatcher( ) & KEYCATCH_UI ) ) {
+		if ( !uivm ) {
+			return;
+		}
+
+		if ( cls.state == CA_ACTIVE && !clc.demoplaying ) {
+			VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_INGAME );
+		}
+		else if ( cls.state != CA_DISCONNECTED ) {
+#if 0
+			CL_Disconnect_f();
+			S_StopAllSounds();
+#else
+			Cmd_Clear();
+			Cvar_Set( "com_errorMessage", "" );
+			if ( cls.state == CA_CINEMATIC ) {
+				SCR_StopCinematic();
+			} else if ( !CL_Disconnect( qfalse ) ) { // restart client if not done already
+				CL_FlushMemory();
+			}
+#endif
+			VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_MAIN );
+		}
+		return;
+	}
+
+	if ( uivm ) {
+		VM_Call( uivm, 3, UI_KEY_EVENT, key, qtrue, time );
+		if ( sendKeyUp ) {
+			VM_Call( uivm, 3, UI_KEY_EVENT, key, qfalse, time );
+		}
+	}
+}
+
+
+/*
+================
+CL_ToggleMenu_f
+================
+*/
+void CL_ToggleMenu_f( void ) {
+	CL_ToggleMenuInternal( K_ESCAPE, qtrue, cls.realtime );
+}
+
+
+/*
+=============
+CL_HandleDemoPlaybackKeyEvent
+
+Applies the retail Quake Live demo-playback shortcuts while normal input
+catchers are clear apart from the recovered 0x10 mouse-pass bit.
+=============
+*/
+static qboolean CL_HandleDemoPlaybackKeyEvent( int key ) {
+	if ( !clc.demoplaying || ( Key_GetCatcher() & ~KEYCATCH_RETAIL_MOUSEPASS ) != 0 ) {
+		return qfalse;
+	}
+
+	switch ( key ) {
+	case K_SPACE:
+		Cbuf_ExecuteText( EXEC_APPEND, "toggle cl_freezeDemo\n" );
+		return qtrue;
+
+	case K_DOWNARROW:
+	case K_MOUSE3:
+		Cbuf_ExecuteText( EXEC_APPEND, "timescale 1\n" );
+		return qtrue;
+
+	case K_LEFTARROW:
+	case K_MWHEELDOWN:
+		Cbuf_ExecuteText( EXEC_APPEND, "cvarAdd timescale -0.1\n" );
+		return qtrue;
+
+	case K_RIGHTARROW:
+	case K_MWHEELUP:
+		if ( cl_freezeDemo && cl_freezeDemo->integer ) {
+			Cbuf_ExecuteText( EXEC_APPEND, "timescale 1; cl_freezeDemo 0; wait; wait; cl_freezeDemo 1\n" );
+		} else {
+			Cbuf_ExecuteText( EXEC_APPEND, "cvarAdd timescale 0.1\n" );
+		}
+		return qtrue;
+
+	case K_DEL:
+		Cbuf_ExecuteText( EXEC_APPEND, "toggle cg_drawDemoHUD\n" );
+		return qtrue;
+	}
+
+	return qfalse;
+}
 
 
 /*
@@ -603,53 +765,11 @@ static void CL_KeyDownEvent( int key, unsigned time )
 
 	// escape is always handled special
 	if ( key == K_ESCAPE ) {
-#ifdef USE_CURL
-		if ( Com_DL_InProgress( &download ) && download.mapAutoDownload ) {
-			Com_DL_Cleanup( &download );
-		}
-#endif
-		if ( Key_GetCatcher() & KEYCATCH_CONSOLE ) {
-			// escape always closes console
-			Con_ToggleConsole_f();
-			Key_ClearStates();
-		}
+		CL_ToggleMenuInternal( key, qfalse, time );
+		return;
+	}
 
-		if ( Key_GetCatcher( ) & KEYCATCH_MESSAGE ) {
-			// clear message mode
-			Message_Key( key );
-			return;
-		}
-
-		// escape always gets out of CGAME stuff
-		if (Key_GetCatcher( ) & KEYCATCH_CGAME) {
-			Key_SetCatcher( Key_GetCatcher( ) & ~KEYCATCH_CGAME );
-			VM_Call( cgvm, 1, CG_EVENT_HANDLING, CGAME_EVENT_NONE );
-			return;
-		}
-
-		if ( !( Key_GetCatcher( ) & KEYCATCH_UI ) ) {
-			if ( cls.state == CA_ACTIVE && !clc.demoplaying ) {
-				VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_INGAME );
-			}
-			else if ( cls.state != CA_DISCONNECTED ) {
-#if 0
-				CL_Disconnect_f();
-				S_StopAllSounds();
-#else
-				Cmd_Clear();
-				Cvar_Set( "com_errorMessage", "" );
-				if ( cls.state == CA_CINEMATIC ) {
-					SCR_StopCinematic();
-				} else if ( !CL_Disconnect( qfalse ) ) { // restart client if not done already
-					CL_FlushMemory();
-				}
-#endif
-				VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_MAIN );
-			}
-			return;
-		}
-
-		VM_Call( uivm, 2, UI_KEY_EVENT, key, qtrue );
+	if ( CL_HandleDemoPlaybackKeyEvent( key ) ) {
 		return;
 	}
 
@@ -659,9 +779,11 @@ static void CL_KeyDownEvent( int key, unsigned time )
 			return;
 		}
 		Console_Key( key );
+	} else if ( Key_GetCatcher( ) & KEYCATCH_BROWSER ) {
+		CL_DispatchBrowserKeyEvent( key, qtrue );
 	} else if ( Key_GetCatcher( ) & KEYCATCH_UI ) {
 		if ( uivm ) {
-			VM_Call( uivm, 2, UI_KEY_EVENT, key, qtrue );
+			VM_Call( uivm, 3, UI_KEY_EVENT, key, qtrue, time );
 		}
 	} else if ( Key_GetCatcher( ) & KEYCATCH_CGAME ) {
 		if ( cgvm ) {
@@ -718,9 +840,11 @@ static void CL_KeyUpEvent( int key, unsigned time )
 		Con_KeyEvent( key, qfalse );
 	}
 
-	if ( Key_GetCatcher() & KEYCATCH_UI ) {
+	if ( ( Key_GetCatcher() & KEYCATCH_BROWSER ) && !( Key_GetCatcher() & KEYCATCH_CONSOLE ) ) {
+		CL_DispatchBrowserKeyEvent( key, qfalse );
+	} else if ( Key_GetCatcher() & KEYCATCH_UI ) {
 		if ( uivm ) {
-			VM_Call( uivm, 2, UI_KEY_EVENT, key, qfalse );
+			VM_Call( uivm, 3, UI_KEY_EVENT, key, qfalse, time );
 		}
 	} else if ( Key_GetCatcher() & KEYCATCH_CGAME ) {
 		if ( cgvm ) {
@@ -765,9 +889,13 @@ void CL_CharEvent( int key )
 	{
 		Con_CharEvent( key );
 	}
+	else if ( Key_GetCatcher( ) & KEYCATCH_BROWSER )
+	{
+		CL_WebView_OnKeyEvent( key | K_CHAR_FLAG, qtrue );
+	}
 	else if ( Key_GetCatcher( ) & KEYCATCH_UI )
 	{
-		VM_Call( uivm, 2, UI_KEY_EVENT, key | K_CHAR_FLAG, qtrue );
+		VM_Call( uivm, 3, UI_KEY_EVENT, key | K_CHAR_FLAG, qtrue, cls.realtime );
 	}
 	else if ( Key_GetCatcher( ) & KEYCATCH_MESSAGE )
 	{

@@ -3993,10 +3993,15 @@ void Com_Init( char *commandLine ) {
 
 	VM_Init();
 	SV_Init();
+	SV_RegisterGameCvars();
 
 	com_dedicated->modified = qfalse;
 
 #ifndef DEDICATED
+	if ( !com_dedicated->integer ) {
+		CL_RegisterCGameCvars();
+	}
+
 	if ( !com_dedicated->integer ) {
 		CL_Init();
 		// Sys_ShowConsole( com_viewlog->integer, qfalse ); // moved down
@@ -4403,6 +4408,8 @@ void Com_Frame( qboolean noDelay ) {
 		Com_EventLoop();
 
 		Cbuf_Execute();
+
+		CL_WebHost_Frame();
 
 		//
 		// client side

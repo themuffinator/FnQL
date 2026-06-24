@@ -65,6 +65,18 @@ constexpr int kSphereVolume = 90;
 constexpr int kMaxSfx = 4096;
 constexpr int kLoopHash = 128;
 
+static int S_VolumeToMasterVolume( float volume )
+{
+	if ( !( volume > 0.0f ) ) {
+		return 0;
+	}
+	if ( volume > 2.0f ) {
+		volume = 2.0f;
+	}
+
+	return ( std::min )( 255, static_cast<int>( static_cast<float>( kMasterVolume ) * volume + 0.5f ) );
+}
+
 static channel_t *GetChannelFreeLink( const channel_t *channel )
 {
 	return fnql::ReadUnaligned<channel_t *>( channel );
@@ -503,11 +515,12 @@ if origin is NULL, the sound will be dynamically sourced from the entity
 Entchannel 0 will never override a playing sound
 ====================
 */
-static void S_Base_StartSound( const vec3_t origin, int entityNum, int entchannel, sfxHandle_t sfxHandle ) {
+static void S_Base_StartSound( const vec3_t origin, int entityNum, int entchannel, sfxHandle_t sfxHandle, float volume ) {
 	channel_t	*ch;
 	sfx_t		*sfx;
 	int i, oldest, chosen, startTime;
 	int	inplay, allowed;
+	const int masterVolume = S_VolumeToMasterVolume( volume );
 
 	if ( !s_soundStarted || s_soundMuted ) {
 		return;
@@ -526,6 +539,10 @@ static void S_Base_StartSound( const vec3_t origin, int entityNum, int entchanne
 
 	if ( sfx->inMemory == qfalse ) {
 		S_memoryLoad(sfx);
+	}
+
+	if ( masterVolume <= 0 ) {
+		return;
 	}
 
 	if ( s_show->integer == 1 ) {
@@ -633,7 +650,7 @@ static void S_Base_StartSound( const vec3_t origin, int entityNum, int entchanne
 		ch->fixed_origin = qfalse;
 	}
 
-	ch->master_vol = kMasterVolume;
+	ch->master_vol = masterVolume;
 	ch->entnum = entityNum;
 	ch->thesfx = sfx;
 	ch->startSample = START_SAMPLE_IMMEDIATE;
@@ -649,7 +666,7 @@ static void S_Base_StartSound( const vec3_t origin, int entityNum, int entchanne
 S_StartLocalSound
 ==================
 */
-static void S_Base_StartLocalSound( sfxHandle_t sfxHandle, int channelNum ) {
+static void S_Base_StartLocalSound( sfxHandle_t sfxHandle, int channelNum, float volume ) {
 	if ( !s_soundStarted || s_soundMuted ) {
 		return;
 	}
@@ -659,7 +676,7 @@ static void S_Base_StartLocalSound( sfxHandle_t sfxHandle, int channelNum ) {
 		return;
 	}
 
-	S_Base_StartSound (nullptr, listener_number, channelNum, sfxHandle );
+	S_Base_StartSound( nullptr, listener_number, channelNum, sfxHandle, volume );
 }
 
 

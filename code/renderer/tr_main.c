@@ -2798,6 +2798,8 @@ static void R_GenerateDrawSurfs( void ) {
 
 	R_AddWorldSurfaces ();
 
+	R_UpdateAdvertisements();
+
 	R_AddPolygonSurfaces();
 
 	// set the projection matrix with the minimum zfar
@@ -2862,4 +2864,6 @@ void R_RenderView( const viewParms_t *parms ) {
 	}
 
 	R_SortDrawSurfs( tr.refdef.drawSurfs + firstDrawSurf, numDrawSurfs - firstDrawSurf );
+
+	R_QueueAdvertisementQueryCmd();
 }

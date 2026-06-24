@@ -5146,6 +5146,10 @@ qboolean FS_idPak(const char *pak, const char *base, int numPaks)
 {
 	int i;
 
+	if ( !Q_stricmp( base, BASEGAME ) && !FS_FilenameCompare( pak, va( "%s/pak00", base ) ) ) {
+		return qtrue;
+	}
+
 	for (i = 0; i < NUM_ID_PAKS; i++) {
 		if ( !FS_FilenameCompare(pak, va("%s/pak%d", base, i)) ) {
 			break;
@@ -5549,6 +5553,8 @@ FS_Startup
 */
 static void FS_Startup( void ) {
 	const char *homePath;
+	const char *steamPath;
+	const char *defaultBasePath;
 	int i, start, end;
 
 	Com_Printf( "----- FS_Startup -----\n" );
@@ -5557,11 +5563,14 @@ static void FS_Startup( void ) {
 	Cvar_SetDescription( fs_debug, "Debugging tool for the filesystem. Run the game in debug mode. Prints additional information regarding read files into the console." );
 	fs_copyfiles = Cvar_Get( "fs_copyfiles", "0", CVAR_INIT );
 	Cvar_SetDescription( fs_copyfiles, "Whether or not to copy files when loading them into the game. Every file found in the cdpath will be copied over." );
-	fs_basepath = Cvar_Get( "fs_basepath", Sys_DefaultBasePath(), CVAR_INIT | CVAR_PROTECTED | CVAR_PRIVATE );
-	Cvar_SetDescription( fs_basepath, "Write-protected CVAR specifying the path to the installation folder of the game." );
+	steamPath = Sys_SteamPath();
+	defaultBasePath = ( steamPath && steamPath[0] ) ? steamPath : Sys_DefaultBasePath();
+	fs_basepath = Cvar_Get( "fs_basepath", defaultBasePath, CVAR_INIT | CVAR_PROTECTED | CVAR_PRIVATE );
+	Cvar_SetDescription( fs_basepath, "Write-protected CVAR specifying the path to the retail Quake Live installation folder." );
 	fs_basegame = Cvar_Get( "fs_basegame", BASEGAME, CVAR_INIT | CVAR_PROTECTED );
 	Cvar_SetDescription( fs_basegame, "Write-protected CVAR specifying the path to the base game(s) folder(s), separated by '/'." );
-	fs_steampath = Cvar_Get( "fs_steampath", Sys_SteamPath(), CVAR_INIT | CVAR_PROTECTED | CVAR_PRIVATE );
+	fs_steampath = Cvar_Get( "fs_steampath", steamPath ? steamPath : "", CVAR_INIT | CVAR_PROTECTED | CVAR_PRIVATE );
+	Cvar_SetDescription( fs_steampath, "Write-protected CVAR specifying the auto-detected retail Quake Live Steam installation folder." );
 
 	/* parse fs_basegame cvar */
 	if ( basegame_cnt == 0 || Q_stricmp( basegame, fs_basegame->string ) ) {
@@ -5618,7 +5627,7 @@ static void FS_Startup( void ) {
 #endif
 
 	// add search path elements in reverse priority order
-	if (fs_steampath->string[0]) {
+	if ( fs_steampath->string[0] && Q_stricmp( fs_steampath->string, fs_basepath->string ) ) {
 		// handle multiple basegames:
 		for (i = 0; i < basegame_cnt; i++) {
 			FS_AddGameDirectory( fs_steampath->string, basegames[i] );
@@ -5654,7 +5663,7 @@ static void FS_Startup( void ) {
 
 	// check for additional game folder for mods
 	if ( fs_gamedirvar->string[0] != '\0' && !FS_IsBaseGame( fs_gamedirvar->string ) ) {
-		if ( fs_steampath->string[0] != '\0' ) {
+		if ( fs_steampath->string[0] != '\0' && Q_stricmp( fs_steampath->string, fs_basepath->string ) ) {
 			FS_AddGameDirectory( fs_steampath->string, fs_gamedirvar->string );
 		}
 		if ( fs_basepath->string[0] != '\0' ) {
@@ -5741,17 +5750,40 @@ static void FS_PrintSearchPaths( void )
 ===================
 FS_CheckIdPaks
 
-Checks that pak0.pk3 is present and its checksum is correct
-Note: If you're building a game that doesn't depend on the
-Q3 media pak0.pk3, you'll want to remove this function
+Accepts retail Quake Live's pak00.pk3 marker. Legacy Quake III paks keep their
+existing checksum guard for compatibility builds using those assets.
 ===================
 */
+static qboolean FS_HasQuakeLiveBasePak( void )
+{
+	const searchpath_t *path;
+
+	for ( path = fs_searchpaths; path; path = path->next )
+	{
+		if ( !path->pack )
+			continue;
+
+		if ( !Q_stricmpn( path->pack->pakGamename, BASEGAME, MAX_OSPATH )
+			&& !Q_stricmpn( path->pack->pakBasename, "pak00", MAX_OSPATH ) )
+		{
+			return qtrue;
+		}
+	}
+
+	return qfalse;
+}
+
+
 static void FS_CheckIdPaks( void )
 {
 	const searchpath_t *path;
 	const char* pakBasename;
 	qboolean founddemo = qfalse;
 	unsigned foundPak = 0;
+
+	if ( FS_HasQuakeLiveBasePak() ) {
+		return;
+	}
 
 	for ( path = fs_searchpaths; path; path = path->next )
 	{
@@ -5790,7 +5822,7 @@ static void FS_CheckIdPaks( void )
 						"**************************************************\n"
 						"ERROR: pak0.pk3 is present but its checksum (%u)\n"
 						"is not correct. Please re-copy pak0.pk3 from your\n"
-						"legitimate Q3 CDROM.\n"
+						"legitimate Quake III CDROM.\n"
 						"**************************************************\n\n\n",
 						path->pack->checksum );
 				}
@@ -5799,12 +5831,12 @@ static void FS_CheckIdPaks( void )
 					Com_Printf("\n\n"
 						"**************************************************\n"
 						"ERROR: pak%d.pk3 is present but its checksum (%u)\n"
-						"is not correct. Please re-install Quake 3 Arena \n"
+						"is not correct. Please re-install legacy Quake III Arena \n"
 						"Point Release v1.32 pk3 files\n"
 						"**************************************************\n\n\n",
 						pakBasename[3]-'0', path->pack->checksum );
 				}
-				Com_Error(ERR_FATAL, "\n* You need to install correct Quake III Arena files in order to play *");
+				Com_Error(ERR_FATAL, "\n* You need to install correct retail Quake Live or legacy Quake III Arena files in order to play *");
 			}
 
 			foundPak |= 1<<(pakBasename[3]-'0');
@@ -5818,26 +5850,25 @@ static void FS_CheckIdPaks( void )
 		if((foundPak&1) != 1 )
 		{
 			Com_Printf("\n\n"
-			"pak0.pk3 is missing. Please copy it\n"
-			"from your legitimate Q3 CDROM.\n");
+			"Quake Live pak00.pk3 is missing. Please verify\n"
+			"your legitimate Steam Quake Live installation.\n");
 		}
 
 		if((foundPak&0x1fe) != 0x1fe )
 		{
 			Com_Printf("\n\n"
-			"Point Release files are missing. Please\n"
-			"re-install the 1.32 point release.\n");
+			"Legacy Quake III Point Release files are missing.\n");
 		}
 
 		Com_Printf("\n\n"
-			"Also check that your Q3 executable is in\n"
-			"the correct place and that every file\n"
+			"Also check that fs_basepath or fs_steampath points at\n"
+			"your retail Quake Live Steam install and that every file\n"
 			"in the %s directory is present and readable.\n", BASEGAME);
 
 		if(!fs_gamedirvar->string[0]
 		|| !Q_stricmp( fs_gamedirvar->string, BASEGAME )
 		|| !Q_stricmp( fs_gamedirvar->string, BASETA ))
-			Com_Error(ERR_FATAL, "\n*** you need to install Quake III Arena in order to play ***");
+			Com_Error(ERR_FATAL, "\n*** you need a valid retail Quake Live Steam installation in order to play ***");
 	}
 }
 
@@ -5972,7 +6003,10 @@ FS_ReferencedPakPureChecksums
 Returns a space separated string containing the pure checksums of all referenced pk3 files.
 Servers with sv_pure set will get this string back from clients for pure validation 
 
-The string has a specific order, "cgame ui @ ref1 ref2 ref3 ..."
+The legacy VM string has a specific order, "cgame ui @ ref1 ref2 ref3 ...".
+QL native pure validation prefixes the cgamex86.dll pak checksum in
+CL_SendPureChecksums, and normally reaches this helper with native modules as
+general references rather than cgame/ui qvm must-have slots.
 =====================
 */
 const char *FS_ReferencedPakPureChecksums( int maxlen ) {
@@ -6314,7 +6348,7 @@ void FS_Restart( int checksumFeed ) {
 	// busted and error out now, rather than getting an unreadable
 	// graphics screen when the font fails to load
 	if ( FS_ReadFile( "default.cfg", NULL ) <= 0 ) {
-		// this might happen when connecting to a pure server not using BASEGAME/pak0.pk3
+		// this might happen when connecting to a pure server not using BASEGAME/pak00.pk3
 		// (for instance a TA demo server)
 		if (lastValidBase[0]) {
 			FS_PureServerSetLoadedPaks("", "");

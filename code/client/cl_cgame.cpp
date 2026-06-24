@@ -31,7 +31,11 @@ extern "C" {
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
+#include <type_traits>
 
 using fnql::ToQboolean;
 
@@ -103,6 +107,78 @@ CL_GetGlconfig
 */
 static void CL_GetGlconfig( glconfig_t *glconfig ) {
 	*glconfig = cls.glconfig;
+}
+
+
+typedef struct {
+	char					renderer_string[MAX_STRING_CHARS];
+	char					vendor_string[MAX_STRING_CHARS];
+	char					version_string[MAX_STRING_CHARS];
+	char					extensions_string[BIG_INFO_STRING];
+
+	int						maxTextureSize;
+	int						maxActiveTextures;
+
+	int						colorBits, depthBits, stencilBits;
+
+	glDriverType_t			driverType;
+	glHardwareType_t		hardwareType;
+
+	qboolean				deviceSupportsGamma;
+	textureCompression_t	textureCompression;
+	qboolean				textureEnvAddAvailable;
+	qboolean				multitextureAvailable;
+
+	int						vidWidth, vidHeight;
+	float					windowAspect;
+
+	int						displayFrequency;
+
+	qboolean				isFullscreen;
+	qboolean				stereoEnabled;
+} qlRetailGlconfig_t;
+
+typedef char qlRetailGlconfigSizeCheck[( sizeof( qlRetailGlconfig_t ) == 0x2c44 ) ? 1 : -1 ];
+
+/*
+====================
+CL_GetRetailGlconfig
+
+Retail Quake Live exposes multitextureAvailable before vidWidth and omits the
+engine-local smpActive tail retained by the shared renderer glconfig_t.
+====================
+*/
+static void CL_GetRetailGlconfig( void *glconfig ) {
+	qlRetailGlconfig_t retailConfig;
+
+	if ( !glconfig ) {
+		return;
+	}
+
+	Com_Memset( &retailConfig, 0, sizeof( retailConfig ) );
+	Q_strncpyz( retailConfig.renderer_string, cls.glconfig.renderer_string, sizeof( retailConfig.renderer_string ) );
+	Q_strncpyz( retailConfig.vendor_string, cls.glconfig.vendor_string, sizeof( retailConfig.vendor_string ) );
+	Q_strncpyz( retailConfig.version_string, cls.glconfig.version_string, sizeof( retailConfig.version_string ) );
+	Q_strncpyz( retailConfig.extensions_string, cls.glconfig.extensions_string, sizeof( retailConfig.extensions_string ) );
+	retailConfig.maxTextureSize = cls.glconfig.maxTextureSize;
+	retailConfig.maxActiveTextures = cls.glconfig.numTextureUnits;
+	retailConfig.colorBits = cls.glconfig.colorBits;
+	retailConfig.depthBits = cls.glconfig.depthBits;
+	retailConfig.stencilBits = cls.glconfig.stencilBits;
+	retailConfig.driverType = cls.glconfig.driverType;
+	retailConfig.hardwareType = cls.glconfig.hardwareType;
+	retailConfig.deviceSupportsGamma = cls.glconfig.deviceSupportsGamma;
+	retailConfig.textureCompression = cls.glconfig.textureCompression;
+	retailConfig.textureEnvAddAvailable = cls.glconfig.textureEnvAddAvailable;
+	retailConfig.multitextureAvailable = ( cls.glconfig.numTextureUnits > 1 ) ? qtrue : qfalse;
+	retailConfig.vidWidth = cls.glconfig.vidWidth;
+	retailConfig.vidHeight = cls.glconfig.vidHeight;
+	retailConfig.windowAspect = cls.glconfig.windowAspect;
+	retailConfig.displayFrequency = cls.glconfig.displayFrequency;
+	retailConfig.isFullscreen = cls.glconfig.isFullscreen;
+	retailConfig.stereoEnabled = cls.glconfig.stereoEnabled;
+
+	Com_Memcpy( glconfig, &retailConfig, sizeof( retailConfig ) );
 }
 
 
@@ -630,8 +706,10 @@ static qboolean CL_GetSnapshot( int snapshotNumber, snapshot_t *snapshot ) {
 CL_SetUserCmdValue
 =====================
 */
-static void CL_SetUserCmdValue( int userCmdValue, float sensitivityScale ) {
+static void CL_SetUserCmdValue( int userCmdValue, int userCmdPrimary, float sensitivityScale, int userCmdFov ) {
 	cl.cgameUserCmdValue = userCmdValue;
+	cl.cgameUserCmdPrimary = userCmdPrimary;
+	cl.cgameUserCmdFov = userCmdFov;
 	cl.cgameSensitivity = sensitivityScale;
 }
 
@@ -886,7 +964,7 @@ static void *VM_ArgPtr( intptr_t intValue ) {
 	if ( !intValue || cgvm == nullptr )
 	  return nullptr;
 
-	if ( cgvm->entryPoint )
+	if ( cgvm->entryPoint || cgvm->dllExports )
 		return reinterpret_cast<void *>( intValue );
 	else
 		return cgvm->dataBase + ( intValue & cgvm->dataMask );
@@ -999,6 +1077,9 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		VM_CHECKBOUNDS( cgvm, args[1], args[2] );
 		Cmd_ArgsBuffer( VMA(1), args[2] );
 		return 0;
+	case CG_CMD_EXECUTETEXT:
+		Cbuf_ExecuteText( static_cast<cbufExec_t>( args[1] ), VMA(2) );
+		return 0;
 
 	case CG_FS_FOPENFILE:
 		return FS_VM_OpenFile( VMA(1), VMA(2), static_cast<fsMode_t>( args[3] ), H_CGAME );
@@ -1045,6 +1126,8 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		return CM_NumInlineModels();
 	case CG_CM_INLINEMODEL:
 		return CM_InlineModel( args[1] );
+	case CG_CM_LOADMODEL:
+		return 0;
 	case CG_CM_TEMPBOXMODEL:
 		return CM_TempBoxModel( VMA(1), VMA(2), /*int capsule*/ qfalse );
 	case CG_CM_TEMPCAPSULEMODEL:
@@ -1209,7 +1292,7 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 	case CG_GETUSERCMD:
 		return CL_GetUserCmd( args[1], VMA(2) );
 	case CG_SETUSERCMDVALUE:
-		CL_SetUserCmdValue( args[1], VMF(2) );
+		CL_SetUserCmdValue( args[1], args[2], VMF(3), args[4] );
 		return 0;
 	case CG_MEMORY_REMAINING:
 		return Hunk_MemoryRemaining();
@@ -1223,6 +1306,22 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		return 0;
 	case CG_KEY_GETKEY:
 		return Key_GetKey( VMA(1) );
+	case CG_KEY_KEYNUMTOSTRINGBUF:
+		VM_CHECKBOUNDS( cgvm, args[2], args[3] );
+		Q_strncpyz( VMA(2), Key_KeynumToString( args[1] ), args[3] );
+		return 0;
+	case CG_KEY_GETBINDINGBUF:
+		VM_CHECKBOUNDS( cgvm, args[2], args[3] );
+		Q_strncpyz( VMA(2), Key_GetBinding( args[1] ), args[3] );
+		return 0;
+	case CG_KEY_SETBINDING:
+		Key_SetBinding( args[1], VMA(2) );
+		return 0;
+	case CG_KEY_GETOVERSTRIKEMODE:
+		return Key_GetOverstrikeMode();
+	case CG_KEY_SETOVERSTRIKEMODE:
+		Key_SetOverstrikeMode( static_cast<qboolean>( args[1] ) );
+		return 0;
 
 	// shared syscalls
 	case TRAP_MEMSET:
@@ -1337,6 +1436,22 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		Cvar_SetDescription2( VMA(1).String(), VMA(2).String() );
 		return 0;
 
+	case CG_ADVERTISEMENTBRIDGE_INITCGAME:
+		CL_AdvertisementBridge_InitCGame();
+		return 0;
+
+	case CG_ADVERTISEMENTBRIDGE_SHUTDOWNCGAME:
+		CL_AdvertisementBridge_ShutdownCGame();
+		return 0;
+
+	case CG_ADVERTISEMENTBRIDGE_UPDATELOADINGVIEWPARAMETERS:
+		CL_AdvertisementBridge_UpdateLoadingViewParameters();
+		return 0;
+
+	case CG_ADVERTISEMENTBRIDGE_SETFRAMETIME:
+		CL_AdvertisementBridge_SetFrameTime( args[1] );
+		return 0;
+
 	case CG_TRAP_GETVALUE:
 		VM_CHECKBOUNDS( cgvm, args[1], args[2] );
 		return CL_GetValue( VMA(1), args[2], VMA(3) );
@@ -1369,6 +1484,543 @@ static intptr_t QDECL CL_DllSyscall( intptr_t arg, ... ) {
 #else
 	return CL_CgameSystemCalls( &arg );
 #endif
+}
+
+typedef void (QDECL *ql_import_f)( void );
+
+static ql_import_f ql_cgame_imports[CGAME_NATIVE_IMPORT_COUNT];
+static vec4_t ql_cgame_currentColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+static std::array<uint64_t, MAX_CLIENTS> ql_cgame_mutedIdentitySet;
+static int ql_cgame_mutedIdentityCount;
+
+template<typename T>
+static intptr_t CG_ImportArgValue( T value ) {
+	using ArgType = typename std::remove_cv<typename std::remove_reference<T>::type>::type;
+
+	if constexpr ( std::is_pointer<ArgType>::value ) {
+		return reinterpret_cast<intptr_t>( value );
+	} else if constexpr ( std::is_enum<ArgType>::value ) {
+		return static_cast<intptr_t>( value );
+	} else if constexpr ( std::is_integral<ArgType>::value ) {
+		return static_cast<intptr_t>( value );
+	} else if constexpr ( std::is_floating_point<ArgType>::value ) {
+		float packedFloat = static_cast<float>( value );
+		int packedBits;
+
+		std::memcpy( &packedBits, &packedFloat, sizeof( packedBits ) );
+		return static_cast<intptr_t>( packedBits );
+	} else {
+		static_assert( std::is_arithmetic<ArgType>::value, "unsupported cgame import argument type" );
+		return 0;
+	}
+}
+
+static intptr_t CG_Import_Dispatch( intptr_t *args ) {
+	const intptr_t arg = args[0];
+
+	if ( arg == CG_GETGLCONFIG ) {
+		CL_GetRetailGlconfig( reinterpret_cast<void *>( args[1] ) );
+		return 0;
+	}
+
+	if ( arg == CG_SETUSERCMDVALUE ) {
+		CL_SetUserCmdValue( static_cast<int>( args[1] ), static_cast<int>( args[2] ), _vmf( args[3] ), static_cast<int>( args[4] ) );
+		return 0;
+	}
+
+	return CL_CgameSystemCalls( args );
+}
+
+static intptr_t CG_Import_Syscall( intptr_t arg ) {
+	intptr_t args[16] = {};
+
+	args[0] = arg;
+	return CG_Import_Dispatch( args );
+}
+
+template<typename... Args>
+static intptr_t CG_Import_Syscall( intptr_t arg, Args... rawArgs ) {
+	static_assert( sizeof...( rawArgs ) < 16, "too many cgame import arguments" );
+
+	intptr_t args[16] = { arg, CG_ImportArgValue( rawArgs )... };
+
+	return CG_Import_Dispatch( args );
+}
+
+#include "ql_cgame_imports.inc"
+
+void CL_ShowFirstTrackedPlayer( void ) {
+	if ( !cgvm || !cgvm->dllExports ) {
+		return;
+	}
+
+	VM_Call( cgvm, 0, CG_SHOW_1ST_TRACKED_PLAYER );
+}
+
+void CL_ShowSecondTrackedPlayer( void ) {
+	if ( !cgvm || !cgvm->dllExports ) {
+		return;
+	}
+
+	VM_Call( cgvm, 0, CG_SHOW_2ND_TRACKED_PLAYER );
+}
+
+int CL_GetCGamePhysicsTime( void ) {
+	if ( !cgvm || !cgvm->dllExports ) {
+		return 0;
+	}
+
+	const int physicsTime = VM_Call( cgvm, 0, CG_GET_PHYSICS_TIME );
+	return physicsTime > 0 ? physicsTime : 0;
+}
+
+static uint64_t QL_CG_CombineIdentityWords( unsigned int identityLow, unsigned int identityHigh ) {
+	return ( static_cast<uint64_t>( identityHigh ) << 32 ) | static_cast<uint64_t>( identityLow );
+}
+
+static int QL_CG_FindMutedIdentityIndex( uint64_t identity ) {
+	for ( int i = 0; i < ql_cgame_mutedIdentityCount; ++i ) {
+		if ( ql_cgame_mutedIdentitySet[i] == identity ) {
+			return i;
+		}
+	}
+
+	return -1;
+}
+
+qboolean CL_IsSteamIdentityMuted( unsigned int identityLow, unsigned int identityHigh ) {
+	const uint64_t identity = QL_CG_CombineIdentityWords( identityLow, identityHigh );
+	return ( identity && QL_CG_FindMutedIdentityIndex( identity ) >= 0 ) ? qtrue : qfalse;
+}
+
+qboolean CL_ToggleSteamIdentityMute( unsigned int identityLow, unsigned int identityHigh ) {
+	const uint64_t identity = QL_CG_CombineIdentityWords( identityLow, identityHigh );
+	if ( !identity ) {
+		return qfalse;
+	}
+
+	const int index = QL_CG_FindMutedIdentityIndex( identity );
+	if ( index >= 0 ) {
+		--ql_cgame_mutedIdentityCount;
+		ql_cgame_mutedIdentitySet[index] = ql_cgame_mutedIdentitySet[ql_cgame_mutedIdentityCount];
+		ql_cgame_mutedIdentitySet[ql_cgame_mutedIdentityCount] = 0;
+		return qfalse;
+	}
+
+	if ( ql_cgame_mutedIdentityCount >= static_cast<int>( ql_cgame_mutedIdentitySet.size() ) ) {
+		return qfalse;
+	}
+
+	ql_cgame_mutedIdentitySet[ql_cgame_mutedIdentityCount++] = identity;
+	return qtrue;
+}
+
+static uint64_t QL_CG_PackFloatBits64( float lo, float hi ) {
+	union {
+		uint64_t value;
+		struct {
+			float lo;
+			float hi;
+		} parts;
+	} packed;
+
+	packed.parts.lo = lo;
+	packed.parts.hi = hi;
+	return packed.value;
+}
+
+static cvarValidator_t QL_CG_CvarRangeType( const char *minimumValue, const char *maximumValue ) {
+	if ( ( minimumValue && std::strchr( minimumValue, '.' ) ) ||
+		( maximumValue && std::strchr( maximumValue, '.' ) ) ) {
+		return CV_FLOAT;
+	}
+
+	return CV_INTEGER;
+}
+
+static void QDECL QL_CG_trap_Cvar_RegisterRange( vmCvar_t *vmCvar, const char *varName,
+		const char *defaultValue, const char *minimumValue, const char *maximumValue, int flags ) {
+	Cvar_Register( vmCvar, varName, defaultValue, flags, cgvm ? cgvm->privateFlag : CVAR_PRIVATE );
+
+	cvar_t *cv = Cvar_Get( varName, defaultValue, flags );
+	if ( cv ) {
+		Cvar_CheckRange( cv, minimumValue, maximumValue, QL_CG_CvarRangeType( minimumValue, maximumValue ) );
+	}
+}
+
+static void QDECL QL_CG_trap_Cvar_SetValue( const char *varName, float value ) {
+	Cvar_SetValueSafe( varName, value );
+}
+
+static void QDECL QL_CG_trap_Cvar_Reset( const char *varName ) {
+	Cvar_Reset( varName );
+}
+
+static int QDECL QL_CG_trap_FS_GetFileList( const char *path, const char *extension, char *listbuf, int bufsize ) {
+	return FS_GetFileList( path, extension, listbuf, bufsize );
+}
+
+static void QDECL QL_CG_trap_S_StartSoundVolume( vec3_t origin, int entityNum, int entchannel, sfxHandle_t sfx, float volume ) {
+	S_StartSoundVolume( origin, entityNum, entchannel, sfx, volume );
+}
+
+static void QDECL QL_CG_trap_S_StartLocalSoundVolume( sfxHandle_t sfx, int channelNum, float volume ) {
+	S_StartLocalSoundVolume( sfx, channelNum, volume );
+}
+
+static void QDECL QL_CG_trap_S_ClearLoopingSoundsFrame( void ) {
+	S_ClearLoopingSounds( qfalse );
+}
+
+static void QDECL QL_CG_trap_S_ClearLoopingSoundsKillAll( void ) {
+	S_ClearLoopingSounds( qtrue );
+	S_ClearSoundBuffer();
+}
+
+static qhandle_t QDECL QL_CG_trap_SetupAdvertCellShader( const char *defaultContent, const void *rect, int cellId ) {
+	return CL_AdvertisementBridge_SetupAdvertCellShader( defaultContent, rect, cellId );
+}
+
+static qhandle_t QDECL QL_CG_trap_RefreshAdvertCellShader( const char *defaultContent, const void *rect, int cellId ) {
+	return CL_AdvertisementBridge_RefreshAdvertCellShader( defaultContent, rect, cellId );
+}
+
+static void QDECL QL_CG_trap_SetActiveAdvert( int cellId ) {
+	CL_AdvertisementBridge_SetActiveAdvert( cellId );
+}
+
+static void QDECL QL_CG_trap_UpdateAdvert( int handleOrToken, int area ) {
+	CL_AdvertisementBridge_UpdateAdvert( handleOrToken, area );
+}
+
+static int QDECL QL_CG_trap_RetailReservedImport( void ) {
+	return 0;
+}
+
+static void QDECL QL_CG_trap_AdvertisementBridge_Reserved21C0( void ) {
+	CL_AdvertisementBridge_Reserved21C0();
+}
+
+static void QDECL QL_CG_trap_AdvertisementBridge_SetMapPath( const char *mapPath ) {
+	CL_AdvertisementBridge_SetMapPath( mapPath );
+}
+
+static void QDECL QL_CG_trap_AdvertisementBridge_UpdateViewParameters( void ) {
+	CL_AdvertisementBridge_UpdateViewParameters();
+}
+
+static void QDECL QL_CG_trap_AdvertisementBridge_ClearDelay( void ) {
+	CL_AdvertisementBridge_ClearDelay();
+}
+
+static void QDECL QL_CG_trap_R_SetColor_QL( const float *rgba ) {
+	if ( rgba ) {
+		ql_cgame_currentColor[0] = rgba[0];
+		ql_cgame_currentColor[1] = rgba[1];
+		ql_cgame_currentColor[2] = rgba[2];
+		ql_cgame_currentColor[3] = rgba[3];
+	} else {
+		ql_cgame_currentColor[0] = 1.0f;
+		ql_cgame_currentColor[1] = 1.0f;
+		ql_cgame_currentColor[2] = 1.0f;
+		ql_cgame_currentColor[3] = 1.0f;
+	}
+
+	re.SetColor( rgba );
+}
+
+static void QDECL QL_CG_trap_PublishTaggedInfoString( const char *messageType, const char *infoString ) {
+	CL_WebView_PublishTaggedInfoString( messageType, infoString );
+}
+
+static void QDECL QL_CG_trap_R_MirrorPoint( vec3_t in, orientation_t *surface, orientation_t *camera, vec3_t out ) {
+	vec3_t local;
+	vec3_t transformed;
+
+	VectorSubtract( in, surface->origin, local );
+	VectorClear( transformed );
+	for ( int i = 0; i < 3; ++i ) {
+		const float d = DotProduct( local, surface->axis[i] );
+		VectorMA( transformed, d, camera->axis[i], transformed );
+	}
+	VectorAdd( transformed, camera->origin, out );
+}
+
+static void QDECL QL_CG_trap_R_MirrorVector( vec3_t in, orientation_t *surface, orientation_t *camera, vec3_t out ) {
+	VectorClear( out );
+	for ( int i = 0; i < 3; ++i ) {
+		const float d = DotProduct( in, surface->axis[i] );
+		VectorMA( out, d, camera->axis[i], out );
+	}
+}
+
+static void QDECL QL_CG_trap_DrawScaledText( int x, int y, const char *text, int fontHandle,
+		float scale, int maxX, float *outMaxX, int forceColor ) {
+	RE_DrawScaledText( x, y, text, fontHandle, scale, maxX, outMaxX, forceColor != qfalse ? qtrue : qfalse, ql_cgame_currentColor );
+}
+
+static uint64_t QDECL QL_CG_trap_MeasureText( const char *text, const char *end, int fontHandle,
+		float scale, int maxX, float *outLeft ) {
+	float width;
+	float height;
+
+	RE_MeasureScaledText( text, end, fontHandle, scale, maxX, &width, &height, outLeft );
+
+	return QL_CG_PackFloatBits64( width, height );
+}
+
+static int QDECL QL_CG_trap_IsClientMuted( unsigned int identityLow, unsigned int identityHigh ) {
+	return CL_IsSteamIdentityMuted( identityLow, identityHigh ) ? 1 : 0;
+}
+
+static int QDECL QL_CG_trap_ToggleClientMute( unsigned int identityLow, unsigned int identityHigh ) {
+	return CL_ToggleSteamIdentityMute( identityLow, identityHigh ) ? 1 : 0;
+}
+
+static int QDECL QL_CG_trap_IsSubscribedApp( int appId ) {
+	return CL_IsSubscribedApp( appId ) ? 1 : 0;
+}
+
+static qhandle_t QDECL QL_CG_trap_GetAvatarImageHandle( unsigned int identityLow, unsigned int identityHigh ) {
+	return CL_GetAvatarImageHandle( identityLow, identityHigh );
+}
+
+static void CL_InitCGameImports( void ) {
+	Com_Memset( ql_cgame_imports, 0, sizeof( ql_cgame_imports ) );
+
+	ql_cgame_currentColor[0] = 1.0f;
+	ql_cgame_currentColor[1] = 1.0f;
+	ql_cgame_currentColor[2] = 1.0f;
+	ql_cgame_currentColor[3] = 1.0f;
+
+	ql_cgame_imports[CG_QL_IMPORT_PRINT] = (ql_import_f)QL_CG_trap_Print;
+	ql_cgame_imports[CG_QL_IMPORT_ERROR] = (ql_import_f)QL_CG_trap_Error;
+	ql_cgame_imports[CG_QL_IMPORT_MILLISECONDS] = (ql_import_f)QL_CG_trap_Milliseconds;
+	ql_cgame_imports[CG_QL_IMPORT_REAL_TIME] = (ql_import_f)QL_CG_trap_RealTime;
+	ql_cgame_imports[CG_QL_IMPORT_CVAR_REGISTER] = (ql_import_f)QL_CG_trap_Cvar_Register;
+	ql_cgame_imports[CG_QL_IMPORT_CVAR_REGISTER_RANGE] = (ql_import_f)QL_CG_trap_Cvar_RegisterRange;
+	ql_cgame_imports[CG_QL_IMPORT_CVAR_UPDATE] = (ql_import_f)QL_CG_trap_Cvar_Update;
+	ql_cgame_imports[CG_QL_IMPORT_CVAR_SET] = (ql_import_f)QL_CG_trap_Cvar_Set;
+	ql_cgame_imports[CG_QL_IMPORT_CVAR_SET_VALUE] = (ql_import_f)QL_CG_trap_Cvar_SetValue;
+	ql_cgame_imports[CG_QL_IMPORT_CVAR_VARIABLESTRINGBUFFER] = (ql_import_f)QL_CG_trap_Cvar_VariableStringBuffer;
+	ql_cgame_imports[CG_QL_IMPORT_CVAR_RESET] = (ql_import_f)QL_CG_trap_Cvar_Reset;
+	ql_cgame_imports[CG_QL_IMPORT_ARGC] = (ql_import_f)QL_CG_trap_Argc;
+	ql_cgame_imports[CG_QL_IMPORT_ARGV] = (ql_import_f)QL_CG_trap_Argv;
+	ql_cgame_imports[CG_QL_IMPORT_ARGS] = (ql_import_f)QL_CG_trap_Args;
+	ql_cgame_imports[CG_QL_IMPORT_FS_FOPENFILE] = (ql_import_f)QL_CG_trap_FS_FOpenFile;
+	ql_cgame_imports[CG_QL_IMPORT_FS_READ] = (ql_import_f)QL_CG_trap_FS_Read;
+	ql_cgame_imports[CG_QL_IMPORT_FS_WRITE] = (ql_import_f)QL_CG_trap_FS_Write;
+	ql_cgame_imports[CG_QL_IMPORT_FS_FCLOSEFILE] = (ql_import_f)QL_CG_trap_FS_FCloseFile;
+	ql_cgame_imports[CG_QL_IMPORT_FS_SEEK] = (ql_import_f)QL_CG_trap_FS_Seek;
+	ql_cgame_imports[CG_QL_IMPORT_FS_GETFILELIST] = (ql_import_f)QL_CG_trap_FS_GetFileList;
+	ql_cgame_imports[CG_QL_IMPORT_SENDCONSOLECOMMAND] = (ql_import_f)QL_CG_trap_SendConsoleCommand;
+	ql_cgame_imports[CG_QL_IMPORT_ADDCOMMAND] = (ql_import_f)QL_CG_trap_AddCommand;
+	ql_cgame_imports[CG_QL_IMPORT_REMOVECOMMAND] = (ql_import_f)QL_CG_trap_RemoveCommand;
+	ql_cgame_imports[CG_QL_IMPORT_SENDCLIENTCOMMAND] = (ql_import_f)QL_CG_trap_SendClientCommand;
+	ql_cgame_imports[CG_QL_IMPORT_UPDATESCREEN] = (ql_import_f)QL_CG_trap_UpdateScreen;
+	ql_cgame_imports[CG_QL_IMPORT_CM_LOADMAP] = (ql_import_f)QL_CG_trap_CM_LoadMap;
+	ql_cgame_imports[CG_QL_IMPORT_CM_NUMINLINEMODELS] = (ql_import_f)QL_CG_trap_CM_NumInlineModels;
+	ql_cgame_imports[CG_QL_IMPORT_CM_INLINEMODEL] = (ql_import_f)QL_CG_trap_CM_InlineModel;
+	ql_cgame_imports[CG_QL_IMPORT_CM_TEMPBOXMODEL] = (ql_import_f)QL_CG_trap_CM_TempBoxModel;
+	ql_cgame_imports[CG_QL_IMPORT_CM_TEMPCAPSULEMODEL] = (ql_import_f)QL_CG_trap_CM_TempCapsuleModel;
+	ql_cgame_imports[CG_QL_IMPORT_CM_POINTCONTENTS] = (ql_import_f)QL_CG_trap_CM_PointContents;
+	ql_cgame_imports[CG_QL_IMPORT_CM_TRANSFORMEDPOINTCONTENTS] = (ql_import_f)QL_CG_trap_CM_TransformedPointContents;
+	ql_cgame_imports[CG_QL_IMPORT_CM_BOXTRACE] = (ql_import_f)QL_CG_trap_CM_BoxTrace;
+	ql_cgame_imports[CG_QL_IMPORT_CM_CAPSULETRACE] = (ql_import_f)QL_CG_trap_CM_CapsuleTrace;
+	ql_cgame_imports[CG_QL_IMPORT_CM_TRANSFORMEDBOXTRACE] = (ql_import_f)QL_CG_trap_CM_TransformedBoxTrace;
+	ql_cgame_imports[CG_QL_IMPORT_CM_TRANSFORMEDCAPSULETRACE] = (ql_import_f)QL_CG_trap_CM_TransformedCapsuleTrace;
+	ql_cgame_imports[CG_QL_IMPORT_CM_MARKFRAGMENTS] = (ql_import_f)QL_CG_trap_CM_MarkFragments;
+	ql_cgame_imports[CG_QL_IMPORT_S_STARTSOUND] = (ql_import_f)QL_CG_trap_S_StartSound;
+	ql_cgame_imports[CG_QL_IMPORT_S_STARTSOUND_VOLUME] = (ql_import_f)QL_CG_trap_S_StartSoundVolume;
+	ql_cgame_imports[CG_QL_IMPORT_S_STARTLOCALSOUND] = (ql_import_f)QL_CG_trap_S_StartLocalSound;
+	ql_cgame_imports[CG_QL_IMPORT_S_STARTLOCALSOUND_VOLUME] = (ql_import_f)QL_CG_trap_S_StartLocalSoundVolume;
+	ql_cgame_imports[CG_QL_IMPORT_S_CLEARLOOPINGSOUNDS_FRAME] = (ql_import_f)QL_CG_trap_S_ClearLoopingSoundsFrame;
+	ql_cgame_imports[CG_QL_IMPORT_S_CLEARLOOPINGSOUNDS_KILLALL] = (ql_import_f)QL_CG_trap_S_ClearLoopingSoundsKillAll;
+	ql_cgame_imports[CG_QL_IMPORT_S_ADDLOOPINGSOUND] = (ql_import_f)QL_CG_trap_S_AddLoopingSound;
+	ql_cgame_imports[CG_QL_IMPORT_S_UPDATEENTITYPOSITION] = (ql_import_f)QL_CG_trap_S_UpdateEntityPosition;
+	ql_cgame_imports[CG_QL_IMPORT_S_RESPATIALIZE] = (ql_import_f)QL_CG_trap_S_Respatialize;
+	ql_cgame_imports[CG_QL_IMPORT_S_REGISTERSOUND] = (ql_import_f)QL_CG_trap_S_RegisterSound;
+	ql_cgame_imports[CG_QL_IMPORT_S_STARTBACKGROUNDTRACK] = (ql_import_f)QL_CG_trap_S_StartBackgroundTrack;
+	ql_cgame_imports[CG_QL_IMPORT_S_STOPBACKGROUNDTRACK] = (ql_import_f)QL_CG_trap_S_StopBackgroundTrack;
+	ql_cgame_imports[CG_QL_IMPORT_R_LOADWORLDMAP] = (ql_import_f)QL_CG_trap_R_LoadWorldMap;
+	ql_cgame_imports[CG_QL_IMPORT_R_REGISTERMODEL] = (ql_import_f)QL_CG_trap_R_RegisterModel;
+	ql_cgame_imports[CG_QL_IMPORT_R_REGISTERSKIN] = (ql_import_f)QL_CG_trap_R_RegisterSkin;
+	ql_cgame_imports[CG_QL_IMPORT_R_REGISTERSHADER] = (ql_import_f)QL_CG_trap_R_RegisterShader;
+	ql_cgame_imports[CG_QL_IMPORT_R_REGISTERSHADERNOMIP] = (ql_import_f)QL_CG_trap_R_RegisterShaderNoMip;
+	ql_cgame_imports[CG_QL_IMPORT_ADVERTISEMENTBRIDGE_RESERVED_21C0] = (ql_import_f)QL_CG_trap_AdvertisementBridge_Reserved21C0;
+	ql_cgame_imports[CG_QL_IMPORT_SETUP_ADVERT_CELL_SHADER] = (ql_import_f)QL_CG_trap_SetupAdvertCellShader;
+	ql_cgame_imports[CG_QL_IMPORT_REFRESH_ADVERT_CELL_SHADER] = (ql_import_f)QL_CG_trap_RefreshAdvertCellShader;
+	ql_cgame_imports[CG_QL_IMPORT_SET_ACTIVE_ADVERT] = (ql_import_f)QL_CG_trap_SetActiveAdvert;
+	ql_cgame_imports[CG_QL_IMPORT_UPDATE_ADVERT] = (ql_import_f)QL_CG_trap_UpdateAdvert;
+	ql_cgame_imports[CG_QL_IMPORT_ADVERTISEMENTBRIDGE_RESERVED_59] = (ql_import_f)QL_CG_trap_RetailReservedImport;
+	ql_cgame_imports[CG_QL_IMPORT_ADVERTISEMENTBRIDGE_SET_MAP_PATH] = (ql_import_f)QL_CG_trap_AdvertisementBridge_SetMapPath;
+	ql_cgame_imports[CG_QL_IMPORT_ADVERTISEMENTBRIDGE_INITCGAME] = (ql_import_f)QL_CG_trap_AdvertisementBridge_InitCGame;
+	ql_cgame_imports[CG_QL_IMPORT_ADVERTISEMENTBRIDGE_SHUTDOWNCGAME] = (ql_import_f)QL_CG_trap_AdvertisementBridge_ShutdownCGame;
+	ql_cgame_imports[CG_QL_IMPORT_ADVERTISEMENTBRIDGE_RESERVED_63] = (ql_import_f)QL_CG_trap_RetailReservedImport;
+	ql_cgame_imports[CG_QL_IMPORT_ADVERTISEMENTBRIDGE_SETFRAMETIME] = (ql_import_f)QL_CG_trap_AdvertisementBridge_SetFrameTime;
+	ql_cgame_imports[CG_QL_IMPORT_ADVERTISEMENTBRIDGE_RESERVED_65] = (ql_import_f)QL_CG_trap_RetailReservedImport;
+	ql_cgame_imports[CG_QL_IMPORT_RETAIL_RESERVED_66] = (ql_import_f)QL_CG_trap_RetailReservedImport;
+	ql_cgame_imports[CG_QL_IMPORT_RETAIL_RESERVED_67] = (ql_import_f)QL_CG_trap_RetailReservedImport;
+	ql_cgame_imports[CG_QL_IMPORT_RETAIL_RESERVED_68] = (ql_import_f)QL_CG_trap_RetailReservedImport;
+	ql_cgame_imports[CG_QL_IMPORT_ADVERTISEMENTBRIDGE_RESERVED_69] = (ql_import_f)QL_CG_trap_RetailReservedImport;
+	ql_cgame_imports[CG_QL_IMPORT_R_CLEARSCENE] = (ql_import_f)QL_CG_trap_R_ClearScene;
+	ql_cgame_imports[CG_QL_IMPORT_R_ADDREFENTITYTOSCENE] = (ql_import_f)QL_CG_trap_R_AddRefEntityToScene;
+	ql_cgame_imports[CG_QL_IMPORT_R_ADDPOLYTOSCENE] = (ql_import_f)QL_CG_trap_R_AddPolyToScene;
+	ql_cgame_imports[CG_QL_IMPORT_R_ADDPOLYSTOSCENE] = (ql_import_f)QL_CG_trap_R_AddPolysToScene;
+	ql_cgame_imports[CG_QL_IMPORT_R_ADDLIGHTTOSCENE] = (ql_import_f)QL_CG_trap_R_AddLightToScene;
+	ql_cgame_imports[CG_QL_IMPORT_R_LIGHTFORPOINT] = (ql_import_f)QL_CG_trap_R_LightForPoint;
+	ql_cgame_imports[CG_QL_IMPORT_R_RENDERSCENE] = (ql_import_f)QL_CG_trap_R_RenderScene;
+	ql_cgame_imports[CG_QL_IMPORT_ADVERTISEMENTBRIDGE_UPDATE_LOADING_VIEW_PARAMETERS] = (ql_import_f)QL_CG_trap_AdvertisementBridge_UpdateLoadingViewParameters;
+	ql_cgame_imports[CG_QL_IMPORT_R_SETCOLOR] = (ql_import_f)QL_CG_trap_R_SetColor_QL;
+	ql_cgame_imports[CG_QL_IMPORT_R_DRAWSTRETCHPIC] = (ql_import_f)QL_CG_trap_R_DrawStretchPic;
+	ql_cgame_imports[CG_QL_IMPORT_RETAIL_RESERVED_80] = (ql_import_f)QL_CG_trap_RetailReservedImport;
+	ql_cgame_imports[CG_QL_IMPORT_R_MODELBOUNDS] = (ql_import_f)QL_CG_trap_R_ModelBounds;
+	ql_cgame_imports[CG_QL_IMPORT_R_LERPTAG] = (ql_import_f)QL_CG_trap_R_LerpTag;
+	ql_cgame_imports[CG_QL_IMPORT_R_REMAP_SHADER] = (ql_import_f)QL_CG_trap_R_RemapShader;
+	ql_cgame_imports[CG_QL_IMPORT_GETGLCONFIG] = (ql_import_f)QL_CG_trap_GetGlconfig;
+	ql_cgame_imports[CG_QL_IMPORT_GETGAMESTATE] = (ql_import_f)QL_CG_trap_GetGameState;
+	ql_cgame_imports[CG_QL_IMPORT_GETCURRENTSNAPSHOTNUMBER] = (ql_import_f)QL_CG_trap_GetCurrentSnapshotNumber;
+	ql_cgame_imports[CG_QL_IMPORT_GETSNAPSHOT] = (ql_import_f)QL_CG_trap_GetSnapshot;
+	ql_cgame_imports[CG_QL_IMPORT_GETSERVERCOMMAND] = (ql_import_f)QL_CG_trap_GetServerCommand;
+	ql_cgame_imports[CG_QL_IMPORT_GETCURRENTCMDNUMBER] = (ql_import_f)QL_CG_trap_GetCurrentCmdNumber;
+	ql_cgame_imports[CG_QL_IMPORT_GETUSERCMD] = (ql_import_f)QL_CG_trap_GetUserCmd;
+	ql_cgame_imports[CG_QL_IMPORT_SETUSERCMDVALUE] = (ql_import_f)QL_CG_trap_SetUserCmdValue;
+	ql_cgame_imports[CG_QL_IMPORT_MEMORY_REMAINING] = (ql_import_f)QL_CG_trap_MemoryRemaining;
+	ql_cgame_imports[CG_QL_IMPORT_R_REGISTERFONT] = (ql_import_f)QL_CG_trap_R_RegisterFont;
+	ql_cgame_imports[CG_QL_IMPORT_KEY_ISDOWN] = (ql_import_f)QL_CG_trap_Key_IsDown;
+	ql_cgame_imports[CG_QL_IMPORT_KEY_GETCATCHER] = (ql_import_f)QL_CG_trap_Key_GetCatcher;
+	ql_cgame_imports[CG_QL_IMPORT_KEY_SETCATCHER] = (ql_import_f)QL_CG_trap_Key_SetCatcher;
+	ql_cgame_imports[CG_QL_IMPORT_KEY_GETKEY] = (ql_import_f)QL_CG_trap_Key_GetKey;
+	ql_cgame_imports[CG_QL_IMPORT_KEY_KEYNUMTOSTRINGBUF] = (ql_import_f)QL_CG_trap_Key_KeynumToStringBuf;
+	ql_cgame_imports[CG_QL_IMPORT_KEY_GETBINDINGBUF] = (ql_import_f)QL_CG_trap_Key_GetBindingBuf;
+	ql_cgame_imports[CG_QL_IMPORT_CIN_PLAYCINEMATIC] = (ql_import_f)QL_CG_trap_CIN_PlayCinematic;
+	ql_cgame_imports[CG_QL_IMPORT_CIN_STOPCINEMATIC] = (ql_import_f)QL_CG_trap_CIN_StopCinematic;
+	ql_cgame_imports[CG_QL_IMPORT_CIN_RUNCINEMATIC] = (ql_import_f)QL_CG_trap_CIN_RunCinematic;
+	ql_cgame_imports[CG_QL_IMPORT_CIN_DRAWCINEMATIC] = (ql_import_f)QL_CG_trap_CIN_DrawCinematic;
+	ql_cgame_imports[CG_QL_IMPORT_CIN_SETEXTENTS] = (ql_import_f)QL_CG_trap_CIN_SetExtents;
+	ql_cgame_imports[CG_QL_IMPORT_GET_ENTITY_TOKEN] = (ql_import_f)QL_CG_trap_GetEntityToken;
+	ql_cgame_imports[CG_QL_IMPORT_PC_ADD_GLOBAL_DEFINE] = (ql_import_f)QL_CG_trap_PC_AddGlobalDefine;
+	ql_cgame_imports[CG_QL_IMPORT_PC_LOAD_SOURCE] = (ql_import_f)QL_CG_trap_PC_LoadSource;
+	ql_cgame_imports[CG_QL_IMPORT_PC_FREE_SOURCE] = (ql_import_f)QL_CG_trap_PC_FreeSource;
+	ql_cgame_imports[CG_QL_IMPORT_PC_READ_TOKEN] = (ql_import_f)QL_CG_trap_PC_ReadToken;
+	ql_cgame_imports[CG_QL_IMPORT_PC_SOURCE_FILE_AND_LINE] = (ql_import_f)QL_CG_trap_PC_SourceFileAndLine;
+	ql_cgame_imports[CG_QL_IMPORT_RETAIL_RESERVED_112] = (ql_import_f)QL_CG_trap_RetailReservedImport;
+	ql_cgame_imports[CG_QL_IMPORT_RETAIL_RESERVED_113] = (ql_import_f)QL_CG_trap_RetailReservedImport;
+	ql_cgame_imports[CG_QL_IMPORT_ADVERTISEMENTBRIDGE_UPDATE_VIEW_PARAMETERS] = (ql_import_f)QL_CG_trap_AdvertisementBridge_UpdateViewParameters;
+	ql_cgame_imports[CG_QL_IMPORT_ADVERTISEMENTBRIDGE_CLEAR_DELAY] = (ql_import_f)QL_CG_trap_AdvertisementBridge_ClearDelay;
+	ql_cgame_imports[CG_QL_IMPORT_PUBLISH_TAGGED_INFO_STRING] = (ql_import_f)QL_CG_trap_PublishTaggedInfoString;
+	ql_cgame_imports[CG_QL_IMPORT_RETAIL_RESERVED_117] = (ql_import_f)QL_CG_trap_RetailReservedImport;
+	ql_cgame_imports[CG_QL_IMPORT_R_MIRROR_POINT] = (ql_import_f)QL_CG_trap_R_MirrorPoint;
+	ql_cgame_imports[CG_QL_IMPORT_R_MIRROR_VECTOR] = (ql_import_f)QL_CG_trap_R_MirrorVector;
+	ql_cgame_imports[CG_QL_IMPORT_IS_SUBSCRIBED_APP] = (ql_import_f)QL_CG_trap_IsSubscribedApp;
+	ql_cgame_imports[CG_QL_IMPORT_DRAW_SCALED_TEXT] = (ql_import_f)QL_CG_trap_DrawScaledText;
+	ql_cgame_imports[CG_QL_IMPORT_MEASURE_TEXT] = (ql_import_f)QL_CG_trap_MeasureText;
+	ql_cgame_imports[CG_QL_IMPORT_IS_CLIENT_MUTED] = (ql_import_f)QL_CG_trap_IsClientMuted;
+	ql_cgame_imports[CG_QL_IMPORT_TOGGLE_CLIENT_MUTE] = (ql_import_f)QL_CG_trap_ToggleClientMute;
+	ql_cgame_imports[CG_QL_IMPORT_GET_AVATAR_IMAGE_HANDLE] = (ql_import_f)QL_CG_trap_GetAvatarImageHandle;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_CM_LOADMODEL] = (ql_import_f)QL_CG_trap_CM_LoadModel;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_S_ADDREALLOOPINGSOUND] = (ql_import_f)QL_CG_trap_S_AddRealLoopingSound;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_S_STOPLOOPINGSOUND] = (ql_import_f)QL_CG_trap_S_StopLoopingSound;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_R_ADDADDITIVELIGHTTOSCENE] = (ql_import_f)QL_CG_trap_R_AddAdditiveLightToScene;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_R_INPVS] = (ql_import_f)QL_CG_trap_R_inPVS;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_KEY_SETBINDING] = (ql_import_f)QL_CG_trap_Key_SetBinding;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_KEY_GETOVERSTRIKEMODE] = (ql_import_f)QL_CG_trap_Key_GetOverstrikeMode;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_KEY_SETOVERSTRIKEMODE] = (ql_import_f)QL_CG_trap_Key_SetOverstrikeMode;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_CMD_EXECUTETEXT] = (ql_import_f)QL_CG_trap_Cmd_ExecuteText;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_PC_ADD_GLOBAL_DEFINE] = (ql_import_f)QL_CG_trap_PC_AddGlobalDefine;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_REAL_TIME] = (ql_import_f)QL_CG_trap_RealTime;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_SNAPVECTOR] = (ql_import_f)QL_CG_trap_SnapVector;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_MEMSET] = (ql_import_f)QL_CG_trap_Memset;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_MEMCPY] = (ql_import_f)QL_CG_trap_Memcpy;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_STRNCPY] = (ql_import_f)QL_CG_trap_Strncpy;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_SIN] = (ql_import_f)QL_CG_trap_Sin;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_COS] = (ql_import_f)QL_CG_trap_Cos;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_ATAN2] = (ql_import_f)QL_CG_trap_Atan2;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_SQRT] = (ql_import_f)QL_CG_trap_Sqrt;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_FLOOR] = (ql_import_f)QL_CG_trap_Floor;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_CEIL] = (ql_import_f)QL_CG_trap_Ceil;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_TESTPRINTINT] = (ql_import_f)QL_CG_trap_TestPrintInt;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_TESTPRINTFLOAT] = (ql_import_f)QL_CG_trap_TestPrintFloat;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_ACOS] = (ql_import_f)QL_CG_trap_ACos;
+}
+
+/*
+====================
+CL_CheckCGameNativeImportIntegrity
+
+Checks the native cgame import slots guarded by retail before cgame frame work.
+====================
+*/
+void CL_CheckCGameNativeImportIntegrity( void ) {
+	if ( !cgvm || !cgvm->dllExports ) {
+		return;
+	}
+
+	if ( ql_cgame_imports[CG_QL_IMPORT_R_ADDREFENTITYTOSCENE] != (ql_import_f)QL_CG_trap_R_AddRefEntityToScene ||
+		ql_cgame_imports[CG_QL_IMPORT_R_RENDERSCENE] != (ql_import_f)QL_CG_trap_R_RenderScene ) {
+		CL_SetRetailClientMessageCGameImportGuardFlag();
+	}
+}
+
+/*
+====================
+CL_LoadCGameVM
+
+Attempts to load cgame, preferring the retail native import-table bridge when
+that path is allowed, while preserving explicit bytecode/compiled fallback.
+====================
+*/
+static vm_t *CL_LoadCGameVM( vmInterpret_t interpret ) {
+	vm_t	*vm;
+
+	CL_InitCGameImports();
+
+	if ( !cl_connectedToPureServer && interpret != VMI_COMPILED ) {
+		vm = VM_CreateNative( VM_CGAME, CL_CgameSystemCalls, CL_DllSyscall,
+			VMI_NATIVE, ql_cgame_imports, CGAME_NATIVE_API_VERSION );
+		if ( vm ) {
+			if ( vm->dllHandle || interpret != VMI_BYTECODE || !vm->compiled ) {
+				return vm;
+			}
+
+			VM_Free( vm );
+			FS_VM_CloseFiles( H_CGAME );
+		}
+	}
+
+	return VM_CreateNative( VM_CGAME, CL_CgameSystemCalls, CL_DllSyscall,
+		interpret, ql_cgame_imports, CGAME_NATIVE_API_VERSION );
+}
+
+/*
+====================
+CL_RegisterCGameCvars
+
+Calls the retail native cgame startup cvar export without running CG_Init.
+====================
+*/
+void CL_RegisterCGameCvars( void ) {
+	vm_t			*registrationVm;
+	vm_t			*oldCgvm;
+	vmInterpret_t	interpret;
+
+	if ( cgvm || ( com_dedicated && com_dedicated->integer ) ) {
+		return;
+	}
+
+	interpret = static_cast<vmInterpret_t>( Cvar_VariableIntegerValue( "vm_cgame" ) );
+	registrationVm = CL_LoadCGameVM( interpret );
+	if ( !registrationVm ) {
+		return;
+	}
+
+	oldCgvm = cgvm;
+	cgvm = registrationVm;
+	(void)VM_CallCGameRegisterCvars( registrationVm );
+	cgvm = oldCgvm;
+
+	VM_Free( registrationVm );
+	FS_VM_CloseFiles( H_CGAME );
 }
 
 
@@ -1411,7 +2063,7 @@ void CL_InitCGame( void ) {
 			interpret = VMI_COMPILED;
 	}
 
-	cgvm = VM_Create( VM_CGAME, CL_CgameSystemCalls, CL_DllSyscall, interpret );
+	cgvm = CL_LoadCGameVM( interpret );
 	if ( !cgvm ) {
 		Com_Error( ERR_DROP, "VM_Create on cgame failed" );
 	}
@@ -1581,6 +2233,7 @@ static void CL_FirstSnapshot( void ) {
 	cl.oldServerTime = cl.snap.serverTime;
 
 	clc.timeDemoBaseTime = cl.snap.serverTime;
+	CL_WebView_PublishGameStart();
 
 	// if this is the first frame of active play,
 	// execute the contents of activeAction now
@@ -1693,9 +2346,9 @@ void CL_SetCGameTime( void ) {
 	cl.oldFrameServerTime = cl.snap.serverTime;
 
 	// get our current view of time
-	demoFreezed = clc.demoplaying && com_timescale->value == 0.0f;
+	demoFreezed = clc.demoplaying && ( ( cl_freezeDemo && cl_freezeDemo->integer ) || com_timescale->value == 0.0f );
 	if ( demoFreezed ) {
-		// \timescale 0 is used to lock a demo in place for single frame advances
+		// cl_freezeDemo and \timescale 0 lock a demo in place for single frame advances.
 		cl.serverTimeDelta -= cls.gameFrametime;
 	} else {
 		// cl_timeNudge is a user adjustable cvar that allows more

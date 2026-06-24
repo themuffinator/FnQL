@@ -1165,6 +1165,17 @@ static void SV_PrintRepeatedChar( char value, int count ) {
 	}
 }
 
+static unsigned long long SV_StatusClientSteamId( int clientNum ) {
+	unsigned int low = 0;
+	unsigned int high = 0;
+
+	if ( !SV_ClientSteamId( clientNum, &low, &high ) ) {
+		return 0ULL;
+	}
+
+	return ( static_cast<unsigned long long>( high ) << 32 ) | static_cast<unsigned long long>( low );
+}
+
 
 /*
 ================
@@ -1178,6 +1189,7 @@ static void SV_Status_f( void ) {
 	const char *s;
 	int max_namelength;
 	int max_addrlength;
+	unsigned long long steamIdValue;
 	std::array<char, MAX_CLIENTS * MAX_NAME_LENGTH> names{};
 	std::array<char, MAX_CLIENTS * 48> addrs{};
 	std::array<const char *, MAX_CLIENTS> np{};
@@ -1233,13 +1245,13 @@ static void SV_Status_f( void ) {
 	SV_PrintRepeatedChar( ' ', max_namelength - 4 );
 	Com_Printf( " address" );
 	SV_PrintRepeatedChar( ' ', max_addrlength - 7 );
-	Com_Printf( " rate\n" );
+	Com_Printf( " rate steamid\n" );
 
 	Com_Printf( "-- ----- ---- " );
 	SV_PrintRepeatedChar( '-', max_namelength );
 	Com_Printf( " " );
 	SV_PrintRepeatedChar( '-', max_addrlength );
-	Com_Printf( " -----\n" );
+	Com_Printf( " ----- -----------------\n" );
 #endif
 
 	for ( SV_ClientSlot slot : SV_ClientSlots() )
@@ -1250,7 +1262,7 @@ static void SV_Status_f( void ) {
 
 		Com_Printf( "%2i ", slot.index ); // id
 		ps = SV_GameClientNum( slot.index );
-		Com_Printf( "%5i ", ps->persistant[PERS_SCORE] );
+		Com_Printf( "%5i ", SV_GameGetClientScore( slot.index, ps->persistant[PERS_SCORE] ) );
 
 		// ping/status
 		if ( cl->state == CS_PRIMED )
@@ -1275,7 +1287,8 @@ static void SV_Status_f( void ) {
 		SV_PrintRepeatedChar( ' ', l );
 
 		// rate
-		Com_Printf( " %5i\n", cl->rate );
+		steamIdValue = SV_StatusClientSteamId( slot.index );
+		Com_Printf( " %5i %llu\n", cl->rate, steamIdValue );
 	}
 
 	Com_Printf( "\n" );

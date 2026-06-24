@@ -404,6 +404,7 @@ struct ai_export_s
 	void	(*BotFreeMoveState)(int handle);
 	void	(*BotInitMoveState)(int handle, bot_initmove_t *initmove);
 	void	(*BotAddAvoidSpot)(int movestate, const vec3_t origin, float radius, int type);
+	void	(*BotDrawAvoidSpots)(int movestate);
 	//-----------------------------------
 	// be_ai_weap.h
 	//-----------------------------------
@@ -417,6 +418,7 @@ struct ai_export_s
 	// be_ai_gen.h
 	//-----------------------------------
 	int		(*GeneticParentsAndChildSelection)(int numranks, float *ranks, int *parent1, int *parent2, int *child);
+	void	(*BotDrawDebugAreas)(vec3_t origin, int enable, int areanum);
 };
 using ai_export_t = ai_export_s;
 

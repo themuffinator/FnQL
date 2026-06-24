@@ -1506,6 +1506,28 @@ typedef struct {
 	int			numSurfaces;
 } bmodel_t;
 
+#define	MAX_MAP_ADVERTISEMENTS	30
+
+typedef struct {
+	int			cellId;
+	bmodel_t	*bmodel;
+	vec3_t		center;
+	vec3_t		normal;
+	vec3_t		points[4];
+	int			cullState;
+	GLuint		occlusionQueryIds[2];
+	int			queryListIndex;
+	int			viewArea;
+	float		projectedNormalX;
+	float		projectedNormalY;
+	int			sourceIndex;
+} qlAdvertisement_t;
+
+typedef struct {
+	GLuint		occlusionQueryIds[2];
+	vec3_t		points[4];
+} advertisementQueryEntry_t;
+
 typedef struct {
 	char		name[MAX_QPATH];		// ie: maps/tim_dm2.bsp
 	char		baseName[MAX_QPATH];	// ie: tim_dm2
@@ -1515,6 +1537,7 @@ typedef struct {
 	int			numShaders;
 	dshader_t	*shaders;
 
+	int			numBmodels;
 	bmodel_t	*bmodels;
 
 	int			numplanes;
@@ -1526,6 +1549,9 @@ typedef struct {
 
 	int			numsurfaces;
 	msurface_t	*surfaces;
+
+	int			numAdvertisements;
+	qlAdvertisement_t	*advertisements;
 
 	int			nummarksurfaces;
 	msurface_t	**marksurfaces;
@@ -1582,6 +1608,10 @@ int			R_LerpTag( orientation_t *tag, qhandle_t handle, int startFrame, int endFr
 void		R_ModelBounds( qhandle_t handle, vec3_t mins, vec3_t maxs );
 
 void		R_Modellist_f (void);
+void		R_AdvertisementList_f( void );
+void		R_UpdateAdvertisements( void );
+void		R_QueueAdvertisementQueryCmd( void );
+void		R_ShutdownAdvertisements( void );
 
 //====================================================
 
@@ -2601,6 +2631,7 @@ void RE_AddPolyToScene( qhandle_t hShader , int numVerts, const polyVert_t *vert
 void RE_AddLightToScene( const vec3_t org, float intensity, float r, float g, float b );
 void RE_AddAdditiveLightToScene( const vec3_t org, float intensity, float r, float g, float b );
 void RE_AddLinearLightToScene( const vec3_t start, const vec3_t end, float intensity, float r, float g, float b );
+void AdvertisementBridge_UpdateLoadingViewParameters( void );
 #ifdef USE_PMLIGHT
 void R_DlightTest_f( void );
 #endif
@@ -2763,6 +2794,12 @@ typedef struct
 	GLboolean rgba[4];
 } colorMaskCommand_t;
 
+typedef struct {
+	int						commandId;
+	int						numEntries;
+	advertisementQueryEntry_t	entries[MAX_MAP_ADVERTISEMENTS];
+} advertisementQueryCommand_t;
+
 typedef struct
 {
 	int commandId;
@@ -2792,6 +2829,7 @@ typedef enum {
 	RC_SCREENSHOT,
 	RC_DRAW_BUFFER,
 	RC_SWAP_BUFFERS,
+	RC_ADVERTISEMENT_QUERIES,
 #ifdef USE_FBO
 	RC_FINISHBLOOM,
 	RC_MENU_DEPTH_OF_FIELD,
@@ -2842,6 +2880,7 @@ void R_IssuePendingRenderCommands( void );
 
 void R_AddDrawSurfCmd( drawSurf_t *drawSurfs, int numDrawSurfs );
 void R_AddScreenshotCmd( int x, int y, int width, int height, int format, const char *fileName, qboolean silent, qboolean allowWatermark );
+void R_AddAdvertisementQueryCmd( const advertisementQueryEntry_t *entries, int numEntries );
 
 void RE_SetColor( const float *rgba );
 void RE_StretchPic ( float x, float y, float w, float h, 
@@ -2872,6 +2911,7 @@ void R_BloomScreen( void );
 	QGL_Ext_PROCS;
 	QGL_ARB_PROGRAM_PROCS;
 	QGL_VBO_PROCS;
+	QGL_OCCLUSION_QUERY_PROCS;
 	QGL_FBO_PROCS;
 	QGL_FBO_OPT_PROCS;
 #undef GLE

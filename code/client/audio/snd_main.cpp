@@ -98,8 +98,19 @@ S_StartSound
 */
 extern "C" void S_StartSound( vec3_t origin, int entnum, int entchannel, sfxHandle_t sfx )
 {
+	S_StartSoundVolume( origin, entnum, entchannel, sfx, 1.0f );
+}
+
+
+/*
+=================
+S_StartSoundVolume
+=================
+*/
+extern "C" void S_StartSoundVolume( vec3_t origin, int entnum, int entchannel, sfxHandle_t sfx, float volume )
+{
 	if( si.StartSound ) {
-		si.StartSound( origin, entnum, entchannel, sfx );
+		si.StartSound( origin, entnum, entchannel, sfx, volume );
 	}
 }
 
@@ -111,8 +122,19 @@ S_StartLocalSound
 */
 extern "C" void S_StartLocalSound( sfxHandle_t sfx, int channelNum )
 {
+	S_StartLocalSoundVolume( sfx, channelNum, 1.0f );
+}
+
+
+/*
+=================
+S_StartLocalSoundVolume
+=================
+*/
+extern "C" void S_StartLocalSoundVolume( sfxHandle_t sfx, int channelNum, float volume )
+{
 	if( si.StartLocalSound ) {
-		si.StartLocalSound( sfx, channelNum );
+		si.StartLocalSound( sfx, channelNum, volume );
 	}
 }
 
@@ -427,7 +449,7 @@ static void S_Play_f( void ) {
 		h = si.RegisterSound( Cmd_Argv(i), qfalse );
 
 		if( h ) {
-			si.StartLocalSound( h, CHAN_LOCAL_SOUND );
+			si.StartLocalSound( h, CHAN_LOCAL_SOUND, 1.0f );
 		}
 	}
 }

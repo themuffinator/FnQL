@@ -77,6 +77,7 @@ typedef struct {
 	void	(*AddAdditiveLightToScene)( const vec3_t org, float intensity, float r, float g, float b );
 	void	(*AddLinearLightToScene)( const vec3_t start, const vec3_t end, float intensity, float r, float g, float b );
 	void	(*RenderScene)( const refdef_t *fd );
+	void	(*AdvertisementBridge_UpdateLoadingViewParameters)( void );
 
 	void	(*SetColor)( const float *rgba );	// NULL = 1,1,1,1
 	void	(*DrawStretchPic) ( float x, float y, float w, float h,
@@ -214,6 +215,15 @@ typedef struct refimport_s {
 	qboolean(*Sys_LowPhysicalMemory)( void );
 
 	int		(*Com_RealTime)( qtime_t *qtime );
+	void	(*SetClientMessageRendererNodeCount)( int nodeCount );
+	void	(*PublishGameScreenshot)( const char *id, const char *name );
+	void	(*AdvertisementBridge_RefreshLoadingViewParameters)( void );
+	int		(*AdvertisementBridge_GetCellDisplayState)( int cellId );
+	void	(*AdvertisementBridge_GetCellLabel)( int cellId, char *buffer, int bufferSize );
+	int		(*AdvertisementBridge_GetLabelList1Count)( void );
+	void	(*AdvertisementBridge_GetLabelList1Entry)( int index, char *buffer, int bufferSize );
+	int		(*AdvertisementBridge_GetLabelList2Count)( void );
+	void	(*AdvertisementBridge_GetLabelList2Entry)( int index, char *buffer, int bufferSize );
 
 	// platform-dependent functions
 	void(*GLimp_InitGamma)(glconfig_t *config);

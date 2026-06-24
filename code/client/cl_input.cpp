@@ -445,11 +445,17 @@ CL_MouseEvent
 void CL_MouseEvent( int dx, int dy /*, int time*/ ) {
 	if ( Key_GetCatcher() & KEYCATCH_CONSOLE ) {
 		Con_MouseEvent( dx, dy );
+	} else if ( Key_GetCatcher() & KEYCATCH_BROWSER ) {
+		CL_WebView_OnMouseMove( dx, dy );
+	} else if ( !CL_AdvertisementBridge_IsDelayElapsed() ) {
+		return;
+	} else if ( Cvar_VariableIntegerValue( "cg_ignoreMouseInput" ) ) {
+		return;
 	} else if ( Key_GetCatcher() & KEYCATCH_UI ) {
 		VM_Call( uivm, 2, UI_MOUSE_EVENT, dx, dy );
 	} else if ( Key_GetCatcher() & KEYCATCH_CGAME ) {
 		VM_Call( cgvm, 2, CG_MOUSE_EVENT, dx, dy );
-	} else {
+	} else if ( ( Key_GetCatcher() & ~KEYCATCH_RETAIL_MOUSEPASS ) == 0 ) {
 		cl.mouseDx[cl.mouseIndex] += dx;
 		cl.mouseDy[cl.mouseIndex] += dy;
 	}
@@ -646,6 +652,8 @@ static void CL_FinishMove( usercmd_t *cmd ) {
 
 	// copy the state that the cgame is currently sending
 	cmd->weapon = cl.cgameUserCmdValue;
+	cmd->weaponPrimary = cl.cgameUserCmdPrimary;
+	cmd->fov = cl.cgameUserCmdFov;
 
 	// send the current server time so the amount of movement
 	// can be determined without allowing cheating
@@ -798,6 +806,45 @@ static bool CL_ReadyToSendPacket( void ) {
 }
 
 
+#define RETAIL_CLIENT_MESSAGE_FLAG_VIEWANGLE_DELTA	0x20
+#define RETAIL_CLIENT_MESSAGE_FLAG_CGAME_IMPORT_GUARD	0x40
+#define RETAIL_CLIENT_MESSAGE_FLAG_INITIAL_HIGH_BIT	0x80
+#define RETAIL_CLIENT_MESSAGE_RENDERER_NODE_MASK		0x1f
+#define RETAIL_CLIENT_MESSAGE_RENDERER_NODE_LIMIT	0x20
+
+static int cl_retailClientMessageFlags = RETAIL_CLIENT_MESSAGE_FLAG_INITIAL_HIGH_BIT;
+
+void CL_SetRetailClientMessageViewangleDeltaFlag( void ) {
+	cl_retailClientMessageFlags |= RETAIL_CLIENT_MESSAGE_FLAG_VIEWANGLE_DELTA;
+}
+
+void CL_SetRetailClientMessageCGameImportGuardFlag( void ) {
+	cl_retailClientMessageFlags |= RETAIL_CLIENT_MESSAGE_FLAG_CGAME_IMPORT_GUARD;
+}
+
+void CL_SetRetailClientMessageRendererNodeCount( int nodeCount ) {
+	int clampedNodeCount;
+
+	if ( nodeCount < 0 ) {
+		clampedNodeCount = 0;
+	} else if ( nodeCount > RETAIL_CLIENT_MESSAGE_RENDERER_NODE_LIMIT ) {
+		clampedNodeCount = RETAIL_CLIENT_MESSAGE_RENDERER_NODE_LIMIT;
+	} else {
+		clampedNodeCount = nodeCount;
+	}
+
+	cl_retailClientMessageFlags ^= ( cl_retailClientMessageFlags ^ clampedNodeCount ) & RETAIL_CLIENT_MESSAGE_RENDERER_NODE_MASK;
+}
+
+static qboolean CL_UseRetailClientMessageSideband( void ) {
+	return ( com_protocol && com_protocol->integer == QL_RETAIL_PROTOCOL_VERSION ) ? qtrue : qfalse;
+}
+
+static int CL_RetailClientMessageFlags( void ) {
+	return cl_retailClientMessageFlags;
+}
+
+
 /*
 ===================
 CL_WritePacket
@@ -850,6 +897,9 @@ void CL_WritePacket( int repeat ) {
 
 	// write the last reliable message we received
 	MSG_WriteLong( &buf, clc.serverCommandSequence );
+	if ( CL_UseRetailClientMessageSideband() ) {
+		MSG_WriteByte( &buf, CL_RetailClientMessageFlags() ^ ( clc.serverCommandSequence & 0xff ) );
+	}
 
 	// write any unacknowledged clientCommands
 	n = clc.reliableSequence - clc.reliableAcknowledge;
@@ -1001,6 +1051,7 @@ void CL_InitInput( void ) {
 	cl_sensitivity = Cvar_Get( "sensitivity", "2", CVAR_ARCHIVE );
 	Cvar_CheckRange( cl_sensitivity, "0.1", "10", CV_FLOAT );
 	Cvar_SetDescription( cl_sensitivity, "Sets base mouse sensitivity (mouse speed)." );
+	Cvar_SetDescription( Cvar_Get( "cg_ignoreMouseInput", "0", CVAR_ROM ), "Read-only Quake Live cgame/UI bridge flag that blocks gameplay mouse deltas while retained overlays own input." );
 	cl_mouseAccel = Cvar_Get( "cl_mouseAccel", "0", CVAR_ARCHIVE_ND );
 	Cvar_SetDescription( cl_mouseAccel, "Toggle the use of mouse acceleration the mouse speeds up or becomes more sensitive as it continues in one direction." );
 	cl_freelook = Cvar_Get( "cl_freelook", "1", CVAR_ARCHIVE_ND );

@@ -42,7 +42,8 @@ NOTES:
   assets to their windows installation:
   ln -s /win/quake3/baseq3/pak0.pk3 /usr/local/games/quake3/baseq3/pak0.pk3
   ln -s /win/quake3/missionpack/pak0.pk3 /usr/local/games/quake3/missionpack/pak0.pk3
-  (Windows partition is mounted as /win and Quake III Arena installation is C:\quake3)
+  (Windows partition is mounted as /win and Quake III Arena installation is at
+  the matching Windows install root.)
 
 Getting Help:
 

@@ -69,6 +69,8 @@ bsp_trace_t AAS_Trace(	vec3_t start,
 								int contentmask);
 //returns the contents at the given point
 int AAS_PointContents(vec3_t point);
+//returns true when p2 is in the PVS of p1
+qboolean AAS_inPVS(vec3_t p1, vec3_t p2);
 #if 0
 //returns true when p2 is in the PVS of p1
 qboolean AAS_inPVS(vec3_t p1, vec3_t p2);

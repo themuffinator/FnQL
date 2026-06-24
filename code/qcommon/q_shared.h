@@ -90,7 +90,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #endif
 #endif
 
-#ifdef __GNUC__
+#if defined(__GNUC__) || defined(__clang__)
 #define UNUSED_VAR __attribute__((unused))
 #else
 #define UNUSED_VAR
@@ -1097,6 +1097,8 @@ typedef struct {
 #define KEYCATCH_UI         0x0002
 #define KEYCATCH_MESSAGE    0x0004
 #define KEYCATCH_CGAME      0x0008
+#define KEYCATCH_RETAIL_MOUSEPASS 0x0010
+#define KEYCATCH_BROWSER    0x0020
 
 
 // sound channels
@@ -1226,11 +1228,13 @@ typedef struct playerState_s {
 
 	int			externalEvent;	// events set on player from another source
 	int			externalEventParm;
-	int			externalEventTime;
 
 	int			clientNum;		// ranges from 0 to MAX_CLIENTS-1
+	int			location;		// retail team location index
 	int			weapon;			// copied to entityState_t->weapon
+	int			weaponPrimary;	// mirrored usercmd byte for retail follow/demo HUD widgets
 	int			weaponstate;
+	int			fov;			// mirrored usercmd byte for retail prediction/HUD consumers
 
 	vec3_t		viewangles;		// for fixed views
 	int			viewheight;
@@ -1248,13 +1252,29 @@ typedef struct playerState_s {
 
 	int			generic1;
 	int			loopSound;
-	int			jumppad_ent;	// jumppad entity hit this frame
+	int			jumppad_ent;	// cached jump-pad entity for event suppression
+
+	// pmove timing state tracked by the server and replicated for client prediction
+	int			jumpTime;
+	int			doubleJumped;
+	int			crouchTime;
+	int			crouchSlideTime;
+
+	// replicated Quake Live HUD/prediction sidecars
+	signed char	forwardmove;	// mirrored usercmd byte for retail follow/demo HUD widgets
+	signed char	rightmove;		// mirrored usercmd byte for retail follow/demo HUD widgets
+	signed char	upmove;			// mirrored usercmd byte for retail follow/demo HUD widgets
+	signed char	commandMirrorPad;
 
 	// not communicated over the net at all
 	int			ping;			// server to game info for scoreboard
 	int			pmove_framecount;	// FIXME: don't transmit over the network
 	int			jumppad_frame;
 	int			entityEventSequence;
+
+	// source-only local sidecars appended after the retail replicated prefix
+	int			externalEventTime;
+	int			armorTier;		// retail Quake Live tiered armor state: 0=green, 1=yellow, 2=red
 } playerState_t;
 
 
@@ -1293,6 +1313,8 @@ typedef struct usercmd_s {
 	int				angles[3];
 	int 			buttons;
 	byte			weapon;           // weapon 
+	byte			weaponPrimary;
+	byte			fov;
 	signed char	forwardmove, rightmove, upmove;
 } usercmd_t;
 
@@ -1307,7 +1329,8 @@ typedef enum {
 	TR_LINEAR,
 	TR_LINEAR_STOP,
 	TR_SINE,					// value = base + sin( time / duration ) * delta
-	TR_GRAVITY
+	TR_GRAVITY,
+	TR_QL_ACCEL					// Quake Live extension: type 6 reads the trajectory gravity scalar
 } trType_t;
 
 typedef struct {
@@ -1316,6 +1339,7 @@ typedef struct {
 	int		trDuration;			// if non 0, trTime + trDuration = stop time
 	vec3_t	trBase;
 	vec3_t	trDelta;			// velocity, etc
+	float	gravity;			// Quake Live trajectory acceleration scalar
 } trajectory_t;
 
 // entityState_t is the information conveyed from the server
@@ -1345,7 +1369,7 @@ typedef struct entityState_s {
 	int		otherEntityNum;	// shotgun sources, etc
 	int		otherEntityNum2;
 
-	int		groundEntityNum;	// ENTITYNUM_NONE = in air
+	int		groundEntityNum;	// -1 = in air
 
 	int		constantLight;	// r + (g<<8) + (b<<16) + (intensity<<24)
 	int		loopSound;		// constantly loop this sound
@@ -1362,11 +1386,16 @@ typedef struct entityState_s {
 
 	// for players
 	int		powerups;		// bit flags
+	int		health;			// replicated player health for retail observers/HUD
+	int		armor;			// replicated player armor for retail observers/HUD
 	int		weapon;			// determines weapon and flash model, etc
+	int		location;		// retail team location index
 	int		legsAnim;		// mask off ANIM_TOGGLEBIT
 	int		torsoAnim;		// mask off ANIM_TOGGLEBIT
 
 	int		generic1;
+	int		jumpTime;
+	int		doubleJumped;
 } entityState_t;
 
 typedef enum {

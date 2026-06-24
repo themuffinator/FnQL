@@ -334,6 +334,31 @@ static bool SV_EntityPassesSnapshotClientFlags( const sharedEntity_t *ent, int c
 
 /*
 ===============
+SV_GameForcesSnapshotEntity
+
+Mirrors the retail qagame visibility exports that can include entities before
+the normal area and PVS pass.  Keep this native-only so legacy QVM/classic DLLs
+are not asked for QL-only exports they may not implement.
+===============
+*/
+static bool SV_GameForcesSnapshotEntity( int viewerClientNum, int entityNum ) {
+	if ( !gvm || !gvm->dllExports ) {
+		return false;
+	}
+
+	if ( entityNum >= 0 && entityNum < MAX_CLIENTS ) {
+		return VM_Call( gvm, 2, GAME_CAN_CLIENT_SEE_CLIENT, viewerClientNum, entityNum ) != 0;
+	}
+
+	if ( VM_Call( gvm, 2, GAME_FREEZE_CAN_SEE_THAW_PROGRESS_EVENT, viewerClientNum, entityNum ) ) {
+		return true;
+	}
+
+	return VM_Call( gvm, 1, GAME_IS_OBJECTIVE_ENTITY, entityNum ) != 0;
+}
+
+/*
+===============
 SV_AreasVisibleForSnapshot
 ===============
 */
@@ -521,6 +546,11 @@ static void SV_AddEntitiesVisibleFromPoint( const vec3_t origin, clientSnapshot_
 
 		// broadcast entities are always sent
 		if ( ent->r.svFlags & SVF_BROADCAST ) {
+			eNums.Add( *svEnt, e );
+			continue;
+		}
+
+		if ( SV_GameForcesSnapshotEntity( frame->ps.clientNum, es->number ) ) {
 			eNums.Add( *svEnt, e );
 			continue;
 		}

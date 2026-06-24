@@ -873,11 +873,13 @@ void HandleEvents( void )
 				case 5: Sys_QueEvent( t, SE_KEY, K_MWHEELDOWN, btn_press, 0, NULL ); break;
 				case 6: btn_code = K_MOUSE4; break;
 				case 7: btn_code = K_MOUSE5; break;
-				case 8: case 9:       // K_AUX1..K_AUX8
+				case 8: case 9:
 				case 10: case 11:
-				case 12: case 13:
+					btn_code = event.xbutton.button - 8 + K_MOUSE6;
+					break;
+				case 12: case 13:       // K_AUX1..K_AUX4
 				case 14: case 15:
-					btn_code = event.xbutton.button - 8 + K_AUX1;
+					btn_code = event.xbutton.button - 12 + K_AUX1;
 					break;
 			}
 

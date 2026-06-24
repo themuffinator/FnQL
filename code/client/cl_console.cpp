@@ -160,6 +160,7 @@ cvar_t		*con_notifytime;
 cvar_t		*con_scale;
 cvar_t		*con_scaleUniform;
 cvar_t		*con_screenExtents;
+static cvar_t	*con_timestamps;
 static cvar_t	*con_backgroundStyle;
 static cvar_t	*con_backgroundColor;
 static cvar_t	*con_backgroundOpacity;
@@ -1007,6 +1008,18 @@ static qboolean Con_CollectCompletionMatch( const char *match, void *context ) {
 	return qtrue;
 }
 
+static void QDECL Con_CollectNativeArenaCompletionMatch( const char *name ) {
+	(void)Con_CollectCompletionMatch( name, nullptr );
+}
+
+static void Con_CollectNativeArenaCompletionMatches( qboolean firstArg ) {
+	if ( firstArg || !uivm || !uivm->dllExports ) {
+		return;
+	}
+
+	VM_Call( uivm, 1, UI_FOR_EACH_ARENA_NAME, (intptr_t)Con_CollectNativeArenaCompletionMatch );
+}
+
 
 static int Con_CompletionLower( int ch ) {
 	return tolower( static_cast<unsigned char>( ch ) );
@@ -1732,6 +1745,7 @@ static void Con_RefreshCompletionState( void ) {
 	appendSpace = qfalse;
 	strictMatchCount = Field_QueryCompletionMatches( prefixBuffer.data(), &appendSpace,
 	Con_CollectCompletionMatch, nullptr );
+	Con_CollectNativeArenaCompletionMatches( firstArg ? qtrue : qfalse );
 
 	if ( ( strictMatchCount < 1 || con.completionCount < 1 ) &&
 		con.completionReplaceLength > 0 &&
@@ -3764,13 +3778,79 @@ void Con_ToggleConsole_f( void ) {
 Con_MessageMode_f
 ================
 */
+static void Con_ToggleMessageCatcher( void ) {
+	Key_SetCatcher( Key_GetCatcher() ^ KEYCATCH_MESSAGE );
+	if ( cgvm && cgvm->dllExports ) {
+		VM_Call( cgvm, 0, ( Key_GetCatcher() & KEYCATCH_MESSAGE ) ? CG_CHAT_DOWN : CG_CHAT_UP );
+	}
+}
+
+static int Con_GetChatFieldY( void ) {
+	int chatFieldY = 413;
+
+	if ( cgvm && cgvm->dllExports ) {
+		const int cgameY = VM_Call( cgvm, 0, CG_GET_CHAT_FIELD_Y );
+
+		if ( cgameY > 0 ) {
+			chatFieldY = cgameY;
+		}
+	}
+
+	return chatFieldY;
+}
+
+static int Con_GetChatFieldPixelWidth( void ) {
+	int chatFieldWidth = SCREEN_WIDTH;
+
+	if ( cgvm && cgvm->dllExports ) {
+		const int cgameWidth = VM_Call( cgvm, 0, CG_GET_CHAT_FIELD_PIXEL_WIDTH );
+
+		if ( cgameWidth > 0 ) {
+			chatFieldWidth = cgameWidth;
+		}
+	}
+
+	return chatFieldWidth;
+}
+
+static int Con_GetChatFieldWidthInChars( qboolean teamChat ) {
+	int width = 30;
+	const int promptChars = teamChat ? 10 : 5;
+	const int pixelWidth = Con_GetChatFieldPixelWidth();
+	const int maxWidth = ( pixelWidth - ( promptChars + 1 ) * BIGCHAR_WIDTH ) / BIGCHAR_WIDTH;
+
+	if ( cgvm && cgvm->dllExports ) {
+		const int cgameWidth = VM_Call( cgvm, 0, CG_GET_CHAT_FIELD_WIDTH_IN_CHARS );
+
+		if ( cgameWidth > 0 ) {
+			width = cgameWidth;
+		}
+	}
+
+	if ( teamChat && width > 5 ) {
+		width -= 5;
+	}
+	if ( maxWidth > 0 && width > maxWidth ) {
+		width = maxWidth;
+	}
+	if ( width < 1 ) {
+		width = 1;
+	}
+
+	return width;
+}
+
+static void Con_ResetChatField( qboolean teamChat ) {
+	Field_Clear( &chatField );
+	chatField.widthInChars = Con_GetChatFieldWidthInChars( teamChat );
+}
+
 static void Con_MessageMode_f( void ) {
 	chat_playerNum = -1;
 	chat_team = qfalse;
-	Field_Clear( &chatField );
-	chatField.widthInChars = 30;
+	Con_ResetChatField( qfalse );
 
-	Key_SetCatcher( Key_GetCatcher() ^ KEYCATCH_MESSAGE );
+	Con_ToggleMessageCatcher();
 }
 
 
@@ -3782,9 +3862,8 @@ Con_MessageMode2_f
 static void Con_MessageMode2_f( void ) {
 	chat_playerNum = -1;
 	chat_team = qtrue;
-	Field_Clear( &chatField );
-	chatField.widthInChars = 25;
-	Key_SetCatcher( Key_GetCatcher() ^ KEYCATCH_MESSAGE );
+	Con_ResetChatField( qtrue );
+	Con_ToggleMessageCatcher();
 }
 
 
@@ -3800,9 +3879,8 @@ static void Con_MessageMode3_f( void ) {
 		return;
 	}
 	chat_team = qfalse;
-	Field_Clear( &chatField );
-	chatField.widthInChars = 30;
-	Key_SetCatcher( Key_GetCatcher() ^ KEYCATCH_MESSAGE );
+	Con_ResetChatField( qfalse );
+	Con_ToggleMessageCatcher();
 }
 
 
@@ -3818,9 +3896,8 @@ static void Con_MessageMode4_f( void ) {
 		return;
 	}
 	chat_team = qfalse;
-	Field_Clear( &chatField );
-	chatField.widthInChars = 30;
-	Key_SetCatcher( Key_GetCatcher() ^ KEYCATCH_MESSAGE );
+	Con_ResetChatField( qfalse );
+	Con_ToggleMessageCatcher();
 }
 
 
@@ -4189,6 +4266,8 @@ void Con_Init( void )
 		"Console display extents:\n"
 		" 0 - use the full screen width\n"
 		" 1 - keep the console display in centered 4:3 space" );
+	con_timestamps = Cvar_Get( "con_timestamps", "0", CVAR_ARCHIVE_ND | CVAR_PROTECTED );
+	Cvar_SetDescription( con_timestamps, "Show Quake Live style elapsed-time prefixes on console and notify lines." );
 	con_scrollLines = Cvar_Get( "con_scrollLines", "8", CVAR_ARCHIVE_ND );
 	Cvar_CheckRange( con_scrollLines, "1", "256", CV_INTEGER );
 	Cvar_SetDescription( con_scrollLines, "Number of console lines scrolled per step, clamped to the current visible console page." );
@@ -4372,6 +4451,72 @@ static void Con_Linefeed( bool skipnotify )
 	Con_Fixup();
 }
 
+static int Con_GetTimestampTime( void ) {
+	int timestampTime = cl.serverTime;
+
+	if ( con_timestamps && con_timestamps->integer == 1 ) {
+		const int physicsTime = CL_GetCGamePhysicsTime();
+
+		if ( physicsTime > 0 ) {
+			timestampTime = physicsTime;
+		}
+	}
+
+	if ( timestampTime < 0 ) {
+		timestampTime = 0;
+	}
+
+	return timestampTime;
+}
+
+static void Con_FormatTimestamp( char *buffer, int bufferSize ) {
+	int timestampTime;
+	int totalSeconds;
+	int minutes;
+	int seconds;
+	int millis;
+
+	if ( !buffer || bufferSize <= 0 ) {
+		return;
+	}
+
+	timestampTime = Con_GetTimestampTime();
+	totalSeconds = timestampTime / 1000;
+	minutes = totalSeconds / 60;
+	seconds = totalSeconds % 60;
+	millis = timestampTime % 1000;
+
+	Com_sprintf( buffer, bufferSize, "[%d:%02d.%03d] ", minutes, seconds, millis );
+}
+
+static void Con_WriteTimestampPrefix( bool skipnotify, int colorIndex ) {
+	char timestamp[32];
+	int timestampLength;
+	int timestampIndex;
+
+	if ( !con_timestamps || !con_timestamps->integer || con.x != 0 ) {
+		return;
+	}
+
+	Con_FormatTimestamp( timestamp, sizeof( timestamp ) );
+	timestampLength = strlen( timestamp );
+
+	for ( timestampIndex = 0; timestampIndex < timestampLength; timestampIndex++ ) {
+		if ( con.newline ) {
+			Con_NewLine();
+			Con_Fixup();
+			con.newline = false;
+		}
+
+		con.text[( con.current % con.totallines ) * con.linewidth + con.x] =
+			( colorIndex << 8 ) | timestamp[timestampIndex];
+		con.x++;
+		if ( con.x >= con.linewidth ) {
+			Con_Linefeed( skipnotify );
+		}
+	}
+}
+
 
 /*
 ================
@@ -4417,6 +4562,8 @@ void CL_ConsolePrint( const char *txt ) {
 	}
 
 	colorIndex = ColorIndex( COLOR_WHITE );
+
+	Con_WriteTimestampPrefix( skipnotify, colorIndex );
 
 	while ( (c = *txt) != 0 ) {
 		if ( Q_IsColorString( txt ) && *(txt+1) != '\n' ) {
@@ -4578,22 +4725,25 @@ static void Con_DrawNotify( void )
 	// draw the chat line
 	if ( Key_GetCatcher( ) & KEYCATCH_MESSAGE )
 	{
-		// rescale to virtual 640x480 space
-		v /= cls.glconfig.vidHeight / 480.0;
+		int chatFieldY;
+		int chatFieldPixelWidth;
+
+		chatFieldY = Con_GetChatFieldY();
+		chatFieldPixelWidth = Con_GetChatFieldPixelWidth();
 
 		if (chat_team)
 		{
-			SCR_DrawBigString( SMALLCHAR_WIDTH, v, "say_team:", 1.0f, qfalse );
+			SCR_DrawBigString( SMALLCHAR_WIDTH, chatFieldY, "say_team:", 1.0f, qfalse );
 			skip = 10;
 		}
 		else
 		{
-			SCR_DrawBigString( SMALLCHAR_WIDTH, v, "say:", 1.0f, qfalse );
+			SCR_DrawBigString( SMALLCHAR_WIDTH, chatFieldY, "say:", 1.0f, qfalse );
 			skip = 5;
 		}
 
-		Field_BigDraw( &chatField, skip * BIGCHAR_WIDTH, v,
-			SCREEN_WIDTH - ( skip + 1 ) * BIGCHAR_WIDTH, qtrue, qtrue );
+		Field_BigDraw( &chatField, skip * BIGCHAR_WIDTH, chatFieldY,
+			chatFieldPixelWidth - ( skip + 1 ) * BIGCHAR_WIDTH, qtrue, qtrue );
 	}
 }
 

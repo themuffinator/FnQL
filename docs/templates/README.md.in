@@ -67,13 +67,12 @@ commands, see [BUILD.md](BUILD.md).
 
 Use QLSRP before making compatibility claims:
 
-1. Locate the owning subsystem in `E:\Repositories\QuakeLive-SRP`.
+1. Locate the owning subsystem in the QLSRP reference checkout.
 2. Compare FnQL's inherited FnQ3 implementation against QLSRP source and
    reference evidence.
 3. Record observed behavior separately from inferred intent.
 4. Reconstruct the engine-side compatibility needed by retail Quake Live.
-5. Validate against a legitimate Steam install, normally
-   `C:\Program Files (x86)\Steam\steamapps\common\Quake Live`.
+5. Validate against a legitimate Steam install of Quake Live.
 
 ## 5. Documentation
 

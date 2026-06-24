@@ -28,6 +28,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <dirent.h>
 #include <unistd.h>
 #include <sys/mman.h>
@@ -431,23 +433,98 @@ const char *Sys_DefaultHomePath( void )
 Sys_SteamPath
 ================
 */
+static qboolean Sys_RegularFileExists( const char *path )
+{
+	struct stat info;
+
+	if ( !path || !path[0] ) {
+		return qfalse;
+	}
+
+	if ( stat( path, &info ) != 0 ) {
+		return qfalse;
+	}
+
+	return S_ISREG( info.st_mode ) ? qtrue : qfalse;
+}
+
+
+#define SYS_STEAM_PATH_SEPARATOR_CHAR '/'
+#define SYS_STEAM_PATH_ALTERNATE_SEPARATOR_CHAR '\\'
+#include "../qcommon/steam_path_shared.h"
+#undef SYS_STEAM_PATH_SEPARATOR_CHAR
+#undef SYS_STEAM_PATH_ALTERNATE_SEPARATOR_CHAR
+
+
+static qboolean Sys_TrySteamRoot( const char *steamRoot, char *out, int outSize )
+{
+	char normalized[MAX_OSPATH];
+
+	if ( !steamRoot || !steamRoot[0] ) {
+		return qfalse;
+	}
+
+	Q_strncpyz( normalized, steamRoot, sizeof( normalized ) );
+	Sys_NormalizeSteamPath( normalized );
+	return Sys_SteamAppPathFromRoot( normalized, out, outSize );
+}
+
+
+static qboolean Sys_TrySteamRootUnderHome( const char *home, const char *suffix, char *out, int outSize )
+{
+	char root[MAX_OSPATH];
+
+	if ( !home || !home[0] || !suffix || !suffix[0] ) {
+		return qfalse;
+	}
+
+	Sys_SteamJoinPath( root, sizeof( root ), home, suffix );
+	return Sys_TrySteamRoot( root, out, outSize );
+}
+
+
 const char *Sys_SteamPath( void )
 {
 	static char steamPath[ MAX_OSPATH ];
-	// Disabled since Steam doesn't let you install Quake 3 on Mac/Linux
-#if 0
-	const char *p;
+	const char *home;
+	const char *steamRoot;
 
-	if( ( p = getenv( "HOME" ) ) != NULL )
-	{
-#ifdef MACOS_X
-		char *steamPathEnd = "/Library/Application Support/Steam/SteamApps/common/" STEAMPATH_NAME;
-#else
-		char *steamPathEnd = "/.steam/steam/SteamApps/common/" STEAMPATH_NAME;
-#endif
-		Com_sprintf(steamPath, sizeof(steamPath), "%s%s", p, steamPathEnd);
+	if ( steamPath[0] ) {
+		return steamPath;
 	}
+
+	steamRoot = getenv( "STEAM_DIR" );
+	if ( Sys_TrySteamRoot( steamRoot, steamPath, sizeof( steamPath ) ) ) {
+		return steamPath;
+	}
+
+	steamRoot = getenv( "STEAM_HOME" );
+	if ( Sys_TrySteamRoot( steamRoot, steamPath, sizeof( steamPath ) ) ) {
+		return steamPath;
+	}
+
+	home = getenv( "HOME" );
+	if ( home && home[0] ) {
+#ifdef MACOS_X
+		if ( Sys_TrySteamRootUnderHome( home, "Library/Application Support/Steam", steamPath, sizeof( steamPath ) ) ) {
+			return steamPath;
+		}
+#else
+		if ( Sys_TrySteamRootUnderHome( home, ".steam/steam", steamPath, sizeof( steamPath ) ) ) {
+			return steamPath;
+		}
+		if ( Sys_TrySteamRootUnderHome( home, ".steam/root", steamPath, sizeof( steamPath ) ) ) {
+			return steamPath;
+		}
+		if ( Sys_TrySteamRootUnderHome( home, ".local/share/Steam", steamPath, sizeof( steamPath ) ) ) {
+			return steamPath;
+		}
+		if ( Sys_TrySteamRootUnderHome( home, ".var/app/com.valvesoftware.Steam/.local/share/Steam", steamPath, sizeof( steamPath ) ) ) {
+			return steamPath;
+		}
 #endif
+	}
+
 	return steamPath;
 }
 

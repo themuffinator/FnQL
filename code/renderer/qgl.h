@@ -204,6 +204,9 @@ typedef char GLchar;
 #ifndef GL_MAX_SAMPLES
 #define GL_MAX_SAMPLES                    0x8D57
 #endif
+#ifndef GL_SAMPLES_PASSED_ARB
+#define GL_SAMPLES_PASSED_ARB             0x8914
+#endif
 
 //===========================================================================
 
@@ -280,6 +283,12 @@ typedef char GLchar;
 	GLE( void, glDeleteBuffersARB, GLsizei n, const GLuint *buffers ) \
 	GLE( void, glBindBufferARB, GLenum target, GLuint buffer ) \
 	GLE( void, glBufferDataARB, GLenum target, GLsizeiptrARB size, const GLvoid *data, GLenum usage )
+
+#define QGL_OCCLUSION_QUERY_PROCS \
+	GLE( void, glGenQueriesARB, GLsizei n, GLuint *ids ) \
+	GLE( void, glDeleteQueriesARB, GLsizei n, const GLuint *ids ) \
+	GLE( void, glBeginQueryARB, GLenum target, GLuint id ) \
+	GLE( void, glEndQueryARB, GLenum target )
 
 #define QGL_FBO_PROCS \
 	GLE( void, glBindRenderbuffer, GLenum target, GLuint renderbuffer ) \

@@ -737,6 +737,34 @@ static void IN_DIMouse( int *mx, int *my ) {
 			else
 				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE4, qfalse, 0, NULL );
 			break;
+
+		case DIMOFS_BUTTON4:
+			if (od.dwData & 0x80)
+				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE5, qtrue, 0, NULL );
+			else
+				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE5, qfalse, 0, NULL );
+			break;
+
+		case DIMOFS_BUTTON5:
+			if (od.dwData & 0x80)
+				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE6, qtrue, 0, NULL );
+			else
+				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE6, qfalse, 0, NULL );
+			break;
+
+		case DIMOFS_BUTTON6:
+			if (od.dwData & 0x80)
+				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE7, qtrue, 0, NULL );
+			else
+				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE7, qfalse, 0, NULL );
+			break;
+
+		case DIMOFS_BUTTON7:
+			if (od.dwData & 0x80)
+				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE8, qtrue, 0, NULL );
+			else
+				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE8, qfalse, 0, NULL );
+			break;
 		// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=50
 		case kDInputMouseWheelOffset:
 			value = od.dwData;
@@ -1263,6 +1291,12 @@ void IN_Frame( void ) {
 #endif
 
 	if ( !s_wmv.mouseInitialized ) {
+		return;
+	}
+
+	if ( Key_GetCatcher() & KEYCATCH_BROWSER ) {
+		IN_DeactivateMouse();
+		IN_MouseMove();
 		return;
 	}
 

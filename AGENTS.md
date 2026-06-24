@@ -18,6 +18,13 @@ Every change should protect these project constraints:
    packaging, tooling, and test improvements unless they conflict with QL.
 5. Speed, determinism, and cross-platform viability matter, but not at the cost
    of compatibility-sensitive behavior.
+6. Robustness and cross-platform support must be considered in every
+   implementation, including narrow fixes. Prefer resilient error handling,
+   explicit fallback behavior, and platform-conscious paths over assumptions
+   that only hold on the current development machine.
+7. The target engine should load retail Quake Live, should not allow joining
+   retail Quake Live servers, and should allow retail Quake Live clients to
+   join FnQL-hosted servers while Steamworks integration is stubbed out.
 
 ## Reference Repositories
 
@@ -39,6 +46,8 @@ Every change should protect these project constraints:
 
 - Start with static comparison before changing behavior. Compare FnQL against
   QLSRP `src/code/`, the QLSRP reference corpus, and retail-observed behavior.
+- Any code ported from QLSRP must be elegantly translated into a form that
+  makes sense for FnQL instead of being mechanically transplanted.
 - Keep observed facts separate from inferences in notes, commits, reviews, and
   implementation comments.
 - Prefer small compatibility slices: filesystem/search path, Steam install
@@ -72,6 +81,9 @@ Every change should protect these project constraints:
 
 - Treat demo, protocol, asset-loading, filesystem, Steam path, and VM/native
   module behavior as compatibility-sensitive by default.
+- Consider robustness and cross-platform behavior for every implementation.
+  Windows, Linux, macOS, and legacy build paths may need different probes,
+  fallbacks, or validation, even when the immediate test environment is Windows.
 - Prefer incremental engine changes over broad rewrites unless a rewrite is the
   only coherent fix.
 - Keep release packaging deterministic. `.install/` is the staged distribution
