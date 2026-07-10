@@ -92,6 +92,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #if defined(__GNUC__) || defined(__clang__)
 #define UNUSED_VAR __attribute__((unused))
+#elif defined(_MSVC_LANG) && _MSVC_LANG >= 201703L
+#define UNUSED_VAR [[maybe_unused]]
 #else
 #define UNUSED_VAR
 #endif
@@ -950,16 +952,22 @@ default values.
 #define CVAR_CHEAT			0x0200	// can not be changed if cheats are disabled
 #define CVAR_NORESTART		0x0400	// do not clear when a cvar_restart is issued
 
-#define CVAR_SERVER_CREATED	0x0800	// cvar was created by a server the client connected to.
-#define CVAR_VM_CREATED		0x1000	// cvar was created exclusively in one of the VMs.
-#define CVAR_PROTECTED		0x2000	// prevent modifying this var from VMs or the server
+// The public flag values below are part of the retail Quake Live native-module
+// ABI.  Do not reuse them for engine-only metadata: retail cgame and qagame
+// pass these exact bits through their import tables.
+#define CVAR_PROTECTED		0x00000800	// Quake Live engine-managed cvar
+#define CVAR_VM_CREATED		0x00001000	// created or guarded by a VM/native module
+#define CVAR_BOUNDED_DISCRETE 0x00002000	// retail endpoint-snapping bounded cvar
+#define CVAR_CLOUD			0x00080000	// Quake Live profile/cloud-persisted cvar
+#define CVAR_GAMERULE		0x00100000	// Quake Live game-rule initialization guard
 
-#define CVAR_NODEFAULT		0x4000	// do not write to config if matching with default value
-
-#define CVAR_PRIVATE		0x8000	// can't be read from VM
-
-#define CVAR_DEVELOPER		0x10000 // can be set only in developer mode
-#define CVAR_NOTABCOMPLETE	0x20000 // no tab completion in console
+// FnQL-only bookkeeping lives above the retail flag range so it cannot alter
+// the meaning of flags supplied by retail modules (notably 0x8000).
+#define CVAR_SERVER_CREATED	0x00200000	// created by a server the client connected to
+#define CVAR_NODEFAULT		0x00400000	// omit from config when matching its default
+#define CVAR_PRIVATE		0x00800000	// secret engine cvar; never expose to modules
+#define CVAR_DEVELOPER		0x01000000	// can be set only in developer mode
+#define CVAR_NOTABCOMPLETE	0x02000000	// omit from console completion
 
 #define CVAR_ARCHIVE_ND		(CVAR_ARCHIVE | CVAR_NODEFAULT)
 
@@ -1019,6 +1027,7 @@ typedef struct {
 	int			modificationCount;
 	float		value;
 	int			integer;
+	int			flags;		// retail Quake Live native-module ABI
 	char		string[MAX_CVAR_VALUE_STRING];
 } vmCvar_t;
 

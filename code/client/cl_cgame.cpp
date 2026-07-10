@@ -1055,10 +1055,18 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 	case CG_MILLISECONDS:
 		return Sys_Milliseconds();
 	case CG_CVAR_REGISTER:
-		Cvar_Register( VMA(1), VMA(2), VMA(3), args[4], cgvm->privateFlag );
+		if ( cgvm->dllExports ) {
+			Cvar_Register( VMA(1), VMA(2), VMA(3), args[4], cgvm->privateFlag );
+		} else {
+			Cvar_RegisterLegacy( VMA(1), VMA(2), VMA(3), args[4], cgvm->privateFlag );
+		}
 		return 0;
 	case CG_CVAR_UPDATE:
-		Cvar_Update( VMA(1), cgvm->privateFlag );
+		if ( cgvm->dllExports ) {
+			Cvar_Update( VMA(1), cgvm->privateFlag );
+		} else {
+			Cvar_UpdateLegacy( VMA(1), cgvm->privateFlag );
+		}
 		return 0;
 	case CG_CVAR_SET:
 		Cvar_SetSafe( VMA(1), VMA(2) );
@@ -1629,22 +1637,16 @@ static uint64_t QL_CG_PackFloatBits64( float lo, float hi ) {
 	return packed.value;
 }
 
-static cvarValidator_t QL_CG_CvarRangeType( const char *minimumValue, const char *maximumValue ) {
-	if ( ( minimumValue && std::strchr( minimumValue, '.' ) ) ||
-		( maximumValue && std::strchr( maximumValue, '.' ) ) ) {
-		return CV_FLOAT;
-	}
-
-	return CV_INTEGER;
-}
-
 static void QDECL QL_CG_trap_Cvar_RegisterRange( vmCvar_t *vmCvar, const char *varName,
 		const char *defaultValue, const char *minimumValue, const char *maximumValue, int flags ) {
 	Cvar_Register( vmCvar, varName, defaultValue, flags, cgvm ? cgvm->privateFlag : CVAR_PRIVATE );
 
 	cvar_t *cv = Cvar_Get( varName, defaultValue, flags );
 	if ( cv ) {
-		Cvar_CheckRange( cv, minimumValue, maximumValue, QL_CG_CvarRangeType( minimumValue, maximumValue ) );
+		// Retail bounds are numeric clamps, not an integer type declaration. A
+		// large part of cgame uses integral-looking endpoints for float defaults
+		// such as 0.75; treating those as integers destroys retail settings.
+		Cvar_CheckRange( cv, minimumValue, maximumValue, CV_FLOAT );
 	}
 }
 

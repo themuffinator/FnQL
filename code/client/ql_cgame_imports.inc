@@ -323,7 +323,7 @@ static void QDECL QL_CG_trap_S_StartLocalSound( sfxHandle_t sfx, int channelNum 
 QL_CG_trap_S_ClearLoopingSounds
 ==============
 */
-static UNUSED_VAR void QDECL QL_CG_trap_S_ClearLoopingSounds( qboolean killall ) {
+[[maybe_unused]] static void QDECL QL_CG_trap_S_ClearLoopingSounds( qboolean killall ) {
 	CG_Import_Syscall( CG_S_CLEARLOOPINGSOUNDS, killall );
 }
 
@@ -458,8 +458,8 @@ static void QDECL QL_CG_trap_R_ClearScene( void ) {
 QL_CG_trap_R_AddRefEntityToScene
 ==============
 */
-static void QDECL QL_CG_trap_R_AddRefEntityToScene( const refEntity_t *re ) {
-	CG_Import_Syscall( CG_R_ADDREFENTITYTOSCENE, re );
+static void QDECL QL_CG_trap_R_AddRefEntityToScene( const refEntity_t *entity ) {
+	CG_Import_Syscall( CG_R_ADDREFENTITYTOSCENE, entity );
 }
 
 /*
@@ -521,7 +521,7 @@ static void QDECL QL_CG_trap_R_RenderScene( const refdef_t *fd ) {
 QL_CG_trap_R_SetColor
 ==============
 */
-static UNUSED_VAR void QDECL QL_CG_trap_R_SetColor( const float *rgba ) {
+[[maybe_unused]] static void QDECL QL_CG_trap_R_SetColor( const float *rgba ) {
 	CG_Import_Syscall( CG_R_SETCOLOR, rgba );
 }
 

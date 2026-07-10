@@ -22,6 +22,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // cl_webui.cpp -- Quake Live WebUI/Awesomium host wiring
 
 #include "client.h"
+#include "webui_backend.hpp"
+
+#include <cstdint>
 
 #if defined( _WIN32 )
 #ifndef WIN32_LEAN_AND_MEAN
@@ -29,6 +32,15 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #endif
 #include "../win32/win_local.h"
 #endif
+
+namespace fnql::webui {
+
+BackendHost &ClientBackendHost() noexcept {
+	static BackendHost host;
+	return host;
+}
+
+} // namespace fnql::webui
 
 #define CL_WEB_DEFAULT_URL "asset://ql/index.html"
 #define CL_WEB_BROWSER_EVENT_COUNT 32
@@ -38,6 +50,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define CL_WEB_NATIVE_REQUEST_BUSY_POLL_FRAMES 1
 #define CL_WEB_NATIVE_REQUEST_IDLE_POLL_FRAMES 15
 #define CL_WEB_NATIVE_REQUEST_LOADING_POLL_FRAMES 30
+#define CL_WEB_MAX_RESOURCE_BYTES ( 64 * 1024 * 1024 )
 #define CL_WEB_BRIDGE_RETRY_FRAMES 30
 #define CL_WEB_CONFIG_SYNC_FRAMES 300
 #define CL_WEB_CONFIG_JSON_LENGTH 8192
@@ -148,10 +161,12 @@ static qboolean CL_WebUI_RuntimeAvailable( void );
 static void CL_WebView_ReplayRetainedEvents( void );
 static void CL_AdvertisementBridge_UpdateCvars( void );
 static void CL_Steam_OverlayCommand_f( void );
+static void CL_WebHost_BuildConfigJson( char *buffer, size_t bufferSize );
 static void CL_WebHost_BuildMapListJson( char *buffer, size_t bufferSize );
 static void CL_WebHost_BuildFactoryListJson( char *buffer, size_t bufferSize );
 static void CL_WebHost_BuildDemoListJson( char *buffer, size_t bufferSize );
 static void CL_WebHost_ReadClipboardText( char *buffer, size_t bufferSize );
+static qboolean CL_WebUI_EnsureBackendStarted( void );
 
 static void CL_WebUI_SetCvarIfChanged( const char *name, const char *value ) {
 	const char *current;
@@ -166,12 +181,27 @@ static void CL_WebUI_SetCvarIfChanged( const char *name, const char *value ) {
 	}
 }
 
+static const char *CL_WebUI_BackendProviderLabel( void ) {
+	return CL_WebUI_RuntimeAvailable()
+		? fnql::webui::ClientBackendHost().ProviderName()
+		: "Unavailable";
+}
+
+static const char *CL_WebUI_BackendPolicyLabel( void ) {
+	if ( !CL_WebUI_RuntimeRequested() ) {
+		return "default-off";
+	}
+	return CL_WebUI_RuntimeAvailable()
+		? "explicit-external-backend"
+		: "runtime-backend-unavailable";
+}
+
 static const char *CL_AdvertisementBridgeProviderLabel( void ) {
-	return CL_WebUI_RuntimeAvailable() ? "Awesomium WebCore" : "Unavailable";
+	return CL_WebUI_BackendProviderLabel();
 }
 
 static const char *CL_AdvertisementBridgePolicyLabel( void ) {
-	return CL_WebUI_RuntimeRequested() ? "runtime-backend-unavailable" : "default-off";
+	return CL_WebUI_BackendPolicyLabel();
 }
 
 static const char *CL_WebHost_OnlineServicesModeLabel( void ) {
@@ -590,7 +620,11 @@ static qboolean CL_WebUI_RuntimeRequested( void ) {
 }
 
 static qboolean CL_WebUI_RuntimeAvailable( void ) {
-	return qfalse;
+	if ( !fnql::webui::ClientBackendHost().IsAvailable() ) {
+		return qfalse;
+	}
+
+	return qtrue;
 }
 
 static void CL_WebHost_NormalizeHash( const char *hash, char *buffer, size_t bufferSize ) {
@@ -627,6 +661,114 @@ static void CL_WebHost_BuildCurrentURL( const char *hash, char *buffer, size_t b
 static void CL_WebUI_SetLastError( const char *message, int code ) {
 	Q_strncpyz( cl_webui.lastError, message ? message : "", sizeof( cl_webui.lastError ) );
 	cl_webui.lastErrorCode = code;
+}
+
+static qboolean CL_WebUI_RecordBackendResult( fnql::webui::BackendResult result ) {
+	if ( result ) {
+		CL_WebUI_SetLastError( "", 0 );
+		return qtrue;
+	}
+
+	char diagnostic[MAX_STRING_CHARS];
+	const size_t copyLength = result.detail.size() < sizeof( diagnostic ) - 1
+		? result.detail.size()
+		: sizeof( diagnostic ) - 1;
+	if ( copyLength > 0 ) {
+		Com_Memcpy( diagnostic, result.detail.data(), copyLength );
+	}
+	diagnostic[copyLength] = '\0';
+	CL_WebUI_SetLastError(
+		diagnostic[0] ? diagnostic : "WebUI backend operation failed.",
+		static_cast<int>( result.code ) );
+	return qfalse;
+}
+
+static qboolean CL_WebUI_EnsureBackendStarted( void ) {
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	char runtimePath[MAX_OSPATH];
+	char basePath[MAX_OSPATH];
+	char playerName[MAX_CVAR_VALUE_STRING];
+	cgameClientIdentity_t identity;
+	unsigned int identityLow = 0u;
+	unsigned int identityHigh = 0u;
+	char *configJson;
+	char *mapJson;
+	char *factoryJson;
+	qboolean started;
+
+	if ( host.IsRunning() ) {
+		return qtrue;
+	}
+	if ( !CL_WebUI_RuntimeRequested() || !host.IsAvailable() ) {
+		return qfalse;
+	}
+	if ( cls.glconfig.vidWidth <= 0 || cls.glconfig.vidHeight <= 0 ) {
+		CL_WebUI_SetLastError( "WebUI runtime cannot start before the renderer has valid dimensions.",
+			static_cast<int>( fnql::webui::BackendError::InvalidState ) );
+		return qfalse;
+	}
+
+	runtimePath[0] = '\0';
+	basePath[0] = '\0';
+	playerName[0] = '\0';
+	Cvar_VariableStringBuffer( "fs_homepath", runtimePath, sizeof( runtimePath ) );
+	Cvar_VariableStringBuffer( "fs_basepath", basePath, sizeof( basePath ) );
+	Cvar_VariableStringBuffer( "name", playerName, sizeof( playerName ) );
+	if ( CL_CopyClientIdentity( clc.clientNum, &identity ) ) {
+		identityLow = identity.identityLow;
+		identityHigh = identity.identityHigh;
+	}
+
+	configJson = static_cast<char *>( Z_Malloc( CL_WEB_CONFIG_JSON_LENGTH ) );
+	mapJson = static_cast<char *>( Z_Malloc( CL_WEB_CATALOG_JSON_LENGTH ) );
+	factoryJson = static_cast<char *>( Z_Malloc( CL_WEB_CATALOG_JSON_LENGTH ) );
+	if ( !configJson || !mapJson || !factoryJson ) {
+		if ( configJson ) {
+			Z_Free( configJson );
+		}
+		if ( mapJson ) {
+			Z_Free( mapJson );
+		}
+		if ( factoryJson ) {
+			Z_Free( factoryJson );
+		}
+		CL_WebUI_SetLastError( "WebUI startup snapshot allocation failed.",
+			static_cast<int>( fnql::webui::BackendError::ResourceUnavailable ) );
+		return qfalse;
+	}
+
+	configJson[0] = '\0';
+	mapJson[0] = '\0';
+	factoryJson[0] = '\0';
+	CL_WebHost_BuildConfigJson( configJson, CL_WEB_CONFIG_JSON_LENGTH );
+	CL_WebHost_BuildMapListJson( mapJson, CL_WEB_CATALOG_JSON_LENGTH );
+	CL_WebHost_BuildFactoryListJson( factoryJson, CL_WEB_CATALOG_JSON_LENGTH );
+	started = CL_Awesomium_Startup(
+		runtimePath,
+		basePath,
+		playerName,
+		(unsigned int)atoi( STEAMPATH_APPID ),
+		identityLow,
+		identityHigh,
+		cls.glconfig.vidWidth,
+		cls.glconfig.vidHeight,
+		configJson,
+		mapJson,
+		factoryJson );
+	Z_Free( factoryJson );
+	Z_Free( mapJson );
+	Z_Free( configJson );
+
+	if ( !started ) {
+		return qfalse;
+	}
+
+	cl_webui.reportedUnavailable = qfalse;
+	if ( cl_webZoom ) {
+		CL_Awesomium_SetZoom( cl_webZoom->integer );
+	}
+	CL_WebUI_SetLastError( "", 0 );
+	return qtrue;
 }
 
 static void CL_WebUI_ReportUnavailable( const char *owner ) {
@@ -679,8 +821,8 @@ void CL_RefreshOnlineServicesBridgeState( void ) {
 
 	CL_WebUI_SetCvarIfChanged( "ui_browserAwesomium", available ? "1" : "0" );
 	CL_WebUI_SetCvarIfChanged( "ui_browserAwesomiumPending", pendingSurface ? "1" : "0" );
-	CL_WebUI_SetCvarIfChanged( "ui_browserAwesomiumProvider", available ? "Awesomium WebCore" : "Unavailable" );
-	CL_WebUI_SetCvarIfChanged( "ui_browserAwesomiumPolicy", requested ? "runtime-backend-unavailable" : "default-off" );
+	CL_WebUI_SetCvarIfChanged( "ui_browserAwesomiumProvider", available ? CL_WebUI_BackendProviderLabel() : "Unavailable" );
+	CL_WebUI_SetCvarIfChanged( "ui_browserAwesomiumPolicy", CL_WebUI_BackendPolicyLabel() );
 	CL_WebUI_SetCvarIfChanged( "ui_browserAwesomiumParityScope", "retail Windows Awesomium/WebUI" );
 	CL_WebUI_SetCvarIfChanged( "ui_browserAwesomiumParityReason", "backend scaffold only; external Awesomium SDK/runtime is not bundled" );
 	CL_WebUI_SetCvarIfChanged( "ui_onlineServicesMode", CL_WebHost_OnlineServicesModeLabel() );
@@ -768,12 +910,14 @@ static void CL_WebUI_RegisterCvars( void ) {
 	Cvar_SetDescription( Cvar_Get( "ui_workshopProvider", "Unavailable", CVAR_ROM ), "Read-only provider label for the Quake Live WebUI workshop lane." );
 	Cvar_SetDescription( Cvar_Get( "ui_workshopPolicy", "Steamworks bridge unavailable", CVAR_ROM ), "Read-only policy label for the Quake Live WebUI workshop lane." );
 	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgeProvider", "Unavailable", CVAR_ROM ), "Read-only provider label for Quake Live UI resource and avatar requests." );
-	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgePolicy", "Steamworks resource bridge unavailable", CVAR_ROM ), "Read-only policy label for Quake Live UI resource and avatar requests." );
-	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgeParityScope", "retail Steam resource and avatar bridge", CVAR_ROM ), "Read-only parity scope for Quake Live UI resource requests." );
-	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgeParityReason", "backend scaffold only; Steamworks resource data source is not bundled", CVAR_ROM ), "Read-only parity note for Quake Live UI resource requests." );
-	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgeSteamDataSourceSubset", "avatars and live image resources", CVAR_ROM ), "Read-only supported SteamDataSource subset for Quake Live UI resources." );
-	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgeSteamDataSourceNativeGap", "SteamDataSource and avatar callbacks are unavailable", CVAR_ROM ), "Read-only native gap for Quake Live UI resource requests." );
-	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgeSteamDataSourceFallbackOwner", "renderer pak shader registry", CVAR_ROM ), "Read-only fallback owner for non-URI UI shader requests." );
+	// These six cvars are shared with the web.pak owner. Keep one canonical
+	// reset value; each backend updates the live read-only value as state changes.
+	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgePolicy", "webpak-unavailable", CVAR_ROM ), "Read-only policy label for Quake Live UI resource and avatar requests." );
+	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgeParityScope", "retail web.pak resource bridge", CVAR_ROM ), "Read-only parity scope for Quake Live UI resource requests." );
+	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgeParityReason", "external retail assets only", CVAR_ROM ), "Read-only parity note for Quake Live UI resource requests." );
+	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgeSteamDataSourceSubset", "avatar-only SteamDataSource", CVAR_ROM ), "Read-only supported SteamDataSource subset for Quake Live UI resources." );
+	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgeSteamDataSourceNativeGap", "missing non-avatar SteamDataSource owner", CVAR_ROM ), "Read-only native gap for Quake Live UI resource requests." );
+	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgeSteamDataSourceFallbackOwner", "QLResourceInterceptor launcher/web fallback", CVAR_ROM ), "Read-only fallback owner for non-URI UI shader requests." );
 	Cvar_SetDescription( Cvar_Get( "ui_advertisementBridgeProvider", "Unavailable", CVAR_ROM ), "Read-only provider label for the Quake Live advertisement bridge." );
 	Cvar_SetDescription( Cvar_Get( "ui_advertisementBridgePolicy", "default-off", CVAR_ROM ), "Read-only policy label for the Quake Live advertisement bridge." );
 	Cvar_SetDescription( Cvar_Get( "ui_advertisementBridgeParityScope", "retail WebUI advertisement bridge", CVAR_ROM ), "Read-only parity scope for the Quake Live advertisement bridge." );
@@ -844,6 +988,11 @@ static qboolean CL_WebHost_OpenRequestedURL( const char *requestedUrl, const cha
 	relativeUrl = strstr( requestedUrl, "://" ) ? qfalse : qtrue;
 
 	if ( !relativeUrl ) {
+		if ( !fnql::webui::IsTrustedNavigationUrl( requestedUrl ) ) {
+			CL_WebUI_SetLastError( "WebUI navigation is restricted to asset://ql/",
+				static_cast<int>( fnql::webui::BackendError::InvalidArgument ) );
+			return qfalse;
+		}
 		Q_strncpyz( cl_webui.currentUrl, requestedUrl, sizeof( cl_webui.currentUrl ) );
 		cl_webui.pendingHash[0] = '\0';
 	} else {
@@ -871,6 +1020,12 @@ static qboolean CL_WebHost_OpenRequestedURL( const char *requestedUrl, const cha
 	if ( !CL_WebUI_ServiceAvailable() ) {
 		CL_WebUI_ReportUnavailable( owner ? owner : "qz.OpenURL" );
 		CL_RefreshOnlineServicesBridgeState();
+		return qfalse;
+	}
+	if ( !CL_WebUI_EnsureBackendStarted() ) {
+		Com_DPrintf( "%s could not start WebUI backend: %s\n",
+			owner ? owner : "qz.OpenURL", CL_Awesomium_LastError() );
+		CL_WebHost_MarkBrowserUnavailable();
 		return qfalse;
 	}
 
@@ -917,6 +1072,10 @@ static void CL_Web_BrowserActive_f( void ) {
 		CL_RefreshOnlineServicesBridgeState();
 		return;
 	}
+	if ( !CL_WebUI_EnsureBackendStarted() ) {
+		CL_WebHost_MarkBrowserUnavailable();
+		return;
+	}
 
 	if ( !CL_Awesomium_OpenURL( cl_webui.currentUrl ) ) {
 		CL_WebHost_MarkBrowserUnavailable();
@@ -938,18 +1097,36 @@ static void CL_Web_ShowError_f( void ) {
 }
 
 static void CL_Web_ClearCache_f( void ) {
+	if ( !fnql::webui::ClientBackendHost().IsRunning() ) {
+		Com_DPrintf( "web_clearCache ignored: Awesomium/WebUI runtime backend is unavailable.\n" );
+		return;
+	}
 	CL_Awesomium_ClearCache();
-	Com_DPrintf( "web_clearCache ignored: Awesomium/WebUI runtime backend is unavailable.\n" );
+	if ( CL_Awesomium_LastError()[0] ) {
+		Com_DPrintf( "web_clearCache failed: %s\n", CL_Awesomium_LastError() );
+	}
 }
 
 static void CL_Web_Reload_f( void ) {
+	if ( !fnql::webui::ClientBackendHost().IsRunning() ) {
+		Com_DPrintf( "web_reload ignored: Awesomium/WebUI runtime backend is unavailable.\n" );
+		return;
+	}
 	CL_Awesomium_Reload( qtrue );
-	Com_DPrintf( "web_reload ignored: Awesomium/WebUI runtime backend is unavailable.\n" );
+	if ( CL_Awesomium_LastError()[0] ) {
+		Com_DPrintf( "web_reload failed: %s\n", CL_Awesomium_LastError() );
+	}
 }
 
 static void CL_Web_StopRefresh_f( void ) {
+	if ( !fnql::webui::ClientBackendHost().IsRunning() ) {
+		Com_DPrintf( "web_stopRefresh ignored: Awesomium/WebUI runtime backend is unavailable.\n" );
+		return;
+	}
 	CL_Awesomium_Stop();
-	Com_DPrintf( "web_stopRefresh ignored: Awesomium/WebUI runtime backend is unavailable.\n" );
+	if ( CL_Awesomium_LastError()[0] ) {
+		Com_DPrintf( "web_stopRefresh failed: %s\n", CL_Awesomium_LastError() );
+	}
 }
 
 void QLWebHost_RegisterCommands( void ) {
@@ -1017,15 +1194,33 @@ void CL_WebHost_Frame( void ) {
 	cl_webui.frameSequence++;
 
 	if ( !CL_WebUI_RuntimeRequested() ) {
+		CL_Awesomium_Shutdown();
 		CL_WebUI_ClearBrowserState();
 	}
 
 	if ( CL_WebUI_ServiceAvailable() ) {
-		CL_Awesomium_Update();
-		CL_WebHost_EnsureStartupBridge();
-		CL_WebHost_UpdateBrowserNativeState();
-		CL_WebHost_SyncNativeSnapshots( qfalse );
-		CL_WebHost_PumpNativeJavascriptRequests();
+		if ( CL_WebHost_HasLiveView() ) {
+			const fnql::webui::BackendStatus backendStatus =
+				fnql::webui::ClientBackendHost().Status();
+			if ( cls.glconfig.vidWidth > 0 && cls.glconfig.vidHeight > 0
+				&& backendStatus.surface != fnql::webui::SurfaceSize{
+					cls.glconfig.vidWidth, cls.glconfig.vidHeight } ) {
+				CL_Awesomium_Resize( cls.glconfig.vidWidth, cls.glconfig.vidHeight );
+			}
+			if ( cl_webZoom && cl_webZoom->modified
+				&& CL_Awesomium_SetZoom( cl_webZoom->integer ) ) {
+				cl_webZoom->modified = qfalse;
+			}
+			CL_Awesomium_Update();
+			if ( !CL_WebHost_HasLiveView() ) {
+				CL_WebHost_MarkBrowserUnavailable();
+			} else {
+				CL_WebHost_EnsureStartupBridge();
+				CL_WebHost_UpdateBrowserNativeState();
+				CL_WebHost_SyncNativeSnapshots( qfalse );
+				CL_WebHost_PumpNativeJavascriptRequests();
+			}
+		}
 	}
 
 	CL_WebHost_ServerBrowserFrame();
@@ -1043,17 +1238,30 @@ void CL_WebHost_BootstrapAwesomiumMenu( void ) {
 		CL_RefreshOnlineServicesBridgeState();
 		return;
 	}
+
+	CL_WebHost_OpenRequestedURL( "#", "CL_WebHost_BootstrapAwesomiumMenu" );
 }
 
 qboolean CL_WebHost_HasLiveView( void ) {
-	return qfalse;
+	const fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	return ( host.IsRunning() && host.Status().viewAlive ) ? qtrue : qfalse;
 }
 
 qboolean CL_WebHost_HasBoundWindowObject( void ) {
-	return qfalse;
+	const fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	return ( host.IsRunning() && host.Status().windowObjectBound ) ? qtrue : qfalse;
 }
 
 qboolean CL_WebHost_HasDrawableSurface( void ) {
+	const fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	if ( !host.IsRunning() || !host.Status().HasSurface() ) {
+		return qfalse;
+	}
+
+	// The backend surface contract is live, but the renderer-neutral upload
+	// path still needs its own compatibility slice.  Do not claim overlay
+	// ownership until pixels can actually be presented; native UI remains the
+	// safe fallback even when an adapter has started successfully.
 	return qfalse;
 }
 
@@ -1400,7 +1608,8 @@ static void CL_WebHost_UpdateBrowserCvarCache( const char *name, const char *val
 	char escapedValue[MAX_CVAR_VALUE_STRING * 2];
 	char script[MAX_STRING_CHARS];
 
-	if ( !name || !name[0] || !CL_WebHost_HasLiveView() || !CL_WebHost_HasBoundWindowObject() ) {
+	if ( !name || !name[0] || ( Cvar_Flags( name ) & CVAR_PRIVATE ) ||
+		!CL_WebHost_HasLiveView() || !CL_WebHost_HasBoundWindowObject() ) {
 		return;
 	}
 
@@ -1739,6 +1948,9 @@ static qboolean CL_WebHost_AppendConfigCvar( char *buffer, size_t bufferSize, co
 	}
 
 	if ( Cvar_Flags( name ) == CVAR_NONEXISTENT ) {
+		return qtrue;
+	}
+	if ( Cvar_Flags( name ) & CVAR_PRIVATE ) {
 		return qtrue;
 	}
 
@@ -3660,7 +3872,7 @@ static void CL_WebHost_ProcessNativeJavascriptRequest( const char *request ) {
 		return;
 	}
 	if ( kindLength >= (int)sizeof( kind ) ) {
-		kindLength = (int)sizeof( kind ) - 1;
+		return;
 	}
 	Com_Memcpy( kind, request, kindLength );
 	kind[kindLength] = '\0';
@@ -3677,10 +3889,13 @@ static void CL_WebHost_ProcessNativeJavascriptRequest( const char *request ) {
 		char name[MAX_CVAR_VALUE_STRING];
 		char value[MAX_CVAR_VALUE_STRING];
 
-		if ( !payload[0] ) {
+		if ( !payload[0] || strlen( payload ) >= sizeof( name ) ) {
 			return;
 		}
 		Q_strncpyz( name, payload, sizeof( name ) );
+		if ( Cvar_Flags( name ) & CVAR_PRIVATE ) {
+			return;
+		}
 		Cvar_VariableStringBuffer( name, value, sizeof( value ) );
 		CL_WebHost_UpdateBrowserCvarCache( name, value );
 		return;
@@ -3702,10 +3917,13 @@ static void CL_WebHost_ProcessNativeJavascriptRequest( const char *request ) {
 			return;
 		}
 		if ( nameLength >= (int)sizeof( name ) ) {
-			nameLength = (int)sizeof( name ) - 1;
+			return;
 		}
 		Com_Memcpy( name, payload, nameLength );
 		name[nameLength] = '\0';
+		if ( Cvar_Flags( name ) & ( CVAR_PRIVATE | CVAR_PROTECTED ) ) {
+			return;
+		}
 
 		valueStart++;
 		Q_strncpyz( value, valueStart, sizeof( value ) );
@@ -3718,10 +3936,13 @@ static void CL_WebHost_ProcessNativeJavascriptRequest( const char *request ) {
 		char name[MAX_CVAR_VALUE_STRING];
 		char value[MAX_CVAR_VALUE_STRING];
 
-		if ( !payload[0] ) {
+		if ( !payload[0] || strlen( payload ) >= sizeof( name ) ) {
 			return;
 		}
 		Q_strncpyz( name, payload, sizeof( name ) );
+		if ( Cvar_Flags( name ) & ( CVAR_PRIVATE | CVAR_PROTECTED ) ) {
+			return;
+		}
 		Cvar_Reset( name );
 		Cvar_VariableStringBuffer( name, value, sizeof( value ) );
 		CL_WebHost_UpdateBrowserCvarCache( name, value );
@@ -3732,7 +3953,7 @@ static void CL_WebHost_ProcessNativeJavascriptRequest( const char *request ) {
 		char path[MAX_QPATH];
 		qboolean exists;
 
-		if ( !payload[0] ) {
+		if ( !payload[0] || strlen( payload ) >= sizeof( path ) ) {
 			return;
 		}
 
@@ -3758,7 +3979,7 @@ static void CL_WebHost_ProcessNativeJavascriptRequest( const char *request ) {
 			return;
 		}
 		if ( pathLength >= (int)sizeof( path ) ) {
-			pathLength = (int)sizeof( path ) - 1;
+			return;
 		}
 		Com_Memcpy( path, payload, pathLength );
 		path[pathLength] = '\0';
@@ -4059,7 +4280,7 @@ void CL_WebView_PublishCvarChange( const char *name, const char *value, qboolean
 	char eventName[CL_WEB_EVENT_NAME_LENGTH];
 	char payload[CL_WEB_EVENT_PAYLOAD_LENGTH];
 
-	if ( !name || !name[0] ) {
+	if ( !name || !name[0] || ( Cvar_Flags( name ) & CVAR_PRIVATE ) ) {
 		return;
 	}
 
@@ -4171,6 +4392,9 @@ static void CL_WebView_PublishGameKey( int key ) {
 
 static qboolean CL_WebHost_BrowserAcceptsInput( void ) {
 	if ( !CL_WebUI_ServiceAvailable() ) {
+		return qfalse;
+	}
+	if ( !CL_WebHost_HasDrawableSurface() ) {
 		return qfalse;
 	}
 
@@ -4294,79 +4518,166 @@ qboolean CL_Awesomium_RequestResource( const char *virtualPath, void **outBuffer
 	return qtrue;
 }
 
+static bool CL_WebUI_BackendRequestResource( void *, std::string_view virtualPath,
+	fnql::webui::ResourceBuffer *resource ) noexcept {
+	char path[MAX_STRING_CHARS];
+	void *buffer = NULL;
+	int length = 0;
+
+	if ( resource ) {
+		*resource = {};
+	}
+	if ( !resource || virtualPath.empty() || virtualPath.size() >= sizeof( path )
+		|| memchr( virtualPath.data(), '\0', virtualPath.size() ) ) {
+		return false;
+	}
+
+	Com_Memcpy( path, virtualPath.data(), virtualPath.size() );
+	path[virtualPath.size()] = '\0';
+	if ( !CL_LauncherRequestData( path, &buffer, &length )
+		|| !buffer || length < 0 || length > CL_WEB_MAX_RESOURCE_BYTES ) {
+		if ( buffer ) {
+			Z_Free( buffer );
+		}
+		return false;
+	}
+
+	resource->bytes = static_cast<const std::uint8_t *>( buffer );
+	resource->size = static_cast<size_t>( length );
+	resource->releaseToken = buffer;
+	return true;
+}
+
+static void CL_WebUI_BackendReleaseResource( void *,
+	fnql::webui::ResourceBuffer *resource ) noexcept {
+	if ( !resource ) {
+		return;
+	}
+	if ( resource->releaseToken ) {
+		Z_Free( resource->releaseToken );
+	}
+	*resource = {};
+}
+
 qboolean CL_Awesomium_Startup( const char *runtimePath, const char *basePath, const char *playerName, unsigned int appId, unsigned int steamIdLow, unsigned int steamIdHigh, int width, int height, const char *initialConfigJson, const char *initialMapJson, const char *initialFactoryJson ) {
-	(void)runtimePath;
-	(void)basePath;
-	(void)playerName;
-	(void)appId;
-	(void)steamIdLow;
-	(void)steamIdHigh;
-	(void)width;
-	(void)height;
-	(void)initialConfigJson;
-	(void)initialMapJson;
-	(void)initialFactoryJson;
-	CL_WebUI_SetLastError( "Awesomium runtime backend is unavailable in this build.", 1 );
-	return qfalse;
+	fnql::webui::StartupParameters parameters;
+	parameters.runtimePath = runtimePath ? runtimePath : "";
+	parameters.basePath = basePath ? basePath : "";
+	parameters.playerName = playerName ? playerName : "";
+	parameters.appId = appId;
+	parameters.identityLow = steamIdLow;
+	parameters.identityHigh = steamIdHigh;
+	parameters.initialSurface = { width, height };
+	parameters.hostServices.requestResource = CL_WebUI_BackendRequestResource;
+	parameters.hostServices.releaseResource = CL_WebUI_BackendReleaseResource;
+	parameters.initialConfigJson = initialConfigJson ? initialConfigJson : "";
+	parameters.initialMapJson = initialMapJson ? initialMapJson : "";
+	parameters.initialFactoryJson = initialFactoryJson ? initialFactoryJson : "";
+	return CL_WebUI_RecordBackendResult(
+		fnql::webui::ClientBackendHost().Start( parameters ) );
 }
 
 qboolean CL_Awesomium_OpenURL( const char *url ) {
-	(void)url;
-	CL_WebUI_SetLastError( "Awesomium runtime backend is unavailable in this build.", 1 );
-	return qfalse;
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	if ( !host.IsAvailable() ) {
+		CL_WebUI_SetLastError( "Awesomium runtime backend is unavailable in this build.", 1 );
+		return qfalse;
+	}
+	if ( !CL_WebUI_RecordBackendResult( host.Navigate(
+		( url && url[0] ) ? url : CL_WEB_DEFAULT_URL ) ) ) {
+		return qfalse;
+	}
+	if ( !CL_WebUI_RecordBackendResult( host.SetRenderingPaused( false ) )
+		|| !CL_WebUI_RecordBackendResult( host.SetFocus( true ) ) ) {
+		return qfalse;
+	}
+	return qtrue;
 }
 
 void CL_Awesomium_Update( void ) {
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	if ( host.IsRunning() ) {
+		CL_WebUI_RecordBackendResult( host.Pump() );
+	}
 }
 
 qboolean CL_Awesomium_Resize( int width, int height ) {
-	(void)width;
-	(void)height;
-	return qfalse;
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	return host.IsRunning()
+		? CL_WebUI_RecordBackendResult( host.Resize( { width, height } ) )
+		: qfalse;
 }
 
 int CL_Awesomium_SurfaceWidth( void ) {
-	return 0;
+	const fnql::webui::BackendStatus status = fnql::webui::ClientBackendHost().Status();
+	return status.HasSurface() ? status.surface.width : 0;
 }
 
 int CL_Awesomium_SurfaceHeight( void ) {
-	return 0;
+	const fnql::webui::BackendStatus status = fnql::webui::ClientBackendHost().Status();
+	return status.HasSurface() ? status.surface.height : 0;
 }
 
 qboolean CL_Awesomium_SurfaceDirty( void ) {
-	return qfalse;
+	const fnql::webui::BackendStatus status = fnql::webui::ClientBackendHost().Status();
+	return ( status.HasSurface() && status.surfaceDirty ) ? qtrue : qfalse;
 }
 
 qboolean CL_Awesomium_IsLoading( void ) {
-	return qfalse;
+	const fnql::webui::BackendStatus status = fnql::webui::ClientBackendHost().Status();
+	return ( status.viewAlive && status.loading ) ? qtrue : qfalse;
 }
 
 qboolean CL_Awesomium_IsCrashed( void ) {
-	return qfalse;
+	return fnql::webui::ClientBackendHost().Status().crashed ? qtrue : qfalse;
 }
 
 int CL_Awesomium_LastErrorCode( void ) {
+	const fnql::webui::BackendStatus status = fnql::webui::ClientBackendHost().Status();
+	if ( status.nativeErrorCode != 0 ) {
+		return status.nativeErrorCode;
+	}
 	return cl_webui.lastErrorCode;
 }
 
 qboolean CL_Awesomium_ExecuteJavascript( const char *script, const char *frame ) {
-	(void)script;
-	(void)frame;
-	return qfalse;
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	if ( !host.IsRunning() ) {
+		return qfalse;
+	}
+	return CL_WebUI_RecordBackendResult(
+		host.ExecuteScript( {
+			script ? script : "",
+			frame ? frame : ""
+		} ) );
 }
 
 qboolean CL_Awesomium_ExecuteJavascriptInteger( const char *script, const char *frame, int *outValue ) {
-	(void)script;
-	(void)frame;
 	if ( outValue ) {
 		*outValue = 0;
 	}
-	return qfalse;
+
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	if ( !host.IsRunning() ) {
+		return qfalse;
+	}
+	fnql::webui::IntegerScriptResult result = host.EvaluateInteger( {
+		script ? script : "",
+		frame ? frame : ""
+	} );
+	if ( !CL_WebUI_RecordBackendResult( result.result ) ) {
+		return qfalse;
+	}
+	if ( outValue ) {
+		*outValue = result.value;
+	}
+	return qtrue;
 }
 
 qboolean CL_Awesomium_PopJavascriptRequest( char *buffer, int bufferSize ) {
 	int length;
 	int i;
+	int outputLength = 0;
 
 	if ( buffer && bufferSize > 0 ) {
 		buffer[0] = '\0';
@@ -4387,87 +4698,246 @@ qboolean CL_Awesomium_PopJavascriptRequest( char *buffer, int bufferSize ) {
 		return qfalse;
 	}
 
-	if ( length >= bufferSize ) {
-		length = bufferSize - 1;
-	}
-
-	for ( i = 0; i < length; ++i ) {
+	const auto rejectRequest = [buffer]( const char *reason ) {
+		buffer[0] = '\0';
+		(void)CL_Awesomium_ExecuteJavascriptInteger(
+			"(function(){window.__qlr_native_read='';return 0;})()", "", nullptr );
+		CL_WebUI_SetLastError( reason,
+			static_cast<int>( fnql::webui::BackendError::InvalidArgument ) );
+		return qfalse;
+	};
+	const auto readCodeUnit = []( int index, int *codeUnit ) {
 		char script[160];
-		int codepoint;
-
 		Com_sprintf(
 			script,
 			sizeof( script ),
 			"(function(){var s=window.__qlr_native_read||'';return s.charCodeAt(%d)||0;})()",
-			i
+			index
 		);
+		return CL_Awesomium_ExecuteJavascriptInteger( script, "", codeUnit ) != qfalse;
+	};
 
-		if ( !CL_Awesomium_ExecuteJavascriptInteger( script, "", &codepoint ) ) {
+	if ( length >= bufferSize ) {
+		return rejectRequest( "WebUI native request exceeded the bridge buffer" );
+	}
+
+	for ( i = 0; i < length; ++i ) {
+		int codeUnit;
+		std::uint32_t scalar;
+		unsigned char encoded[4];
+		int encodedLength;
+
+		if ( !readCodeUnit( i, &codeUnit ) ) {
 			buffer[0] = '\0';
 			return qfalse;
 		}
+		if ( codeUnit <= 0 || codeUnit > 0xffff ) {
+			return rejectRequest( "WebUI native request contains an invalid UTF-16 code unit" );
+		}
 
-		buffer[i] = ( codepoint <= 0 || codepoint > 255 ) ? '?' : (char)codepoint;
+		scalar = static_cast<std::uint32_t>( codeUnit );
+		if ( scalar >= 0xd800u && scalar <= 0xdbffu ) {
+			int lowSurrogate;
+			if ( ++i >= length || !readCodeUnit( i, &lowSurrogate )
+				|| lowSurrogate < 0xdc00 || lowSurrogate > 0xdfff ) {
+				return rejectRequest( "WebUI native request contains malformed UTF-16" );
+			}
+			scalar = 0x10000u + ( ( scalar - 0xd800u ) << 10u )
+				+ ( static_cast<std::uint32_t>( lowSurrogate ) - 0xdc00u );
+		} else if ( scalar >= 0xdc00u && scalar <= 0xdfffu ) {
+			return rejectRequest( "WebUI native request contains malformed UTF-16" );
+		}
+
+		if ( scalar <= 0x7fu ) {
+			encoded[0] = static_cast<unsigned char>( scalar );
+			encodedLength = 1;
+		} else if ( scalar <= 0x7ffu ) {
+			encoded[0] = static_cast<unsigned char>( 0xc0u | ( scalar >> 6u ) );
+			encoded[1] = static_cast<unsigned char>( 0x80u | ( scalar & 0x3fu ) );
+			encodedLength = 2;
+		} else if ( scalar <= 0xffffu ) {
+			encoded[0] = static_cast<unsigned char>( 0xe0u | ( scalar >> 12u ) );
+			encoded[1] = static_cast<unsigned char>( 0x80u | ( ( scalar >> 6u ) & 0x3fu ) );
+			encoded[2] = static_cast<unsigned char>( 0x80u | ( scalar & 0x3fu ) );
+			encodedLength = 3;
+		} else {
+			encoded[0] = static_cast<unsigned char>( 0xf0u | ( scalar >> 18u ) );
+			encoded[1] = static_cast<unsigned char>( 0x80u | ( ( scalar >> 12u ) & 0x3fu ) );
+			encoded[2] = static_cast<unsigned char>( 0x80u | ( ( scalar >> 6u ) & 0x3fu ) );
+			encoded[3] = static_cast<unsigned char>( 0x80u | ( scalar & 0x3fu ) );
+			encodedLength = 4;
+		}
+
+		if ( outputLength > bufferSize - 1 - encodedLength ) {
+			return rejectRequest( "WebUI native request exceeds the UTF-8 bridge buffer" );
+		}
+		Com_Memcpy( buffer + outputLength, encoded, encodedLength );
+		outputLength += encodedLength;
 	}
 
-	buffer[length] = '\0';
+	buffer[outputLength] = '\0';
 	CL_Awesomium_ExecuteJavascript( "(function(){window.__qlr_native_read='';})()", "" );
 	return qtrue;
 }
 
 qboolean CL_Awesomium_SetZoom( int zoomPercent ) {
-	(void)zoomPercent;
-	return qfalse;
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	return host.IsRunning()
+		? CL_WebUI_RecordBackendResult( host.SetZoom( zoomPercent ) )
+		: qfalse;
 }
 
 void CL_Awesomium_PauseRendering( void ) {
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	if ( host.IsRunning() ) {
+		CL_WebUI_RecordBackendResult( host.SetRenderingPaused( true ) );
+	}
 }
 
 void CL_Awesomium_Unfocus( void ) {
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	if ( host.IsRunning() ) {
+		CL_WebUI_RecordBackendResult( host.SetFocus( false ) );
+	}
 }
 
 qboolean CL_Awesomium_CopySurface( byte *destination, int width, int height, int rowSpan ) {
-	(void)destination;
-	(void)width;
-	(void)height;
-	(void)rowSpan;
-	return qfalse;
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	if ( !host.IsRunning() ) {
+		return qfalse;
+	}
+	if ( !destination || width <= 0 || height <= 0 || rowSpan <= 0 ) {
+		return CL_WebUI_RecordBackendResult( fnql::webui::BackendResult::Failure(
+			fnql::webui::BackendError::InvalidArgument,
+			"WebUI destination surface is invalid" ) );
+	}
+
+	const size_t stride = static_cast<size_t>( rowSpan );
+	const size_t rows = static_cast<size_t>( height );
+	if ( rows > ( std::numeric_limits<size_t>::max )() / stride ) {
+		return CL_WebUI_RecordBackendResult( fnql::webui::BackendResult::Failure(
+			fnql::webui::BackendError::InvalidArgument,
+			"WebUI destination surface size overflows" ) );
+	}
+
+	fnql::webui::MutableSurface surface;
+	surface.pixels = destination;
+	surface.capacity = stride * rows;
+	surface.rowStride = stride;
+	surface.size = { width, height };
+	return CL_WebUI_RecordBackendResult( host.CopySurface( surface ) );
 }
 
 void CL_Awesomium_InjectMouseMove( int x, int y ) {
-	(void)x;
-	(void)y;
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	if ( host.IsRunning() ) {
+		CL_WebUI_RecordBackendResult( host.InjectMouseMove( { x, y } ) );
+	}
+}
+
+static qboolean CL_Awesomium_MapMouseButton( int button,
+	fnql::webui::MouseButton *mappedButton ) {
+	if ( !mappedButton ) {
+		return qfalse;
+	}
+
+	switch ( button ) {
+		case 0:
+			*mappedButton = fnql::webui::MouseButton::Left;
+			return qtrue;
+		case 1:
+			*mappedButton = fnql::webui::MouseButton::Middle;
+			return qtrue;
+		case 2:
+			*mappedButton = fnql::webui::MouseButton::Right;
+			return qtrue;
+		default:
+			return qfalse;
+	}
 }
 
 void CL_Awesomium_InjectMouseDown( int button ) {
-	(void)button;
+	fnql::webui::MouseButton mappedButton;
+	if ( !CL_Awesomium_MapMouseButton( button, &mappedButton ) ) {
+		return;
+	}
+
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	if ( host.IsRunning() ) {
+		CL_WebUI_RecordBackendResult( host.InjectMouseButton( {
+			mappedButton, fnql::webui::ButtonAction::Press } ) );
+	}
 }
 
 void CL_Awesomium_InjectMouseUp( int button ) {
-	(void)button;
+	fnql::webui::MouseButton mappedButton;
+	if ( !CL_Awesomium_MapMouseButton( button, &mappedButton ) ) {
+		return;
+	}
+
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	if ( host.IsRunning() ) {
+		CL_WebUI_RecordBackendResult( host.InjectMouseButton( {
+			mappedButton, fnql::webui::ButtonAction::Release } ) );
+	}
 }
 
 void CL_Awesomium_InjectMouseWheel( int direction ) {
-	(void)direction;
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	if ( host.IsRunning() && direction != 0 ) {
+		CL_WebUI_RecordBackendResult( host.InjectMouseWheel( { 0, direction } ) );
+	}
 }
 
 void CL_Awesomium_InjectKeyboardEvent( unsigned int eventType, unsigned int virtualKeyCode, long nativeKeyCode ) {
-	(void)eventType;
-	(void)virtualKeyCode;
-	(void)nativeKeyCode;
+	fnql::webui::KeyboardEventType type;
+	switch ( eventType ) {
+		case CL_WEB_KEYBOARD_EVENT_KEYDOWN_TYPE:
+			type = fnql::webui::KeyboardEventType::KeyDown;
+			break;
+		case CL_WEB_KEYBOARD_EVENT_KEYUP_TYPE:
+			type = fnql::webui::KeyboardEventType::KeyUp;
+			break;
+		case CL_WEB_KEYBOARD_EVENT_CHAR_TYPE:
+			type = fnql::webui::KeyboardEventType::Character;
+			break;
+		default:
+			return;
+	}
+
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	if ( host.IsRunning() ) {
+		CL_WebUI_RecordBackendResult( host.InjectKeyboard( {
+			type,
+			static_cast<std::uint32_t>( virtualKeyCode ),
+			static_cast<std::intptr_t>( nativeKeyCode )
+		} ) );
+	}
 }
 
 void CL_Awesomium_Stop( void ) {
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	if ( host.IsRunning() ) {
+		CL_WebUI_RecordBackendResult( host.StopLoading() );
+	}
 }
 
 void CL_Awesomium_ClearCache( void ) {
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	if ( host.IsRunning() ) {
+		CL_WebUI_RecordBackendResult( host.ClearCache() );
+	}
 }
 
 void CL_Awesomium_Reload( qboolean ignoreCache ) {
-	(void)ignoreCache;
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	if ( host.IsRunning() ) {
+		CL_WebUI_RecordBackendResult( host.Reload( ignoreCache != qfalse ) );
+	}
 }
 
 void CL_Awesomium_Shutdown( void ) {
+	fnql::webui::ClientBackendHost().Shutdown();
 }
 
 const char *CL_Awesomium_LastError( void ) {

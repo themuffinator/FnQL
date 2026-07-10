@@ -9,6 +9,11 @@ FnQL is currently an early Quake Live migration baseline. A successful build is
 not yet proof of full retail Quake Live compatibility; runtime work should be
 validated against a legitimate Steam installation.
 
+On Windows, use the **Win32/x86 client for retail Quake Live runtime tests**.
+Retail `bin.pk3` ships `qagamex86.dll`, `cgamex86.dll`, and `uix86.dll`; the x64
+build remains useful for engine-only validation but cannot load those x86
+modules in-process.
+
 ### meson/ninja
 
 Install Meson, Ninja, a C/C++ toolchain, and the platform dependencies listed below. Configure the default build directory from the repository root:
@@ -57,11 +62,17 @@ Project Meson options:
 
 `-Dglx-tests=true|false` - build deterministic GLx renderer logic tests, enabled by default
 
-Legacy Make and MSVC project files remain available while CI and packaging finish migrating, but new local work should prefer `meson/build`.
+`-Dstrict-warnings=true|false` - treat diagnostics in FnQL-owned targets as errors without applying project warning policy to fallback dependencies, disabled by default
+
+Legacy Make inputs remain available while CI and packaging finish migrating,
+but new local work should prefer `meson/build`. The Visual Studio solution is
+a maintained frontend for that same Meson graph rather than a separate source
+and dependency manifest.
 
 ### windows/msvc
 
-Install Visual Studio Community Edition 2017 or later, then build through Meson from a Visual Studio developer prompt:
+Install Visual Studio Community Edition 2017 or later, Python, Meson, and
+Ninja. You can build through Meson from a Visual Studio developer prompt:
 
 `meson setup meson/build-msvc --buildtype=release`
 
@@ -69,7 +80,20 @@ Install Visual Studio Community Edition 2017 or later, then build through Meson 
 
 `meson install -C meson/build-msvc --destdir dist`
 
-The older `code/win32/msvc2017/fnql.sln` project files are kept for legacy reference while packaging finishes migrating. Prefer Meson for dependency resolution; it uses the wrap files under `subprojects/` instead of deleted in-tree third-party source directories.
+VS Code's default build and the launch configurations labelled
+`Retail QL / Win32` initialize the matching MSVC environment automatically and
+use `meson/build/win32` (Release) or `meson/build/win32-debug` (Debug). The x64
+tasks and launch entries are retained explicitly as engine-only checks.
+
+Alternatively, open `code/win32/msvc2017/fnql.sln`. Its single maintained
+project delegates the selected Debug/Release and Win32/x64/ARM64 configuration
+to Meson with strict warnings enabled and all renderer modules selected. Build
+directories are isolated below `meson/build/vs/`. The older engine and renderer
+component projects remain alongside it for source-coupling/reference tooling;
+building one delegates to the same Meson graph. Obsolete third-party projects
+were removed rather than restoring deleted in-tree dependency sources. Install
+the corresponding MSVC C++ build tools for each selected architecture; ARM64
+requires the optional ARM64 compiler workload.
 
 ---
 

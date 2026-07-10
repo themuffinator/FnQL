@@ -23,6 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "cm_local.h"
 #include "bsp_v43.h"
+#include "ql_bsp.h"
 
 #ifdef BSPC
 
@@ -694,6 +695,7 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 	void			*buf;
 	int				i;
 	dheader_t		header;
+	lump_t			qlAdvertisementsLump;
 	int				length;
 	bsp43_translation_t translated = { 0 };
 
@@ -773,11 +775,12 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 		Com_Error( ERR_DROP, "%s: %s has wrong version number (%i should be %i or %i)",
 			__func__, name, header.version, BSP_VERSION, BSP_VERSION_QL );
 	}
+	if ( header.ident != BSP_IDENT ) {
+		Com_Error( ERR_DROP, "%s: %s has wrong file identifier", __func__, name );
+	}
 
 	for ( i = 0; i < HEADER_LUMPS; i++ ) {
-		int32_t ofs = header.lumps[i].fileofs;
-		int32_t len = header.lumps[i].filelen;
-		if ( (uint32_t)ofs > MAX_QINT || (uint32_t)len > MAX_QINT || ofs + len > length || ofs + len <  0 ) {
+		if ( !QLBSP_LumpRangeValid( &header.lumps[i], (size_t)length ) ) {
 			Com_Error( ERR_DROP, "%s: %s has wrong lump[%i] size/offset", __func__, name, i );
 		}
 	}
@@ -805,6 +808,17 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 	} else {
 		// we are NOT freeing the file, because it is cached for the ref
 		FS_FreeFile( buf );
+	}
+	if ( header.version == BSP_VERSION_QL ) {
+		const qlBspLumpResult_t lumpResult =
+			QLBSP_ReadAdvertisementLump( buf, (size_t)length, &qlAdvertisementsLump );
+		if ( lumpResult == QL_BSP_LUMP_TRUNCATED_HEADER ) {
+			Com_Error( ERR_DROP, "%s: %s has truncated QL extra lump header", __func__, name );
+		}
+		if ( lumpResult != QL_BSP_LUMP_OK
+			|| !QLBSP_AdvertisementLumpShapeValid( &qlAdvertisementsLump ) ) {
+			Com_Error( ERR_DROP, "%s: %s has invalid QL advertisement lump", __func__, name );
+		}
 	}
 
 	CM_InitBoxHull();

@@ -374,7 +374,7 @@ VM_Init
 */
 void VM_Init( void ) {
 #ifndef DEDICATED
-	Cvar_Get( "vm_ui", "2", CVAR_ARCHIVE | CVAR_PROTECTED );	// !@# SHIP WITH SET TO 2
+	Cvar_Get( "vm_ui", "0", CVAR_ARCHIVE | CVAR_PROTECTED );	// Quake Live ships native UI modules by default.
 	Cvar_Get( "vm_cgame", "0", CVAR_ARCHIVE | CVAR_PROTECTED );	// Quake Live ships native cgame by default.
 #endif
 	Cvar_Get( "vm_game", "0", CVAR_ARCHIVE | CVAR_PROTECTED );
@@ -1869,6 +1869,38 @@ static qboolean VM_WriteNativeCacheFile( const char *path, const void *buffer, i
 	return qtrue;
 }
 
+typedef enum {
+	VM_DLL_ENTRY_INVALID,
+	VM_DLL_ENTRY_LEGACY,
+	VM_DLL_ENTRY_STRUCTURED
+} vmDllEntryAbi_t;
+
+/*
+=================
+VM_SelectDllEntryAbi
+
+Retail Quake Live game modules expose dllEntry without vmMain and receive the
+structured export/import tables.  Classic Quake III modules expose vmMain and
+use the one-argument syscall registration entry point.  Select from the export
+shape before invoking dllEntry so a legacy module is never called once with an
+incompatible argument list merely as a native-ABI probe.
+=================
+*/
+static vmDllEntryAbi_t VM_SelectDllEntryAbi( dllEntry_t dllEntry, vmMainFunc_t entryPoint,
+	void **dllExports, void *dllImports, int *dllApiVersion ) {
+	if ( !dllEntry ) {
+		return VM_DLL_ENTRY_INVALID;
+	}
+	if ( entryPoint ) {
+		return VM_DLL_ENTRY_LEGACY;
+	}
+	if ( dllExports && dllImports && dllApiVersion ) {
+		return VM_DLL_ENTRY_STRUCTURED;
+	}
+
+	return VM_DLL_ENTRY_INVALID;
+}
+
 static void *VM_LoadDllFromPakCache( const char *filename ) {
 	void	*buffer;
 	int		length;
@@ -1908,12 +1940,30 @@ static void *VM_LoadDllFromPakCache( const char *filename ) {
 	return libHandle;
 }
 
+static qboolean VM_AssignDllFunction( void *destination, size_t destinationSize,
+	void *symbol, const char *symbolName ) {
+	if ( destinationSize != sizeof( symbol ) ) {
+		Com_Printf( "VM_LoadDll: function pointer for '%s' has an incompatible size\n", symbolName );
+		Com_Memset( destination, 0, destinationSize );
+		return qfalse;
+	}
+
+	/* Dynamic loader APIs expose symbols as data pointers even when the symbol
+	 * is a function. Copying the representation avoids a non-portable C cast. */
+	Com_Memcpy( destination, &symbol, destinationSize );
+	return qtrue;
+}
+
 static void * QDECL VM_LoadDll( const char *name, vmMainFunc_t *entryPoint, dllSyscall_t systemcalls,
 		void **dllExports, void *dllImports, int *dllApiVersion ) {
 
 	char		filename[ MAX_QPATH ];
 	void		*libHandle;
 	dllEntry_t	dllEntry;
+	dllEntryNative_t dllEntryNative;
+	vmDllEntryAbi_t entryAbi;
+	void		*dllEntrySymbol;
+	void		*vmMainSymbol;
 
 	Com_sprintf( filename, sizeof( filename ), "%s" ARCH_STRING DLL_EXT, name );
 
@@ -1929,8 +1979,14 @@ static void * QDECL VM_LoadDll( const char *name, vmMainFunc_t *entryPoint, dllS
 
 	Com_Printf( "VM_LoadDLL '%s' ok\n", filename );
 
-	dllEntry = /* ( dllEntry_t ) */ Sys_LoadFunction( libHandle, "dllEntry" );
-	*entryPoint = /* ( dllSyscall_t ) */ Sys_LoadFunction( libHandle, "vmMain" );
+	dllEntrySymbol = Sys_LoadFunction( libHandle, "dllEntry" );
+	vmMainSymbol = Sys_LoadFunction( libHandle, "vmMain" );
+	if ( !VM_AssignDllFunction( &dllEntry, sizeof( dllEntry ), dllEntrySymbol, "dllEntry" ) ||
+		 !VM_AssignDllFunction( &dllEntryNative, sizeof( dllEntryNative ), dllEntrySymbol, "dllEntry" ) ||
+		 !VM_AssignDllFunction( entryPoint, sizeof( *entryPoint ), vmMainSymbol, "vmMain" ) ) {
+		Sys_UnloadLibrary( libHandle );
+		return NULL;
+	}
 	if ( dllExports ) {
 		*dllExports = NULL;
 	}
@@ -1938,28 +1994,29 @@ static void * QDECL VM_LoadDll( const char *name, vmMainFunc_t *entryPoint, dllS
 		*dllApiVersion = 0;
 	}
 
-	if ( dllEntry && dllExports && dllImports && dllApiVersion ) {
-		dllEntryNative_t dllEntryNative;
-
-		dllEntryNative = (dllEntryNative_t)dllEntry;
+	entryAbi = VM_SelectDllEntryAbi( dllEntry, *entryPoint, dllExports, dllImports, dllApiVersion );
+	if ( entryAbi == VM_DLL_ENTRY_STRUCTURED ) {
 		dllEntryNative( dllExports, dllImports, dllApiVersion );
-		if ( *dllExports ) {
-			Com_Printf( "VM_LoadDll(%s) found native exports at %p (api %d)\n",
-				name, *dllExports, *dllApiVersion );
-			return libHandle;
+		if ( !*dllExports ) {
+			Com_Printf( "VM_LoadDll(%s) did not publish native exports\n", name );
+			Sys_UnloadLibrary( libHandle );
+			return NULL;
 		}
+
+		Com_Printf( "VM_LoadDll(%s) found native exports at %p (api %d)\n",
+			name, *dllExports, *dllApiVersion );
+		return libHandle;
 	}
 
-	if ( !*entryPoint || !dllEntry ) {
-		Sys_UnloadLibrary( libHandle );
-		return NULL;
+	if ( entryAbi == VM_DLL_ENTRY_LEGACY ) {
+		Com_Printf( "VM_LoadDll(%s) found legacy vmMain at %p\n", name, vmMainSymbol );
+		dllEntry( systemcalls );
+		Com_Printf( "VM_LoadDll(%s) succeeded!\n", name );
+		return libHandle;
 	}
 
-	Com_Printf( "VM_LoadDll(%s) found **vmMain** at %p\n", name, *entryPoint );
-	dllEntry( systemcalls );
-	Com_Printf( "VM_LoadDll(%s) succeeded!\n", name );
-
-	return libHandle;
+	Sys_UnloadLibrary( libHandle );
+	return NULL;
 }
 
 

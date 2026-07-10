@@ -354,7 +354,7 @@ qhandle_t RE_RegisterModel( const char *name ) {
 		{
 			if( orgNameFailed )
 			{
-				ri.Printf( PRINT_DEVELOPER, "WARNING: %s not present, using %s instead\n",
+				ri.Printf( PRINT_DEVELOPER, "Model fallback: %s -> %s\n",
 						name, altName );
 			}
 

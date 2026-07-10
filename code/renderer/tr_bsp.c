@@ -23,6 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_local.h"
 #include "../qcommon/bsp_v43.h"
+#include "../qcommon/ql_bsp.h"
 
 /*
 
@@ -38,15 +39,6 @@ static	world_t		s_worldData;
 static	byte		*fileBase;
 
 static int	c_gridVerts;
-
-#define	LUMP_ADVERTISEMENTS_QL	17
-
-typedef struct {
-	int		cellId;
-	float	normal[3];
-	float	points[4][3];
-	char	model[MAX_QPATH];
-} dAdvertisement_t;
 
 //===============================================================================
 
@@ -3065,7 +3057,7 @@ R_LoadAdvertisements
 =================
 */
 static void R_LoadAdvertisements( const lump_t *l ) {
-	const dAdvertisement_t	*in;
+	const byte				*records;
 	qlAdvertisement_t		*out;
 	bmodel_t				*bmodel;
 	int						count;
@@ -3080,21 +3072,33 @@ static void R_LoadAdvertisements( const lump_t *l ) {
 		return;
 	}
 
-	if ( l->filelen % sizeof( *in ) ) {
+	if ( l->filelen % sizeof( qlBspAdvertisementDisk_t ) ) {
 		ri.Error( ERR_DROP, "R_LoadAdvertisements: funny lump size\n" );
 	}
 
-	count = l->filelen / sizeof( *in );
+	count = l->filelen / sizeof( qlBspAdvertisementDisk_t );
 	if ( count >= MAX_MAP_ADVERTISEMENTS ) {
 		ri.Error( ERR_DROP, "R_LoadAdvertisements: number of advertisements exceeds level limit.\n" );
 	}
 
-	in = (const dAdvertisement_t *)( fileBase + l->fileofs );
+	records = fileBase + l->fileofs;
 	out = ri.Hunk_Alloc( count * sizeof( *out ), h_low );
 	s_worldData.advertisements = out;
 
-	for ( i = 0; i < count; i++, in++ ) {
-		modelNum = in->model[0] == '*' ? atoi( in->model + 1 ) : -1;
+	for ( i = 0; i < count; i++ ) {
+		qlBspAdvertisementDisk_t record;
+		const qlBspAdvertisementDisk_t *in = &record;
+
+		Com_Memcpy( &record, records + i * sizeof( record ), sizeof( record ) );
+		if ( !QLBSP_ParseAdvertisementModel( in->model, &modelNum ) ) {
+			modelNum = -1;
+		}
+		if ( !QLBSP_AdvertisementGeometryFinite( in ) ) {
+			ri.Printf( PRINT_DEVELOPER,
+				"cell ID %d has non-finite advertisement geometry. It has been ignored.\n",
+				LittleLong( in->cellId ) );
+			continue;
+		}
 		if ( modelNum < 0 || modelNum >= s_worldData.numBmodels ) {
 			bmodel = NULL;
 		} else {
@@ -3725,27 +3729,22 @@ void RE_LoadWorldMap( const char *name ) {
 	}
 
 	for ( i = 0; i < HEADER_LUMPS; i++ ) {
-		int32_t ofs = header->lumps[i].fileofs;
-		int32_t len = header->lumps[i].filelen;
-		if ( (uint32_t)ofs > MAX_QINT || (uint32_t)len > MAX_QINT || ofs + len > size || ofs + len < 0 ) {
+		if ( !QLBSP_LumpRangeValid( &header->lumps[i], (size_t)size ) ) {
 			ri.Error( ERR_DROP, "%s: %s has wrong lump[%i] size/offset", __func__, name, i );
 		}
 	}
+	if ( header->ident != BSP_IDENT ) {
+		ri.Error( ERR_DROP, "%s: %s has wrong file identifier", __func__, name );
+	}
 
 	if ( header->version == BSP_VERSION_QL ) {
-		const lump_t *extraLump;
-
-		if ( size < (int)( sizeof( dheader_t ) + sizeof( lump_t ) ) ) {
+		const qlBspLumpResult_t lumpResult =
+			QLBSP_ReadAdvertisementLump( buffer.b, (size_t)size, &qlAdvertisementsLump );
+		if ( lumpResult == QL_BSP_LUMP_TRUNCATED_HEADER ) {
 			ri.Error( ERR_DROP, "%s: %s has truncated QL extra lump header", __func__, name );
 		}
-
-		extraLump = (const lump_t *)( (byte *)header + sizeof( dheader_t ) );
-		qlAdvertisementsLump.fileofs = LittleLong( extraLump[LUMP_ADVERTISEMENTS_QL - HEADER_LUMPS].fileofs );
-		qlAdvertisementsLump.filelen = LittleLong( extraLump[LUMP_ADVERTISEMENTS_QL - HEADER_LUMPS].filelen );
-		if ( (uint32_t)qlAdvertisementsLump.fileofs > MAX_QINT ||
-			(uint32_t)qlAdvertisementsLump.filelen > MAX_QINT ||
-			qlAdvertisementsLump.fileofs + qlAdvertisementsLump.filelen > size ||
-			qlAdvertisementsLump.fileofs + qlAdvertisementsLump.filelen < 0 ) {
+		if ( lumpResult != QL_BSP_LUMP_OK
+			|| !QLBSP_AdvertisementLumpShapeValid( &qlAdvertisementsLump ) ) {
 			ri.Error( ERR_DROP, "%s: %s has wrong QL advertisement lump size/offset", __func__, name );
 		}
 	}

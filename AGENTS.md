@@ -25,6 +25,12 @@ Every change should protect these project constraints:
 7. The target engine should load retail Quake Live, should not allow joining
    retail Quake Live servers, and should allow retail Quake Live clients to
    join FnQL-hosted servers while Steamworks integration is stubbed out.
+8. Changes must not regress existing behavior in any aspect. Preserve working
+   compatibility, features, performance, determinism, diagnostics, build
+   configurations, release behavior, and supported-platform paths. If retail
+   Quake Live evidence requires intentionally replacing incompatible behavior,
+   document the evidence, scope the change narrowly, and add a regression gate
+   for both the corrected behavior and unaffected paths.
 
 ## Reference Repositories
 
@@ -46,8 +52,23 @@ Every change should protect these project constraints:
 
 - Start with static comparison before changing behavior. Compare FnQL against
   QLSRP `src/code/`, the QLSRP reference corpus, and retail-observed behavior.
-- Any code ported from QLSRP must be elegantly translated into a form that
-  makes sense for FnQL instead of being mechanically transplanted.
+- Treat QLSRP as behavioral, protocol, file-format, and ABI evidence rather
+  than as a source of implementation text. Anything derived from
+  `../QuakeLive-SRP/` must be independently rewritten for FnQL: do not perform
+  mechanical line-by-line ports, cosmetic renames, or preserve a QLSRP
+  implementation structure merely because it already exists there.
+- Design each QLSRP-informed rewrite around FnQL's current architecture. Prefer
+  small typed interfaces, explicit ownership and bounds, deterministic parsing,
+  resilient failure paths, and modern C++ where the surrounding subsystem and
+  ABI permit it. Keep C-compatible boundaries where retail modules, legacy
+  renderers, or platform APIs require them.
+- A rewrite is not complete merely because it matches QLSRP. It must aim to
+  gain or preserve compatibility with the legitimate retail Quake Live Steam
+  runtime, and it must avoid regressing already-compatible retail behavior.
+- Record the retail/QLSRP observation that motivates compatibility-sensitive
+  constants and branches, then validate the independently written behavior with
+  focused tests, fixture inspection, or a documented retail probe. When QLSRP
+  and observed retail behavior disagree, retail behavior is authoritative.
 - Keep observed facts separate from inferences in notes, commits, reviews, and
   implementation comments.
 - Prefer small compatibility slices: filesystem/search path, Steam install
@@ -149,6 +170,19 @@ Every change should protect these project constraints:
 
 ## Guardrails
 
+- Every change must aim to gain or maintain retail Quake Live compatibility.
+- Write efficient, robust, safe, and modern code, subject to the project's
+  compatibility-sensitive boundaries and supported toolchains.
+- Seek worthwhile modernizations and improvements, provided they preserve the
+  retail compatibility target and do not weaken established behavior.
+- Preserve FnQL's existing strengths and improvements. Changes must be
+  non-regressive across compatibility, features, performance, determinism,
+  diagnostics, build configurations, release behavior, and supported platforms.
+- Treat non-regression as a completion requirement, not a follow-up. Before a
+  compatibility slice is considered complete, compare its affected behavior
+  against the current FnQL baseline and run proportionate build, test, static,
+  and retail-fixture checks. Do not remove or silently weaken an existing path
+  merely because the QLSRP reference lacks FnQL's modernization.
 - If a change touches runtime identity strings, keep compatibility-sensitive
   behavior unchanged unless the user explicitly wants a compatibility break.
 - If you have to choose between a cleaner abstraction and a safer

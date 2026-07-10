@@ -72,6 +72,16 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/qcommon.h"
 #include "../renderercommon/tr_public.h"
 
+#if defined(RENDERER_OPENGL2)
+#include "../renderer2/tr_common.h"
+#elif defined(RENDERER_VULKAN)
+#include "../renderervk/tr_common.h"
+#else
+#include "../renderer/tr_common.h"
+#endif
+
+extern cvar_t *r_saveFontData;
+
 extern void R_IssuePendingRenderCommands( void );
 extern qhandle_t RE_RegisterShaderNoMip( const char *name );
 
@@ -334,18 +344,51 @@ float readFloat( void ) {
 	return me.ffred;
 }
 
+/*
+=================
+R_ResolveRetailFontPath
+
+Retail UI menus use logical font aliases rather than filenames. Resolve those
+aliases at the renderer boundary while leaving explicit third-party paths
+unchanged.
+=================
+*/
+#ifdef BUILD_FREETYPE
+static const char *R_ResolveRetailFontPath( const char *fontName ) {
+	if ( !fontName || !fontName[0] || !Q_stricmp( fontName, "fonts/font" ) ||
+		!Q_stricmp( fontName, "fonts/bigfont" ) || !Q_stricmp( fontName, "normal" ) ) {
+		return "fonts/handelgothic.ttf";
+	}
+
+	if ( !Q_stricmp( fontName, "fonts/smallfont" ) || !Q_stricmp( fontName, "sans" ) ) {
+		return "fonts/notosans-regular.ttf";
+	}
+
+	if ( !Q_stricmp( fontName, "fonts/monofont" ) || !Q_stricmp( fontName, "mono" ) ) {
+		return "fonts/droidsansmono.ttf";
+	}
+
+	if ( !Q_stricmp( fontName, "sans-fallback" ) || !Q_stricmp( fontName, "sans-windows-fallback" ) ) {
+		return "fonts/droidsansfallbackfull.ttf";
+	}
+
+	return fontName;
+}
+#endif
+
 void RE_RegisterFont(const char *fontName, int pointSize, fontInfo_t *font) {
 #ifdef BUILD_FREETYPE
 	FT_Face face;
 	int j, k, xOut, yOut, lastStart, imageNumber;
 	int scaledSize, newSize, maxHeight, left;
 	unsigned char *out, *imageBuff;
-	glyphInfo_t *glyph;
+	glyphInfo_t *glyph = NULL;
 	image_t *image;
 	qhandle_t h;
 	float max;
 	float dpi = 72;
 	float glyphScale;
+	const char *resolvedFontName;
 #endif
 	void *faceData;
 	int i, len;
@@ -417,21 +460,25 @@ void RE_RegisterFont(const char *fontName, int pointSize, fontInfo_t *font) {
 		return;
 	}
 
-	len = ri.FS_ReadFile(fontName, &faceData);
+	resolvedFontName = R_ResolveRetailFontPath( fontName );
+	len = ri.FS_ReadFile(resolvedFontName, &faceData);
 	if (len <= 0) {
-		ri.Printf(PRINT_WARNING, "RE_RegisterFont: Unable to read font file '%s'\n", fontName);
+		ri.Printf(PRINT_WARNING, "RE_RegisterFont: Unable to read font file '%s'\n", resolvedFontName);
 		return;
 	}
 
 	// allocate on the stack first in case we fail
 	if (FT_New_Memory_Face( ftLibrary, faceData, len, 0, &face )) {
 		ri.Printf(PRINT_WARNING, "RE_RegisterFont: FreeType, unable to allocate new face.\n");
+		ri.FS_FreeFile( faceData );
 		return;
 	}
 
 
 	if (FT_Set_Char_Size( face, pointSize << 6, pointSize << 6, dpi, dpi)) {
 		ri.Printf(PRINT_WARNING, "RE_RegisterFont: FreeType, unable to set face char size.\n");
+		FT_Done_Face( face );
+		ri.FS_FreeFile( faceData );
 		return;
 	}
 
@@ -443,6 +490,8 @@ void RE_RegisterFont(const char *fontName, int pointSize, fontInfo_t *font) {
 	out = ri.Malloc(256*256);
 	if (out == NULL) {
 		ri.Printf(PRINT_WARNING, "RE_RegisterFont: ri.Malloc failure during output image creation.\n");
+		FT_Done_Face( face );
+		ri.FS_FreeFile( faceData );
 		return;
 	}
 	Com_Memset(out, 0, 256*256);
@@ -502,7 +551,11 @@ void RE_RegisterFont(const char *fontName, int pointSize, fontInfo_t *font) {
 			}
 
 			//Com_sprintf (name, sizeof(name), "fonts/fontImage_%i_%i", imageNumber++, pointSize);
-			image = R_CreateImage(name, NULL, imageBuff, 256, 256, IMGFLAG_CLAMPTOEDGE );
+			#ifdef RENDERER_OPENGL2
+			image = R_CreateImage( name, imageBuff, 256, 256, IMGTYPE_COLORALPHA, IMGFLAG_CLAMPTOEDGE, 0 );
+			#else
+			image = R_CreateImage( name, NULL, imageBuff, 256, 256, IMGFLAG_CLAMPTOEDGE );
+			#endif
 			h = RE_RegisterShaderFromImage(name, LIGHTMAP_2D, image, qfalse);
 			for (j = lastStart; j < i; j++) {
 				font->glyphs[j].glyph = h;
@@ -515,9 +568,12 @@ void RE_RegisterFont(const char *fontName, int pointSize, fontInfo_t *font) {
 			ri.Free(imageBuff);
 			if ( i == GLYPH_END + 1 )
 				i++;
-		} else {
+		} else if ( glyph ) {
 			Com_Memcpy(&font->glyphs[i], glyph, sizeof(glyphInfo_t));
 			i++;
+		} else {
+			ri.Printf( PRINT_WARNING, "RE_RegisterFont: failed to construct glyph %d\n", i );
+			break;
 		}
 	}
 
@@ -537,6 +593,7 @@ void RE_RegisterFont(const char *fontName, int pointSize, fontInfo_t *font) {
 
 	ri.Free(out);
 
+	FT_Done_Face( face );
 	ri.FS_FreeFile(faceData);
 #endif
 }

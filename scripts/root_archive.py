@@ -68,8 +68,16 @@ DEFAULT_WEAPON_SOUND_SHADER_ASSETS = [
     ),
 ]
 
+DEFAULT_RENDERER_SHADER_ASSETS = [
+    (
+        PKG_ROOT / "baseq3" / "scripts" / "fnql.shader",
+        Path("baseq3") / "scripts" / "fnql.shader",
+    ),
+]
+
 DEFAULT_ROOT_ARCHIVE_REQUIRED_ASSETS = [
     *DEFAULT_AUDIO_ZONE_ASSETS,
+    *DEFAULT_RENDERER_SHADER_ASSETS,
     *DEFAULT_WEAPON_SOUND_SHADER_ASSETS,
 ]
 

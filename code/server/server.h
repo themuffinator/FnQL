@@ -331,6 +331,23 @@ extern	cvar_t	*sv_cheats;
 extern	cvar_t *sv_levelTimeReset;
 extern	cvar_t *sv_filter;
 
+typedef enum svPlatformCapability_e {
+	SV_PLATFORM_CAPABILITY_ONLINE,
+	SV_PLATFORM_CAPABILITY_AUTH,
+	SV_PLATFORM_CAPABILITY_STEAM_GAME_SERVER,
+	SV_PLATFORM_CAPABILITY_WORKSHOP,
+	SV_PLATFORM_CAPABILITY_STATS,
+	SV_PLATFORM_CAPABILITY_COUNT
+} svPlatformCapability_t;
+
+typedef struct svPlatformServiceStatus_s {
+	const char	*key;
+	const char	*provider;
+	const char	*policy;
+	qboolean	available;
+	unsigned int	appId;
+} svPlatformServiceStatus_t;
+
 #ifdef USE_BANS
 extern	cvar_t	*sv_banFile;
 extern	serverBan_t serverBans[SERVER_MAXBANS];
@@ -355,6 +372,18 @@ void SV_RemoveOperatorCommands( void );
 
 void SV_MasterShutdown( void );
 int SV_RateMsec( const client_t *client );
+
+void Zmq_RegisterCvarsAndInitRcon( void );
+void Zmq_UpdatePasswords( void );
+void Zmq_InitStatsPublisher( void );
+void Zmq_ShutdownStatsPublisher( void );
+void Zmq_ShutdownRuntime( void );
+void Zmq_PumpRcon( void );
+void Zmq_BroadcastRconOutput( const char *message );
+void Zmq_SubmitMatchReport( const void *report );
+void Zmq_ReportPlayerEvent( unsigned int steamIdLow, unsigned int steamIdHigh,
+	const void *clientStats, const char *eventName, const void *payload );
+qboolean Zmq_RconActive( void );
 
 
 //
@@ -430,6 +459,8 @@ svEntity_t	*SV_SvEntityForGentity( sharedEntity_t *gEnt );
 sharedEntity_t *SV_GEntityForSvEntity( svEntity_t *svEnt );
 void		SV_InitGameProgs ( void );
 void		SV_RegisterGameCvars( void );
+const svPlatformServiceStatus_t *SV_GetPlatformServiceStatus( svPlatformCapability_t capability );
+qboolean	SV_PlatformServiceAvailable( svPlatformCapability_t capability );
 const char	*SV_GetPlatformAuthProviderLabel( void );
 const char	*SV_GetPlatformAuthPolicyLabel( void );
 const char	*SV_GetSteamServerProviderLabel( void );

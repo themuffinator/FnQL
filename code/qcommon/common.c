@@ -37,7 +37,26 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "../client/keys.h"
 
-const int demo_protocols[] = { 66, 67, OLD_PROTOCOL_VERSION, NEW_PROTOCOL_VERSION, 0 };
+const int demo_protocols[] = {
+	66,
+	67,
+	OLD_PROTOCOL_VERSION,
+	NEW_PROTOCOL_VERSION,
+	QL_RETAIL_PROTOCOL_VERSION,
+	0
+};
+
+qboolean Com_DemoProtocolSupported( int protocol ) {
+	const int *candidate;
+
+	for ( candidate = demo_protocols; *candidate; candidate++ ) {
+		if ( *candidate == protocol ) {
+			return qtrue;
+		}
+	}
+
+	return qfalse;
+}
 
 #define USE_MULTI_SEGMENT // allocate additional zone segments on demand
 
@@ -49,11 +68,7 @@ const int demo_protocols[] = { 66, 67, OLD_PROTOCOL_VERSION, NEW_PROTOCOL_VERSIO
 #define DEF_COMHUNKMEGS		256
 #endif
 
-#ifdef USE_MULTI_SEGMENT
-#define DEF_COMZONEMEGS		12
-#else
-#define DEF_COMZONEMEGS		25
-#endif
+#define DEF_COMZONEMEGS		64
 
 static jmp_buf abortframe;	// an ERR_DROP occurred, exit the entire frame
 
@@ -127,6 +142,8 @@ static char com_errorMessage[ MAXPRINTMSG ];
 static void Com_Shutdown( void );
 static void Com_WriteConfig_f( void );
 void CIN_CloseAllVideos( void );
+void Zmq_BroadcastRconOutput( const char *message );
+void Zmq_ShutdownRuntime( void );
 
 //============================================================================
 
@@ -194,6 +211,8 @@ void FORMAT_PRINTF(1, 2) QDECL Com_Printf( const char *fmt, ... ) {
 		//*rd_buffer = '\0';
 		return;
 	}
+
+	Zmq_BroadcastRconOutput( msg );
 
 #ifndef DEDICATED
 	// echo to client console if we're not a dedicated server
@@ -617,7 +636,9 @@ void Com_StartupVariable( const char *match ) {
 			if ( Cvar_Flags( name ) == CVAR_NONEXISTENT )
 				Cvar_Get( name, Cmd_ArgsFrom( 2 ), CVAR_USER_CREATED );
 			else
-				Cvar_Set2( name, Cmd_ArgsFrom( 2 ), qfalse );
+				// Command-line +set values are trusted local startup policy and
+				// must win over managed configs, including protected path cvars.
+				Cvar_Set2( name, Cmd_ArgsFrom( 2 ), qtrue );
 		}
 	}
 }
@@ -1708,7 +1729,12 @@ typedef struct memstatic_s {
 	byte mem[2];
 } memstatic_t;
 
-#define MEM_STATIC(chr) { { NULL, NULL, PAD(sizeof(memstatic_t),4), TAG_STATIC, ZONEID }, {chr,'\0'} }
+#ifdef ZONE_DEBUG
+#define MEM_STATIC_DEBUG_INITIALIZER , { NULL, NULL, 0, 0 }
+#else
+#define MEM_STATIC_DEBUG_INITIALIZER
+#endif
+#define MEM_STATIC(chr) { { NULL, NULL, PAD(sizeof(memstatic_t),4), TAG_STATIC, ZONEID MEM_STATIC_DEBUG_INITIALIZER }, {chr,'\0'} }
 
 static const memstatic_t emptystring =
 	MEM_STATIC( '\0' );
@@ -1725,6 +1751,8 @@ static const memstatic_t numberstring[] = {
 	MEM_STATIC( '8' ),
 	MEM_STATIC( '9' )
 };
+#undef MEM_STATIC
+#undef MEM_STATIC_DEBUG_INITIALIZER
 #endif // USE_STATIC_TAGS
 
 /*
@@ -2992,14 +3020,27 @@ static void Com_ExecuteCfg( void )
 	Cbuf_ExecuteText(EXEC_NOW, "exec default.cfg\n");
 	Cbuf_Execute(); // Always execute after exec to prevent text buffer overflowing
 
-	if (!Com_SafeMode())
-	{
-		// skip the q3config.cfg and autoexec.cfg if "safe" is on the command line
-		Cbuf_ExecuteText(EXEC_NOW, "exec " Q3CONFIG_CFG "\n");
-		Cbuf_Execute();
-		Cbuf_ExecuteText(EXEC_NOW, "exec autoexec.cfg\n");
+	// Retail QL stores the managed client config at the active Steam profile
+	// root. Existing FnQ3/FnQL q3config.cfg files remain a one-way migration
+	// fallback when no qzconfig.cfg exists yet.
+	if ( !Com_SafeMode() ) {
+		if ( FS_ProfileFileExists( QL_CONFIG_HARDWARE_FILE ) ) {
+			Cbuf_ExecuteText( EXEC_NOW, "execq " QL_CONFIG_HARDWARE_FILE "\n" );
+		} else {
+			Cbuf_ExecuteText( EXEC_NOW, "execq " Q3CONFIG_CFG "\n" );
+		}
 		Cbuf_Execute();
 	}
+
+#ifndef DEDICATED
+	Cbuf_ExecuteText( EXEC_NOW, "execq " QL_CONFIG_REPLICATE_FILE "\n" );
+#else
+	Cbuf_ExecuteText( EXEC_NOW, "execq server.cfg\n" );
+#endif
+	Cbuf_Execute();
+
+	Cbuf_ExecuteText( EXEC_NOW, "execq autoexec.cfg\n" );
+	Cbuf_Execute();
 }
 
 
@@ -3810,13 +3851,6 @@ void Com_Init( char *commandLine ) {
 	Cvar_CheckRange( com_journal, "0", "2", CV_INTEGER );
 	Cvar_SetDescription( com_journal, "When enabled, writes events and its data to 'journal.dat' and 'journaldata.dat'.");
 
-	Com_StartupVariable( "sv_master1" );
-	Com_StartupVariable( "sv_master2" );
-	Com_StartupVariable( "sv_master3" );
-	Cvar_Get( "sv_master1", MASTER_SERVER_NAME, CVAR_INIT );
-	Cvar_Get( "sv_master2", "directory.ioquake3.org", CVAR_INIT );
-	Cvar_Get( "sv_master3", "master.maverickservers.com", CVAR_INIT );
-
 	com_protocol = Cvar_Get( "protocol", XSTRING( DEFAULT_PROTOCOL_VERSION ), 0 );
 	Cvar_SetDescription( com_protocol, "Specify network protocol version number, use -compat suffix for OpenArena compatibility.");
 	if ( Q_stristr( com_protocol->string, "-compat" ) > com_protocol->string ) {
@@ -3867,7 +3901,7 @@ void Com_Init( char *commandLine ) {
 
 	// if any archived cvars are modified after this, we will trigger a writing
 	// of the config file
-	cvar_modifiedFlags &= ~CVAR_ARCHIVE;
+	cvar_modifiedFlags &= ~( CVAR_ARCHIVE | CVAR_CLOUD );
 
 	//
 	// init commands and vars
@@ -4078,6 +4112,53 @@ static void Com_WriteConfigToFile( const char *filename ) {
 }
 
 
+#ifndef DEDICATED
+/*
+===============================
+Com_WriteQLConfigurationFiles
+
+Stages both retail QL configuration halves before replacing either live file.
+This avoids truncating a known-good profile when one of the two writes cannot
+be opened, while FS_SV_Rename provides the established cross-platform replace
+fallback at the profile root.
+===============================
+*/
+static qboolean Com_WriteQLConfigurationFiles( void ) {
+	static const char hardwareTemp[] = QL_CONFIG_HARDWARE_FILE ".tmp";
+	static const char replicateTemp[] = QL_CONFIG_REPLICATE_FILE ".tmp";
+	fileHandle_t hardwareFile;
+	fileHandle_t replicateFile;
+
+	hardwareFile = FS_FOpenProfileFileWrite( hardwareTemp );
+	if ( hardwareFile == FS_INVALID_HANDLE ) {
+		Com_Printf( "Couldn't stage %s.\n", QL_CONFIG_HARDWARE_FILE );
+		return qfalse;
+	}
+
+	replicateFile = FS_FOpenProfileFileWrite( replicateTemp );
+	if ( replicateFile == FS_INVALID_HANDLE ) {
+		FS_FCloseFile( hardwareFile );
+		Com_Printf( "Couldn't stage %s.\n", QL_CONFIG_REPLICATE_FILE );
+		return qfalse;
+	}
+
+	FS_Printf( hardwareFile,
+		"// Hardware cfg - Generated by FnQL for QUAKE LIVE compatibility. Do not modify" Q_NEWLINE );
+	FS_Printf( replicateFile,
+		"// Replicate cfg - Generated by FnQL for QUAKE LIVE compatibility. Do not modify" Q_NEWLINE );
+	Key_WriteBindings( replicateFile );
+	Cmd_WriteAliases( hardwareFile );
+	Cvar_WriteQLConfigVariables( hardwareFile, replicateFile, qfalse );
+
+	FS_FCloseFile( replicateFile );
+	FS_FCloseFile( hardwareFile );
+	FS_SV_Rename( hardwareTemp, QL_CONFIG_HARDWARE_FILE );
+	FS_SV_Rename( replicateTemp, QL_CONFIG_REPLICATE_FILE );
+	return qtrue;
+}
+#endif
+
+
 /*
 ===============
 Com_WriteConfiguration
@@ -4096,12 +4177,22 @@ void Com_WriteConfiguration( void ) {
 		return;
 	}
 
-	if ( !(cvar_modifiedFlags & CVAR_ARCHIVE ) ) {
+	if ( !( cvar_modifiedFlags & ( CVAR_ARCHIVE | CVAR_CLOUD ) ) ) {
 		return;
 	}
-	cvar_modifiedFlags &= ~CVAR_ARCHIVE;
 
+#ifndef DEDICATED
+	if ( !com_dedicated->integer ) {
+		if ( !Com_WriteQLConfigurationFiles() ) {
+			return;
+		}
+	} else {
+		Com_WriteConfigToFile( Q3CONFIG_CFG );
+	}
+#else
 	Com_WriteConfigToFile( Q3CONFIG_CFG );
+#endif
+	cvar_modifiedFlags &= ~( CVAR_ARCHIVE | CVAR_CLOUD );
 
 #ifndef DEDICATED
 	gamedir = FS_GetCurrentGameDir();
@@ -4473,6 +4564,8 @@ Com_Shutdown
 =================
 */
 static void Com_Shutdown( void ) {
+	Zmq_ShutdownRuntime();
+
 	if ( logfile != FS_INVALID_HANDLE ) {
 		FS_FCloseFile( logfile );
 		logfile = FS_INVALID_HANDLE;

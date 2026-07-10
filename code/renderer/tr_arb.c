@@ -2268,7 +2268,8 @@ static const char *ARB_BuildDlightFP( char *program, int programIndex )
 		"MUL local.x, tile.w, shadowAtlas.x; \n"
 		"ADD local.y, tile.z, one.x; \n"
 		"MUL local.y, local.y, shadowAtlas.x; \n"
-		"SUB local.y, shadowAtlas.w, local.y; \n"
+		"SUB local.y, shadowAtlas.w, local.y; \n" );
+		strcat( program,
 		"MAD tile.x, tile.x, shadowAtlas.x, local.x; \n"
 		"MAD tile.y, tile.y, shadowAtlas.x, local.y; \n"
 		"MUL tile.x, tile.x, dlightShadow.x; \n"

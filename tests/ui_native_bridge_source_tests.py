@@ -168,6 +168,44 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
         self.assertIn("libHandle = Sys_LoadLibrary( cachePath );", vm_c)
         self.assertIn("libHandle = VM_LoadDllFromPakCache( filename );", vm_c)
 
+    def test_vm_loader_selects_retail_or_legacy_dllentry_before_calling_it(self) -> None:
+        vm_c = read_repo_file("code/qcommon/vm.c")
+
+        selector = vm_c[
+            vm_c.index("static vmDllEntryAbi_t VM_SelectDllEntryAbi"):
+            vm_c.index("static void *VM_LoadDllFromPakCache")
+        ]
+        loader = vm_c[
+            vm_c.index("static void * QDECL VM_LoadDll"):
+            vm_c.index("VM_Create\n")
+        ]
+
+        self.assertIn("if ( entryPoint )", selector)
+        self.assertIn("return VM_DLL_ENTRY_LEGACY;", selector)
+        self.assertIn("dllExports && dllImports && dllApiVersion", selector)
+        self.assertIn("return VM_DLL_ENTRY_STRUCTURED;", selector)
+        self.assertIn("entryAbi = VM_SelectDllEntryAbi", loader)
+        self.assertIn("if ( entryAbi == VM_DLL_ENTRY_STRUCTURED )", loader)
+        self.assertIn("dllEntryNative( dllExports, dllImports, dllApiVersion );", loader)
+        self.assertIn("if ( entryAbi == VM_DLL_ENTRY_LEGACY )", loader)
+        self.assertIn("dllEntry( systemcalls );", loader)
+        structured_branch = loader[
+            loader.index("if ( entryAbi == VM_DLL_ENTRY_STRUCTURED )"):
+            loader.index("if ( entryAbi == VM_DLL_ENTRY_LEGACY )")
+        ]
+        self.assertIn("if ( !*dllExports )", structured_branch)
+        self.assertIn("Sys_UnloadLibrary( libHandle );", structured_branch)
+        self.assertIn("return NULL;", structured_branch)
+        self.assertIn("return libHandle;", structured_branch)
+        self.assertLess(
+            structured_branch.index("if ( !*dllExports )"),
+            structured_branch.index("return libHandle;"),
+        )
+        self.assertLess(
+            loader.index("entryAbi = VM_SelectDllEntryAbi"),
+            loader.index("dllEntryNative( dllExports, dllImports, dllApiVersion );"),
+        )
+
     def test_client_ui_initializes_full_ql_import_table(self) -> None:
         cl_ui = read_repo_file("code/client/cl_ui.cpp")
 
@@ -382,7 +420,6 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
         self.assertIn("SV_MirrorClientSteamIdToUserinfo( newcl, userinfo.data()", sv_client)
         self.assertIn("SV_MirrorClientSteamIdToUserinfo( cl, cl->userinfo", sv_client)
         self.assertIn("qboolean SV_VerifyClientSteamAuth( int clientNum )", sv_client)
-        self.assertIn("Sys_IsLANAddress( &client.netchan.remoteAddress )", sv_client)
         self.assertIn("void SV_SteamStats_AddFieldValue", sv_client)
         self.assertIn("qboolean SV_SteamStats_HasAchievement", sv_client)
         self.assertIn("SV_GetPlatformAuthProviderLabel()", sv_client)
@@ -390,8 +427,8 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
         self.assertIn("SV_GetServerStatsProviderLabel()", sv_client)
         self.assertIn("SV_GetServerStatsPolicyLabel()", sv_client)
         self.assertIn("static void SV_LogSteamStatsStubLifecycle", sv_client)
-        self.assertIn("accepted local/LAN client", sv_client)
-        self.assertIn("rejected remote client", sv_client)
+        self.assertIn("accepted without identity verification", sv_client)
+        self.assertIn("std::numeric_limits<std::uint64_t>::max", sv_client)
         self.assertIn('SV_LogSteamStatsStubLifecycle( "field-delta", detail );', sv_client)
         self.assertIn('SV_LogSteamStatsStubLifecycle( "achievement-unlock", detail );', sv_client)
         self.assertIn('SV_LogSteamStatsStubLifecycle( "achievement-query", detail );', sv_client)
@@ -512,6 +549,7 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
     def test_qagame_platform_service_policy_cvars_are_exposed(self) -> None:
         server_h = read_repo_file("code/server/server.h")
         sv_init = read_repo_file("code/server/sv_init.cpp")
+        sv_platform = read_repo_file("code/server/sv_platform.cpp")
 
         for name in [
             "SV_GetPlatformAuthProviderLabel",
@@ -525,13 +563,14 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
             "SV_RefreshPlatformServiceCvars",
         ]:
             self.assertIn(name, server_h)
-            self.assertIn(name, sv_init)
+            self.assertIn(name, sv_platform)
 
-        self.assertIn('SV_ONLINE_SERVICES_MODE = "Build-disabled (FnQL engine-only)"', sv_init)
-        self.assertIn('SV_PLATFORM_AUTH_POLICY = "compatibility-disabled (LAN/local auth only)"', sv_init)
-        self.assertIn('SV_STEAM_SERVER_POLICY = "compatibility-disabled (no Steam GameServer owner)"', sv_init)
-        self.assertIn('SV_WORKSHOP_POLICY = "compatibility-disabled (retail assets only)"', sv_init)
-        self.assertIn('SV_SERVER_STATS_POLICY = "compatibility-disabled (no live Steam stats owner)"', sv_init)
+        self.assertIn('"Build-disabled (FnQL engine-only)"', sv_platform)
+        self.assertIn('"compatibility-unverified (Steamworks stub; identity is not authenticated)"', sv_platform)
+        self.assertIn('"compatibility-disabled (no Steam GameServer owner)"', sv_platform)
+        self.assertIn('"compatibility-disabled (retail assets only)"', sv_platform)
+        self.assertIn('"compatibility-disabled (no live Steam stats owner)"', sv_platform)
+        self.assertIn("constexpr unsigned int QL_STEAM_APP_ID = 282440u;", sv_platform)
 
         for cvar in [
             "sv_onlineServicesMode",
@@ -545,8 +584,7 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
             "sv_statsProvider",
             "sv_statsPolicy",
         ]:
-            self.assertIn(f'Cvar_Get( "{cvar}",', sv_init)
-            self.assertIn(f'Cvar_Set( "{cvar}",', sv_init)
+            self.assertIn(f'SetReadOnlyStatus( "{cvar}",', sv_platform)
 
         self.assertIn("SV_RefreshPlatformServiceCvars();", sv_init)
         self.assertLess(
@@ -678,7 +716,7 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
         sv_client = read_repo_file("code/server/sv_client.cpp")
 
         marker = (
-            "if ( com_protocol && com_protocol->integer == QL_RETAIL_PROTOCOL_VERSION ) {\n"
+            "if ( cl->netchan.wireProfile == NETCHAN_WIRE_QL_RETAIL ) {\n"
             "\t\t(void)MSG_ReadByte( msg );\n"
             "\t}"
         )

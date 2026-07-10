@@ -21,6 +21,21 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 // tr_vbo.c
 #include "tr_local.h"
+#include <limits.h>
+
+
+static qboolean R_CountBytes(int count, size_t elementSize, int *byteCount)
+{
+	if (count < 0 || elementSize == 0 || elementSize > (size_t)INT_MAX ||
+		(size_t)count > (size_t)INT_MAX / elementSize)
+	{
+		*byteCount = 0;
+		return qfalse;
+	}
+
+	*byteCount = (int)((size_t)count * elementSize);
+	return qtrue;
+}
 
 
 void R_VaoPackTangent(int16_t *out, vec4_t v)
@@ -182,10 +197,11 @@ vao_t *R_CreateVao2(const char *name, int numVertexes, srfVert_t *verts, int num
 	byte           *data;
 	int             dataSize;
 	int             dataOfs;
+	int             indexesSize;
 
 	int				glUsage = GL_STATIC_DRAW;
 
-	if(!numVertexes || !numIndexes)
+	if(numVertexes <= 0 || numIndexes <= 0)
 		return NULL;
 
 	if(strlen(name) >= MAX_QPATH)
@@ -264,7 +280,13 @@ vao_t *R_CreateVao2(const char *name, int numVertexes, srfVert_t *verts, int num
 
 
 	// create VBO
-	dataSize *= numVertexes;
+	if (!R_CountBytes(numVertexes, (size_t)dataSize, &dataSize) ||
+		!R_CountBytes(numIndexes, sizeof(glIndex_t), &indexesSize))
+	{
+		ri.Error(ERR_DROP, "R_CreateVao2: geometry is too large");
+		return NULL;
+	}
+
 	data = ri.Hunk_AllocateTempMemory(dataSize);
 	dataOfs = 0;
 
@@ -308,7 +330,7 @@ vao_t *R_CreateVao2(const char *name, int numVertexes, srfVert_t *verts, int num
 
 
 	// create IBO
-	vao->indexesSize = numIndexes * sizeof(glIndex_t);
+	vao->indexesSize = indexesSize;
 
 	qglGenBuffers(1, &vao->indexesIBO);
 
@@ -731,7 +753,10 @@ void VaoCache_Commit(void)
 			buffered_t *indexSet2 = indexSet;
 			for (surf = vcq.surfaces; surf < end; surf++, indexSet2++)
 			{
-				if (surf->indexes != indexSet2->data || (surf->numIndexes * sizeof(glIndex_t)) != indexSet2->size)
+				int indexesSize;
+
+				if (!R_CountBytes(surf->numIndexes, sizeof(glIndex_t), &indexesSize) ||
+					surf->indexes != indexSet2->data || indexesSize != indexSet2->size)
 					break;
 			}
 
@@ -766,9 +791,16 @@ void VaoCache_Commit(void)
 		for (surf = vcq.surfaces; surf < end; surf++)
 		{
 			glIndex_t *srcIndex = surf->indexes;
-			int vertexesSize = surf->numVerts * sizeof(srfVert_t);
-			int indexesSize = surf->numIndexes * sizeof(glIndex_t);
+			int vertexesSize;
+			int indexesSize;
 			int i, indexOffset = (vc.vertexOffset + vcq.vertexCommitSize) / sizeof(srfVert_t);
+
+			if (!R_CountBytes(surf->numVerts, sizeof(srfVert_t), &vertexesSize) ||
+				!R_CountBytes(surf->numIndexes, sizeof(glIndex_t), &indexesSize))
+			{
+				ri.Error(ERR_DROP, "VaoCache_Commit: queued geometry is too large");
+				return;
+			}
 
 			Com_Memcpy(dstVertex, surf->vertexes, vertexesSize);
 			dstVertex += surf->numVerts;
@@ -873,10 +905,18 @@ void VaoCache_BindVao(void)
 	R_BindVao(vc.vao);
 }
 
-void VaoCache_CheckAdd(qboolean *endSurface, qboolean *recycleVertexBuffer, qboolean *recycleIndexBuffer, int numVerts, int numIndexes)
+qboolean VaoCache_CheckAdd(qboolean *endSurface, qboolean *recycleVertexBuffer, qboolean *recycleIndexBuffer, int numVerts, int numIndexes)
 {
-	int vertexesSize = sizeof(srfVert_t) * numVerts;
-	int indexesSize = sizeof(glIndex_t) * numIndexes;
+	int vertexesSize;
+	int indexesSize;
+
+	if (!R_CountBytes(numVerts, sizeof(srfVert_t), &vertexesSize) ||
+		!R_CountBytes(numIndexes, sizeof(glIndex_t), &indexesSize) ||
+		numVerts > VAOCACHE_QUEUE_MAX_VERTEXES ||
+		numIndexes > VAOCACHE_QUEUE_MAX_INDEXES)
+	{
+		return qfalse;
+	}
 
 	if (vc.vao->vertexesSize < vc.vertexOffset + vcq.vertexCommitSize + vertexesSize)
 	{
@@ -913,17 +953,19 @@ void VaoCache_CheckAdd(qboolean *endSurface, qboolean *recycleVertexBuffer, qboo
 		*endSurface = qtrue;
 	}
 
-	if (VAOCACHE_QUEUE_MAX_VERTEXES * sizeof(srfVert_t) < vcq.vertexCommitSize + vertexesSize)
+	if ((int)(VAOCACHE_QUEUE_MAX_VERTEXES * sizeof(srfVert_t)) < vcq.vertexCommitSize + vertexesSize)
 	{
 		//ri.Printf(PRINT_ALL, "out of queued vertexes\n");
 		*endSurface = qtrue;
 	}
 
-	if (VAOCACHE_QUEUE_MAX_INDEXES * sizeof(glIndex_t) < vcq.indexCommitSize + indexesSize)
+	if ((int)(VAOCACHE_QUEUE_MAX_INDEXES * sizeof(glIndex_t)) < vcq.indexCommitSize + indexesSize)
 	{
 		//ri.Printf(PRINT_ALL, "out of queued indexes\n");
 		*endSurface = qtrue;
 	}
+
+	return qtrue;
 }
 
 void VaoCache_RecycleVertexBuffer(void)
@@ -951,13 +993,29 @@ void VaoCache_InitQueue(void)
 
 void VaoCache_AddSurface(srfVert_t *verts, int numVerts, glIndex_t *indexes, int numIndexes)
 {
-	queuedSurface_t *queueEntry = vcq.surfaces + vcq.numSurfaces;
+	int vertexesSize;
+	int indexesSize;
+	queuedSurface_t *queueEntry;
+
+	if (!R_CountBytes(numVerts, sizeof(srfVert_t), &vertexesSize) ||
+		!R_CountBytes(numIndexes, sizeof(glIndex_t), &indexesSize) ||
+		vcq.numSurfaces < 0 || vcq.numSurfaces >= VAOCACHE_QUEUE_MAX_SURFACES ||
+		vcq.vertexCommitSize < 0 ||
+		vcq.vertexCommitSize > (int)(VAOCACHE_QUEUE_MAX_VERTEXES * sizeof(srfVert_t)) - vertexesSize ||
+		vcq.indexCommitSize < 0 ||
+		vcq.indexCommitSize > (int)(VAOCACHE_QUEUE_MAX_INDEXES * sizeof(glIndex_t)) - indexesSize)
+	{
+		ri.Error(ERR_DROP, "VaoCache_AddSurface: invalid queued geometry");
+		return;
+	}
+
+	queueEntry = vcq.surfaces + vcq.numSurfaces;
 	queueEntry->vertexes = verts;
 	queueEntry->numVerts = numVerts;
 	queueEntry->indexes = indexes;
 	queueEntry->numIndexes = numIndexes;
 	vcq.numSurfaces++;
 
-	vcq.vertexCommitSize += sizeof(srfVert_t) * numVerts;
-	vcq.indexCommitSize += sizeof(glIndex_t) * numIndexes;
+	vcq.vertexCommitSize += vertexesSize;
+	vcq.indexCommitSize += indexesSize;
 }

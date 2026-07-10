@@ -35,6 +35,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <array>
 #include <cstdint>
 #include <cstdio>
+#include <type_traits>
 
 botlib_export_t	*botlib_export;
 
@@ -488,10 +489,18 @@ static intptr_t SV_GameSystemCalls( intptr_t *args ) {
 	case G_MILLISECONDS:
 		return Sys_Milliseconds();
 	case G_CVAR_REGISTER:
-		Cvar_Register( VMA(1), VMA(2), VMA(3), args[4], gvm->privateFlag ); 
+		if ( gvm->dllExports ) {
+			Cvar_Register( VMA(1), VMA(2), VMA(3), args[4], gvm->privateFlag );
+		} else {
+			Cvar_RegisterLegacy( VMA(1), VMA(2), VMA(3), args[4], gvm->privateFlag );
+		}
 		return 0;
 	case G_CVAR_UPDATE:
-		Cvar_Update( VMA(1), gvm->privateFlag );
+		if ( gvm->dllExports ) {
+			Cvar_Update( VMA(1), gvm->privateFlag );
+		} else {
+			Cvar_UpdateLegacy( VMA(1), gvm->privateFlag );
+		}
 		return 0;
 	case G_CVAR_SET:
 		Cvar_SetSafe( VMA(1), VMA(2) );
@@ -1155,31 +1164,13 @@ static void SV_ResetGameCvarRegistration( void ) {
 
 static qboolean SV_CallGameRegisterCvarsOnce( vm_t *vm );
 
-[[maybe_unused]] static intptr_t SV_GameImportArg( intptr_t value ) {
-	return value;
-}
-
-static intptr_t SV_GameImportArg( int value ) {
+template <typename T, std::enable_if_t<std::is_integral_v<T> || std::is_enum_v<T>, int> = 0>
+static intptr_t SV_GameImportArg( T value ) {
 	return static_cast<intptr_t>( value );
 }
 
-[[maybe_unused]] static intptr_t SV_GameImportArg( unsigned int value ) {
-	return static_cast<intptr_t>( value );
-}
-
-static intptr_t SV_GameImportArg( long value ) {
-	return static_cast<intptr_t>( value );
-}
-
-static intptr_t SV_GameImportArg( unsigned long value ) {
-	return static_cast<intptr_t>( value );
-}
-
-static intptr_t SV_GameImportArg( const void *value ) {
-	return reinterpret_cast<intptr_t>( value );
-}
-
-static intptr_t SV_GameImportArg( void *value ) {
+template <typename T>
+static intptr_t SV_GameImportArg( T *value ) {
 	return reinterpret_cast<intptr_t>( value );
 }
 

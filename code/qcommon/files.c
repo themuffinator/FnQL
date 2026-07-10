@@ -232,6 +232,7 @@ static const unsigned pak_checksums[] = {
 
 #define FNQL_ROOT_ARCHIVE_NAME			"FnQL-pkg.fnz"
 #define FNQL_ROOT_ARCHIVE_HUD_SCRIPT	"fnql-hud.json"
+#define FNQL_ROOT_ARCHIVE_RENDERER_SHADER "scripts/fnql.shader"
 #define FNQL_ROOT_ARCHIVE_WEAPON_SOUNDS	"sound/fnql-weapon-sounds.sndshd"
 #define FNQL_ROOT_ARCHIVE_MAX_PATHS		8
 #define FNQL_ROOT_ARCHIVE_MAX_ENTRIES	64
@@ -683,15 +684,23 @@ static void FS_CopyFile( const char *fromOSPath, const char *toOSPath ) {
 	FILE	*f;
 	size_t	len;
 	byte	*buf;
+	char	fromPath[MAX_OSPATH * 3 + 1];
+	char	toPath[MAX_OSPATH * 3 + 1];
 
-	Com_Printf( "copy %s to %s\n", fromOSPath, toOSPath );
+	// Callers frequently pass FS_BuildOSPath's rotating scratch buffers.
+	// Logging and path creation can invoke FS_BuildOSPath again, so take stable
+	// copies before doing anything that may re-enter the filesystem.
+	Q_strncpyz( fromPath, fromOSPath, sizeof( fromPath ) );
+	Q_strncpyz( toPath, toOSPath, sizeof( toPath ) );
 
-	if (strstr(fromOSPath, "journal.dat") || strstr(fromOSPath, "journaldata.dat")) {
+	Com_Printf( "copy %s to %s\n", fromPath, toPath );
+
+	if (strstr(fromPath, "journal.dat") || strstr(fromPath, "journaldata.dat")) {
 		Com_Printf( "Ignoring journal files\n");
 		return;
 	}
 
-	f = Sys_FOpen( fromOSPath, "rb" );
+	f = Sys_FOpen( fromPath, "rb" );
 	if ( !f ) {
 		return;
 	}
@@ -713,13 +722,13 @@ static void FS_CopyFile( const char *fromOSPath, const char *toOSPath ) {
 	}
 	fclose( f );
 
-	f = Sys_FOpen( toOSPath, "wb" );
+	f = Sys_FOpen( toPath, "wb" );
 	if ( !f ) {
-		if ( FS_CreatePath( toOSPath ) ) {
+		if ( FS_CreatePath( toPath ) ) {
 			free( buf );
 			return;
 		}
-		f = Sys_FOpen( toOSPath, "wb" );
+		f = Sys_FOpen( toPath, "wb" );
 		if ( !f ) {
 			free( buf );
 			return;
@@ -857,6 +866,74 @@ qboolean FS_FileExists( const char *file )
 		return qtrue;
 	}
 	return qfalse;
+}
+
+
+/*
+================
+FS_ProfileQpathIsValid
+
+Profile-root access is reserved for trusted engine-owned files. Keep it
+separate from the virtual game filesystem and reject absolute/traversing paths
+so a future caller cannot accidentally escape the active Steam-user profile.
+================
+*/
+static qboolean FS_ProfileQpathIsValid( const char *qpath ) {
+	const char *component;
+	const char *separator;
+	size_t componentLength;
+
+	if ( !qpath || !qpath[ 0 ] ) {
+		return qfalse;
+	}
+
+	if ( qpath[ 0 ] == '/' || qpath[ 0 ] == '\\' || strchr( qpath, ':' ) ) {
+		return qfalse;
+	}
+
+	for ( component = qpath; *component; component = *separator ? separator + 1 : separator ) {
+		separator = component;
+		while ( *separator && *separator != '/' && *separator != '\\' ) {
+			separator++;
+		}
+		componentLength = (size_t)( separator - component );
+		if ( componentLength == 2 && component[ 0 ] == '.' && component[ 1 ] == '.' ) {
+			return qfalse;
+		}
+	}
+
+	return qtrue;
+}
+
+
+/*
+================
+FS_ProfileFileExists
+
+Tests only the active user-profile root. Unlike FS_FileExists, this does not
+append fs_gamedir and does not search retail installation directories or paks.
+================
+*/
+qboolean FS_ProfileFileExists( const char *file ) {
+	FILE *handle;
+	const char *ospath;
+
+	if ( !fs_searchpaths ) {
+		Com_Error( ERR_FATAL, "Filesystem call made without initialization" );
+	}
+
+	if ( !FS_ProfileQpathIsValid( file ) ) {
+		return qfalse;
+	}
+
+	ospath = FS_BuildOSPath( fs_homepath->string, file, NULL );
+	handle = Sys_FOpen( ospath, "rb" );
+	if ( !handle ) {
+		return qfalse;
+	}
+
+	fclose( handle );
+	return qtrue;
 }
 
 
@@ -1046,7 +1123,8 @@ FS_SV_Rename
 ===========
 */
 void FS_SV_Rename( const char *from, const char *to ) {
-	const char			*from_ospath, *to_ospath;
+	char			from_ospath[MAX_OSPATH * 3 + 1];
+	char			to_ospath[MAX_OSPATH * 3 + 1];
 
 	if ( !fs_searchpaths ) {
 		Com_Error( ERR_FATAL, "Filesystem call made without initialization" );
@@ -1057,14 +1135,14 @@ void FS_SV_Rename( const char *from, const char *to ) {
 	// S_ClearSoundBuffer();
 #endif
 
-	from_ospath = FS_BuildOSPath( fs_homepath->string, from, NULL );
-	to_ospath = FS_BuildOSPath( fs_homepath->string, to, NULL );
+	Q_strncpyz( from_ospath, FS_BuildOSPath( fs_homepath->string, from, NULL ), sizeof( from_ospath ) );
+	Q_strncpyz( to_ospath, FS_BuildOSPath( fs_homepath->string, to, NULL ), sizeof( to_ospath ) );
 
 	if ( fs_debug->integer ) {
 		Com_Printf( "FS_SV_Rename: %s --> %s\n", from_ospath, to_ospath );
 	}
 
-	if ( rename( from_ospath, to_ospath ) ) {
+	if ( !Sys_ReplaceFile( from_ospath, to_ospath ) ) {
 		// Failed, try copying it and deleting the original
 		FS_CopyFile( from_ospath, to_ospath );
 		FS_Remove( from_ospath );
@@ -1078,7 +1156,8 @@ FS_Rename
 ===========
 */
 void FS_Rename( const char *from, const char *to ) {
-	const char *from_ospath, *to_ospath;
+	char from_ospath[MAX_OSPATH * 3 + 1];
+	char to_ospath[MAX_OSPATH * 3 + 1];
 	FILE *f;
 
 	if ( !fs_searchpaths ) {
@@ -1090,8 +1169,10 @@ void FS_Rename( const char *from, const char *to ) {
 	// S_ClearSoundBuffer();
 #endif
 
-	from_ospath = FS_BuildOSPath( fs_homepath->string, fs_gamedir, from );
-	to_ospath = FS_BuildOSPath( fs_homepath->string, fs_gamedir, to );
+	Q_strncpyz( from_ospath,
+		FS_BuildOSPath( fs_homepath->string, fs_gamedir, from ), sizeof( from_ospath ) );
+	Q_strncpyz( to_ospath,
+		FS_BuildOSPath( fs_homepath->string, fs_gamedir, to ), sizeof( to_ospath ) );
 
 	if ( fs_debug->integer ) {
 		Com_Printf( "FS_Rename: %s --> %s\n", from_ospath, to_ospath );
@@ -1103,7 +1184,7 @@ void FS_Rename( const char *from, const char *to ) {
 		FS_Remove( to_ospath );
 	}
 
-	if ( rename( from_ospath, to_ospath ) ) {
+	if ( !Sys_ReplaceFile( from_ospath, to_ospath ) ) {
 		// Failed, try copying it and deleting the original
 		FS_CopyFile( from_ospath, to_ospath );
 		FS_Remove( from_ospath );
@@ -1248,6 +1329,118 @@ qboolean FS_ResetReadOnlyAttribute( const char *filename ) {
 	ospath = FS_BuildOSPath( fs_homepath->string, fs_gamedir, filename );
 
 	return Sys_ResetReadOnlyAttribute( ospath );
+}
+
+
+qboolean FS_ResetProfileReadOnlyAttribute( const char *filename ) {
+	const char *ospath;
+
+	if ( !FS_ProfileQpathIsValid( filename ) ) {
+		return qfalse;
+	}
+
+	ospath = FS_BuildOSPath( fs_homepath->string, filename, NULL );
+	return Sys_ResetReadOnlyAttribute( ospath );
+}
+
+
+/*
+===========
+FS_FOpenProfileFileWrite
+
+Opens an engine-owned file at the active user-profile root. Retail Quake Live
+uses this location for qzconfig.cfg and repconfig.cfg while normal game writes
+continue to use fs_homepath/fs_gamedir.
+===========
+*/
+fileHandle_t FS_FOpenProfileFileWrite( const char *filename ) {
+	const char *ospath;
+	fileHandle_t handle;
+	fileHandleData_t *fileData;
+
+	if ( !fs_searchpaths ) {
+		Com_Error( ERR_FATAL, "Filesystem call made without initialization" );
+	}
+
+	if ( !FS_ProfileQpathIsValid( filename ) ) {
+		return FS_INVALID_HANDLE;
+	}
+
+	ospath = FS_BuildOSPath( fs_homepath->string, filename, NULL );
+	FS_CheckFilenameIsNotAllowed( ospath, __func__, qfalse );
+
+	handle = FS_HandleForFile();
+	fileData = &fsh[ handle ];
+	FS_InitHandle( fileData );
+	fileData->handleFiles.file.o = Sys_FOpen( ospath, "wb" );
+	if ( !fileData->handleFiles.file.o ) {
+		if ( FS_CreatePath( ospath ) ) {
+			return FS_INVALID_HANDLE;
+		}
+		fileData->handleFiles.file.o = Sys_FOpen( ospath, "wb" );
+		if ( !fileData->handleFiles.file.o ) {
+			return FS_INVALID_HANDLE;
+		}
+	}
+
+	if ( fs_debug->integer ) {
+		Com_Printf( "FS_FOpenProfileFileWrite: %s\n", ospath );
+	}
+
+	Q_strncpyz( fileData->name, filename, sizeof( fileData->name ) );
+	fileData->handleSync = qfalse;
+	fileData->zipFile = qfalse;
+	return handle;
+}
+
+
+/*
+===========
+FS_FOpenProfileFileRead
+
+Opens only the active user-profile root. This intentionally does not fall
+through to fs_basepath, fs_steampath, a mod directory, or a package.
+===========
+*/
+int FS_FOpenProfileFileRead( const char *filename, fileHandle_t *file ) {
+	const char *ospath;
+	fileHandle_t handle;
+	fileHandleData_t *fileData;
+	FILE *stream;
+
+	if ( !fs_searchpaths ) {
+		Com_Error( ERR_FATAL, "Filesystem call made without initialization" );
+	}
+
+	if ( !file ) {
+		return -1;
+	}
+	*file = FS_INVALID_HANDLE;
+
+	if ( !FS_ProfileQpathIsValid( filename ) ) {
+		return -1;
+	}
+
+	ospath = FS_BuildOSPath( fs_homepath->string, filename, NULL );
+	stream = Sys_FOpen( ospath, "rb" );
+	if ( !stream ) {
+		return -1;
+	}
+
+	handle = FS_HandleForFile();
+	fileData = &fsh[ handle ];
+	FS_InitHandle( fileData );
+	fileData->handleFiles.file.o = stream;
+	fileData->handleSync = qfalse;
+	fileData->zipFile = qfalse;
+	Q_strncpyz( fileData->name, filename, sizeof( fileData->name ) );
+	*file = handle;
+
+	if ( fs_debug->integer ) {
+		Com_Printf( "FS_FOpenProfileFileRead: %s\n", ospath );
+	}
+
+	return FS_FileLength( stream );
 }
 
 
@@ -2265,6 +2458,7 @@ static qboolean FS_RootArchiveAllowsFile( const char *qpath )
 {
 	return qpath != NULL &&
 		( !FS_FilenameCompare( qpath, FNQL_ROOT_ARCHIVE_HUD_SCRIPT ) ||
+			!FS_FilenameCompare( qpath, FNQL_ROOT_ARCHIVE_RENDERER_SHADER ) ||
 			!FS_FilenameCompare( qpath, FNQL_ROOT_ARCHIVE_WEAPON_SOUNDS ) ||
 			FS_RootArchiveAllowsAudioZoneSidecar( qpath ) );
 }
@@ -2432,7 +2626,7 @@ static int FS_RootArchiveBuildArchivePaths(
 FS_ReadFileFromRootArchive
 
 Read compatibility-safe source-port assets from a fixed archive next to the executable.
-Restricted to HUD alignment scripts, audio-zone sidecars, and FnQL sound shader overrides so it doesn't widen the general data search path.
+Restricted to explicitly owned HUD, renderer, audio-zone, and sound-shader sidecars so it doesn't widen the general data search path.
 =================
 */
 static int FS_ReadFileFromRootArchive( const char *qpath, void **buffer )
@@ -2720,6 +2914,50 @@ int FS_ReadFile( const char *qpath, void **buffer ) {
 
 
 /*
+============
+FS_ReadProfileFile
+
+Reads an entire engine-owned file from the active user-profile root using the
+same temporary-memory ownership contract as FS_ReadFile.
+============
+*/
+int FS_ReadProfileFile( const char *qpath, void **buffer ) {
+	fileHandle_t handle;
+	byte *data;
+	int length;
+	int bytesRead;
+
+	length = FS_FOpenProfileFileRead( qpath, &handle );
+	if ( handle == FS_INVALID_HANDLE || length < 0 ) {
+		if ( buffer ) {
+			*buffer = NULL;
+		}
+		return -1;
+	}
+
+	if ( !buffer ) {
+		FS_FCloseFile( handle );
+		return length;
+	}
+
+	data = Hunk_AllocateTempMemory( length + 1 );
+	bytesRead = FS_Read( data, length, handle );
+	FS_FCloseFile( handle );
+	if ( bytesRead != length ) {
+		Hunk_FreeTempMemory( data );
+		*buffer = NULL;
+		return -1;
+	}
+
+	data[ length ] = '\0';
+	*buffer = data;
+	fs_loadCount++;
+	fs_loadStack++;
+	return length;
+}
+
+
+/*
 =============
 FS_FreeFile
 =============
@@ -2799,7 +3037,10 @@ Check if file should NOT be added to hash search table
 */
 static qboolean FS_BannedPakFile( const char *filename )
 {
-	if ( !strcmp( filename, "autoexec.cfg" ) || !strcmp( filename, Q3CONFIG_CFG ) )
+	if ( !Q_stricmp( filename, "autoexec.cfg" ) ||
+		!Q_stricmp( filename, Q3CONFIG_CFG ) ||
+		!Q_stricmp( filename, QL_CONFIG_HARDWARE_FILE ) ||
+		!Q_stricmp( filename, QL_CONFIG_REPLICATE_FILE ) )
 		return qtrue;
 	else
 		return qfalse;
@@ -4336,7 +4577,37 @@ FS_ListFiles
 */
 char **FS_ListFiles( const char *path, const char *extension, int *numfiles ) 
 {
-	return FS_ListFilteredFiles( path, extension, NULL, numfiles, FS_MATCH_ANY );
+	char **files;
+	char **expanded;
+	int count;
+	int i;
+
+	files = FS_ListFilteredFiles( path, extension, NULL, numfiles, FS_MATCH_ANY );
+	count = *numfiles;
+
+	/* The root archive is deliberately not a general search path. Expose its
+	 * single owned renderer shader only for the exact list operation used by
+	 * renderer startup, then let the normal allowlisted read path serve it. */
+	if ( Q_stricmp( path, "scripts" ) || Q_stricmp( extension, ".shader" ) ||
+		FS_ReadFileFromRootArchive( FNQL_ROOT_ARCHIVE_RENDERER_SHADER, NULL ) < 0 ) {
+		return files;
+	}
+
+	for ( i = 0; i < count; i++ ) {
+		if ( !FS_FilenameCompare( files[i], "fnql.shader" ) ) {
+			return files;
+		}
+	}
+
+	expanded = Z_Malloc( ( count + 2 ) * sizeof( expanded[0] ) );
+	for ( i = 0; i < count; i++ ) {
+		expanded[i] = files[i];
+	}
+	expanded[count] = CopyString( "fnql.shader" );
+	expanded[count + 1] = NULL;
+	Z_Free( files );
+	*numfiles = count + 1;
+	return expanded;
 }
 
 
@@ -5387,48 +5658,6 @@ void FS_Shutdown( qboolean closemfp )
 
 /*
 ================
-FS_ReorderSearchPaths
-================
-*/
-static void FS_ReorderSearchPaths( void ) {
-	searchpath_t **list, **paks, **dirs;
-	searchpath_t *path;
-	int i, ndirs, npaks, cnt;
-
-	cnt = fs_packCount + fs_dirCount + fs_pk3dirCount;
-	if ( cnt == 0 )
-		return;
-
-	// relink path chains in following order:
-	// 1. pk3dirs @ pak files
-	// 2. directories
-	list = (searchpath_t **)Z_Malloc( cnt * sizeof( list[0] ) );
-	paks = list;
-	dirs = list + fs_pk3dirCount + fs_packCount;
-
-	npaks = ndirs = 0;
-	path = fs_searchpaths;
-	while ( path ) {
-		if ( path->pack || path->policy != DIR_STATIC ) {
-			paks[npaks++] = path;
-		} else {
-			dirs[ndirs++] = path;
-		}
-		path = path->next;
-	}
-
-	fs_searchpaths = list[0];
-	for ( i = 0; i < cnt-1; i++ ) {
-		list[i]->next = list[i+1];
-	}
-	list[cnt-1]->next = NULL;
-
-	Z_Free( list );
-}
-
-
-/*
-================
 FS_ReorderPurePaks
 NOTE TTimo: the reordering that happens here is not reflected in the cvars (\cvarlist *pak*)
   this can lead to misleading situations, see https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=540
@@ -5548,6 +5777,35 @@ qboolean FS_IsPureChecksum( int sum )
 
 /*
 ================
+FS_DefaultHomePath
+
+Retail Windows uses <install>/<SteamID> for configuration and extracted native
+modules. Other platforms retain their established user-data location. Command
+line fs_homepath still wins because it is registered as an init cvar below.
+================
+*/
+static const char *FS_DefaultHomePath( const char *basePath )
+{
+	const char *homePath;
+
+#ifdef _WIN32
+	homePath = Sys_QuakeLiveProfilePath( basePath );
+	if ( homePath && homePath[0] ) {
+		return homePath;
+	}
+#endif
+
+	homePath = Sys_DefaultHomePath();
+	if ( homePath && homePath[0] ) {
+		return homePath;
+	}
+
+	return basePath ? basePath : "";
+}
+
+
+/*
+================
 FS_Startup
 ================
 */
@@ -5597,13 +5855,12 @@ static void FS_Startup( void ) {
 		" 1 - keep file handles locked, more consistent, total pack count limited to ~1k-4k\n" );
 #endif
 
-	homePath = Sys_DefaultHomePath();
-	if ( homePath == NULL || homePath[0] == '\0' ) {
-		homePath = fs_basepath->string;
-	}
+	homePath = FS_DefaultHomePath( fs_basepath->string );
 
 	fs_homepath = Cvar_Get( "fs_homepath", homePath, CVAR_INIT | CVAR_PROTECTED | CVAR_PRIVATE );
 	Cvar_SetDescription( fs_homepath, "Directory to store user configuration and downloaded files." );
+	Com_Printf( "Retail QL filesystem: install '%s', home '%s'\n",
+		fs_basepath->string, fs_homepath->string );
 
 	fs_gamedirvar = Cvar_Get( "fs_game", "", CVAR_INIT | CVAR_SYSTEMINFO );
 	Cvar_CheckRange( fs_gamedirvar, NULL, NULL, CV_FSPATH );
@@ -5673,9 +5930,6 @@ static void FS_Startup( void ) {
 			FS_AddGameDirectory( fs_homepath->string, fs_gamedirvar->string );
 		}
 	}
-
-	// reorder search paths to minimize further changes
-	FS_ReorderSearchPaths();
 
 	// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=506
 	// reorder the pure pk3 files according to server order
@@ -6367,10 +6621,18 @@ void FS_Restart( int checksumFeed ) {
 
 	// new check before safeMode
 	if ( Q_stricmp(fs_gamedirvar->string, lastValidGame) && execConfig ) {
-		// skip the q3config.cfg if "safe" is on the command line
+		// Reapply the profile-global QL configuration after a game-directory
+		// transition. Preserve q3config.cfg solely as a legacy fallback.
 		if ( !Com_SafeMode() ) {
-			Cbuf_AddText( "exec " Q3CONFIG_CFG "\n" );
+			if ( FS_ProfileFileExists( QL_CONFIG_HARDWARE_FILE ) ) {
+				Cbuf_AddText( "execq " QL_CONFIG_HARDWARE_FILE "\n" );
+			} else {
+				Cbuf_AddText( "execq " Q3CONFIG_CFG "\n" );
+			}
 		}
+#ifndef DEDICATED
+		Cbuf_AddText( "execq " QL_CONFIG_REPLICATE_FILE "\n" );
+#endif
 	}
 	execConfig = qfalse;
 

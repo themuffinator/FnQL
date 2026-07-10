@@ -150,7 +150,7 @@ static void Con_LoadHistory( void )
 	consoleSaveBufferSize = FS_Home_FOpenFileRead( CONSOLE_HISTORY_FILE, &f );
 	if ( f == FS_INVALID_HANDLE )
 	{
-		Com_Printf( "Couldn't read %s.\n", CONSOLE_HISTORY_FILE );
+		Com_DPrintf( "No saved console history at %s.\n", CONSOLE_HISTORY_FILE );
 		return;
 	}
 
@@ -210,7 +210,7 @@ static void Con_LoadHistory( void )
 		historyLine = nextHistoryLine = numLines;
 	}
 	else
-		Com_Printf( "Couldn't read %s.\n", CONSOLE_HISTORY_FILE );
+		Com_Printf( "Ignoring unreadable console history at %s.\n", CONSOLE_HISTORY_FILE );
 
 	FS_FCloseFile( f );
 }

@@ -32,6 +32,16 @@ extern "C" {
 #include <array>
 #include <initializer_list>
 
+#if defined( _WIN32 )
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 using fnql::FileReadObject;
 using fnql::FileWriteObject;
 using fnql::OpenHomeFileRead;
@@ -830,11 +840,19 @@ static intptr_t CL_UISystemCalls( intptr_t *args ) {
 		return Sys_Milliseconds();
 
 	case UI_CVAR_REGISTER:
-		Cvar_Register( VMA(1), VMA(2), VMA(3), args[4], uivm->privateFlag );
+		if ( uivm->dllExports ) {
+			Cvar_Register( VMA(1), VMA(2), VMA(3), args[4], uivm->privateFlag );
+		} else {
+			Cvar_RegisterLegacy( VMA(1), VMA(2), VMA(3), args[4], uivm->privateFlag );
+		}
 		return 0;
 
 	case UI_CVAR_UPDATE:
-		Cvar_Update( VMA(1), uivm->privateFlag );
+		if ( uivm->dllExports ) {
+			Cvar_Update( VMA(1), uivm->privateFlag );
+		} else {
+			Cvar_UpdateLegacy( VMA(1), uivm->privateFlag );
+		}
 		return 0;
 
 	case UI_CVAR_SET:
@@ -1949,10 +1967,10 @@ void CL_InitUI( void ) {
 			FS_PureServerSetLoadedPaks( "", "" );
 			uivm = VM_CreateNative( VM_UI, CL_UISystemCalls, UI_DllSyscall, interpret, ql_ui_imports, UI_QL_API_VERSION );
 			if ( !uivm ) {
-				Com_Error( ERR_DROP, "VM_Create on UI failed" );
+				Com_Error( ERR_FATAL, "VM_Create on UI failed; retail Quake Live on Windows requires the Win32 FnQL build" );
 			}
 		} else {
-			Com_Error( ERR_DROP, "VM_Create on UI failed" );
+			Com_Error( ERR_FATAL, "VM_Create on UI failed; retail Quake Live on Windows requires the Win32 FnQL build" );
 		}
 	}
 

@@ -59,9 +59,10 @@ struct fielddef_s
 	size_t offset;									//offset in the structure
 	int type;										//type of the field
 	//type specific fields
-	int maxarray;									//maximum array size
-	float floatmin, floatmax;					//float min and max
-	structdef_s *substruct;					//sub structure
+	int maxarray = 0;								//maximum array size
+	float floatmin = 0.0f;
+	float floatmax = 0.0f;						//float min and max
+	structdef_s *substruct = nullptr;			//sub structure
 };
 using fielddef_t = fielddef_s;
 

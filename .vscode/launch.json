@@ -2,39 +2,77 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "OpenGLx",
+      "name": "OpenGL (Retail QL / Win32)",
       "type": "cppvsdbg",
       "request": "launch",
-      "program": "${workspaceFolder}\\meson\\build\\fnquake3.x64.exe",
-      "args": [
-        "+set",
-        "cl_renderer",
-        "glx"
-      ],
-      "cwd": "${workspaceFolder}\\meson\\build",
+      "program": "${workspaceFolder}\\meson\\build\\win32-debug\\fnql.exe",
+      "args": ["+set", "r_fullscreen", "0", "+set", "cl_renderer", "opengl"],
+      "cwd": "${workspaceFolder}\\meson\\build\\win32-debug",
+      "preLaunchTask": "meson: build Win32 debug",
       "stopAtEntry": false,
       "console": "internalConsole"
     },
     {
-      "name": "Vulkan",
+      "name": "OpenGL2 (Retail QL / Win32)",
       "type": "cppvsdbg",
       "request": "launch",
-      "program": "${workspaceFolder}\\meson\\build\\fnquake3.x64.exe",
-      "args": [
-        "+set",
-        "cl_renderer",
-        "vulkan"
-      ],
-      "cwd": "${workspaceFolder}\\meson\\build",
+      "program": "${workspaceFolder}\\meson\\build\\win32-debug\\fnql.exe",
+      "args": ["+set", "r_fullscreen", "0", "+set", "cl_renderer", "opengl2"],
+      "cwd": "${workspaceFolder}\\meson\\build\\win32-debug",
+      "preLaunchTask": "meson: build Win32 debug",
       "stopAtEntry": false,
       "console": "internalConsole"
     },
     {
-      "name": "Dedicated",
+      "name": "GLx (Retail QL / Win32)",
       "type": "cppvsdbg",
       "request": "launch",
-      "program": "${workspaceFolder}\\meson\\build\\fnquake3.ded.x64.exe",
+      "program": "${workspaceFolder}\\meson\\build\\win32-debug\\fnql.exe",
+      "args": ["+set", "r_fullscreen", "0", "+set", "cl_renderer", "glx"],
+      "cwd": "${workspaceFolder}\\meson\\build\\win32-debug",
+      "preLaunchTask": "meson: build Win32 debug",
+      "stopAtEntry": false,
+      "console": "internalConsole"
+    },
+    {
+      "name": "Vulkan (Retail QL / Win32)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\meson\\build\\win32-debug\\fnql.exe",
+      "args": ["+set", "r_fullscreen", "0", "+set", "cl_renderer", "vulkan"],
+      "cwd": "${workspaceFolder}\\meson\\build\\win32-debug",
+      "preLaunchTask": "meson: build Win32 debug",
+      "stopAtEntry": false,
+      "console": "internalConsole"
+    },
+    {
+      "name": "Dedicated (Retail QL / Win32)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\meson\\build\\win32-debug\\fnql.ded.exe",
+      "cwd": "${workspaceFolder}\\meson\\build\\win32-debug",
+      "preLaunchTask": "meson: build Win32 debug",
+      "stopAtEntry": false,
+      "console": "internalConsole"
+    },
+    {
+      "name": "OpenGL (x64 engine-only)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\meson\\build\\fnql.x64.exe",
+      "args": ["+set", "r_fullscreen", "0", "+set", "cl_renderer", "opengl"],
       "cwd": "${workspaceFolder}\\meson\\build",
+      "preLaunchTask": "meson: build x64",
+      "stopAtEntry": false,
+      "console": "internalConsole"
+    },
+    {
+      "name": "Dedicated (x64 engine-only)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\meson\\build\\fnql.ded.x64.exe",
+      "cwd": "${workspaceFolder}\\meson\\build",
+      "preLaunchTask": "meson: build x64",
       "stopAtEntry": false,
       "console": "internalConsole"
     }

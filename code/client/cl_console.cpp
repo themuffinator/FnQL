@@ -4547,7 +4547,7 @@ void CL_ConsolePrint( const char *txt ) {
 	}
 	
 	if ( !con.initialized ) {
-		static cvar_t null_cvar = { 0 };
+		static cvar_t null_cvar = {};
 		con.color[0] =
 		con.color[1] =
 		con.color[2] =

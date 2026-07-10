@@ -1334,6 +1334,9 @@ void SV_Frame( int msec, int realMsec ) {
 		return;
 	}
 
+	Zmq_UpdatePasswords();
+	Zmq_PumpRcon();
+
 	svs.time += realMsec;
 
 	// allow pause if only the local client is connected

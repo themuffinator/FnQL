@@ -2385,7 +2385,7 @@ static const collapse_t collapse[] = {
 	{ 0, GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA | GLS_SRCBLEND_SRC_ALPHA,
 		GL_DECAL, 0 },
 #endif
-	{ -1 }
+	{ -1, 0, 0, 0 }
 };
 
 
@@ -4014,18 +4014,18 @@ static shader_t *FinishShader( void ) {
 
 #ifdef USE_FOG_COLLAPSE
 			if ( fogCollapse && tr.numFogs > 0 ) {
-				Vk_Pipeline_Def def;
+				Vk_Pipeline_Def fogDef;
 				Vk_Pipeline_Def def_mirror;
 
-				vk_get_pipeline_def( pStage->vk_pipeline[0], &def );
+				vk_get_pipeline_def( pStage->vk_pipeline[0], &fogDef );
 				vk_get_pipeline_def( pStage->vk_mirror_pipeline[0], &def_mirror );
 
-				def.fog_stage = 1;
+				fogDef.fog_stage = 1;
 				def_mirror.fog_stage = 1;
-				def.acff = pStage->bundle[0].adjustColorsForFog;
+				fogDef.acff = pStage->bundle[0].adjustColorsForFog;
 				def_mirror.acff = pStage->bundle[0].adjustColorsForFog;
 
-				pStage->vk_pipeline[1] = vk_find_pipeline_ext( 0, &def, qfalse );
+				pStage->vk_pipeline[1] = vk_find_pipeline_ext( 0, &fogDef, qfalse );
 				pStage->vk_mirror_pipeline[1] = vk_find_pipeline_ext( 0, &def_mirror, qfalse );
 
 				pStage->bundle[0].adjustColorsForFog = ACFF_NONE; // will be handled in shader from now
@@ -4335,7 +4335,7 @@ shader_t *R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
 
 		image = R_FindImageFile( name, flags );
 		if ( !image ) {
-			ri.Printf( PRINT_DEVELOPER, "Couldn't find image file for shader %s\n", name );
+			ri.Printf( PRINT_DEVELOPER, "Shader image unavailable for: %s\n", name );
 			shader.defaultShader = qtrue;
 			return FinishShader();
 		}

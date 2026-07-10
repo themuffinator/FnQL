@@ -10,20 +10,51 @@ ROOT = Path(__file__).resolve().parents[1]
 class WebPakSourceTests(unittest.TestCase):
     def test_webpak_bridge_supports_external_datapak_without_vendoring(self) -> None:
         source = (ROOT / "code" / "client" / "cl_webpak.cpp").read_text(encoding="utf-8")
+        format_header = (ROOT / "code" / "client" / "webpak_format.h").read_text(encoding="utf-8")
 
         self.assertIn("CL_WebDataPak_LoadFile", source)
-        self.assertIn("version == 4u", source)
-        self.assertIn("version == 5u", source)
+        self.assertIn("InspectDataPack", source)
+        self.assertIn("parsed.version == 4u", format_header)
+        self.assertIn("parsed.version == 5u", format_header)
         self.assertIn('"web.pak"', source)
         self.assertIn('"fs_homepath", "fs_basepath", "fs_steampath"', source)
         self.assertIn("retail-assets-external", source)
         self.assertNotIn("FS_LoadPackExplicit", source)
         self.assertNotIn("awesomium.dll", source)
 
+    def test_datapak_layout_is_bounded_before_engine_table_access(self) -> None:
+        source = (ROOT / "code" / "client" / "cl_webpak.cpp").read_text(encoding="utf-8")
+        format_header = (ROOT / "code" / "client" / "webpak_format.h").read_text(encoding="utf-8")
+        tests = (ROOT / "tests" / "webpak_format_tests.cpp").read_text(encoding="utf-8")
+        meson = (ROOT / "meson.build").read_text(encoding="utf-8")
+
+        self.assertIn("InspectDataPack( dataPak.buffer", source)
+        self.assertIn("DataPackCheckedMultiply", format_header)
+        self.assertIn("offset < parsed.payloadOffset", format_header)
+        self.assertIn("UnsortedResourceIds", format_header)
+        self.assertIn("InvalidAliasTarget", format_header)
+        self.assertIn("AcceptsRetailV4Shape", tests)
+        self.assertIn("AcceptsV5AliasShape", tests)
+        self.assertIn("RejectsTruncatedHeadersAndTables", tests)
+        self.assertIn("RejectsUnsafeAliasTables", tests)
+        self.assertIn("fnql_webpak_format", meson)
+
+    def test_datapak_manifest_index_is_validated_and_binary_searchable(self) -> None:
+        source = (ROOT / "code" / "client" / "cl_webpak.cpp").read_text(encoding="utf-8")
+
+        self.assertIn("nextResourceId > UINT16_MAX", source)
+        self.assertIn("CL_WebDataPak_FindEntryIndex( dataPak, (uint16_t)nextResourceId )", source)
+        self.assertIn("std::sort( dataPak->paths", source)
+        self.assertIn("std::lower_bound( cl_webDataPak.paths", source)
+        self.assertIn("cl_webPakVersion", source)
+        self.assertIn("cl_webPakResourceCount", source)
+
     def test_launcher_requests_strip_protocol_and_reject_unsafe_paths(self) -> None:
         source = (ROOT / "code" / "client" / "cl_webpak.cpp").read_text(encoding="utf-8")
 
-        self.assertIn('strstr( virtualPath, "://" )', source)
+        self.assertIn('trustedPrefix[] = "asset://ql/"', source)
+        self.assertIn("CL_WEB_PAK_MAX_BYTES", source)
+        self.assertIn("CL_WEB_RESOURCE_MAX_BYTES", source)
         self.assertIn("static qboolean CL_WebPak_IsSteamDataSourceRequest", source)
         self.assertIn('!Q_stricmpn( virtualPath, "steam://", 8 )', source)
         self.assertIn("CL_WebPak_IsSteamDataSourceRequest( virtualPath )", source)
@@ -32,6 +63,7 @@ class WebPakSourceTests(unittest.TestCase):
         self.assertIn('strstr( normalized, ".." )', source)
         self.assertIn("CL_LauncherRequestData", source)
         self.assertIn("CL_WebRequestResolve", source)
+        self.assertIn("FS_FOpenFileRead", source)
 
     def test_resource_bridge_exposes_steam_datasource_diagnostics(self) -> None:
         source = (ROOT / "code" / "client" / "cl_webpak.cpp").read_text(encoding="utf-8")

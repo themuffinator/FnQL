@@ -2369,7 +2369,7 @@ static const collapse_t collapse[] = {
 	{ 0, GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA | GLS_SRCBLEND_SRC_ALPHA,
 		GL_DECAL, 0 },
 #endif
-	{ -1 }
+	{ -1, 0, 0, 0 }
 };
 
 
@@ -3741,7 +3741,7 @@ shader_t *R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
 
 		image = R_FindImageFile( name, flags );
 		if ( !image ) {
-			ri.Printf( PRINT_DEVELOPER, "Couldn't find image file for shader %s\n", name );
+			ri.Printf( PRINT_DEVELOPER, "Shader image unavailable for: %s\n", name );
 			shader.defaultShader = qtrue;
 			return FinishShader();
 		}

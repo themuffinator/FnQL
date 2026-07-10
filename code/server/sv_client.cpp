@@ -24,6 +24,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "server.h"
 
 #include <array>
+#include <cstdint>
+#include <limits>
 
 static void SV_CloseDownload( client_t *cl );
 
@@ -835,18 +837,26 @@ SV_IsClientSteamIdString
 */
 static qboolean SV_IsClientSteamIdString( const char *steamId ) {
 	int length;
+	std::uint64_t value = 0;
 
 	if ( !steamId || !steamId[0] ) {
 		return qfalse;
 	}
 
 	for ( length = 0; steamId[length]; ++length ) {
+		std::uint64_t digit;
+
 		if ( steamId[length] < '0' || steamId[length] > '9' ) {
 			return qfalse;
 		}
+		digit = static_cast<std::uint64_t>( steamId[length] - '0' );
+		if ( value > ( ( std::numeric_limits<std::uint64_t>::max )() - digit ) / 10u ) {
+			return qfalse;
+		}
+		value = value * 10u + digit;
 	}
 
-	return SV_QBool( length > 0 && length < SV_PLATFORM_STEAM_ID_SIZE );
+	return SV_QBool( value != 0 && length > 0 && length < SV_PLATFORM_STEAM_ID_SIZE );
 }
 
 
@@ -891,9 +901,10 @@ static void SV_MirrorClientSteamIdToUserinfo( const client_t *client, char *user
 ==================
 SV_VerifyClientSteamAuth
 
-FnQL has no live Steam auth owner yet. Keep the retained QL native import
-explicitly offline-compatible by accepting local/LAN clients and failing remote
-clients closed.
+FnQL has no live Steam auth owner yet. Preserve retail-client interoperability
+by accepting active clients explicitly as unverified; the platform capability
+and policy cvars remain unavailable so game code cannot mistake this for a
+successful Steam authentication round trip.
 ==================
 */
 qboolean SV_VerifyClientSteamAuth( int clientNum ) {
@@ -910,15 +921,9 @@ qboolean SV_VerifyClientSteamAuth( int clientNum ) {
 		return qfalse;
 	}
 
-	if ( Sys_IsLANAddress( &client.netchan.remoteAddress ) ) {
-		Com_DPrintf( "Server auth validate client %d via %s [%s]: accepted local/LAN client\n",
-			clientNum, SV_GetPlatformAuthProviderLabel(), SV_GetPlatformAuthPolicyLabel() );
-		return qtrue;
-	}
-
-	Com_DPrintf( "Server auth validate client %d via %s [%s]: rejected remote client\n",
+	Com_DPrintf( "Server auth validate client %d via %s [%s]: accepted without identity verification\n",
 		clientNum, SV_GetPlatformAuthProviderLabel(), SV_GetPlatformAuthPolicyLabel() );
-	return qfalse;
+	return qtrue;
 }
 
 static void SV_LogSteamStatsStubLifecycle( const char *stage, const char *detail ) {
@@ -994,6 +999,7 @@ SV_SteamStats_ProcessMatchReport
 */
 const void *SV_SteamStats_ProcessMatchReport( const void *report, char *buffer, int bufferSize ) {
 	SV_LogSteamStatsStubLifecycle( "match-report", "ignored MATCH_REPORT for disabled Steam stats owner" );
+	Zmq_SubmitMatchReport( report );
 
 	(void)buffer;
 	(void)bufferSize;
@@ -1015,6 +1021,7 @@ void SV_SteamStats_ProcessEvent( unsigned int steamIdLow, unsigned int steamIdHi
 		eventName && eventName[0] ? eventName : "unnamed",
 		( (unsigned long long)steamIdHigh << 32 ) | steamIdLow );
 	SV_LogSteamStatsStubLifecycle( "event-process", detail );
+	Zmq_ReportPlayerEvent( steamIdLow, steamIdHigh, clientStats, eventName, payload );
 
 	(void)steamIdLow;
 	(void)steamIdHigh;
@@ -1170,7 +1177,7 @@ void SV_DirectConnect( const netadr_t *from ) {
 		longstr = true;
 	} else {
 		longstr = false;
-		if ( com_protocolCompat ) {
+		if ( com_protocolCompat && cl_proto != QL_RETAIL_PROTOCOL_VERSION ) {
 			// enforce dm68-compatible stream for other clients
 			compat = true;
 		}
@@ -1338,7 +1345,8 @@ gotnewcl:
 
 	// save the address
 	newcl->compat = SV_QBool( compat );
-	Netchan_Setup( NS_SERVER, &newcl->netchan, from, qport, challenge, SV_QBool( compat ) );
+	Netchan_Setup( NS_SERVER, &newcl->netchan, from, qport, challenge,
+		Netchan_SelectWireProfile( cl_proto, compat ) );
 
 	// init the netchan queue
 	newcl->netchan_end_queue = &newcl->netchan_start_queue;
@@ -1376,7 +1384,9 @@ gotnewcl:
 	}
 
 	// send the connect packet to the client
-	if ( longstr /*&& !compat*/ ) {
+	if ( cl_proto == QL_RETAIL_PROTOCOL_VERSION && !longstr ) {
+		NET_OutOfBandPrint( NS_SERVER, from, "connectResponse" );
+	} else if ( longstr ) {
 		NET_OutOfBandPrint( NS_SERVER, from, "connectResponse %d %d", challenge, sv_proto );
 	} else {
 		NET_OutOfBandPrint( NS_SERVER, from, "connectResponse %d", challenge );
@@ -2894,7 +2904,7 @@ void SV_ExecuteClientMessage( client_t *cl, msg_t *msg ) {
 
 	cl->justConnected = qfalse;
 
-	if ( com_protocol && com_protocol->integer == QL_RETAIL_PROTOCOL_VERSION ) {
+	if ( cl->netchan.wireProfile == NETCHAN_WIRE_QL_RETAIL ) {
 		(void)MSG_ReadByte( msg );
 	}
 

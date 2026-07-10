@@ -1214,19 +1214,19 @@ static void SV_Status_f( void ) {
 	// first pass: save and determine max.lengths of name/address fields
 	for ( SV_ClientSlot slot : SV_ClientSlots() )
 	{
-		client_t *cl = &slot.client;
+		client_t *slotClient = &slot.client;
 
-		if ( cl->state == CS_FREE )
+		if ( slotClient->state == CS_FREE )
 			continue;
 
-		l = strlen( cl->name ) + 1;
-		Q_strncpyz( nc, cl->name, SV_ArraySize(names) - static_cast<int>( nc - names.data() ) );
+		l = strlen( slotClient->name ) + 1;
+		Q_strncpyz( nc, slotClient->name, SV_ArraySize(names) - static_cast<int>( nc - names.data() ) );
 		np[ slot.index ] = nc; nc += l;			// name pointer in name buffer
-		nl[ slot.index ] = SV_Strlen( cl->name );// name length without color sequences
+		nl[ slot.index ] = SV_Strlen( slotClient->name );// name length without color sequences
 		if ( nl[ slot.index ] > max_namelength )
 			max_namelength = nl[ slot.index ];
 
-		s = NET_AdrToString( &cl->netchan.remoteAddress );
+		s = NET_AdrToString( &slotClient->netchan.remoteAddress );
 		l = strlen( s ) + 1;
 		Q_strncpyz( ac, s, SV_ArraySize(addrs) - static_cast<int>( ac - addrs.data() ) );
 		ap[ slot.index ] = ac; ac += l;			// address pointer in address buffer

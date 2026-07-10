@@ -21,14 +21,18 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 // cl_webpak.cpp -- Quake Live WebUI resource bridge
 
+#include <algorithm>
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #include "client.h"
+#include "webpak_format.h"
 
 #define CL_WEB_FILE_LIST_BUFFER 4096
+#define CL_WEB_PAK_MAX_BYTES ( 512 * 1024 * 1024 )
+#define CL_WEB_RESOURCE_MAX_BYTES ( 64 * 1024 * 1024 )
 
 typedef struct {
 	uint16_t	resourceId;
@@ -52,6 +56,8 @@ static clWebDataPak_t cl_webDataPak;
 
 static cvar_t *cl_webPakLoaded;
 static cvar_t *cl_webPakSource;
+static cvar_t *cl_webPakVersion;
+static cvar_t *cl_webPakResourceCount;
 static cvar_t *ui_resourceBridgeProvider;
 static cvar_t *ui_resourceBridgePolicy;
 static cvar_t *ui_resourceBridgeParityScope;
@@ -94,16 +100,11 @@ static void CL_WebPak_BuildStandalonePath( const char *rootPath, const char *fil
 }
 
 static uint16_t CL_WebDataPak_ReadUInt16( const byte *cursor ) {
-	return (uint16_t)( cursor[0] | ( cursor[1] << 8 ) );
+	return fnql::webui::DataPackReadU16( cursor );
 }
 
 static uint32_t CL_WebDataPak_ReadUInt32( const byte *cursor ) {
-	return (uint32_t)(
-		cursor[0]
-		| ( cursor[1] << 8 )
-		| ( cursor[2] << 16 )
-		| ( cursor[3] << 24 )
-	);
+	return fnql::webui::DataPackReadU32( cursor );
 }
 
 static void CL_WebDataPak_Clear( clWebDataPak_t *dataPak ) {
@@ -253,7 +254,8 @@ static qboolean CL_WebDataPak_ReadResource( const clWebDataPak_t *dataPak, uint1
 		*outLength = 0;
 	}
 
-	if ( !outBuffer || !CL_WebDataPak_GetResourceView( dataPak, resourceId, &view, &length ) ) {
+	if ( !outBuffer || !CL_WebDataPak_GetResourceView( dataPak, resourceId, &view, &length )
+		|| length < 0 || length > CL_WEB_RESOURCE_MAX_BYTES ) {
 		return qfalse;
 	}
 
@@ -288,7 +290,7 @@ static qboolean CL_WebDataPak_DecodePath( const byte *utf16Data, uint32_t charCo
 
 		low = utf16Data[i * 2];
 		high = utf16Data[i * 2 + 1];
-		if ( high != 0 ) {
+		if ( high != 0 || low == 0 || low < 0x20 || low == 0x7f ) {
 			return qfalse;
 		}
 
@@ -296,7 +298,7 @@ static qboolean CL_WebDataPak_DecodePath( const byte *utf16Data, uint32_t charCo
 	}
 	outPath[charCount] = '\0';
 
-	if ( strstr( outPath, ".." ) || strstr( outPath, "::" ) || strchr( outPath, ':' ) ) {
+	if ( outPath[0] == '/' || strstr( outPath, ".." ) || strstr( outPath, "::" ) || strchr( outPath, ':' ) ) {
 		return qfalse;
 	}
 
@@ -307,6 +309,7 @@ static qboolean CL_WebDataPak_DecodePath( const byte *utf16Data, uint32_t charCo
 static qboolean CL_WebDataPak_BuildPathTable( clWebDataPak_t *dataPak ) {
 	const byte *manifestData;
 	uint32_t trailerResourceId;
+	uint32_t manifestPayloadLength;
 	int manifestLength;
 	int cursor;
 	char pendingPath[MAX_QPATH];
@@ -320,11 +323,19 @@ static qboolean CL_WebDataPak_BuildPathTable( clWebDataPak_t *dataPak ) {
 		return qfalse;
 	}
 
-	if ( manifestLength < 16 || CL_WebDataPak_ReadUInt32( manifestData ) + 4u > (uint32_t)manifestLength ) {
+	if ( manifestLength < 16 ) {
+		return qfalse;
+	}
+	manifestPayloadLength = CL_WebDataPak_ReadUInt32( manifestData );
+	if ( manifestPayloadLength > (uint32_t)manifestLength - 4u ) {
 		return qfalse;
 	}
 
 	trailerResourceId = CL_WebDataPak_ReadUInt32( manifestData + manifestLength - 4 );
+	if ( trailerResourceId > UINT16_MAX
+		|| CL_WebDataPak_FindEntryIndex( dataPak, (uint16_t)trailerResourceId ) < 0 ) {
+		return qfalse;
+	}
 	dataPak->paths = (clWebDataPakPath_t *)Z_Malloc( sizeof( *dataPak->paths ) * ( dataPak->resourceCount - 1 ) );
 	if ( !dataPak->paths ) {
 		return qfalse;
@@ -347,7 +358,10 @@ static qboolean CL_WebDataPak_BuildPathTable( clWebDataPak_t *dataPak ) {
 		pathLength = CL_WebDataPak_ReadUInt32( manifestData + cursor );
 		cursor += 4;
 
-		if ( pathLength == 0 || pathLength >= MAX_QPATH || cursor + (int)( pathLength * 2 ) > manifestLength - 8 ) {
+		if ( nextResourceId > UINT16_MAX
+			|| CL_WebDataPak_FindEntryIndex( dataPak, (uint16_t)nextResourceId ) < 0
+			|| pathLength == 0 || pathLength >= MAX_QPATH
+			|| cursor + (int)( pathLength * 2 ) > manifestLength - 8 ) {
 			return qfalse;
 		}
 
@@ -356,8 +370,14 @@ static qboolean CL_WebDataPak_BuildPathTable( clWebDataPak_t *dataPak ) {
 		}
 		cursor += (int)( pathLength * 2 );
 		cursor = ( cursor + 3 ) & ~3;
+		if ( cursor > manifestLength - 8 ) {
+			return qfalse;
+		}
 
-		if ( havePending && dataPak->pathCount < (int)dataPak->resourceCount - 1 ) {
+		if ( havePending ) {
+			if ( dataPak->pathCount >= (int)dataPak->resourceCount - 1 ) {
+				return qfalse;
+			}
 			dataPak->paths[dataPak->pathCount].resourceId = (uint16_t)nextResourceId;
 			Q_strncpyz( dataPak->paths[dataPak->pathCount].path, pendingPath, sizeof( dataPak->paths[dataPak->pathCount].path ) );
 			dataPak->pathCount++;
@@ -367,23 +387,38 @@ static qboolean CL_WebDataPak_BuildPathTable( clWebDataPak_t *dataPak ) {
 		havePending = qtrue;
 	}
 
-	if ( havePending && dataPak->pathCount < (int)dataPak->resourceCount - 1 ) {
+	if ( havePending ) {
+		if ( dataPak->pathCount >= (int)dataPak->resourceCount - 1 ) {
+			return qfalse;
+		}
 		dataPak->paths[dataPak->pathCount].resourceId = (uint16_t)trailerResourceId;
 		Q_strncpyz( dataPak->paths[dataPak->pathCount].path, pendingPath, sizeof( dataPak->paths[dataPak->pathCount].path ) );
 		dataPak->pathCount++;
 	}
 
-	return dataPak->pathCount > 0 ? qtrue : qfalse;
+	if ( dataPak->pathCount <= 0 ) {
+		return qfalse;
+	}
+
+	std::sort( dataPak->paths, dataPak->paths + dataPak->pathCount,
+		[]( const clWebDataPakPath_t &lhs, const clWebDataPakPath_t &rhs ) {
+			return strcmp( lhs.path, rhs.path ) < 0;
+		} );
+	for ( int i = 1; i < dataPak->pathCount; ++i ) {
+		if ( !strcmp( dataPak->paths[i - 1].path, dataPak->paths[i].path ) ) {
+			return qfalse;
+		}
+	}
+
+	return qtrue;
 }
 
 static qboolean CL_WebDataPak_LoadFile( const char *pakPath, clWebDataPak_t *outDataPak ) {
 	clWebDataPak_t dataPak;
 	FILE *fp;
 	long fileLength;
-	uint32_t version;
-	int tableLength;
-	int aliasLength;
-	int i;
+	fnql::webui::DataPackError parseError;
+	fnql::webui::DataPackLayout layout;
 
 	if ( !pakPath || !pakPath[0] || !outDataPak ) {
 		return qfalse;
@@ -396,10 +431,13 @@ static qboolean CL_WebDataPak_LoadFile( const char *pakPath, clWebDataPak_t *out
 		return qfalse;
 	}
 
-	fseek( fp, 0, SEEK_END );
+	if ( fseek( fp, 0, SEEK_END ) != 0 ) {
+		fclose( fp );
+		return qfalse;
+	}
 	fileLength = ftell( fp );
-	fseek( fp, 0, SEEK_SET );
-	if ( fileLength <= 0 || fileLength > INT_MAX ) {
+	if ( fileLength <= 0 || fileLength > INT_MAX || fileLength > CL_WEB_PAK_MAX_BYTES
+		|| fseek( fp, 0, SEEK_SET ) != 0 ) {
 		fclose( fp );
 		return qfalse;
 	}
@@ -418,57 +456,21 @@ static qboolean CL_WebDataPak_LoadFile( const char *pakPath, clWebDataPak_t *out
 	fclose( fp );
 
 	dataPak.bufferLength = (int)fileLength;
-	version = CL_WebDataPak_ReadUInt32( dataPak.buffer );
-	if ( version == 4u ) {
-		dataPak.version = version;
-		dataPak.resourceCount = CL_WebDataPak_ReadUInt32( dataPak.buffer + 4 );
-		dataPak.aliasCount = 0;
-		dataPak.headerLength = 9;
-	} else if ( version == 5u ) {
-		dataPak.version = version;
-		dataPak.resourceCount = CL_WebDataPak_ReadUInt16( dataPak.buffer + 8 );
-		dataPak.aliasCount = CL_WebDataPak_ReadUInt16( dataPak.buffer + 10 );
-		dataPak.headerLength = 12;
-	} else {
+	if ( !fnql::webui::InspectDataPack( dataPak.buffer, (size_t)dataPak.bufferLength, &layout, &parseError ) ) {
+		Com_DPrintf( "web.pak rejected at %s: %s\n", pakPath, fnql::webui::DataPackErrorString( parseError ) );
+		CL_WebDataPak_Clear( &dataPak );
+		return qfalse;
+	}
+	if ( layout.resourceCount < 2 ) {
+		Com_DPrintf( "web.pak rejected at %s: launcher manifest has no resource payload\n", pakPath );
 		CL_WebDataPak_Clear( &dataPak );
 		return qfalse;
 	}
 
-	if ( dataPak.resourceCount < 2 || dataPak.resourceCount > 65535u ) {
-		CL_WebDataPak_Clear( &dataPak );
-		return qfalse;
-	}
-
-	tableLength = ( (int)dataPak.resourceCount + 1 ) * 6;
-	aliasLength = (int)dataPak.aliasCount * 4;
-	if ( dataPak.headerLength + tableLength + aliasLength > dataPak.bufferLength ) {
-		CL_WebDataPak_Clear( &dataPak );
-		return qfalse;
-	}
-
-	for ( i = 0; i <= (int)dataPak.resourceCount; i++ ) {
-		const byte *entry;
-		uint32_t offset;
-
-		entry = CL_WebDataPak_EntryPointer( &dataPak, i );
-		offset = CL_WebDataPak_ReadUInt32( entry + 2 );
-		if ( offset > (uint32_t)dataPak.bufferLength ) {
-			CL_WebDataPak_Clear( &dataPak );
-			return qfalse;
-		}
-
-		if ( i > 0 ) {
-			const byte *prevEntry;
-			uint32_t previousOffset;
-
-			prevEntry = CL_WebDataPak_EntryPointer( &dataPak, i - 1 );
-			previousOffset = CL_WebDataPak_ReadUInt32( prevEntry + 2 );
-			if ( offset < previousOffset ) {
-				CL_WebDataPak_Clear( &dataPak );
-				return qfalse;
-			}
-		}
-	}
+	dataPak.version = layout.version;
+	dataPak.resourceCount = layout.resourceCount;
+	dataPak.aliasCount = layout.aliasCount;
+	dataPak.headerLength = (int)layout.headerSize;
 
 	if ( !CL_WebDataPak_BuildPathTable( &dataPak ) ) {
 		CL_WebDataPak_Clear( &dataPak );
@@ -494,44 +496,40 @@ static qboolean CL_WebDataPak_Load( const char *pakPath ) {
 }
 
 static qboolean CL_WebDataPak_Fetch( const char *normalizedPath, void **outBuffer, int *outLength ) {
-	int i;
+	clWebDataPakPath_t *match;
 
 	if ( !cl_webDataPak.loaded || !normalizedPath || !normalizedPath[0] ) {
 		return qfalse;
 	}
 
-	for ( i = 0; i < cl_webDataPak.pathCount; i++ ) {
-		if ( !Q_stricmp( cl_webDataPak.paths[i].path, normalizedPath ) ) {
-			return CL_WebDataPak_ReadResource( &cl_webDataPak, cl_webDataPak.paths[i].resourceId, outBuffer, outLength );
-		}
+
+	match = std::lower_bound( cl_webDataPak.paths, cl_webDataPak.paths + cl_webDataPak.pathCount, normalizedPath,
+		[]( const clWebDataPakPath_t &entry, const char *path ) {
+			return strcmp( entry.path, path ) < 0;
+		} );
+	if ( match != cl_webDataPak.paths + cl_webDataPak.pathCount && !strcmp( match->path, normalizedPath ) ) {
+		return CL_WebDataPak_ReadResource( &cl_webDataPak, match->resourceId, outBuffer, outLength );
 	}
 
 	return qfalse;
 }
 
 static const char *CL_WebPak_StripProtocol( const char *virtualPath ) {
-	const char *pathStart;
+	static const char trustedPrefix[] = "asset://ql/";
 	const char *separator;
 
 	if ( !virtualPath ) {
 		return NULL;
 	}
 
-	pathStart = virtualPath;
 	separator = strstr( virtualPath, "://" );
-	if ( separator ) {
-		pathStart = separator + 3;
-		separator = strchr( pathStart, '/' );
-		if ( separator ) {
-			pathStart = separator + 1;
-		}
+	if ( !separator ) {
+		return virtualPath;
 	}
-
-	while ( *pathStart == '/' || *pathStart == '\\' ) {
-		pathStart++;
+	if ( Q_stricmpn( virtualPath, trustedPrefix, sizeof( trustedPrefix ) - 1 ) ) {
+		return NULL;
 	}
-
-	return pathStart;
+	return virtualPath + sizeof( trustedPrefix ) - 1;
 }
 
 static qboolean CL_WebPak_IsSteamDataSourceRequest( const char *virtualPath ) {
@@ -599,10 +597,13 @@ static qboolean CL_WebPak_ReadStandaloneFile( const char *rootPath, const char *
 		return qfalse;
 	}
 
-	fseek( fp, 0, SEEK_END );
+	if ( fseek( fp, 0, SEEK_END ) != 0 ) {
+		fclose( fp );
+		return qfalse;
+	}
 	fileLength = ftell( fp );
-	fseek( fp, 0, SEEK_SET );
-	if ( fileLength < 0 || fileLength > INT_MAX ) {
+	if ( fileLength < 0 || fileLength > INT_MAX || fileLength > CL_WEB_RESOURCE_MAX_BYTES
+		|| fseek( fp, 0, SEEK_SET ) != 0 ) {
 		fclose( fp );
 		return qfalse;
 	}
@@ -683,7 +684,7 @@ static int CL_WebPak_AppendUniqueFile( const char *name, char *listbuf, int bufs
 
 	offset = *outOffset;
 	length = (int)strlen( name ) + 1;
-	if ( offset + length + 1 >= bufsize ) {
+	if ( length >= bufsize || offset < 0 || offset > bufsize - length - 1 ) {
 		return count;
 	}
 
@@ -767,6 +768,10 @@ static void CL_WebPak_RegisterCvars( void ) {
 	Cvar_SetDescription( cl_webPakLoaded, "Read-only state for the external Quake Live web.pak resource bridge." );
 	cl_webPakSource = Cvar_Get( "cl_webPakSource", "", CVAR_ROM );
 	Cvar_SetDescription( cl_webPakSource, "Read-only source path for the mounted external Quake Live web.pak." );
+	cl_webPakVersion = Cvar_Get( "cl_webPakVersion", "0", CVAR_ROM );
+	Cvar_SetDescription( cl_webPakVersion, "Read-only Chromium DataPack version for the mounted external Quake Live web.pak." );
+	cl_webPakResourceCount = Cvar_Get( "cl_webPakResourceCount", "0", CVAR_ROM );
+	Cvar_SetDescription( cl_webPakResourceCount, "Read-only validated resource count for the mounted external Quake Live web.pak." );
 	ui_resourceBridgeProvider = Cvar_Get( "ui_resourceBridgeProvider", "Unavailable", CVAR_ROM );
 	Cvar_SetDescription( ui_resourceBridgeProvider, "Read-only provider label for WebUI resource requests." );
 	ui_resourceBridgePolicy = Cvar_Get( "ui_resourceBridgePolicy", "webpak-unavailable", CVAR_ROM );
@@ -792,6 +797,10 @@ static void CL_WebPak_RefreshCvars( void ) {
 
 	CL_WebPak_SetCvarIfChanged( "cl_webPakLoaded", loaded ? "1" : "0" );
 	CL_WebPak_SetCvarIfChanged( "cl_webPakSource", loaded ? cl_webDataPak.sourcePath : "" );
+	CL_WebPak_SetCvarIfChanged( "cl_webPakVersion",
+		loaded ? va( "%u", static_cast<unsigned int>( cl_webDataPak.version ) ) : "0" );
+	CL_WebPak_SetCvarIfChanged( "cl_webPakResourceCount",
+		loaded ? va( "%u", static_cast<unsigned int>( cl_webDataPak.resourceCount ) ) : "0" );
 	CL_WebPak_SetCvarIfChanged( "ui_resourceBridgeProvider", loaded ? "Awesomium DataPak web.pak" : "Loose filesystem fallback" );
 	CL_WebPak_SetCvarIfChanged( "ui_resourceBridgePolicy", loaded ? "retail-assets-external" : "webpak-unavailable" );
 	CL_WebPak_SetCvarIfChanged( "ui_resourceBridgeParityScope", "retail web.pak resource bridge" );
@@ -875,14 +884,18 @@ int CL_WebPak_GetFileList( const char *path, const char *extension, char *listbu
 qboolean CL_WebRequestResolve( const char *virtualPath, void **outBuffer, int *outLength ) {
 	char normalized[MAX_QPATH];
 	qboolean normalizedValid;
-	void *fsBuffer;
+	fileHandle_t file;
 	int length;
+	int bytesRead;
 
 	if ( outBuffer ) {
 		*outBuffer = NULL;
 	}
 	if ( outLength ) {
 		*outLength = 0;
+	}
+	if ( !outBuffer ) {
+		return qfalse;
 	}
 
 	normalizedValid = CL_WebPak_NormalizePath( virtualPath, normalized, sizeof( normalized ) );
@@ -894,17 +907,24 @@ qboolean CL_WebRequestResolve( const char *virtualPath, void **outBuffer, int *o
 		return qfalse;
 	}
 
-	length = FS_ReadFile( normalized, &fsBuffer );
-	if ( length < 0 ) {
+	file = FS_INVALID_HANDLE;
+	length = FS_FOpenFileRead( normalized, &file, qfalse );
+	if ( length < 0 || length > CL_WEB_RESOURCE_MAX_BYTES || file == FS_INVALID_HANDLE ) {
+		if ( file != FS_INVALID_HANDLE ) {
+			FS_FCloseFile( file );
+		}
 		return qfalse;
 	}
 
 	*outBuffer = Z_Malloc( length + 1 );
-	if ( fsBuffer && length > 0 ) {
-		Com_Memcpy( *outBuffer, fsBuffer, length );
+	bytesRead = length > 0 ? FS_Read( *outBuffer, length, file ) : 0;
+	FS_FCloseFile( file );
+	if ( bytesRead != length ) {
+		Z_Free( *outBuffer );
+		*outBuffer = NULL;
+		return qfalse;
 	}
 	( (byte *)*outBuffer )[length] = 0;
-	FS_FreeFile( fsBuffer );
 
 	if ( outLength ) {
 		*outLength = length;

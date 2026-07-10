@@ -142,7 +142,7 @@ void GLimp_InitGamma( glconfig_t *config )
 		{
 			int g;
 
-			Com_Printf( S_COLOR_YELLOW "WARNING: suspicious gamma tables, using linear ramp for restoration\n" );
+			Com_Printf( S_COLOR_CYAN "Gamma restoration: suspicious tables replaced with a linear ramp\n" );
 
 			for ( g = 0; g < 256; g++ )
 			{

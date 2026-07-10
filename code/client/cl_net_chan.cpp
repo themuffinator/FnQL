@@ -25,6 +25,7 @@ extern "C" {
 }
 
 #include "client_cpp.h"
+#include "../qcommon/netchan_codec.hpp"
 
 using fnql::ReadUnaligned;
 
@@ -77,9 +78,8 @@ CL_Netchan_Encode
 */
 void CL_Netchan_Encode( msg_t *msg ) {
 	int serverId, messageAcknowledge, reliableAcknowledge;
-	int i, index;
 	byte key;
-	const byte *string;
+	const char *command;
 
 	if ( msg->cursize <= CL_ENCODE_START ) {
 		return;
@@ -96,24 +96,11 @@ void CL_Netchan_Encode( msg_t *msg ) {
 	reliableAcknowledge = MSG_ReadLong(msg);
 	savedReadState.Restore();
 
-	string = reinterpret_cast<const byte *>( clc.serverCommands[ reliableAcknowledge & kReliableCommandMask ] );
-	index = 0;
-	//
+	command = clc.serverCommands[ reliableAcknowledge & kReliableCommandMask ];
 	key = static_cast<byte>( clc.challenge ^ serverId ^ messageAcknowledge );
-	for (i = CL_ENCODE_START; i < msg->cursize; i++) {
-		// modify the key with the last received now acknowledged server command
-		if (!string[index])
-			index = 0;
-		if (string[index] > 127 || string[index] == '%') {
-			key ^= '.' << (i & 1);
-		}
-		else {
-			key ^= string[index] << (i & 1);
-		}
-		index++;
-		// encode the data with this key
-		*(msg->data + i) = (*(msg->data + i)) ^ key;
-	}
+	fnql::ApplyNetchanXor( msg->data, static_cast<std::size_t>( msg->cursize ),
+		CL_ENCODE_START, key,
+		fnql::NetchanCommandView( command, MAX_STRING_CHARS ) );
 }
 
 
@@ -126,9 +113,9 @@ CL_Netchan_Decode
 ==============
 */
 void CL_Netchan_Decode( msg_t *msg ) {
-	int reliableAcknowledge, i, index;
+	int reliableAcknowledge;
 	byte key;
-	const byte *string;
+	const char *command;
 
 	MsgReadState savedReadState( msg );
 
@@ -137,24 +124,12 @@ void CL_Netchan_Decode( msg_t *msg ) {
 	reliableAcknowledge = MSG_ReadLong( msg );
 	savedReadState.Restore();
 
-	string = reinterpret_cast<const byte *>( clc.reliableCommands[ reliableAcknowledge & kReliableCommandMask ] );
-	index = 0;
+	command = clc.reliableCommands[ reliableAcknowledge & kReliableCommandMask ];
 	// xor the client challenge with the netchan sequence number (need something that changes every message)
 	key = CL_NetchanSequenceKey( msg );
-	for (i = msg->readcount + CL_DECODE_START; i < msg->cursize; i++) {
-		// modify the key with the last sent and with this message acknowledged client command
-		if (!string[index])
-			index = 0;
-		if (string[index] > 127 || string[index] == '%') {
-			key ^= '.' << (i & 1);
-		}
-		else {
-			key ^= string[index] << (i & 1);
-		}
-		index++;
-		// decode the data with this key
-		*(msg->data + i) = *(msg->data + i) ^ key;
-	}
+	fnql::ApplyNetchanXor( msg->data, static_cast<std::size_t>( msg->cursize ),
+		static_cast<std::size_t>( msg->readcount + CL_DECODE_START ), key,
+		fnql::NetchanCommandView( command, MAX_STRING_CHARS ) );
 }
 
 
@@ -184,7 +159,8 @@ CL_Netchan_Transmit
 */
 extern "C" void CL_Netchan_Transmit( netchan_t *chan, msg_t *msg ) {
 
-	if ( chan->compat )
+	if ( Netchan_WireHasFeature( chan->wireProfile,
+		NETCHAN_FEATURE_RELIABLE_XOR ) )
 		CL_Netchan_Encode( msg );
 
 	Netchan_Transmit( chan, msg->cursize, msg->data );
@@ -210,7 +186,8 @@ extern "C" void CL_Netchan_Enqueue( netchan_t *chan, msg_t *msg, int times ) {
 		;
 	}
 
-	if ( chan->compat ) {
+	if ( Netchan_WireHasFeature( chan->wireProfile,
+		NETCHAN_FEATURE_RELIABLE_XOR ) ) {
 		CL_Netchan_Encode( msg );
 	}
 
@@ -234,7 +211,8 @@ extern "C" qboolean CL_Netchan_Process( netchan_t *chan, msg_t *msg ) {
 	if ( !ret )
 		return qfalse;
 
-	if ( chan->compat )
+	if ( Netchan_WireHasFeature( chan->wireProfile,
+		NETCHAN_FEATURE_RELIABLE_XOR ) )
 		CL_Netchan_Decode( msg );
 
 	return qtrue;

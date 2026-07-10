@@ -355,6 +355,18 @@ FILE *Sys_FOpen( const char *ospath, const char *mode )
 
 /*
 ==============
+Sys_ReplaceFile
+
+POSIX rename atomically replaces a file within the same filesystem.
+==============
+*/
+qboolean Sys_ReplaceFile( const char *from, const char *to ) {
+	return rename( from, to ) == 0 ? qtrue : qfalse;
+}
+
+
+/*
+==============
 Sys_ResetReadOnlyAttribute
 ==============
 */

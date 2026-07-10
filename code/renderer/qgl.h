@@ -338,11 +338,11 @@ typedef char GLchar;
 #ifndef __APPLE__
 
 #define GLE( ret, name, ... ) extern ret ( APIENTRY * q##name )( __VA_ARGS__ );
-	QGL_Swp_PROCS;
+	QGL_Swp_PROCS
 #ifdef _WIN32
-	QGL_Win32_PROCS;
+	QGL_Win32_PROCS
 #else // assume in opposition to win32
-	QGL_LinX11_PROCS;
+	QGL_LinX11_PROCS
 #endif
 #undef GLE
 

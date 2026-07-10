@@ -50,6 +50,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'" Label="Configuration">
     <PlatformToolset>v141</PlatformToolset>
   </PropertyGroup>
+  <Import Project="fnql-meson-legacy.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
   </ImportGroup>
@@ -305,8 +306,10 @@
     <ClCompile Include="..\..\server\sv_init.cpp" />
     <ClCompile Include="..\..\server\sv_main.cpp" />
     <ClCompile Include="..\..\server\sv_net_chan.cpp" />
+    <ClCompile Include="..\..\server\sv_platform.cpp" />
     <ClCompile Include="..\..\server\sv_snapshot.cpp" />
     <ClCompile Include="..\..\server\sv_world.cpp" />
+    <ClCompile Include="..\..\server\sv_zmq.cpp" />
     <ClCompile Include="..\win_main.cpp" />
     <ClCompile Include="..\win_shared.cpp" />
     <ClCompile Include="..\win_syscon.cpp" />
@@ -340,12 +343,6 @@
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="..\win_resource.rc" />
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="botlib.vcxproj">
-      <Project>{a410161f-ae9f-485d-a01f-5294891430a6}</Project>
-      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
-    </ProjectReference>
   </ItemGroup>
   <ItemGroup>
     <CustomBuild Include="..\..\asm\common_x64.asm">

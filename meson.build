@@ -12,6 +12,7 @@ project('FnQL', 'c', 'cpp',
     'cpp_std=c++17',
     'buildtype=debugoptimized',
     'b_vscrt=from_buildtype',
+    'warning_level=3',
   ],
 )
 
@@ -24,7 +25,11 @@ fallback_defaults = ['default_library=static']
 quiet_fallback_defaults = fallback_defaults + ['warning_level=0', 'c_args=-w', 'cpp_args=-w']
 curl_fallback_defaults = quiet_fallback_defaults + ['tests=disabled']
 openal_fallback_defaults = quiet_fallback_defaults
-vorbis_fallback_defaults = quiet_fallback_defaults + ['tests=false', 'ogg:default_library=static']
+vorbis_fallback_defaults = quiet_fallback_defaults + [
+  'tests=false',
+  'ogg:default_library=static',
+  'ogg:warning_level=0',
+]
 jpeg_fallback_defaults = quiet_fallback_defaults + ['tests=disabled']
 
 win32 = host_machine.system() == 'windows'
@@ -78,6 +83,7 @@ dll_link_args = []
 if cc.get_argument_syntax() == 'gcc'
   common_c_args += cc.get_supported_arguments([
     '-Wall',
+    '-Wextra',
     '-Wimplicit',
     '-Wstrict-prototypes',
     '-Wno-unused-result',
@@ -87,6 +93,7 @@ if cc.get_argument_syntax() == 'gcc'
   ])
   common_cpp_args += cpp.get_supported_arguments([
     '-Wall',
+    '-Wextra',
     '-Wno-unused-result',
     '-fvisibility=hidden',
     '-fno-strict-aliasing',
@@ -104,8 +111,18 @@ if cc.get_argument_syntax() == 'gcc'
     link_args += cc.get_supported_link_arguments(['-Wl,--gc-sections'])
   endif
 elif cc.get_id() == 'msvc'
-  common_c_args += ['/D_CRT_SECURE_NO_WARNINGS', '/D_CRT_NONSTDC_NO_WARNINGS', '/D_WINSOCK_DEPRECATED_NO_WARNINGS']
-  common_cpp_args += ['/D_CRT_SECURE_NO_WARNINGS', '/D_CRT_NONSTDC_NO_WARNINGS', '/D_WINSOCK_DEPRECATED_NO_WARNINGS']
+  common_c_args += ['/wd4201', '/D_CRT_SECURE_NO_WARNINGS', '/D_CRT_NONSTDC_NO_WARNINGS', '/D_WINSOCK_DEPRECATED_NO_WARNINGS']
+  common_cpp_args += ['/wd4201', '/EHsc', '/D_CRT_SECURE_NO_WARNINGS', '/D_CRT_NONSTDC_NO_WARNINGS', '/D_WINSOCK_DEPRECATED_NO_WARNINGS']
+endif
+
+if get_option('strict-warnings')
+  if cc.get_argument_syntax() == 'gcc'
+    common_c_args += cc.get_supported_arguments(['-Werror'])
+    common_cpp_args += cpp.get_supported_arguments(['-Werror'])
+  elif cc.get_id() == 'msvc'
+    common_c_args += ['/WX']
+    common_cpp_args += ['/WX']
+  endif
 endif
 
 if win32
@@ -217,8 +234,10 @@ server_src = [
   'code/server/sv_init.cpp',
   'code/server/sv_main.cpp',
   'code/server/sv_net_chan.cpp',
+  'code/server/sv_platform.cpp',
   'code/server/sv_snapshot.cpp',
   'code/server/sv_world.cpp',
+  'code/server/sv_zmq.cpp',
 ]
 
 client_src = [
@@ -439,6 +458,29 @@ client_deps = []
 server_deps = []
 renderer_deps = []
 copy_runtime_files = []
+
+thread_dep = dependency('threads')
+client_deps += thread_dep
+server_deps += thread_dep
+
+freetype_dep = dependency('freetype2',
+  required: get_option('build-client'),
+  fallback: 'freetype2',
+  default_options: [
+    'default_library=static',
+    'brotli=disabled',
+    'bzip2=disabled',
+    'harfbuzz=disabled',
+    'png=disabled',
+    'zlib=disabled',
+  ],
+)
+if freetype_dep.found()
+  common_c_args += ['-DBUILD_FREETYPE']
+  renderer_deps += freetype_dep
+  # Static-renderer builds extract renderer objects into the client target.
+  client_deps += freetype_dep
+endif
 
 libm = cc.find_library('m', required: false)
 if libm.found()
@@ -690,7 +732,7 @@ if renderer_dlopen
       renderer_gl_src + renderer_base_src,
       include_directories: include_dirs,
       dependencies: renderer_deps,
-      c_args: renderer_c_args,
+      c_args: renderer_c_args + ['-DRENDERER_CLASSIC'],
       cpp_args: renderer_cpp_args,
       link_args: dll_link_args,
       name_prefix: '',
@@ -705,7 +747,7 @@ if renderer_dlopen
       renderer_gl_src + renderer_glx_src + renderer_base_src,
       include_directories: include_dirs,
       dependencies: renderer_deps,
-      c_args: renderer_c_args + ['-DRENDERER_GLX'],
+      c_args: renderer_c_args + ['-DRENDERER_CLASSIC', '-DRENDERER_GLX'],
       cpp_args: renderer_cpp_args + ['-DRENDERER_GLX'],
       link_args: dll_link_args,
       name_prefix: '',
@@ -720,7 +762,7 @@ if renderer_dlopen
       renderer_vk_src + renderer_base_src,
       include_directories: include_dirs,
       dependencies: renderer_deps,
-      c_args: renderer_c_args,
+      c_args: renderer_c_args + ['-DRENDERER_VULKAN'],
       cpp_args: renderer_cpp_args,
       link_args: dll_link_args,
       name_prefix: '',
@@ -731,11 +773,14 @@ if renderer_dlopen
   endif
 
   if 'opengl2' in enabled_renderers
+    # The generated sources intentionally embed complete GLSL programs in one
+    # string literal. Keep this exception local to those renderer sources.
+    renderer2_c_args = renderer_c_args + ['-DRENDERER_OPENGL2'] + cc.get_supported_arguments(['-Wno-overlength-strings'])
     renderer_targets += shared_library(renderer_prefix + '_opengl2_' + renderer_arch,
       renderer2_src + renderer2_glsl_src + renderer_base_src,
       include_directories: include_dirs,
       dependencies: renderer_deps,
-      c_args: renderer_c_args,
+      c_args: renderer2_c_args,
       cpp_args: renderer_cpp_args,
       link_args: dll_link_args,
       name_prefix: '',
@@ -753,7 +798,7 @@ if not renderer_dlopen
       renderer_gl_src + renderer_glx_src + renderer_common_src,
       include_directories: include_dirs,
       dependencies: renderer_deps,
-      c_args: common_c_args + ['-DRENDERER_GLX'],
+      c_args: common_c_args + ['-DRENDERER_CLASSIC', '-DRENDERER_GLX'],
       cpp_args: common_cpp_args + ['-DRENDERER_GLX'],
       install: false,
     )
@@ -763,17 +808,18 @@ if not renderer_dlopen
       renderer_vk_src + renderer_common_src,
       include_directories: include_dirs,
       dependencies: renderer_deps,
-      c_args: common_c_args,
+      c_args: common_c_args + ['-DRENDERER_VULKAN'],
       cpp_args: common_cpp_args,
       install: false,
     )
     static_renderer_objects = [static_renderer.extract_all_objects(recursive: false)]
   elif renderer_default == 'opengl2'
+    renderer2_c_args = common_c_args + ['-DRENDERER_OPENGL2'] + cc.get_supported_arguments(['-Wno-overlength-strings'])
     static_renderer = static_library('renderer_static_opengl2',
       renderer2_src + renderer2_glsl_src + renderer_common_src,
       include_directories: include_dirs,
       dependencies: renderer_deps,
-      c_args: common_c_args,
+      c_args: renderer2_c_args,
       cpp_args: common_cpp_args,
       install: false,
     )
@@ -783,7 +829,7 @@ if not renderer_dlopen
       renderer_gl_src + renderer_common_src,
       include_directories: include_dirs,
       dependencies: renderer_deps,
-      c_args: common_c_args,
+      c_args: common_c_args + ['-DRENDERER_CLASSIC'],
       cpp_args: common_cpp_args,
       install: false,
     )
@@ -883,6 +929,7 @@ foreach map_name : standard_audio_zone_maps
 endforeach
 root_package_assets = standard_audio_zone_sidecars + files(
   'pkg/baseq3/fnql-hud.json',
+  'pkg/baseq3/scripts/fnql.shader',
   'pkg/baseq3/sound/fnql-weapon-sounds.sndshd',
   'pkg/missionpack/sound/fnql-weapon-sounds.sndshd',
 )
@@ -955,6 +1002,62 @@ if get_option('audio-tests')
   )
 endif
 
+netchan_profile_tests = executable('fnql_netchan_profile_tests',
+  'tests/netchan_profile_tests.cpp',
+  include_directories: include_directories('code/qcommon'),
+  cpp_args: common_cpp_args,
+)
+test('fnql_netchan_profiles', netchan_profile_tests)
+
+netchan_codec_tests = executable('fnql_netchan_codec_tests',
+  'tests/netchan_codec_tests.cpp',
+  include_directories: include_directories('code/qcommon'),
+  cpp_args: common_cpp_args,
+)
+test('fnql_netchan_codec', netchan_codec_tests)
+
+demo_stream_tests = executable('fnql_demo_stream_tests',
+  'tests/demo_stream_tests.cpp',
+  include_directories: include_directories('code/client'),
+  cpp_args: common_cpp_args,
+)
+test('fnql_demo_stream', demo_stream_tests)
+
+test('fnql_ql_demo_source', python,
+  args: files('tests/ql_demo_source_tests.py'),
+)
+
+ql_bsp_contract_tests = executable('fnql_ql_bsp_contract_tests',
+  'tests/ql_bsp_contract_tests.cpp',
+  include_directories: include_directories('code/qcommon'),
+  cpp_args: common_cpp_args,
+)
+test('fnql_ql_bsp_contract', ql_bsp_contract_tests)
+test('fnql_ql_services_source', python,
+  args: files('tests/ql_services_source_tests.py'),
+)
+
+webpak_format_tests = executable('fnql_webpak_format_tests',
+  'tests/webpak_format_tests.cpp',
+  include_directories: include_directories('code/client'),
+  cpp_args: common_cpp_args,
+)
+test('fnql_webpak_format', webpak_format_tests)
+
+webui_backend_tests = executable('fnql_webui_backend_tests',
+  'tests/webui_backend_tests.cpp',
+  include_directories: include_directories('code/client'),
+  cpp_args: common_cpp_args,
+)
+test('fnql_webui_backend', webui_backend_tests)
+
+zmq_endpoint_tests = executable('fnql_zmq_endpoint_tests',
+  'tests/zmq_endpoint_tests.cpp',
+  include_directories: include_directories('code/server'),
+  cpp_args: common_cpp_args,
+)
+test('fnql_zmq_endpoint', zmq_endpoint_tests)
+
 if get_option('glx-tests')
   glx_logic_tests = executable('fnql_glx_logic_tests',
     'tests/glx/glx_logic_tests.cpp',
@@ -994,6 +1097,19 @@ if get_option('glx-tests')
     args: files('tests/ui_native_bridge_source_tests.py'),
   )
 endif
+
+# Keep the complete source-level regression suite visible to the default Meson
+# test workflow.  Individual tests above remain useful for focused filtering,
+# while discovery catches compatibility tests that are intentionally independent
+# of renderer/audio build options.
+test('fnql_python_source_regressions', python,
+  args: [
+    '-m', 'unittest', 'discover',
+    '-s', join_paths(meson.current_source_dir(), 'tests'),
+    '-p', '*_tests.py',
+  ],
+  workdir: meson.current_source_dir(),
+)
 
 curl_summary = 'disabled'
 if use_curl

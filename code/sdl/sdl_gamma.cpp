@@ -264,7 +264,7 @@ static qboolean SDLGamma_BackupMonitorGamma( const char *displayName )
 	if ( HIBYTE( s_oldHardwareGamma[0][181] ) == 255 ) {
 		int i;
 
-		Com_Printf( S_COLOR_YELLOW "WARNING: suspicious gamma tables, using linear ramp for restoration\n" );
+		Com_Printf( S_COLOR_CYAN "Gamma restoration: suspicious tables replaced with a linear ramp\n" );
 
 		for ( i = 0; i < 256; i++ ) {
 			s_oldHardwareGamma[0][i] = i << 8;

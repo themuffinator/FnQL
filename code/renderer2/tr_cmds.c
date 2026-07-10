@@ -268,9 +268,9 @@ void	RE_SetColor( const float *rgba ) {
 	}
 	cmd->commandId = RC_SET_COLOR;
 	if ( !rgba ) {
-		static float colorWhite[4] = { 1, 1, 1, 1 };
+		static float defaultColor[4] = { 1, 1, 1, 1 };
 
-		rgba = colorWhite;
+		rgba = defaultColor;
 	}
 
 	cmd->color[0] = rgba[0];

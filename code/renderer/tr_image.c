@@ -1049,7 +1049,7 @@ static const char *R_LoadImage( const char *name, byte **pic, int *width, int *h
 #if 0
 			if ( orgNameFailed )
 			{
-				ri.Printf( PRINT_DEVELOPER, S_COLOR_YELLOW "WARNING: %s not present, using %s instead\n",
+				ri.Printf( PRINT_DEVELOPER, "Image fallback: %s -> %s\n",
 						name, altName );
 			}
 #endif

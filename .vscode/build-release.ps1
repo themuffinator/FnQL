@@ -12,16 +12,16 @@ param(
 	[ValidateSet('all', 'opengl', 'renderer2', 'opengl2', 'vulkan', 'glx')]
 	[string]$Renderer = 'all',
 
-	[string]$Renderers = $(if ($env:FNQ3_MESON_RENDERERS) { $env:FNQ3_MESON_RENDERERS } else { 'opengl,glx,vulkan,opengl2' }),
+	[string]$Renderers = $(if ($env:FNQL_MESON_RENDERERS) { $env:FNQL_MESON_RENDERERS } elseif ($env:FNQ3_MESON_RENDERERS) { $env:FNQ3_MESON_RENDERERS } else { 'opengl,glx,vulkan,opengl2' }),
 	[ValidateSet('opengl', 'opengl2', 'vulkan', 'glx')]
-	[string]$RendererDefault = $(if ($env:FNQ3_MESON_RENDERER_DEFAULT) { $env:FNQ3_MESON_RENDERER_DEFAULT } else { 'opengl' }),
-	[string]$BuildDir = $(if ($env:FNQ3_MESON_BUILD_DIR) { $env:FNQ3_MESON_BUILD_DIR } else { 'meson\build' }),
+	[string]$RendererDefault = $(if ($env:FNQL_MESON_RENDERER_DEFAULT) { $env:FNQL_MESON_RENDERER_DEFAULT } elseif ($env:FNQ3_MESON_RENDERER_DEFAULT) { $env:FNQ3_MESON_RENDERER_DEFAULT } else { 'opengl' }),
+	[string]$BuildDir = $(if ($env:FNQL_MESON_BUILD_DIR) { $env:FNQL_MESON_BUILD_DIR } elseif ($env:FNQ3_MESON_BUILD_DIR) { $env:FNQ3_MESON_BUILD_DIR } else { 'meson\build' }),
 	[switch]$SetupOnly,
 	[switch]$RunTests,
 	[switch]$Install,
-	[string]$DestDir = $(if ($env:FNQ3_MESON_DESTDIR) { $env:FNQ3_MESON_DESTDIR } else { '' }),
+	[string]$DestDir = $(if ($env:FNQL_MESON_DESTDIR) { $env:FNQL_MESON_DESTDIR } elseif ($env:FNQ3_MESON_DESTDIR) { $env:FNQ3_MESON_DESTDIR } else { '' }),
 	[switch]$Archive,
-	[string]$RootArchiveName = $(if ($env:FNQ3_MESON_ROOT_ARCHIVE_NAME) { $env:FNQ3_MESON_ROOT_ARCHIVE_NAME } else { 'FnQuake3-pkg.fnz' })
+	[string]$RootArchiveName = $(if ($env:FNQL_MESON_ROOT_ARCHIVE_NAME) { $env:FNQL_MESON_ROOT_ARCHIVE_NAME } elseif ($env:FNQ3_MESON_ROOT_ARCHIVE_NAME) { $env:FNQ3_MESON_ROOT_ARCHIVE_NAME } else { 'FnQL-pkg.fnz' })
 )
 
 $ErrorActionPreference = 'Stop'
@@ -55,6 +55,48 @@ function Resolve-CommandPath {
 	}
 
 	throw "Unable to locate $Name. Install Meson/Ninja or add them to PATH."
+}
+
+function Import-MsvcEnvironment {
+	param([string]$SelectedPlatform)
+
+	if ($env:OS -ne 'Windows_NT') {
+		return
+	}
+
+	$arch = switch ($SelectedPlatform) {
+		'Win32' { 'x86' }
+		'x64' { 'amd64' }
+		'ARM64' { 'arm64' }
+		default { throw "Unsupported platform: $SelectedPlatform" }
+	}
+
+	$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+	if (-not (Test-Path $vswhere)) {
+		if (Get-Command cl.exe -ErrorAction SilentlyContinue) {
+			return
+		}
+		throw 'Visual Studio discovery tool was not found and no MSVC environment is active.'
+	}
+
+	$installation = & $vswhere -latest -products * `
+		-requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+	if (-not $installation) {
+		throw 'A Visual Studio installation with the MSVC x86/x64 tools was not found.'
+	}
+
+	$devCmd = Join-Path $installation 'Common7\Tools\VsDevCmd.bat'
+	$environmentCommand = "`"$devCmd`" -no_logo -arch=$arch -host_arch=x64 >nul && set"
+	$environmentLines = & cmd.exe /d /s /c $environmentCommand
+	if ($LASTEXITCODE -ne 0) {
+		throw "Visual Studio environment setup failed for $SelectedPlatform."
+	}
+
+	foreach ($line in $environmentLines) {
+		if ($line -match '^([^=]+)=(.*)$') {
+			Set-Item -Path "Env:$($matches[1])" -Value $matches[2]
+		}
+	}
 }
 
 function Convert-RendererName {
@@ -150,13 +192,13 @@ function Assert-WindowsOutputs {
 	$rendererArch = Get-ExpectedRendererArch -SelectedPlatform $SelectedPlatform
 
 	if ($SelectedTarget -in @('client', 'both')) {
-		$clientExe = Join-Path $BuildPath "fnquake3$suffix.exe"
+		$clientExe = Join-Path $BuildPath "fnql$suffix.exe"
 		if (-not (Test-Path $clientExe)) {
 			throw "Client executable was not produced: $clientExe"
 		}
 
 		foreach ($rendererName in ($RendererCsv -split ',')) {
-			$rendererDll = Join-Path $BuildPath "fnquake3_${rendererName}_${rendererArch}.dll"
+			$rendererDll = Join-Path $BuildPath "fnql_${rendererName}_${rendererArch}.dll"
 			if (-not (Test-Path $rendererDll)) {
 				throw "Renderer module was not produced: $rendererDll"
 			}
@@ -164,7 +206,7 @@ function Assert-WindowsOutputs {
 	}
 
 	if ($SelectedTarget -in @('dedicated', 'both')) {
-		$dedicatedExe = Join-Path $BuildPath "fnquake3.ded$suffix.exe"
+		$dedicatedExe = Join-Path $BuildPath "fnql.ded$suffix.exe"
 		if (-not (Test-Path $dedicatedExe)) {
 			throw "Dedicated executable was not produced: $dedicatedExe"
 		}
@@ -207,12 +249,19 @@ function Invoke-MesonInstall {
 
 $workspaceRoot = Split-Path -Parent $PSScriptRoot
 $buildPath = Resolve-BuildPath -WorkspaceRoot $workspaceRoot -SelectedBuildDir $BuildDir
+$canonicalRootArchiveName = 'FnQL-pkg.fnz'
+if ([System.IO.Path]::GetFileName($RootArchiveName) -ne $RootArchiveName -or
+	[System.IO.Path]::GetExtension($RootArchiveName) -ne '.fnz') {
+	throw "Root archive name must be a .fnz file name without a directory: $RootArchiveName"
+}
 $buildType = Convert-BuildType -SelectedConfiguration $Configuration
 $rendererCsv = Resolve-RendererList `
 	-SelectedRenderer $Renderer `
 	-RendererCsv $Renderers `
 	-RendererCsvWasProvided ($PSBoundParameters.ContainsKey('Renderers'))
-$mesonPath = Resolve-CommandPath -Name 'meson' -Override $env:FNQ3_MESON
+$mesonOverride = if ($env:FNQL_MESON) { $env:FNQL_MESON } else { $env:FNQ3_MESON }
+Import-MsvcEnvironment -SelectedPlatform $Platform
+$mesonPath = Resolve-CommandPath -Name 'meson' -Override $mesonOverride
 
 Write-Host "Meson: $mesonPath"
 Write-Host "Configuration: $Configuration ($buildType)"
@@ -230,6 +279,7 @@ $setupArgs = @(
 	'setup',
 	$buildPath,
 	"--buildtype=$buildType",
+	'-Dstrict-warnings=true',
 	'-Drenderer-dlopen=true',
 	"-Drenderers=$rendererCsv",
 	"-Drenderer-default=$RendererDefault",
@@ -260,7 +310,10 @@ if ($SetupOnly) {
 }
 
 Clear-StaleMesonArchive -BuildPath $buildPath -ArchiveName 'libbotlib.a'
-Clear-StaleMesonArchive -BuildPath $buildPath -ArchiveName $RootArchiveName
+Clear-StaleMesonArchive -BuildPath $buildPath -ArchiveName $canonicalRootArchiveName
+if ($RootArchiveName -ne $canonicalRootArchiveName) {
+	Clear-StaleMesonArchive -BuildPath $buildPath -ArchiveName $RootArchiveName
+}
 
 $compileArgs = @('compile', '-C', $buildPath)
 Write-Host "==> $mesonPath $($compileArgs -join ' ')"
@@ -285,7 +338,14 @@ if ($Install) {
 }
 
 if ($Archive) {
+	$canonicalArchivePath = Join-Path $buildPath $canonicalRootArchiveName
+	if (-not (Test-Path $canonicalArchivePath)) {
+		throw "Canonical root package archive was not produced: $canonicalArchivePath"
+	}
 	$archivePath = Join-Path $buildPath $RootArchiveName
+	if ($archivePath -ne $canonicalArchivePath) {
+		Copy-Item -LiteralPath $canonicalArchivePath -Destination $archivePath -Force
+	}
 	if (-not (Test-Path $archivePath)) {
 		throw "Root package archive was not produced: $archivePath"
 	}

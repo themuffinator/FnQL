@@ -78,7 +78,11 @@ Publishes a cvar change using the latched value when retail would expose one.
 static void Cvar_PublishChange( const cvar_t *var ) {
 	const char	*value;
 
-	if ( !var ) {
+	/* The browser bridge is an external presentation boundary, not a trusted
+	 * cvar reader. CVAR_PRIVATE must suppress the event entirely: publishing a
+	 * redacted marker would still disclose the timing and existence of secret
+	 * changes, while publishing the value exposes credentials to any backend. */
+	if ( !var || ( var->flags & CVAR_PRIVATE ) ) {
 		return;
 	}
 
@@ -646,6 +650,13 @@ Prints the value, default, and latched string of the given variable
 ============
 */
 static void Cvar_Print( const cvar_t *v ) {
+	if ( v->flags & CVAR_PRIVATE ) {
+		Com_Printf( "\"%s\" is \"<private>\"\n", v->name );
+		if ( v->description ) {
+			Com_Printf( "%s\n", v->description );
+		}
+		return;
+	}
 
 	Com_Printf ("\"%s\" is:\"%s" S_COLOR_WHITE "\"",
 		v->name, v->string );
@@ -1466,6 +1477,79 @@ void Cvar_WriteVariables( fileHandle_t f )
 
 
 /*
+===========================
+Cvar_WriteQLConfigVariables
+
+Writes Quake Live's two-file configuration contract. Local/hardware archived
+state goes to qzconfig.cfg; engine-protected and module-replicated state goes
+to repconfig.cfg alongside key bindings. The split is deliberately expressed
+here rather than copied from the reconstructed implementation so it remains a
+single, testable policy boundary in FnQL.
+===========================
+*/
+void Cvar_WriteQLConfigVariables( fileHandle_t hardwareFile,
+		fileHandle_t replicateFile, qboolean clientConfigOnly ) {
+	cvar_t *var;
+	char buffer[MAX_CMD_LINE];
+	const char *value;
+	fileHandle_t target;
+
+	if ( hardwareFile == FS_INVALID_HANDLE ) {
+		return;
+	}
+	if ( replicateFile == FS_INVALID_HANDLE ) {
+		replicateFile = hardwareFile;
+	}
+
+	if ( cvar_sort ) {
+		cvar_sort = qfalse;
+		Cvar_Sort();
+	}
+
+	for ( var = cvar_vars; var; var = var->next ) {
+		if ( !var->name || var->name[ 0 ] == '/' ||
+			( ( var->flags & ( CVAR_ROM | CVAR_ARCHIVE | CVAR_CLOUD ) ) == CVAR_ROM ) ||
+			!Q_stricmp( var->name, "cl_cdkey" ) || !Q_stricmp( var->name, "password" ) ||
+			( ( var->flags & ( CVAR_PRIVATE | CVAR_INIT ) ) == ( CVAR_PRIVATE | CVAR_INIT ) ) ) {
+			continue;
+		}
+
+		if ( !( var->flags & ( CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_CLOUD ) ) ) {
+			continue;
+		}
+
+		value = var->latchedString ? var->latchedString : var->string;
+		if ( !value ) {
+			value = "";
+		}
+
+		if ( clientConfigOnly ) {
+			if ( !( var->flags & CVAR_CLOUD ) ||
+				!Q_stricmp( value, var->resetString ? var->resetString : "" ) ) {
+				continue;
+			}
+		}
+
+		if ( strlen( var->name ) + strlen( value ) + 10 >= sizeof( buffer ) ) {
+			Com_DPrintf( "Config value omitted because cvar '%s' exceeds the command limit\n",
+				var->name );
+			continue;
+		}
+
+		target = hardwareFile;
+		if ( ( var->flags & CVAR_PROTECTED ) ||
+			( (unsigned int)var->flags & 0x80000000u ) ) {
+			target = replicateFile;
+		}
+
+		Com_sprintf( buffer, sizeof( buffer ), "seta %s \"%s\"" Q_NEWLINE,
+			var->name, value );
+		FS_Printf( target, "%s", buffer );
+	}
+}
+
+
+/*
 ============
 Cvar_List_f
 ============
@@ -1539,7 +1623,8 @@ static void Cvar_List_f( void ) {
 			Com_Printf(" ");
 		}
 
-		Com_Printf (" %s \"%s\"\n", var->name, var->string);
+		Com_Printf( " %s \"%s\"\n", var->name,
+			( var->flags & CVAR_PRIVATE ) ? "<private>" : var->string );
 	}
 
 	Com_Printf ("\n%i total cvars\n", i);
@@ -1625,7 +1710,11 @@ static void Cvar_ListModified_f( void ) {
 			Com_Printf(" ");
 		}
 
-		Com_Printf (" %s \"%s\", default \"%s\"\n", var->name, value, var->resetString);
+		if ( var->flags & CVAR_PRIVATE ) {
+			Com_Printf( " %s \"<private>\", default \"<private>\"\n", var->name );
+		} else {
+			Com_Printf( " %s \"%s\", default \"%s\"\n", var->name, value, var->resetString );
+		}
 	}
 
 	Com_Printf ("\n%i total modified cvars\n", totalModified);
@@ -2078,22 +2167,14 @@ Cvar_Register
 basically a slightly modified Cvar_Get for the interpreted modules
 =====================
 */
-#define INVALID_FLAGS ( CVAR_USER_CREATED | CVAR_SERVER_CREATED | CVAR_PROTECTED | CVAR_PRIVATE | CVAR_MODIFIED | CVAR_NONEXISTENT )
+#define INVALID_FLAGS ( CVAR_USER_CREATED | CVAR_SERVER_CREATED | CVAR_PRIVATE | CVAR_MODIFIED | CVAR_NONEXISTENT )
 void Cvar_Register( vmCvar_t *vmCvar, const char *varName, const char *defaultValue, int flags, int privateFlag )
 {
 	cvar_t	*cv;
 
-	// There is code in Cvar_Get to prevent CVAR_ROM cvars being changed by the
-	// user. In other words CVAR_ARCHIVE and CVAR_ROM are mutually exclusive
-	// flags. Unfortunately some historical game code (including single player
-	// baseq3) sets both flags. We unset CVAR_ROM for such cvars.
-	if ((flags & (CVAR_ARCHIVE | CVAR_ROM)) == (CVAR_ARCHIVE | CVAR_ROM)) {
-		Com_DPrintf( S_COLOR_YELLOW "WARNING: Unsetting CVAR_ROM from cvar '%s', "
-			"since it is also CVAR_ARCHIVE\n", varName );
-		flags &= ~CVAR_ROM;
-	}
-
-	// Don't allow VM to specify a different creator or other internal flags.
+	// Do not allow modules to specify internal FnQL bookkeeping flags. Retail
+	// Quake Live modules legitimately supply CVAR_PROTECTED, so that public ABI
+	// bit must pass through unchanged.
 	if ( flags & INVALID_FLAGS ) {
 		Com_DPrintf( S_COLOR_YELLOW "WARNING: VM tried to set invalid flags 0x%02x on cvar '%s'\n", ( flags & INVALID_FLAGS ), varName );
 		flags &= ~INVALID_FLAGS;
@@ -2101,15 +2182,11 @@ void Cvar_Register( vmCvar_t *vmCvar, const char *varName, const char *defaultVa
 
 	cv = Cvar_FindVar( varName );
 
-	// Don't modify cvar if it's protected.
-	if ( cv && ( cv->flags & ( CVAR_PROTECTED | CVAR_PRIVATE ) ) ) {
-		Com_DPrintf( S_COLOR_YELLOW "WARNING: VM tried to register protected cvar '%s' with value '%s'%s\n",
-			varName, defaultValue, ( flags & ~cv->flags ) != 0 ? " and new flags" : "" );
-		if ( cv->flags & CVAR_PRIVATE ) {
-			if ( privateFlag ) {
-				return;
-			}
-		}
+	// Private engine cvars remain inaccessible to modules. CVAR_PROTECTED is
+	// retail module metadata and is intentionally handled by Cvar_Get.
+	if ( cv && ( cv->flags & CVAR_PRIVATE ) && privateFlag ) {
+		Com_DPrintf( S_COLOR_YELLOW "WARNING: VM tried to register private cvar '%s'\n", varName );
+		return;
 	} else {
 		cv = Cvar_Get( varName, defaultValue, flags | CVAR_VM_CREATED );
 	}
@@ -2119,8 +2196,46 @@ void Cvar_Register( vmCvar_t *vmCvar, const char *varName, const char *defaultVa
 
 	vmCvar->handle = cv - cvar_indexes;
 	vmCvar->modificationCount = -1;
+	vmCvar->flags = cv->flags;
 
 	Cvar_Update( vmCvar, 0 );
+}
+
+/* Quake III bytecode and legacy vmMain DLLs use the pre-QL vmCvar_t layout,
+ * which has no flags word before string. Keep that ABI isolated at the legacy
+ * syscall boundary while native Quake Live modules receive the retail layout. */
+typedef struct {
+	cvarHandle_t	handle;
+	int			modificationCount;
+	float		value;
+	int			integer;
+	char		string[MAX_CVAR_VALUE_STRING];
+} legacyVmCvar_t;
+
+static void Cvar_CopyRetailToLegacy( legacyVmCvar_t *legacy, const vmCvar_t *retail ) {
+	if ( !legacy || !retail ) {
+		return;
+	}
+
+	legacy->handle = retail->handle;
+	legacy->modificationCount = retail->modificationCount;
+	legacy->value = retail->value;
+	legacy->integer = retail->integer;
+	Q_strncpyz( legacy->string, retail->string, sizeof( legacy->string ) );
+}
+
+void Cvar_RegisterLegacy( void *vmCvar, const char *varName, const char *defaultValue, int flags, int privateFlag ) {
+	legacyVmCvar_t *legacy = (legacyVmCvar_t *)vmCvar;
+	vmCvar_t retail;
+
+	if ( !legacy ) {
+		Cvar_Register( NULL, varName, defaultValue, flags, privateFlag );
+		return;
+	}
+
+	Com_Memset( &retail, 0, sizeof( retail ) );
+	Cvar_Register( &retail, varName, defaultValue, flags, privateFlag );
+	Cvar_CopyRetailToLegacy( legacy, &retail );
 }
 
 
@@ -2137,12 +2252,6 @@ cvar_t *Cvar_RegisterBounded( vmCvar_t *vmCvar, const char *varName, const char 
 {
 	cvar_t	*cv;
 
-	if ((flags & (CVAR_ARCHIVE | CVAR_ROM)) == (CVAR_ARCHIVE | CVAR_ROM)) {
-		Com_DPrintf( S_COLOR_YELLOW "WARNING: Unsetting CVAR_ROM from cvar '%s', "
-			"since it is also CVAR_ARCHIVE\n", varName );
-		flags &= ~CVAR_ROM;
-	}
-
 	if ( flags & INVALID_FLAGS ) {
 		Com_DPrintf( S_COLOR_YELLOW "WARNING: VM tried to set invalid flags 0x%02x on cvar '%s'\n", ( flags & INVALID_FLAGS ), varName );
 		flags &= ~INVALID_FLAGS;
@@ -2150,14 +2259,9 @@ cvar_t *Cvar_RegisterBounded( vmCvar_t *vmCvar, const char *varName, const char 
 
 	cv = Cvar_FindVar( varName );
 
-	if ( cv && ( cv->flags & ( CVAR_PROTECTED | CVAR_PRIVATE ) ) ) {
-		Com_DPrintf( S_COLOR_YELLOW "WARNING: VM tried to register protected cvar '%s' with value '%s'%s\n",
-			varName, defaultValue, ( flags & ~cv->flags ) != 0 ? " and new flags" : "" );
-		if ( cv->flags & CVAR_PRIVATE ) {
-			if ( privateFlag ) {
-				return cv;
-			}
-		}
+	if ( cv && ( cv->flags & CVAR_PRIVATE ) && privateFlag ) {
+		Com_DPrintf( S_COLOR_YELLOW "WARNING: VM tried to register private cvar '%s'\n", varName );
+		return cv;
 	} else {
 		cv = Cvar_Get( varName, defaultValue, flags | CVAR_VM_CREATED );
 		Cvar_CheckRange( cv, minimumValue, maximumValue, CV_FLOAT );
@@ -2168,6 +2272,7 @@ cvar_t *Cvar_RegisterBounded( vmCvar_t *vmCvar, const char *varName, const char 
 
 	vmCvar->handle = cv - cvar_indexes;
 	vmCvar->modificationCount = -1;
+	vmCvar->flags = cv->flags;
 
 	Cvar_Update( vmCvar, 0 );
 
@@ -2216,6 +2321,24 @@ void Cvar_Update( vmCvar_t *vmCvar, int privateFlag ) {
 
 	vmCvar->value = cv->value;
 	vmCvar->integer = cv->integer;
+}
+
+void Cvar_UpdateLegacy( void *vmCvar, int privateFlag ) {
+	legacyVmCvar_t *legacy = (legacyVmCvar_t *)vmCvar;
+	vmCvar_t retail;
+
+	if ( !legacy ) {
+		return;
+	}
+
+	Com_Memset( &retail, 0, sizeof( retail ) );
+	retail.handle = legacy->handle;
+	retail.modificationCount = legacy->modificationCount;
+	retail.value = legacy->value;
+	retail.integer = legacy->integer;
+	Q_strncpyz( retail.string, legacy->string, sizeof( retail.string ) );
+	Cvar_Update( &retail, privateFlag );
+	Cvar_CopyRetailToLegacy( legacy, &retail );
 }
 
 

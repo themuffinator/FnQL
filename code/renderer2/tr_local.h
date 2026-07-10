@@ -39,7 +39,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define GL_INDEX_TYPE		GL_UNSIGNED_INT
 typedef unsigned int glIndex_t;
 
-#define BUFFER_OFFSET(i) ((char *)NULL + (i))
+#define BUFFER_OFFSET(i) ((const void *)(uintptr_t)(i))
 
 #define	REFENTITYNUM_BITS	11	// can't be increased without changing drawsurf bit packing
 #define	REFENTITYNUM_MASK	((1<<REFENTITYNUM_BITS) - 1)
@@ -2270,7 +2270,7 @@ void            RB_UpdateTessVao(unsigned int attribBits);
 void VaoCache_Commit(void);
 void VaoCache_Init(void);
 void VaoCache_BindVao(void);
-void VaoCache_CheckAdd(qboolean *endSurface, qboolean *recycleVertexBuffer, qboolean *recycleIndexBuffer, int numVerts, int numIndexes);
+qboolean VaoCache_CheckAdd(qboolean *endSurface, qboolean *recycleVertexBuffer, qboolean *recycleIndexBuffer, int numVerts, int numIndexes);
 void VaoCache_RecycleVertexBuffer(void);
 void VaoCache_RecycleIndexBuffer(void);
 void VaoCache_InitQueue(void);

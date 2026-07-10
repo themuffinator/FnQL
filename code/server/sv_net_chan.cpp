@@ -21,6 +21,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 #include "server.h"
+#include "../qcommon/netchan_codec.hpp"
 
 /*
 ==============
@@ -33,48 +34,17 @@ SV_Netchan_Encode
 */
 static void SV_Netchan_Encode(client_t *client, msg_t *msg, const char *clientCommandString)
 {
-	long i, index;
 	byte key;
-	const byte *string;
-	int	srdc, sbit;
-	bool soob;
 
 	if ( msg->cursize < SV_ENCODE_START ) {
 		return;
 	}
 
-	srdc = msg->readcount;
-	sbit = msg->bit;
-	soob = SV_AsBool( msg->oob );
-
-	msg->bit = 0;
-	msg->readcount = 0;
-	msg->oob = qfalse;
-
-	/* reliableAcknowledge = */ MSG_ReadLong(msg);
-
-	msg->oob = SV_QBool( soob );
-	msg->bit = sbit;
-	msg->readcount = srdc;
-
-	string = reinterpret_cast<const byte *>( clientCommandString );
-	index = 0;
 	// xor the client challenge with the netchan sequence number
 	key = client->challenge ^ client->netchan.outgoingSequence;
-	for (i = SV_ENCODE_START; i < msg->cursize; i++) {
-		// modify the key with the last received and with this message acknowledged client command
-		if (!string[index])
-			index = 0;
-		if (string[index] > 127 || string[index] == '%') {
-			key ^= '.' << (i & 1);
-		}
-		else {
-			key ^= string[index] << (i & 1);
-		}
-		index++;
-		// encode the data with this key
-		*(msg->data + i) = *(msg->data + i) ^ key;
-	}
+	fnql::ApplyNetchanXor( msg->data, static_cast<std::size_t>( msg->cursize ),
+		SV_ENCODE_START, key,
+		fnql::NetchanCommandView( clientCommandString, MAX_STRING_CHARS ) );
 }
 
 /*
@@ -90,10 +60,10 @@ SV_Netchan_Decode
 */
 static void SV_Netchan_Decode( client_t *client, msg_t *msg ) {
 	int serverId, messageAcknowledge, reliableAcknowledge;
-	int i, index, srdc, sbit;
+	int srdc, sbit;
 	bool soob;
 	byte key;
-	const byte *string;
+	const char *command;
 
 	srdc = msg->readcount;
 	sbit = msg->bit;
@@ -109,24 +79,11 @@ static void SV_Netchan_Decode( client_t *client, msg_t *msg ) {
 	msg->bit = sbit;
 	msg->readcount = srdc;
 
-	string = reinterpret_cast<const byte *>( client->reliableCommands[ reliableAcknowledge & ( MAX_RELIABLE_COMMANDS - 1 ) ] );
-	index = 0;
-	//
+	command = client->reliableCommands[ reliableAcknowledge & ( MAX_RELIABLE_COMMANDS - 1 ) ];
 	key = client->challenge ^ serverId ^ messageAcknowledge;
-	for (i = msg->readcount + SV_DECODE_START; i < msg->cursize; i++) {
-		// modify the key with the last sent and acknowledged server command
-		if (!string[index])
-			index = 0;
-		if (string[index] > 127 || string[index] == '%') {
-			key ^= '.' << (i & 1);
-		}
-		else {
-			key ^= string[index] << (i & 1);
-		}
-		index++;
-		// decode the data with this key
-		*(msg->data + i) = *(msg->data + i) ^ key;
-	}
+	fnql::ApplyNetchanXor( msg->data, static_cast<std::size_t>( msg->cursize ),
+		static_cast<std::size_t>( msg->readcount + SV_DECODE_START ), key,
+		fnql::NetchanCommandView( command, MAX_STRING_CHARS ) );
 }
 
 
@@ -161,7 +118,8 @@ static void SV_Netchan_TransmitNextInQueue(client_t *client)
 	Com_DPrintf("#462 Netchan_TransmitNextFragment: popping a queued message for transmit\n");
 	netbuf = client->netchan_start_queue;
 
-	if( client->compat )
+	if ( Netchan_WireHasFeature( client->netchan.wireProfile,
+		NETCHAN_FEATURE_RELIABLE_XOR ) )
 		SV_Netchan_Encode(client, &netbuf->msg, netbuf->clientCommandString);
 
 	Netchan_Transmit(&client->netchan, netbuf->msg.cursize, netbuf->msg.data);
@@ -227,7 +185,8 @@ void SV_Netchan_Transmit( client_t *client, msg_t *msg)
 		netbuf = SV_ZMalloc<netchan_buffer_t>();
 		// store the msg, we can't store it encoded, as the encoding depends on stuff we still have to finish sending
 		MSG_Copy(&netbuf->msg, netbuf->msgBuffer, SV_ArraySize( netbuf->msgBuffer ), msg);
-		if ( client->compat ) 
+		if ( Netchan_WireHasFeature( client->netchan.wireProfile,
+			NETCHAN_FEATURE_RELIABLE_XOR ) )
 		{
 			Q_strncpyz(netbuf->clientCommandString, client->lastClientCommandString,
 			SV_ArraySize(netbuf->clientCommandString));
@@ -239,7 +198,8 @@ void SV_Netchan_Transmit( client_t *client, msg_t *msg)
 	}
 	else
 	{
-		if ( client->compat )
+		if ( Netchan_WireHasFeature( client->netchan.wireProfile,
+			NETCHAN_FEATURE_RELIABLE_XOR ) )
 			SV_Netchan_Encode(client, msg, client->lastClientCommandString);
 		Netchan_Transmit( &client->netchan, msg->cursize, msg->data );
 	}
@@ -254,7 +214,8 @@ qboolean SV_Netchan_Process( client_t *client, msg_t *msg ) {
 	if ( !Netchan_Process( &client->netchan, msg ) )
 		return SV_QBool( false );
 
-	if ( client->compat )
+	if ( Netchan_WireHasFeature( client->netchan.wireProfile,
+		NETCHAN_FEATURE_RELIABLE_XOR ) )
 		SV_Netchan_Decode( client, msg );
 
 	return SV_QBool( true );

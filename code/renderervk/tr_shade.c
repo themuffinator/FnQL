@@ -685,8 +685,8 @@ static void ProjectDlightTexture( void ) {
 
 #endif // USE_LEGACY_DLIGHTS
 
-uint32_t VK_PushUniform( const vkUniform_t *uniform );
-void VK_SetFogParams( vkUniform_t *uniform, int *fogStage );
+uint32_t VK_PushUniform( const vkUniform_t *uniformData );
+void VK_SetFogParams( vkUniform_t *uniformData, int *fogStage );
 static vkUniform_t uniform;
 
 static float VK_ComputeTextureIntensityScale( const image_t *image )
@@ -709,20 +709,20 @@ static float VK_ComputeTextureIntensityScale( const image_t *image )
 	return 1.0f;
 }
 
-static void VK_SetTextureFactors( vkUniform_t *uniform, const shaderStage_t *pStage, int bundle )
+static void VK_SetTextureFactors( vkUniform_t *uniformData, const shaderStage_t *pStage, int bundle )
 {
 	float specColor;
 
-	uniform->texFactors[0] = VK_ComputeTextureIntensityScale( pStage->bundle[ bundle ].image[0] );
-	uniform->texFactors[1] = r_dlightSpecPower ? r_dlightSpecPower->value : 10.0f;
+	uniformData->texFactors[0] = VK_ComputeTextureIntensityScale( pStage->bundle[ bundle ].image[0] );
+	uniformData->texFactors[1] = r_dlightSpecPower ? r_dlightSpecPower->value : 10.0f;
 
 	specColor = r_dlightSpecColor ? r_dlightSpecColor->value : -0.2f;
 	if ( specColor > 0.0f ) {
-		uniform->texFactors[2] = 0.0f;
-		uniform->texFactors[3] = specColor;
+		uniformData->texFactors[2] = 0.0f;
+		uniformData->texFactors[3] = specColor;
 	} else {
-		uniform->texFactors[2] = -specColor;
-		uniform->texFactors[3] = 0.0f;
+		uniformData->texFactors[2] = -specColor;
+		uniformData->texFactors[3] = 0.0f;
 	}
 }
 
@@ -1366,21 +1366,21 @@ static void RB_IterateStagesGeneric( const shaderCommands_t *input )
 
 #ifdef USE_VULKAN
 
-void VK_SetFogParams( vkUniform_t *uniform, int *fogStage )
+void VK_SetFogParams( vkUniform_t *uniformData, int *fogStage )
 {
 	if ( tess.fogNum && tess.shader->fogPass ) {
 		const fogProgramParms_t *fp = RB_CalcFogProgramParms();
 		// vertex data
-		Vector4Copy( fp->fogDistanceVector, uniform->fogDistanceVector );
-		Vector4Copy( fp->fogDepthVector, uniform->fogDepthVector );
-		uniform->fogEyeT[0] = fp->eyeT;
+		Vector4Copy( fp->fogDistanceVector, uniformData->fogDistanceVector );
+		Vector4Copy( fp->fogDepthVector, uniformData->fogDepthVector );
+		uniformData->fogEyeT[0] = fp->eyeT;
 		if ( fp->eyeOutside ) {
-			uniform->fogEyeT[1] = 0.0; // fog eye out
+			uniformData->fogEyeT[1] = 0.0; // fog eye out
 		} else {
-			uniform->fogEyeT[1] = 1.0; // fog eye in
+			uniformData->fogEyeT[1] = 1.0; // fog eye in
 		}
 		// fragment data
-		Vector4Copy( fp->fogColor, uniform->fogColor );
+		Vector4Copy( fp->fogColor, uniformData->fogColor );
 		*fogStage = 1;
 	} else {
 		*fogStage = 0;
@@ -1523,7 +1523,7 @@ static qboolean VK_SpotShadowParams( const dlight_t *dl, const shadowSpotLightPl
 	return qtrue;
 }
 
-static void VK_SetLightParams( vkUniform_t *uniform, const dlight_t *dl ) {
+static void VK_SetLightParams( vkUniform_t *uniformData, const dlight_t *dl ) {
 	float radius;
 	vec4_t shadowInfo = { 0.0f, 0.0f, 0.0f, 0.0f };
 	vec4_t shadowAtlas = { 0.0f, 0.0f, 0.0f, 0.0f };
@@ -1538,19 +1538,19 @@ static void VK_SetLightParams( vkUniform_t *uniform, const dlight_t *dl ) {
 #else
 	if ( !glConfig.deviceSupportsGamma )
 #endif
-		VectorScale( dl->color, 2 * powf( r_intensity->value, r_gamma->value ), uniform->light.color);
+		VectorScale( dl->color, 2 * powf( r_intensity->value, r_gamma->value ), uniformData->light.color);
 	else
-		VectorCopy( dl->color, uniform->light.color );
+		VectorCopy( dl->color, uniformData->light.color );
 
 	radius = dl->radius;
 
 	// vertex data
-	VectorCopy( backEnd.or.viewOrigin, uniform->eyePos ); uniform->eyePos[3] = 0.0f;
-	VectorCopy( dl->transformed, uniform->light.pos ); uniform->light.pos[3] = 0.0f;
+	VectorCopy( backEnd.or.viewOrigin, uniformData->eyePos ); uniformData->eyePos[3] = 0.0f;
+	VectorCopy( dl->transformed, uniformData->light.pos ); uniformData->light.pos[3] = 0.0f;
 
 	// fragment data
-	uniform->light.color[3] = 1.0f / Square( radius );
-	uniform->dlightFactors[0] = r_dlightFalloff ? r_dlightFalloff->value : 1.0f;
+	uniformData->light.color[3] = 1.0f / Square( radius );
+	uniformData->dlightFactors[0] = r_dlightFalloff ? r_dlightFalloff->value : 1.0f;
 	shadowPlan = R_ShadowManagerPointPlanForDlight( &tr.shadowManager, &backEnd.viewParms, dl );
 	spotPlan = R_ShadowManagerSpotPlanForDlight( &tr.shadowManager, dl );
 	dlightShadow = VK_DlightShadowParams( dl, shadowPlan, shadowInfo, shadowAtlas, shadowMode,
@@ -1559,38 +1559,38 @@ static void VK_SetLightParams( vkUniform_t *uniform, const dlight_t *dl ) {
 		dlightShadow = VK_SpotShadowParams( dl, spotPlan, shadowInfo, shadowAtlas,
 			shadowMode, &shadowStrength );
 	}
-	uniform->dlightFactors[1] = dlightShadow ? shadowStrength : 0.0f;
+	uniformData->dlightFactors[1] = dlightShadow ? shadowStrength : 0.0f;
 	if ( dlightShadow ) {
-		VK_DlightShadowFilterOffsets( &uniform->dlightFactors[2], &uniform->dlightFactors[3] );
+		VK_DlightShadowFilterOffsets( &uniformData->dlightFactors[2], &uniformData->dlightFactors[3] );
 	} else {
-		uniform->dlightFactors[2] = 0.0f;
-		uniform->dlightFactors[3] = 0.0f;
+		uniformData->dlightFactors[2] = 0.0f;
+		uniformData->dlightFactors[3] = 0.0f;
 	}
 
-	Vector4Copy( shadowInfo, uniform->depthFadeInfo );
-	Vector4Copy( shadowAtlas, uniform->depthFadeScale );
-	Vector4Copy( shadowMode, uniform->depthFadeBias );
-	uniform->depthFadeScale[3] = dlightShadow ? 1.0f : 0.0f;
+	Vector4Copy( shadowInfo, uniformData->depthFadeInfo );
+	Vector4Copy( shadowAtlas, uniformData->depthFadeScale );
+	Vector4Copy( shadowMode, uniformData->depthFadeBias );
+	uniformData->depthFadeScale[3] = dlightShadow ? 1.0f : 0.0f;
 
 	if ( dl->linear )
 	{
 		vec4_t ab;
 		VectorSubtract( dl->transformed2, dl->transformed, ab );
 		ab[3] = 1.0f / DotProduct( ab, ab );
-		Vector4Copy( ab, uniform->light.vector );
+		Vector4Copy( ab, uniformData->light.vector );
 	}
 }
 #endif
 
 
-uint32_t VK_PushUniform( const vkUniform_t *uniform ) {
+uint32_t VK_PushUniform( const vkUniform_t *uniformData ) {
 	const uint32_t offset = vk.cmd->uniform_read_offset = PAD( vk.cmd->vertex_buffer_offset, vk.uniform_alignment );
 
 	if ( offset + vk.uniform_item_size > vk.geometry_buffer_size )
 		return ~0U;
 
 	// push uniform
-	Com_Memcpy( vk.cmd->vertex_buffer_ptr + offset, uniform, sizeof( *uniform ) );
+	Com_Memcpy( vk.cmd->vertex_buffer_ptr + offset, uniformData, sizeof( *uniformData ) );
 	vk.cmd->vertex_buffer_offset = offset + vk.uniform_item_size;
 
 	vk_update_descriptor( VK_DESC_UNIFORM, vk.cmd->uniform_descriptor );

@@ -1670,7 +1670,7 @@ static qboolean NET_GetCvars( void ) {
 	modified += net_socksUsername->modified;
 	net_socksUsername->modified = qfalse;
 
-	net_socksPassword = Cvar_Get( "net_socksPassword", "", CVAR_LATCH | CVAR_ARCHIVE_ND );
+	net_socksPassword = Cvar_Get( "net_socksPassword", "", CVAR_LATCH | CVAR_ARCHIVE_ND | CVAR_PRIVATE );
 	Cvar_SetDescription( net_socksPassword, "Variable holds password for socks firewall access. Supports no authentication and username/password authentication method (RFC-1929). It does NOT support GSS-API method (RFC-1961) authentication (can only be set at initialization time from the OS command line)." );
 	modified += net_socksPassword->modified;
 	net_socksPassword->modified = qfalse;

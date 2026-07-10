@@ -1002,6 +1002,12 @@ class WebUiWiringTests(unittest.TestCase):
                 self.assertIn("re.AdvertisementBridge_UpdateLoadingViewParameters = AdvertisementBridge_UpdateLoadingViewParameters;", init)
 
     def test_renderer_loads_ql_advertisement_lump_for_bridge_diagnostics(self) -> None:
+        ql_bsp = (ROOT / "code" / "qcommon" / "ql_bsp.h").read_text(encoding="utf-8")
+        self.assertIn("#define QL_BSP_ADVERTISEMENT_LUMP_INDEX 17", ql_bsp)
+        self.assertIn("} qlBspAdvertisementDisk_t;", ql_bsp)
+        self.assertIn("QLBSP_ReadAdvertisementLump", ql_bsp)
+        self.assertIn("QLBSP_ParseAdvertisementModel", ql_bsp)
+
         for renderer in ("renderer", "renderer2", "renderervk"):
             with self.subTest(renderer=renderer):
                 tr_local = (ROOT / "code" / renderer / "tr_local.h").read_text(encoding="utf-8")
@@ -1018,14 +1024,15 @@ class WebUiWiringTests(unittest.TestCase):
                 self.assertIn("void\t\tR_AdvertisementList_f( void );", tr_local)
                 self.assertIn("void\t\tR_UpdateAdvertisements( void );", tr_local)
 
-                self.assertIn("#define\tLUMP_ADVERTISEMENTS_QL\t17", tr_bsp)
-                self.assertIn("} dAdvertisement_t;", tr_bsp)
+                self.assertIn('#include "../qcommon/ql_bsp.h"', tr_bsp)
+                self.assertIn("qlBspAdvertisementDisk_t record;", tr_bsp)
+                self.assertIn("Com_Memcpy( &record, records + i * sizeof( record )", tr_bsp)
                 self.assertIn("static void R_LoadAdvertisements( const lump_t *l )", tr_bsp)
-                self.assertIn("modelNum = in->model[0] == '*' ? atoi( in->model + 1 ) : -1;", tr_bsp)
+                self.assertIn("QLBSP_ParseAdvertisementModel( in->model, &modelNum )", tr_bsp)
                 self.assertIn("out[s_worldData.numAdvertisements].cellId = LittleLong( in->cellId );", tr_bsp)
                 self.assertIn("out[s_worldData.numAdvertisements].occlusionQueryIds[0] = 0;", tr_bsp)
                 self.assertIn("out[s_worldData.numAdvertisements].sourceIndex = i;", tr_bsp)
-                self.assertIn("qlAdvertisementsLump.fileofs = LittleLong", tr_bsp)
+                self.assertIn("QLBSP_ReadAdvertisementLump( buffer.b", tr_bsp)
                 self.assertIn("if ( header->version == BSP_VERSION_QL )", tr_bsp)
                 self.assertRegex(
                     tr_bsp,
@@ -1151,12 +1158,13 @@ class WebUiWiringTests(unittest.TestCase):
         linux_input = (ROOT / "code" / "unix" / "linux_glimp.cpp").read_text(encoding="utf-8")
 
         self.assertIn("browserActive = ( Key_GetCatcher() & KEYCATCH_BROWSER )", sdl_input)
-        self.assertIn("relativeMouse = ( in_mouse->integer == 1 && grabMouse && !browserActive )", sdl_input)
+        self.assertIn("relativeMouse = ( in_mouse->integer > 0 && grabMouse && !browserActive )", sdl_input)
         self.assertIn("if( mouseActive || ( Key_GetCatcher() & KEYCATCH_BROWSER ) )", sdl_input)
         self.assertIn("b = K_MOUSE6 + ( e.button.button - ( SDL_BUTTON_X2 + 1 ) );", sdl_input)
         self.assertIn("if ( Key_GetCatcher() & KEYCATCH_BROWSER )", win_input)
-        self.assertIn("case DIMOFS_BUTTON7:", win_input)
-        self.assertIn("SE_KEY, K_MOUSE8", win_input)
+        self.assertIn("kDInputMouseButtonKeys[]", win_input)
+        self.assertIn("K_MOUSE5, K_MOUSE6, K_MOUSE7, K_MOUSE8", win_input)
+        self.assertIn("buttonIndex < ARRAY_LEN( kDInputMouseButtonKeys )", win_input)
         self.assertIn("btn_code = event.xbutton.button - 8 + K_MOUSE6;", linux_input)
         self.assertIn("IN_DeactivateMouse();\n\t\tIN_MouseMove();", win_input)
 

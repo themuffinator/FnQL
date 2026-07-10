@@ -74,16 +74,20 @@ class CGameNativeBridgeSourceTests(unittest.TestCase):
         cl_main = read_repo_file("code/client/cl_main.cpp")
         sv_client = read_repo_file("code/server/sv_client.cpp")
 
-        self.assertIn("#define\tQL_RETAIL_PROTOCOL_VERSION\t91", qcommon_h)
+        self.assertIn(
+            "#define\tQL_RETAIL_PROTOCOL_VERSION\tNETCHAN_QL_RETAIL_PROTOCOL_VERSION",
+            qcommon_h,
+        )
         self.assertIn("void CL_SetRetailClientMessageViewangleDeltaFlag( void );", client_h)
         self.assertIn("void CL_SetRetailClientMessageCGameImportGuardFlag( void );", client_h)
         self.assertIn("void CL_SetRetailClientMessageRendererNodeCount( int nodeCount );", client_h)
         self.assertIn("void CL_CheckCGameNativeImportIntegrity( void );", client_h)
         self.assertIn("RETAIL_CLIENT_MESSAGE_FLAG_CGAME_IMPORT_GUARD", cl_input)
-        self.assertIn("com_protocol->integer == QL_RETAIL_PROTOCOL_VERSION", cl_input)
+        self.assertIn("clc.netchan.wireProfile == NETCHAN_WIRE_QL_RETAIL", cl_input)
         self.assertIn("MSG_WriteByte( &buf, CL_RetailClientMessageFlags() ^ ( clc.serverCommandSequence & 0xff ) );", cl_input)
         self.assertIn("CL_CheckCGameNativeImportIntegrity();", cl_main)
         self.assertIn("CL_SetRetailClientMessageViewangleDeltaFlag();", cl_main)
+        self.assertIn("cl->netchan.wireProfile == NETCHAN_WIRE_QL_RETAIL", sv_client)
         self.assertIn("MSG_ReadByte( msg );", sv_client)
 
     def test_cgame_usercmd_value_uses_ql_primary_and_fov_fields(self) -> None:

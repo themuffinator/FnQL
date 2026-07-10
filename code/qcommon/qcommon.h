@@ -25,6 +25,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include <sys/types.h>
 #include "cm_public.h"
+#include "netchan_profile.h"
 
 //Ignore __attribute__ on non-gcc/clang platforms
 #if !defined(__GNUC__) && !defined(__clang__)
@@ -271,13 +272,14 @@ typedef struct {
 	int			lastSentTime;
 	int			lastSentSize;
 
-	qboolean	compat; // ioq3 extension
+	netchanWireProfile_t wireProfile;
 	qboolean	isLANAddress;
 
 } netchan_t;
 
 void Netchan_Init( int qport );
-void Netchan_Setup( netsrc_t sock, netchan_t *chan, const netadr_t *adr, int port, int challenge, qboolean compat );
+void Netchan_Setup( netsrc_t sock, netchan_t *chan, const netadr_t *adr, int port,
+	int challenge, netchanWireProfile_t wireProfile );
 
 void Netchan_Transmit( netchan_t *chan, int length, const byte *data );
 void Netchan_TransmitNextFragment( netchan_t *chan );
@@ -299,7 +301,7 @@ PROTOCOL
 #define	NEW_PROTOCOL_VERSION	71
 // Quake Live retail protocol. Kept opt-in until the remaining protocol deltas
 // are migrated and validated against retail Steam assets.
-#define	QL_RETAIL_PROTOCOL_VERSION	91
+#define	QL_RETAIL_PROTOCOL_VERSION	NETCHAN_QL_RETAIL_PROTOCOL_VERSION
 #define	QL_NATIVE_CGAME_DLL	"cgamex86.dll"
 // 1.31 - 67
 
@@ -309,6 +311,7 @@ PROTOCOL
 // maintain a list of compatible protocols for demo playing
 // NOTE: that stuff only works with two digits protocols
 extern const int demo_protocols[];
+qboolean Com_DemoProtocolSupported( int protocol );
 
 #define	UPDATE_SERVER_NAME	"update.quake3arena.com"
 // override on command line, config files etc.
@@ -527,6 +530,7 @@ void	Cmd_AddCommand( const char *cmd_name, xcommand_t function );
 
 void	Cmd_RemoveCommand( const char *cmd_name );
 void	Cmd_RemoveCgameCommands( void );
+void	Cmd_WriteAliases( fileHandle_t file );
 
 typedef void (*completionFunc_t)( const char *args, int argNum );
 
@@ -598,6 +602,8 @@ cvar_t *Cvar_Get( const char *var_name, const char *value, int flags );
 // if value is "", the value will not override a previously set value.
 
 void	Cvar_Register( vmCvar_t *vmCvar, const char *varName, const char *defaultValue, int flags, int privateFlag );
+// Preserve the smaller Quake III vmCvar_t memory layout for legacy vmMain/QVM modules.
+void	Cvar_RegisterLegacy( void *vmCvar, const char *varName, const char *defaultValue, int flags, int privateFlag );
 // basically a slightly modified Cvar_Get for the interpreted modules
 
 cvar_t *Cvar_RegisterBounded( vmCvar_t *vmCvar, const char *varName, const char *defaultValue,
@@ -605,6 +611,7 @@ cvar_t *Cvar_RegisterBounded( vmCvar_t *vmCvar, const char *varName, const char 
 // Cvar_Register plus Quake Live numeric bounds for native modules.
 
 void	Cvar_Update( vmCvar_t *vmCvar, int privateFlag );
+void	Cvar_UpdateLegacy( void *vmCvar, int privateFlag );
 // updates an interpreted modules' version of a cvar
 
 void 	Cvar_Set( const char *var_name, const char *value );
@@ -655,6 +662,9 @@ qboolean Cvar_Command( void );
 void 	Cvar_WriteVariables( fileHandle_t f );
 // writes lines containing "set variable value" for all variables
 // with the archive flag set to true.
+void	Cvar_WriteQLConfigVariables( fileHandle_t hardwareFile,
+		fileHandle_t replicateFile, qboolean clientConfigOnly );
+// writes the retail Quake Live hardware/replicated configuration split.
 
 void	Cvar_Init( void );
 
@@ -725,6 +735,13 @@ typedef enum {
 
 #define	MAX_FOUND_FILES		0x5000
 
+// Retail Quake Live keeps its automatically managed client configuration at
+// the Steam-user profile root, split between hardware/local and replicated
+// state.  Q3CONFIG_CFG remains a read-only migration fallback for existing
+// FnQ3/FnQL profiles; new automatic writes use the QL names below.
+#define QL_CONFIG_HARDWARE_FILE "qzconfig.cfg"
+#define QL_CONFIG_REPLICATE_FILE "repconfig.cfg"
+
 #ifdef DEDICATED
 #define Q3CONFIG_CFG "q3config_server.cfg"
 #define CONSOLE_HISTORY_FILE "q3history_server"
@@ -760,6 +777,7 @@ char	**FS_ListFiles( const char *directory, const char *extension, int *numfiles
 void	FS_FreeFileList( char **list );
 
 qboolean FS_FileExists( const char *file );
+qboolean FS_ProfileFileExists( const char *file );
 
 char   *FS_BuildOSPath( const char *base, const char *game, const char *qpath );
 
@@ -772,9 +790,11 @@ int		FS_GetFileList(  const char *path, const char *extension, char *listbuf, in
 
 fileHandle_t	FS_FOpenFileWrite( const char *qpath );
 fileHandle_t	FS_FOpenFileAppend( const char *filename );
+fileHandle_t	FS_FOpenProfileFileWrite( const char *qpath );
 // will properly create any needed paths and deal with separator character issues
 
 qboolean FS_ResetReadOnlyAttribute( const char *filename );
+qboolean FS_ResetProfileReadOnlyAttribute( const char *filename );
 
 qboolean FS_SV_FileExists( const char *file );
 
@@ -782,6 +802,7 @@ fileHandle_t FS_SV_FOpenFileWrite( const char *filename );
 int		FS_SV_FOpenFileRead( const char *filename, fileHandle_t *fp );
 void	FS_SV_Rename( const char *from, const char *to );
 int		FS_FOpenFileRead( const char *qpath, fileHandle_t *file, qboolean uniqueFILE );
+int		FS_FOpenProfileFileRead( const char *qpath, fileHandle_t *file );
 // if uniqueFILE is true, then a new FILE will be fopened even if the file
 // is found in an already open pak file.  If uniqueFILE is false, you must call
 // FS_FCloseFile instead of fclose, otherwise the pak FILE would be improperly closed
@@ -814,6 +835,7 @@ void	FS_FCloseFile( fileHandle_t f );
 // note: you can't just fclose from another DLL, due to MS libc issues
 
 int		FS_ReadFile( const char *qpath, void **buffer );
+int		FS_ReadProfileFile( const char *qpath, void **buffer );
 // returns the length of the file
 // a null buffer will just return the file length without loading
 // as a quick check for existence. -1 length == not present
@@ -1353,12 +1375,16 @@ void		Sys_ShowIP(void);
 
 qboolean	Sys_Mkdir( const char *path );
 FILE	*Sys_FOpen( const char *ospath, const char *mode );
+qboolean Sys_ReplaceFile( const char *from, const char *to );
 qboolean Sys_ResetReadOnlyAttribute( const char *ospath );
 
 const char *Sys_Pwd( void );
 const char *Sys_DefaultBasePath( void );
 const char *Sys_DefaultHomePath( void );
 const char *Sys_SteamPath( void );
+#ifdef _WIN32
+const char *Sys_QuakeLiveProfilePath( const char *installPath );
+#endif
 
 #ifdef __APPLE__
 char    *Sys_DefaultAppPath( void );

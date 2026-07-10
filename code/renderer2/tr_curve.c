@@ -476,7 +476,7 @@ void R_SubdividePatchToGrid( srfBspSurface_t *grid, int width, int height,
 			for ( i = 0 ; i < height ; i++ ) {
 				vec3_t		midxyz;
 				vec3_t		midxyz2;
-				vec3_t		dir;
+				vec3_t		curveDir;
 				vec3_t		projected;
 				float		d;
 
@@ -491,11 +491,11 @@ void R_SubdividePatchToGrid( srfBspSurface_t *grid, int width, int height,
 				// texture warping, but it gives a lot less polygons than
 				// dist-from-midpoint
 				VectorSubtract( midxyz, ctrl[i][j].xyz, midxyz );
-				VectorSubtract( ctrl[i][j+2].xyz, ctrl[i][j].xyz, dir );
-				VectorNormalize( dir );
+				VectorSubtract( ctrl[i][j+2].xyz, ctrl[i][j].xyz, curveDir );
+				VectorNormalize( curveDir );
 
-				d = DotProduct( midxyz, dir );
-				VectorScale( dir, d, projected );
+				d = DotProduct( midxyz, curveDir );
+				VectorScale( curveDir, d, projected );
 				VectorSubtract( midxyz, projected, midxyz2);
 				len = VectorLengthSquared( midxyz2 );			// we will do the sqrt later
 				if ( len > maxLen ) {

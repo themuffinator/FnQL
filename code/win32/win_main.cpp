@@ -230,6 +230,21 @@ FILE *Sys_FOpen( const char *ospath, const char *mode )
 
 /*
 ==============
+Sys_ReplaceFile
+
+Atomically replaces an existing destination when the filesystem supports it.
+MOVEFILE_WRITE_THROUGH keeps managed profile updates durable across a sudden
+shutdown after the replacement succeeds.
+==============
+*/
+qboolean Sys_ReplaceFile( const char *from, const char *to ) {
+	return MoveFileExA( from, to,
+		MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH ) ? qtrue : qfalse;
+}
+
+
+/*
+==============
 Sys_ResetReadOnlyAttribute
 ==============
 */

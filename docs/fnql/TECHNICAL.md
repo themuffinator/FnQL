@@ -28,6 +28,13 @@ Compatibility-sensitive areas include:
 - native module ABI and loader behavior
 - renderer defaults that affect demo output or deterministic behavior
 
+Windows retail validation is intentionally Win32: the legitimate retail
+`bin.pk3` contains x86 native game modules only. The active Steam account maps
+to `<Quake Live>/<SteamID64>`; QL's `qzconfig.cfg` and `repconfig.cfg` are
+profile-root files, while normal engine/game writes remain under
+`<profile>/baseq3`. Keep those namespaces separate and preserve profile loose
+files ahead of install packages in the search order.
+
 ## Reference Baselines
 
 Local checkout and install paths are intentionally kept in [`AGENTS.md`](../../AGENTS.md)
@@ -43,6 +50,13 @@ so this maintainer document stays portable.
 
 Current migration rule: compare first, reconstruct second, validate third.
 Keep observed QLSRP or retail facts distinct from inferred design intent.
+
+The subsystem inventory, execution order, and non-regression gates for the
+native API, WebUI/Awesomium, protocol/demos, BSP/advertisements, ZMQ, and
+Steamworks work are maintained in
+[`QL_COMPATIBILITY_ROADMAP.md`](./QL_COMPATIBILITY_ROADMAP.md).
+The browser-neutral runtime boundary and the reason a live Awesomium adapter
+remains opt-in are detailed in [`WEBUI_BACKEND.md`](./WEBUI_BACKEND.md).
 
 ## Repository Layout
 

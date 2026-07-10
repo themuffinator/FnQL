@@ -1548,7 +1548,9 @@ int CIN_PlayCinematic( const char *arg, int x, int y, int w, int h, int systemBi
 
 	Com_DPrintf("CIN_PlayCinematic( %s )\n", arg);
 
-	cin = {};
+	// The decoder cache is several MiB. Aggregate assignment creates a stack
+	// temporary with MSVC; reset the trivially stored decoder state in place.
+	Com_Memset( &cin, 0, sizeof( cin ) );
 	currentHandle = CIN_HandleForVideo();
 
 	cin.currentHandle = currentHandle;

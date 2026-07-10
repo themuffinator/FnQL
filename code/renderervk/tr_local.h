@@ -2850,8 +2850,8 @@ void RE_VertexLighting( qboolean allowed );
 
 #ifndef USE_VULKAN
 #define GLE( ret, name, ... ) extern ret ( APIENTRY * q##name )( __VA_ARGS__ );
-	QGL_Core_PROCS;
-	QGL_Ext_PROCS;
+	QGL_Core_PROCS
+	QGL_Ext_PROCS
 #undef GLE
 #endif
 

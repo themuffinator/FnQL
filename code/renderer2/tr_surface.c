@@ -415,12 +415,13 @@ static qboolean RB_SurfaceVaoCached(int numVerts, srfVert_t *verts, int numIndex
 	if (!numIndexes || !numVerts)
 		return qfalse;
 
+	if (!VaoCache_CheckAdd(&endSurface, &recycleVertexBuffer, &recycleIndexBuffer, numVerts, numIndexes))
+		return qfalse;
+
 	VaoCache_BindVao();
 
 	tess.dlightBits |= dlightBits;
 	tess.pshadowBits |= pshadowBits;
-
-	VaoCache_CheckAdd(&endSurface, &recycleVertexBuffer, &recycleIndexBuffer, numVerts, numIndexes);
 
 	if (endSurface)
 	{

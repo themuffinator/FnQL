@@ -7,10 +7,32 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
 ## [Unreleased]
 
 ### Highlights
-- _None yet._
+- Expanded the retail Quake Live engine-compatibility foundation across native
+  modules, protocol 91 and demos, BSP advertisements, WebUI resources, and
+  optional dedicated-server services.
 
 ### Compatibility
-- _None yet._
+- Corrected native DLL entry-point selection so retail structured modules and
+  legacy `vmMain` modules use their respective ABIs without an incompatible
+  probe call.
+- Added a browser-neutral, versioned WebUI backend host with deterministic
+  null/fake implementations while keeping live Awesomium loading default-off.
+- Added explicit legacy, ioquake3, and retail Quake Live netchan profiles,
+  bounded reliable-command XOR handling, and a checked `.dm_91` record reader,
+  discovery, and input validation while retaining supported legacy paths.
+- Centralized overflow-safe BSP v47 advertisement-lump validation across
+  collision and renderer loaders, and hardened external retail `web.pak`
+  DataPack and manifest parsing.
+- Matched the retail protocol-91 bare `connectResponse` while preserving the
+  extended FnQL handshake, and kept retail clients joinable under the explicit
+  unverified Steamworks-stub policy.
+- Added an external, default-off ZMQ server bridge with bounded authenticated
+  RCON and stats publication, fail-closed authentication, correct IPv6 and
+  REQ/DEALER framing, and explicit unavailable Steamworks capability reporting
+  for the engine-only default build.
+- Matched the retail Steam-user filesystem layout and priority: active-user
+  profile files override retail packages, while managed `qzconfig.cfg` and
+  `repconfig.cfg` live at the profile root and preserve QL aliases/bindings.
 
 ### Rendering and Display
 - _None yet._
@@ -19,10 +41,43 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
 - _None yet._
 
 ### Builds and Packaging
-- _None yet._
+- Added Meson/CMake compatibility contract tests and made the complete Python
+  source-regression suite discoverable from the default test workflows.
+- Cleared Clang and MSVC strict-warning builds across the client, dedicated
+  server, all renderer variants, utilities, and tests; added a scoped Meson
+  `strict-warnings` validation option and validated both x86 and x64 MSVC
+  targets.
+- Replaced the stale Visual Studio solution dependency graph with a maintained
+  Meson frontend, removing references to deleted bundled library trees and
+  inherited SDK/toolset pins; the bridge now tolerates Visual Studio PATH
+  filtering and reports missing architecture toolchains directly.
+- Rebranded the VS Code build, archive, launch, and runtime-sweep workflows to
+  their actual FnQL artifact names and made the release task enforce strict
+  warnings; legacy `FNQ3_*` environment overrides remain fallback aliases.
+- Made retail-compatible VS Code launch profiles build and debug Win32 by
+  default while keeping clearly labelled x64 engine-only configurations.
 
 ### Fixes
-- _None yet._
+- Corrected the Windows DirectInput mouse format to carry all eight advertised
+  buttons and removed undefined OpenGL buffer-offset arithmetic.
+- Made renderer2 HDR/light-grid and VBO byte calculations overflow-safe,
+  corrected the light-grid element allocation size, and made native qagame
+  import argument marshaling compile consistently on 32- and 64-bit targets.
+- Prevented private/password cvars from crossing the WebUI event/cache boundary
+  or being printed verbatim by cvar diagnostics.
+- Restricted privileged WebUI navigation to `asset://ql/`, rejected ambiguous
+  or oversized native requests, and added lossless checked UTF-8 conversion.
+- Rejected malformed BSP identifiers and advertisement record shapes in every
+  loader, bounded all WebPak allocations, and made ZMQ multipart recovery and
+  Windows runtime loading fail closed.
+- Cleaned up partial DirectInput initialization and reacquire failures before
+  falling back to the Win32 mouse path.
+- Finished FnQL naming and legacy-variable fallbacks in the project-owned GLx
+  verification and issue-triage workflows exposed by the full regression gate.
+- Eliminated the retail UI startup recursion, Win32 client-state stack
+  overflow, native cvar-layout mismatch, and config/path rename-buffer race;
+  profile config replacement is now staged and atomically committed.
 
 ### Documentation and Tooling
-- _None yet._
+- Added a subsystem-by-subsystem Quake Live porting roadmap and permanent
+  independent-rewrite, retail-compatibility, and non-regression agent rules.

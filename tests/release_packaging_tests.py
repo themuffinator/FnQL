@@ -86,7 +86,7 @@ class ReleasePackagingTests(unittest.TestCase):
         }
 
         self.assertEqual(len(destinations), 35)
-        self.assertEqual(len(required_destinations), 37)
+        self.assertEqual(len(required_destinations), 38)
         self.assertIn("pkg/baseq3/maps/q3dm1.azb", sources)
         self.assertIn("baseq3/maps/q3dm1.azb", destinations)
         self.assertIn("baseq3/maps/q3dm17.azb", destinations)
@@ -94,6 +94,7 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertIn("baseq3/maps/pro-q3dm6.azb", destinations)
         self.assertIn("baseq3/sound/fnql-weapon-sounds.sndshd", required_destinations)
         self.assertIn("missionpack/sound/fnql-weapon-sounds.sndshd", required_destinations)
+        self.assertIn("baseq3/scripts/fnql.shader", required_destinations)
         self.assertNotIn("baseq3/maps/test_bigbox.azb", destinations)
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -117,6 +118,7 @@ class ReleasePackagingTests(unittest.TestCase):
         meson_build = (ROOT / "meson.build").read_text(encoding="utf-8")
 
         self.assertIn("'pkg/baseq3/fnql-hud.json'", meson_build)
+        self.assertIn("'pkg/baseq3/scripts/fnql.shader'", meson_build)
         self.assertIn("'pkg/baseq3/sound/fnql-weapon-sounds.sndshd'", meson_build)
         self.assertIn("'pkg/missionpack/sound/fnql-weapon-sounds.sndshd'", meson_build)
 

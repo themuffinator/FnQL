@@ -699,8 +699,8 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, q
 	int i;
 	const SDL_DisplayMode *desktopMode;
 	SDL_DisplayID display = 0;
-	int x;
-	int y;
+	int x = vid_xpos->integer;
+	int y = vid_ypos->integer;
 	SDL_WindowFlags flags = 0;
 	qboolean requestFloatFramebuffer = qfalse;
 	qboolean reusedWindow;

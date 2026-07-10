@@ -14,7 +14,11 @@
         "Bypass",
         "-File",
         "${workspaceFolder}\\.vscode\\build-release.ps1",
-        "-SetupOnly"
+        "-SetupOnly",
+        "-Platform",
+        "Win32",
+        "-BuildDir",
+        "meson\\build\\win32"
       ],
       "problemMatcher": []
     },
@@ -28,6 +32,10 @@
         "Bypass",
         "-File",
         "${workspaceFolder}\\.vscode\\build-release.ps1",
+        "-Platform",
+        "Win32",
+        "-BuildDir",
+        "meson\\build\\win32",
         "-Target",
         "both",
         "-Renderers",
@@ -44,13 +52,65 @@
       }
     },
     {
+      "label": "meson: build Win32 debug",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\.vscode\\build-release.ps1",
+        "-Configuration",
+        "Debug",
+        "-Platform",
+        "Win32",
+        "-BuildDir",
+        "meson\\build\\win32-debug",
+        "-Target",
+        "both",
+        "-Renderers",
+        "opengl,glx,vulkan,opengl2",
+        "-Archive"
+      ],
+      "problemMatcher": [
+        "$gcc",
+        "$msCompile"
+      ]
+    },
+    {
+      "label": "meson: build x64",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\.vscode\\build-release.ps1",
+        "-Platform",
+        "x64",
+        "-BuildDir",
+        "meson\\build",
+        "-Target",
+        "both",
+        "-Renderers",
+        "opengl,glx,vulkan,opengl2",
+        "-Archive"
+      ],
+      "problemMatcher": [
+        "$gcc",
+        "$msCompile"
+      ]
+    },
+    {
       "label": "meson: test",
       "type": "shell",
       "command": "meson",
       "args": [
         "test",
         "-C",
-        "meson/build",
+        "meson/build/win32",
         "--print-errorlogs"
       ],
       "dependsOn": [
@@ -59,7 +119,7 @@
       "problemMatcher": []
     },
     {
-      "label": "Release: Build FnQuake3 Full",
+      "label": "Release: Build FnQL Full",
       "dependsOrder": "sequence",
       "dependsOn": [
         "meson: build"
@@ -73,7 +133,7 @@
       "args": [
         "${workspaceFolder}\\scripts\\glx_runtime_sweep.py",
         "--exe",
-        "${workspaceFolder}\\meson\\build\\fnquake3.x64.exe",
+        "${workspaceFolder}\\meson\\build\\fnql.x64.exe",
         "--renderers",
         "opengl,glx",
         "--switch-sequence",
@@ -84,7 +144,7 @@
         "glx-parity"
       ],
       "dependsOn": [
-        "meson: build"
+        "meson: build x64"
       ],
       "problemMatcher": []
     }

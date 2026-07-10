@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- Historical component projects remain useful as source manifests. Any
+       build request must use the canonical dependency/build graph. -->
+  <PropertyGroup>
+    <PlatformToolset>$(DefaultPlatformToolset)</PlatformToolset>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ConfigurationType>Makefile</ConfigurationType>
+    <FnQLSourceRoot>$(MSBuildThisFileDirectory)..\..\..</FnQLSourceRoot>
+    <FnQLMesonBuildDir>$(FnQLSourceRoot)\meson\build\vs\$(Platform)\$(Configuration)</FnQLMesonBuildDir>
+    <FnQLMesonBuildType Condition="'$(Configuration)'=='Debug'">debug</FnQLMesonBuildType>
+    <FnQLMesonBuildType Condition="'$(Configuration)'=='Release'">release</FnQLMesonBuildType>
+    <FnQLMesonDriver>$(FnQLSourceRoot)\scripts\msvc_meson.py</FnQLMesonDriver>
+    <FnQLPython Condition="Exists('$(SystemRoot)\py.exe')">&quot;$(SystemRoot)\py.exe&quot; -3</FnQLPython>
+    <FnQLPython Condition="'$(FnQLPython)'==''">python</FnQLPython>
+    <NMakeBuildCommandLine>$(FnQLPython) "$(FnQLMesonDriver)" build --build-dir "$(FnQLMesonBuildDir)" --buildtype $(FnQLMesonBuildType) --platform $(Platform)</NMakeBuildCommandLine>
+    <NMakeReBuildCommandLine>$(FnQLPython) "$(FnQLMesonDriver)" rebuild --build-dir "$(FnQLMesonBuildDir)" --buildtype $(FnQLMesonBuildType) --platform $(Platform)</NMakeReBuildCommandLine>
+    <NMakeCleanCommandLine>$(FnQLPython) "$(FnQLMesonDriver)" clean --build-dir "$(FnQLMesonBuildDir)" --buildtype $(FnQLMesonBuildType) --platform $(Platform)</NMakeCleanCommandLine>
+    <NMakeOutput Condition="'$(Platform)'=='Win32'">$(FnQLMesonBuildDir)\fnql.exe</NMakeOutput>
+    <NMakeOutput Condition="'$(Platform)'=='x64'">$(FnQLMesonBuildDir)\fnql.x64.exe</NMakeOutput>
+    <NMakeOutput Condition="'$(Platform)'=='ARM64'">$(FnQLMesonBuildDir)\fnql.arm64.exe</NMakeOutput>
+  </PropertyGroup>
+</Project>

@@ -83,7 +83,8 @@ Netchan_Setup
 called to open a channel to a remote system
 ==============
 */
-void Netchan_Setup( netsrc_t sock, netchan_t *chan, const netadr_t *adr, int port, int challenge, qboolean compat )
+void Netchan_Setup( netsrc_t sock, netchan_t *chan, const netadr_t *adr, int port,
+	int challenge, netchanWireProfile_t wireProfile )
 {
 	Com_Memset (chan, 0, sizeof(*chan));
 	
@@ -93,7 +94,7 @@ void Netchan_Setup( netsrc_t sock, netchan_t *chan, const netadr_t *adr, int por
 	chan->incomingSequence = 0;
 	chan->outgoingSequence = 1;
 	chan->challenge = challenge;
-	chan->compat = compat;
+	chan->wireProfile = wireProfile;
 	chan->isLANAddress = Sys_IsLANAddress( adr );
 }
 
@@ -118,11 +119,13 @@ void Netchan_TransmitNextFragment( netchan_t *chan ) {
 	MSG_WriteLong( &send, outgoingSequence );
 
 	// send the qport if we are a client
-	if ( chan->sock == NS_CLIENT ) {
+	if ( chan->sock == NS_CLIENT && Netchan_WireHasFeature(
+		chan->wireProfile, NETCHAN_FEATURE_CLIENT_QPORT ) ) {
 		MSG_WriteShort( &send, qport->integer );
 	}
 
-	if ( !chan->compat )
+	if ( Netchan_WireHasFeature( chan->wireProfile,
+		NETCHAN_FEATURE_SEQUENCE_CHECKSUM ) )
 		MSG_WriteLong(&send, NETCHAN_GENCHECKSUM(chan->challenge, chan->outgoingSequence));
 
 	// copy the reliable message to the packet first
@@ -181,11 +184,13 @@ static void Netchan_EnqueueFragments( const netchan_t *chan, const int length, c
 		MSG_WriteLong( &send, chan->outgoingSequence | FRAGMENT_BIT );
 
 		// send the qport if we are a client
-		if ( chan->sock == NS_CLIENT ) {
+		if ( chan->sock == NS_CLIENT && Netchan_WireHasFeature(
+			chan->wireProfile, NETCHAN_FEATURE_CLIENT_QPORT ) ) {
 			MSG_WriteShort( &send, qport->integer );
 		}
 
-		if ( !chan->compat ) {
+		if ( Netchan_WireHasFeature( chan->wireProfile,
+			NETCHAN_FEATURE_SEQUENCE_CHECKSUM ) ) {
 			MSG_WriteLong( &send, NETCHAN_GENCHECKSUM( chan->challenge, chan->outgoingSequence ) );
 		}
 
@@ -252,10 +257,12 @@ void Netchan_Transmit( netchan_t *chan, int length, const byte *data ) {
 	MSG_WriteLong( &send, chan->outgoingSequence );
 
 	// send the qport if we are a client
-	if ( chan->sock == NS_CLIENT )
+	if ( chan->sock == NS_CLIENT && Netchan_WireHasFeature(
+		chan->wireProfile, NETCHAN_FEATURE_CLIENT_QPORT ) )
 		MSG_WriteShort( &send, qport->integer );
 
-	if ( !chan->compat )
+	if ( Netchan_WireHasFeature( chan->wireProfile,
+		NETCHAN_FEATURE_SEQUENCE_CHECKSUM ) )
 		MSG_WriteLong(&send, NETCHAN_GENCHECKSUM(chan->challenge, chan->outgoingSequence));
 
 	chan->outgoingSequence++;
@@ -307,10 +314,12 @@ void Netchan_Enqueue( netchan_t *chan, int length, const byte *data ) {
 	MSG_WriteLong( &send, chan->outgoingSequence );
 
 	// send the qport if we are a client
-	if ( chan->sock == NS_CLIENT )
+	if ( chan->sock == NS_CLIENT && Netchan_WireHasFeature(
+		chan->wireProfile, NETCHAN_FEATURE_CLIENT_QPORT ) )
 		MSG_WriteShort( &send, qport->integer );
 
-	if ( !chan->compat )
+	if ( Netchan_WireHasFeature( chan->wireProfile,
+		NETCHAN_FEATURE_SEQUENCE_CHECKSUM ) )
 		MSG_WriteLong( &send, NETCHAN_GENCHECKSUM( chan->challenge, chan->outgoingSequence ) );
 
 	MSG_WriteData( &send, data, length );
@@ -355,11 +364,13 @@ qboolean Netchan_Process( netchan_t *chan, msg_t *msg ) {
 	}
 
 	// read the qport if we are a server
-	if ( chan->sock == NS_SERVER ) {
+	if ( chan->sock == NS_SERVER && Netchan_WireHasFeature(
+		chan->wireProfile, NETCHAN_FEATURE_CLIENT_QPORT ) ) {
 		/*qport=*/ MSG_ReadShort( msg );
 	}
 
-	if ( !chan->compat ) {
+	if ( Netchan_WireHasFeature( chan->wireProfile,
+		NETCHAN_FEATURE_SEQUENCE_CHECKSUM ) ) {
 		int checksum = MSG_ReadLong( msg );
 
 		// UDP spoofing protection

@@ -357,9 +357,9 @@ static const char *vk_result_string( VkResult code ) {
 #undef CASE_STR
 
 #define VK_CHECK( function_call ) { \
-	VkResult res = function_call; \
-	if ( res < 0 ) { \
-		ri.Error( ERR_FATAL, "Vulkan: %s returned %s", #function_call, vk_result_string( res ) ); \
+	VkResult vkCheckResult = function_call; \
+	if ( vkCheckResult < 0 ) { \
+		ri.Error( ERR_FATAL, "Vulkan: %s returned %s", #function_call, vk_result_string( vkCheckResult ) ); \
 	} \
 }
 
@@ -3228,24 +3228,51 @@ static qboolean vk_create_device( VkPhysicalDevice physical_device, int device_i
 }
 
 
+static void vk_copy_function_pointer( void *destination, size_t destination_size,
+	const void *source, size_t source_size, const char *name )
+{
+	/* ISO C does not define conversions between data and function pointers, or
+	 * between differently typed function pointers. Vulkan guarantees that its
+	 * loader entry points are callable through the matching PFN type, so copy
+	 * the representation after checking the platform uses equal sizes. */
+	if ( destination_size != source_size ) {
+		ri.Error( ERR_FATAL, "Vulkan entrypoint %s has an incompatible pointer size", name );
+		return;
+	}
+
+	Com_Memcpy( destination, source, destination_size );
+}
+
+static void vk_load_instance_function( void *destination, size_t destination_size, const char *name )
+{
+	void *address = ri.VK_GetInstanceProcAddr( vk_instance, name );
+	vk_copy_function_pointer( destination, destination_size, &address, sizeof( address ), name );
+}
+
+static void vk_load_device_function( void *destination, size_t destination_size, const char *name )
+{
+	PFN_vkVoidFunction address = qvkGetDeviceProcAddr( vk.device, name );
+	vk_copy_function_pointer( destination, destination_size, &address, sizeof( address ), name );
+}
+
 #define INIT_INSTANCE_FUNCTION(func) \
-	q##func = /*(PFN_ ## func)*/ ri.VK_GetInstanceProcAddr(vk_instance, #func); \
+	vk_load_instance_function( &q##func, sizeof( q##func ), #func ); \
 	if (q##func == NULL) {											\
 		ri.Error(ERR_FATAL, "Failed to find entrypoint %s", #func);	\
 	}
 
 #define INIT_INSTANCE_FUNCTION_EXT(func) \
-	q##func = /*(PFN_ ## func)*/ ri.VK_GetInstanceProcAddr(vk_instance, #func);
+	vk_load_instance_function( &q##func, sizeof( q##func ), #func );
 
 
 #define INIT_DEVICE_FUNCTION(func) \
-	q##func = (PFN_ ## func) qvkGetDeviceProcAddr(vk.device, #func);\
+	vk_load_device_function( &q##func, sizeof( q##func ), #func );\
 	if (q##func == NULL) {											\
 		ri.Error(ERR_FATAL, "Failed to find entrypoint %s", #func);	\
 	}
 
 #define INIT_DEVICE_FUNCTION_EXT(func) \
-	q##func = (PFN_ ## func) qvkGetDeviceProcAddr(vk.device, #func);
+	vk_load_device_function( &q##func, sizeof( q##func ), #func );
 
 
 static void vk_destroy_instance( void ) {
@@ -5903,7 +5930,7 @@ static void vk_create_attachments( void )
 
 static void vk_create_framebuffers( void )
 {
-	VkImageView attachments[4];
+	VkImageView framebufferAttachments[4];
 	VkFramebufferCreateInfo desc;
 	qboolean depthResolveActive;
 	uint32_t n;
@@ -5913,7 +5940,7 @@ static void vk_create_framebuffers( void )
 	desc.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 	desc.pNext = NULL;
 	desc.flags = 0;
-	desc.pAttachments = attachments;
+	desc.pAttachments = framebufferAttachments;
 	desc.layers = 1;
 
 	for ( n = 0; n < vk.swapchain_image_count; n++ )
@@ -5924,8 +5951,8 @@ static void vk_create_framebuffers( void )
 		{
 			desc.width = gls.windowWidth;
 			desc.height = gls.windowHeight;
-			attachments[0] = vk.swapchain_image_views[n];
-			attachments[1] = vk.depth_image_view;
+			framebufferAttachments[0] = vk.swapchain_image_views[n];
+			framebufferAttachments[1] = vk.depth_image_view;
 			VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.main[n] ) );
 
 			SET_OBJECT_NAME( vk.framebuffers.main[n], va( "framebuffer - main %i", n ), VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT );
@@ -5941,16 +5968,16 @@ static void vk_create_framebuffers( void )
 			{
 				desc.width = glConfig.vidWidth;
 				desc.height = glConfig.vidHeight;
-				attachments[0] = vk.color_image_view;
-				attachments[1] = vk.depth_image_view;
+				framebufferAttachments[0] = vk.color_image_view;
+				framebufferAttachments[1] = vk.depth_image_view;
 				if ( vk.msaaActive )
 				{
 					desc.attachmentCount = 3;
-					attachments[2] = vk.msaa_image_view;
+					framebufferAttachments[2] = vk.msaa_image_view;
 				}
 				if ( depthResolveActive ) {
 					desc.attachmentCount = 4;
-					attachments[3] = vk.depth_fade_image_view;
+					framebufferAttachments[3] = vk.depth_fade_image_view;
 				}
 				VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.main[n] ) );
 				SET_OBJECT_NAME( vk.framebuffers.main[n], "framebuffer - main", VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT );
@@ -5971,7 +5998,7 @@ static void vk_create_framebuffers( void )
 			desc.attachmentCount = 1;
 			desc.width = gls.windowWidth;
 			desc.height = gls.windowHeight;
-			attachments[0] = vk.swapchain_image_views[n];
+			framebufferAttachments[0] = vk.swapchain_image_views[n];
 			VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.gamma[n] ) );
 
 			SET_OBJECT_NAME( vk.framebuffers.gamma[n], "framebuffer - gamma-correction", VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT );
@@ -5984,7 +6011,7 @@ static void vk_create_framebuffers( void )
 		desc.attachmentCount = 1;
 		desc.width = vk.dlight_shadow_atlas_width;
 		desc.height = vk.dlight_shadow_atlas_height;
-		attachments[0] = vk.dlight_shadow_image_view;
+		framebufferAttachments[0] = vk.dlight_shadow_image_view;
 		VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.dlight_shadow ) );
 		SET_OBJECT_NAME( vk.framebuffers.dlight_shadow, "framebuffer - dlight shadow atlas", VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT );
 	}
@@ -5995,7 +6022,7 @@ static void vk_create_framebuffers( void )
 		desc.attachmentCount = 1;
 		desc.width = vk.spot_shadow_atlas_width;
 		desc.height = vk.spot_shadow_atlas_height;
-		attachments[0] = vk.spot_shadow_image_view;
+		framebufferAttachments[0] = vk.spot_shadow_image_view;
 		VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.spot_shadow ) );
 		SET_OBJECT_NAME( vk.framebuffers.spot_shadow, "framebuffer - spot shadow atlas", VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT );
 	}
@@ -6006,7 +6033,7 @@ static void vk_create_framebuffers( void )
 		desc.attachmentCount = 1;
 		desc.width = vk.csm_shadow_atlas_width;
 		desc.height = vk.csm_shadow_atlas_height;
-		attachments[0] = vk.csm_shadow_image_view;
+		framebufferAttachments[0] = vk.csm_shadow_image_view;
 		VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.csm_shadow ) );
 		SET_OBJECT_NAME( vk.framebuffers.csm_shadow, "framebuffer - csm shadow atlas", VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT );
 	}
@@ -6018,22 +6045,22 @@ static void vk_create_framebuffers( void )
 		desc.attachmentCount = 2;
 		desc.width = vk.screenMapWidth;
 		desc.height = vk.screenMapHeight;
-		attachments[0] = vk.screenMap.color_image_view;
-		attachments[1] = vk.screenMap.depth_image_view;
+		framebufferAttachments[0] = vk.screenMap.color_image_view;
+		framebufferAttachments[1] = vk.screenMap.depth_image_view;
 		if ( vk.screenMapSamples > VK_SAMPLE_COUNT_1_BIT )
 		{
 			desc.attachmentCount = 3;
-			attachments[2] = vk.screenMap.color_image_view_msaa;
+			framebufferAttachments[2] = vk.screenMap.color_image_view_msaa;
 		}
 		VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.screenmap ) );
 		SET_OBJECT_NAME( vk.framebuffers.screenmap, "framebuffer - screenmap", VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT );
 
 		if ( vk.capture.image != VK_NULL_HANDLE )
 		{
-			attachments[0] = vk.capture.image_view;
+			framebufferAttachments[0] = vk.capture.image_view;
 
 			desc.renderPass = vk.render_pass.capture;
-			desc.pAttachments = attachments;
+			desc.pAttachments = framebufferAttachments;
 			desc.attachmentCount = 1;
 			desc.width = gls.captureWidth;
 			desc.height = gls.captureHeight;
@@ -6053,7 +6080,7 @@ static void vk_create_framebuffers( void )
 			desc.height = height;
 
 			desc.attachmentCount = 1;
-			attachments[0] = vk.bloom_image_view[0];
+			framebufferAttachments[0] = vk.bloom_image_view[0];
 
 			VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.bloom_extract ) );
 
@@ -6070,10 +6097,10 @@ static void vk_create_framebuffers( void )
 
 				desc.attachmentCount = 1;
 
-				attachments[0] = vk.bloom_image_view[n+0+1];
+				framebufferAttachments[0] = vk.bloom_image_view[n+0+1];
 				VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.blur[n+0] ) );
 
-				attachments[0] = vk.bloom_image_view[n+1+1];
+				framebufferAttachments[0] = vk.bloom_image_view[n+1+1];
 				VK_CHECK( qvkCreateFramebuffer( vk.device, &desc, NULL, &vk.framebuffers.blur[n+1] ) );
 
 				SET_OBJECT_NAME( vk.framebuffers.blur[n+0], va( "framebuffer - blur %i", n+0 ), VK_DEBUG_REPORT_OBJECT_TYPE_FRAMEBUFFER_EXT );
@@ -6465,25 +6492,25 @@ void vk_initialize( void )
 
 	// get memory size & defaults
 	{
-		VkPhysicalDeviceMemoryProperties props;
+		VkPhysicalDeviceMemoryProperties memoryProps;
 		VkDeviceSize maxDedicatedSize = 0;
 		VkDeviceSize maxBARSize = 0;
-		qvkGetPhysicalDeviceMemoryProperties( vk.physical_device, &props );
-		for ( i = 0; i < props.memoryTypeCount; i++ ) {
-			if ( props.memoryTypes[i].propertyFlags == VK_MEMORY_HEAP_DEVICE_LOCAL_BIT ) {
-				maxDedicatedSize = props.memoryHeaps[props.memoryTypes[i].heapIndex].size;
+		qvkGetPhysicalDeviceMemoryProperties( vk.physical_device, &memoryProps );
+		for ( i = 0; i < memoryProps.memoryTypeCount; i++ ) {
+			if ( memoryProps.memoryTypes[i].propertyFlags == VK_MEMORY_HEAP_DEVICE_LOCAL_BIT ) {
+				maxDedicatedSize = memoryProps.memoryHeaps[memoryProps.memoryTypes[i].heapIndex].size;
 			}
-			else if ( props.memoryTypes[i].propertyFlags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT ) {
-				if ( maxDedicatedSize == 0 || props.memoryHeaps[props.memoryTypes[i].heapIndex].size > maxDedicatedSize ) {
-					maxDedicatedSize = props.memoryHeaps[props.memoryTypes[i].heapIndex].size;
+			else if ( memoryProps.memoryTypes[i].propertyFlags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT ) {
+				if ( maxDedicatedSize == 0 || memoryProps.memoryHeaps[memoryProps.memoryTypes[i].heapIndex].size > maxDedicatedSize ) {
+					maxDedicatedSize = memoryProps.memoryHeaps[memoryProps.memoryTypes[i].heapIndex].size;
 				}
 			}
-			if ( props.memoryTypes[i].propertyFlags == (VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ) {
-				maxBARSize = props.memoryHeaps[props.memoryTypes[i].heapIndex].size;
+			if ( memoryProps.memoryTypes[i].propertyFlags == (VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ) {
+				maxBARSize = memoryProps.memoryHeaps[memoryProps.memoryTypes[i].heapIndex].size;
 			}
-			else if ( (props.memoryTypes[i].propertyFlags & (VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) == (VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ) {
+			else if ( (memoryProps.memoryTypes[i].propertyFlags & (VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) == (VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ) {
 				if ( maxBARSize == 0 ) {
-					maxBARSize = props.memoryHeaps[props.memoryTypes[i].heapIndex].size;
+					maxBARSize = memoryProps.memoryHeaps[memoryProps.memoryTypes[i].heapIndex].size;
 				}
 			}
 		}
@@ -6654,7 +6681,7 @@ void vk_initialize( void )
 	{
 		VkDescriptorPoolSize pool_size[3];
 		VkDescriptorPoolCreateInfo desc;
-		uint32_t i, maxSets;
+		uint32_t poolIndex, maxSets;
 
 		pool_size[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		pool_size[0].descriptorCount = MAX_DRAWIMAGES + 1 + 1 + 1 + 1 + 1 + 1 + 1 + VK_NUM_BLOOM_PASSES * 2; // color, screenmap, depth fade, dlight/spot/csm shadow atlases, bloom descriptors
@@ -6668,8 +6695,8 @@ void vk_initialize( void )
 		pool_size[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
 		pool_size[2].descriptorCount = 1;
 
-		for ( i = 0, maxSets = 0; i < ARRAY_LEN( pool_size ); i++ ) {
-			maxSets += pool_size[i].descriptorCount;
+		for ( poolIndex = 0, maxSets = 0; poolIndex < ARRAY_LEN( pool_size ); poolIndex++ ) {
+			maxSets += pool_size[poolIndex].descriptorCount;
 		}
 
 		desc.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;

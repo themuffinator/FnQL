@@ -298,13 +298,13 @@ qboolean textureSrgbAvailable = qfalse;
 qboolean framebufferSrgbAvailable = qfalse;
 
 #define GLE( ret, name, ... ) ret ( APIENTRY * q##name )( __VA_ARGS__ );
-	QGL_Core_PROCS;
-	QGL_Ext_PROCS;
-	QGL_ARB_PROGRAM_PROCS;
-	QGL_VBO_PROCS;
-	QGL_OCCLUSION_QUERY_PROCS;
-	QGL_FBO_PROCS;
-	QGL_FBO_OPT_PROCS;
+	QGL_Core_PROCS
+	QGL_Ext_PROCS
+	QGL_ARB_PROGRAM_PROCS
+	QGL_VBO_PROCS
+	QGL_OCCLUSION_QUERY_PROCS
+	QGL_FBO_PROCS
+	QGL_FBO_OPT_PROCS
 #undef GLE
 
 typedef struct {
@@ -342,6 +342,18 @@ static const char *R_ResolveSymbols( sym_t *syms, int count )
 		}
 	}
 	return NULL;
+}
+
+static void R_AssignProcAddress( void *destination, size_t destinationSize,
+		const char *name )
+{
+	void *address = ri.GL_GetProcAddress( name );
+
+	if ( destinationSize != sizeof( address ) )
+	{
+		ri.Error( ERR_FATAL, "OpenGL procedure pointer size mismatch for %s", name );
+	}
+	Com_Memcpy( destination, &address, destinationSize );
 }
 
 
@@ -554,9 +566,9 @@ static void R_InitExtensions( void )
 	{
 		if ( r_ext_multitexture->integer )
 		{
-			qglMultiTexCoord2fARB = ri.GL_GetProcAddress( "glMultiTexCoord2fARB" );
-			qglActiveTextureARB = ri.GL_GetProcAddress( "glActiveTextureARB" );
-			qglClientActiveTextureARB = ri.GL_GetProcAddress( "glClientActiveTextureARB" );
+			R_AssignProcAddress( &qglMultiTexCoord2fARB, sizeof( qglMultiTexCoord2fARB ), "glMultiTexCoord2fARB" );
+			R_AssignProcAddress( &qglActiveTextureARB, sizeof( qglActiveTextureARB ), "glActiveTextureARB" );
+			R_AssignProcAddress( &qglClientActiveTextureARB, sizeof( qglClientActiveTextureARB ), "glClientActiveTextureARB" );
 
 			if ( qglActiveTextureARB && qglClientActiveTextureARB )
 			{
@@ -605,8 +617,8 @@ static void R_InitExtensions( void )
 		if ( r_ext_compiled_vertex_array->integer )
 		{
 			ri.Printf( PRINT_ALL, "...using GL_EXT_compiled_vertex_array\n" );
-			qglLockArraysEXT = ri.GL_GetProcAddress( "glLockArraysEXT" );
-			qglUnlockArraysEXT = ri.GL_GetProcAddress( "glUnlockArraysEXT" );
+			R_AssignProcAddress( &qglLockArraysEXT, sizeof( qglLockArraysEXT ), "glLockArraysEXT" );
+			R_AssignProcAddress( &qglUnlockArraysEXT, sizeof( qglUnlockArraysEXT ), "glUnlockArraysEXT" );
 			if ( !qglLockArraysEXT || !qglUnlockArraysEXT ) {
 				ri.Error( ERR_FATAL, "bad getprocaddress" );
 			}

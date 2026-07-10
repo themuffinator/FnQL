@@ -26,16 +26,18 @@ extern "C" {
 }
 
 #include "client_cpp.h"
+#include "demo_stream.hpp"
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cstdlib>
 #include <cstring>
 #include <limits.h>
+#include <system_error>
 
 using fnql::CloseFile;
 using fnql::FileRead;
-using fnql::FileReadObject;
 using fnql::FileWrite;
 using fnql::OpenFileRead;
 using fnql::OpenSvFileRead;
@@ -173,6 +175,49 @@ static qboolean CL_IsLegacyDemoExt( const char *ext )
 
 /*
 ====================
+CL_ParseDemoProtocolExtension
+
+Parses a complete dm_NN extension without accepting atoi-style trailing data.
+Protocol support is deliberately checked separately so callers can distinguish
+an invalid filename from a well-formed demo for an unsupported protocol.
+====================
+*/
+static bool CL_ParseDemoProtocolExtension( const char *ext, int *protocol )
+{
+	constexpr std::size_t prefixLength = sizeof( DEMOEXT ) - 1;
+	const char *first;
+	const char *last;
+	std::from_chars_result result;
+	int parsedProtocol = 0;
+
+	if ( !ext || !protocol || Q_stricmpn( ext, DEMOEXT,
+		static_cast<int>( prefixLength ) ) != 0 ) {
+		return false;
+	}
+
+	first = ext + prefixLength;
+	last = first + std::strlen( first );
+	if ( first == last ) {
+		return false;
+	}
+
+	result = std::from_chars( first, last, parsedProtocol );
+	if ( result.ec != std::errc{} || result.ptr != last || parsedProtocol <= 0 ) {
+		return false;
+	}
+
+	*protocol = parsedProtocol;
+	return true;
+}
+
+static bool CL_DemoProtocolSupported( int protocol )
+{
+	return Com_DemoProtocolSupported( protocol ) ||
+		( com_protocol && protocol == com_protocol->integer );
+}
+
+/*
+====================
 CL_DetectLegacyDemoProtocol
 
 Pre-1.27 demos store an uncompressed gamestate in the first message. Scan that
@@ -183,11 +228,9 @@ message for the literal `protocol\NN` key so the parser can pick the correct
 static int CL_DetectLegacyDemoProtocol( fileHandle_t handle )
 {
 	std::array<byte, MAX_MSGLEN> buffer;
-	int sequence;
+	fnql::demo::EnvelopeResult envelope;
 	int length;
-	int littleLength;
 	int protocol;
-	int r;
 	int i;
 
 	ScopedFilePosition restorePosition( handle );
@@ -199,27 +242,15 @@ static int CL_DetectLegacyDemoProtocol( fileHandle_t handle )
 		return 43;
 	}
 
-	r = FileReadObject( handle, sequence );
-	if ( r != 4 ) {
+	envelope = fnql::demo::ReadEnvelope(
+		[handle]( std::uint8_t *destination, std::size_t bytes ) {
+			return FileRead( handle, destination, bytes );
+		}, buffer.data(), buffer.size() );
+	if ( envelope.status != fnql::demo::EnvelopeStatus::Message ||
+		envelope.payloadLength <= 0 ) {
 		return 43;
 	}
-	static_cast<void>( sequence );
-
-	r = FileReadObject( handle, length );
-	if ( r != 4 ) {
-		return 43;
-	}
-
-	littleLength = LittleLong( length );
-	length = littleLength;
-	if ( length <= 0 || length > static_cast<int>( buffer.size() ) ) {
-		return 43;
-	}
-
-	r = FileRead( handle, buffer.data(), length );
-	if ( r != length ) {
-		return 43;
-	}
+	length = envelope.payloadLength;
 
 	for ( i = 0; i + 10 < length; i++ ) {
 		const char *scan = reinterpret_cast<const char *>( &buffer[i] );
@@ -404,7 +435,7 @@ void CL_StopRecord_f( void ) {
 		int	len, sequence;
 
 		// finish up
-		len = -1;
+		len = LittleLong( -1 );
 		FileWrite( clc.recordfile, &len, 4 );
 		FileWrite( clc.recordfile, &len, 4 );
 		CloseFile( clc.recordfile );
@@ -709,8 +740,8 @@ Begins recording a demo from the current position
 static void CL_Record_f( void ) {
 	std::array<char, MAX_OSPATH> demoName;
 	std::array<char, MAX_OSPATH> name;
-	std::array<char, 16> demoExt;
 	const char	*ext;
+	int protocol;
 	qtime_t		t;
 
 	if ( Cmd_Argc() > 2 ) {
@@ -740,20 +771,12 @@ static void CL_Record_f( void ) {
 		Q_strncpyz( demoName.data(), Cmd_Argv( 1 ), static_cast<int>( demoName.size() ) );
 		ext = COM_GetExtension( demoName.data() );
 		if ( *ext ) {
-			// strip demo extension
-			if ( CL_IsLegacyDemoExt( ext ) ) {
+			// Strip every demo extension this build can actually play, including
+			// retail Quake Live dm_91, before the final protocol is appended.
+			if ( CL_IsLegacyDemoExt( ext ) ||
+				( CL_ParseDemoProtocolExtension( ext, &protocol ) &&
+					CL_DemoProtocolSupported( protocol ) ) ) {
 				*(strrchr( demoName.data(), '.' )) = '\0';
-			} else {
-				Com_sprintf( demoExt.data(), static_cast<int>( demoExt.size() ), "%s%d", DEMOEXT, OLD_PROTOCOL_VERSION );
-				if ( Q_stricmp( ext, demoExt.data() ) == 0 ) {
-					*(strrchr( demoName.data(), '.' )) = '\0';
-				} else {
-					// check both protocols
-					Com_sprintf( demoExt.data(), static_cast<int>( demoExt.size() ), "%s%d", DEMOEXT, NEW_PROTOCOL_VERSION );
-					if ( Q_stricmp( ext, demoExt.data() ) == 0 ) {
-						*(strrchr( demoName.data(), '.' )) = '\0';
-					}
-				}
 			}
 		}
 		Com_sprintf( name.data(), static_cast<int>( name.size() ), "demos/%s", demoName.data() );
@@ -859,47 +882,41 @@ CL_ReadDemoMessage
 =================
 */
 void CL_ReadDemoMessage( void ) {
-	int			r;
 	msg_t		buf;
 	std::array<byte, MAX_MSGLEN_BUF> bufData;
-	int			s;
+	fnql::demo::EnvelopeResult envelope;
 
 	if ( clc.demofile == FS_INVALID_HANDLE ) {
 		CL_DemoCompleted();
 		return;
 	}
 
-	// get the sequence number
-	r = FileRead( clc.demofile, &s, 4 );
-	if ( r != 4 ) {
-		CL_DemoCompleted();
-		return;
-	}
-	clc.serverMessageSequence = LittleLong( s );
-
-	// init the message
 	MSG_Init( &buf, bufData.data(), MAX_MSGLEN );
+	envelope = fnql::demo::ReadEnvelope(
+		[]( std::uint8_t *destination, std::size_t bytes ) {
+			return FileRead( clc.demofile, destination, bytes );
+		}, buf.data, static_cast<std::size_t>( buf.maxsize ) );
 
-	// get the length
-	r = FileRead( clc.demofile, &buf.cursize, 4 );
-	if ( r != 4 ) {
+	switch ( envelope.status ) {
+	case fnql::demo::EnvelopeStatus::Message:
+		break;
+	case fnql::demo::EnvelopeStatus::EndOfStreamTrailer:
+	case fnql::demo::EnvelopeStatus::TruncatedHeader:
 		CL_DemoCompleted();
 		return;
-	}
-	buf.cursize = LittleLong( buf.cursize );
-	if ( buf.cursize == -1 ) {
+	case fnql::demo::EnvelopeStatus::TruncatedPayload:
+		Com_Printf( "Demo file was truncated.\n" );
 		CL_DemoCompleted();
 		return;
-	}
-	if ( buf.cursize > buf.maxsize ) {
-		Com_Error (ERR_DROP, "CL_ReadDemoMessage: demoMsglen > MAX_MSGLEN");
-	}
-	r = FileRead( clc.demofile, buf.data, buf.cursize );
-	if ( r != buf.cursize ) {
-		Com_Printf( "Demo file was truncated.\n");
-		CL_DemoCompleted();
+	case fnql::demo::EnvelopeStatus::NegativeLength:
+	case fnql::demo::EnvelopeStatus::OversizeLength:
+		Com_Error( ERR_DROP, "CL_ReadDemoMessage: invalid demo message length %d",
+			envelope.payloadLength );
 		return;
 	}
+
+	clc.serverMessageSequence = envelope.sequence;
+	buf.cursize = envelope.payloadLength;
 
 	clc.lastPacketTime = cls.realtime;
 	buf.readcount = 0;
@@ -922,28 +939,56 @@ void CL_ReadDemoMessage( void ) {
 
 /*
 ====================
+CL_TryDemoProtocol
+====================
+*/
+static bool CL_TryDemoProtocol( const char *arg, int protocol, char *name,
+	int nameLength, ScopedFileHandle &handle )
+{
+	Com_sprintf( name, nameLength, "demos/%s.%s%d", arg, DEMOEXT, protocol );
+	OpenPureFileRead( name, handle );
+	if ( handle ) {
+		Com_Printf( "Demo file: %s\n", name );
+		return true;
+	}
+
+	Com_Printf( "Not found: %s\n", name );
+	return false;
+}
+
+
+/*
+====================
 CL_WalkDemoExt
 ====================
 */
 static int CL_WalkDemoExt( const char *arg, char *name, int name_len, ScopedFileHandle &handle )
 {
+	int preferredProtocol;
 	int i;
 
 	handle.reset();
-	i = 0;
+	preferredProtocol = ( com_protocol &&
+		com_protocol->integer == QL_RETAIL_PROTOCOL_VERSION ) ?
+		QL_RETAIL_PROTOCOL_VERSION : 0;
 
-	while ( demo_protocols[ i ] )
+	// Preserve the historical multi-protocol order outside the explicit QL
+	// profile, while ensuring a retail session never silently chooses a same-
+	// named legacy demo before its dm_91 capture.
+	if ( preferredProtocol && CL_TryDemoProtocol( arg, preferredProtocol,
+		name, name_len, handle ) ) {
+		return preferredProtocol;
+	}
+
+	for ( i = 0; demo_protocols[ i ]; i++ )
 	{
-		Com_sprintf( name, name_len, "demos/%s.%s%d", arg, DEMOEXT, demo_protocols[ i ] );
-		OpenPureFileRead( name, handle );
-		if ( handle )
-		{
-			Com_Printf( "Demo file: %s\n", name );
+		if ( demo_protocols[ i ] == preferredProtocol ) {
+			continue;
+		}
+		if ( CL_TryDemoProtocol( arg, demo_protocols[ i ], name, name_len,
+			handle ) ) {
 			return demo_protocols[ i ];
 		}
-		else
-			Com_Printf( "Not found: %s\n", name );
-		i++;
 	}
 
 	Com_sprintf( name, name_len, "demos/%s.%s", arg, LEGACY_DEMOEXT );
@@ -968,25 +1013,18 @@ CL_DemoExtCallback
 static qboolean CL_DemoNameCallback_f( const char *filename, int length )
 {
 	const int legacy_ext_len = static_cast<int>( strlen( LEGACY_DEMOEXT ) ) + 1;
-	const int ext_len = strlen( "." DEMOEXT );
-	const int num_len = 2;
+	const char *extension;
 	int version;
 
 	if ( length >= legacy_ext_len && filename[ length - legacy_ext_len ] == '.' &&
 		!Q_stricmp( filename + length - static_cast<int>( strlen( LEGACY_DEMOEXT ) ), LEGACY_DEMOEXT ) )
 		return qtrue;
 
-	if ( length <= ext_len + num_len || Q_stricmpn( filename + length - (ext_len + num_len), "." DEMOEXT, ext_len ) != 0 )
+	extension = COM_GetExtension( filename );
+	if ( !CL_ParseDemoProtocolExtension( extension, &version ) )
 		return qfalse;
 
-	version = std::atoi( filename + length - num_len );
-	if ( version == com_protocol->integer )
-		return qtrue;
-
-	if ( version < 66 || version > NEW_PROTOCOL_VERSION )
-		return qfalse;
-
-	return qtrue;
+	return ToQboolean( CL_DemoProtocolSupported( version ) );
 }
 
 
@@ -1033,7 +1071,7 @@ static void CL_PlayDemo_f( void ) {
 	std::array<char, MAX_OSPATH> name;
 	const char		*arg;
 	const char		*ext_test;
-	int			protocol, i;
+	int			protocol;
 	std::array<char, MAX_OSPATH> retry;
 	const char	*shortname, *slash;
 	ScopedFileHandle hFile;
@@ -1056,15 +1094,11 @@ static void CL_PlayDemo_f( void ) {
 	}
 	else if ( ext_test && !Q_stricmpn(ext_test + 1, DEMOEXT, ARRAY_LEN(DEMOEXT) - 1) )
 	{
-		protocol = std::atoi( ext_test + ARRAY_LEN( DEMOEXT ) );
-
-		for( i = 0; demo_protocols[ i ]; i++ )
-		{
-			if ( demo_protocols[ i ] == protocol )
-				break;
+		if ( !CL_ParseDemoProtocolExtension( ext_test + 1, &protocol ) ) {
+			protocol = -1;
 		}
 
-		if ( demo_protocols[ i ] || protocol == com_protocol->integer  )
+		if ( CL_DemoProtocolSupported( protocol ) )
 		{
 			Com_sprintf( name.data(), static_cast<int>( name.size() ), "demos/%s", arg );
 			OpenPureFileRead( name.data(), hFile );
@@ -1073,7 +1107,11 @@ static void CL_PlayDemo_f( void ) {
 		{
 			size_t len;
 
-			Com_Printf("Protocol %d not supported for demos\n", protocol );
+			if ( protocol > 0 ) {
+				Com_Printf( "Protocol %d not supported for demos\n", protocol );
+			} else {
+				Com_Printf( "Invalid demo protocol extension: %s\n", ext_test + 1 );
+			}
 			len = ext_test - arg;
 
 			if ( len > retry.size() - 1 ) {
@@ -1317,7 +1355,10 @@ void CL_ClearState( void ) {
 
 //	S_StopAllSounds();
 
-	cl = {};
+	// clientActive_t is larger than the default Windows thread stack once QL's
+	// snapshot/entity limits are represented. Aggregate assignment materializes
+	// a full temporary on MSVC, so clear the POD state directly in place.
+	Com_Memset( &cl, 0, sizeof( cl ) );
 }
 
 /*
@@ -1765,8 +1806,9 @@ qboolean CL_Disconnect( qboolean showMainMenu ) {
 
 	CL_ClearState();
 
-	// wipe the client connection
-	clc = {};
+	// Wipe in place; avoid manufacturing a sizeable aggregate temporary on the
+	// comparatively small Win32 client thread stack.
+	Com_Memset( &clc, 0, sizeof( clc ) );
 
 	cls.state = CA_DISCONNECTED;
 
@@ -3253,6 +3295,8 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 
 	// server connection
 	if ( !Q_stricmp(c, "connectResponse") ) {
+		int negotiatedProtocol;
+
 		if ( cls.state >= CA_CONNECTED ) {
 			Com_Printf( "Dup connect received. Ignored.\n" );
 			return false;
@@ -3265,6 +3309,10 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 			Com_Printf( "connectResponse from wrong address. Ignored.\n" );
 			return false;
 		}
+
+		negotiatedProtocol = clc.compat ? OLD_PROTOCOL_VERSION :
+			( com_protocol->integer == DEFAULT_PROTOCOL_VERSION ?
+				NEW_PROTOCOL_VERSION : com_protocol->integer );
 
 		if ( !clc.compat ) {
 			// first argument: challenge response
@@ -3281,16 +3329,12 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 				return false;
 			}
 
-			if ( com_protocolCompat ) {
-				// enforce dm68-compatible stream for legacy/unknown servers
-				clc.compat = qtrue;
-			}
-
 			// second (optional) argument: actual protocol version used on server-side
 			c = Cmd_Argv( 2 );
 			if ( *c != '\0' ) {
 				int protocol = std::atoi( c );
 				if ( protocol > 0 ) {
+					negotiatedProtocol = protocol;
 					if ( protocol <= OLD_PROTOCOL_VERSION ) {
 						clc.compat = qtrue;
 					} else {
@@ -3298,9 +3342,18 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 					}
 				}
 			}
+
+			if ( com_protocolCompat &&
+				negotiatedProtocol != QL_RETAIL_PROTOCOL_VERSION ) {
+				// Preserve the explicit ioq3 compatibility fallback without
+				// downgrading the retail Quake Live wire contract.
+				clc.compat = qtrue;
+			}
 		}
 
-		Netchan_Setup( NS_CLIENT, &clc.netchan, from, Cvar_VariableIntegerValue( "net_qport" ), clc.challenge, clc.compat );
+		Netchan_Setup( NS_CLIENT, &clc.netchan, from,
+			Cvar_VariableIntegerValue( "net_qport" ), clc.challenge,
+			Netchan_SelectWireProfile( negotiatedProtocol, clc.compat ) );
 
 		cls.state = CA_CONNECTED;
 		clc.lastPacketSentTime = cls.realtime - 9999; // send first packet immediately
@@ -3779,7 +3832,10 @@ static void CL_InitRenderer( void ) {
 	// load character sets
 	cls.charSetShader = re.RegisterShader( "gfx/2d/bigchars" );
 	cls.whiteShader = re.RegisterShader( "white" );
-	cls.consoleShader = re.RegisterShader( "console" );
+	// pak00 contains two historical shaders named "console"; the earlier Q3
+	// definition references textures not shipped by retail QL. Use FnQL's
+	// uniquely named sidecar shader, which reproduces the complete QL variant.
+	cls.consoleShader = re.RegisterShader( "fnql/console" );
 	cls.cursorShader = re.RegisterShaderNoMip( "menu/art/3_cursor2" );
 
 	Con_CheckResize();
@@ -4500,7 +4556,7 @@ void CL_Init( void ) {
 	Cvar_SetDescription( cl_shownet, "Toggle the display of current network status." );
 	cl_showTimeDelta = Cvar_Get ("cl_showTimeDelta", "0", CVAR_TEMP );
 	Cvar_SetDescription( cl_showTimeDelta, "Prints the time delta of each packet to the console (the time delta between server updates)." );
-	rcon_client_password = Cvar_Get ("rconPassword", "", CVAR_TEMP );
+	rcon_client_password = Cvar_Get ("rconPassword", "", CVAR_TEMP | CVAR_PRIVATE );
 	Cvar_SetDescription( rcon_client_password, "Sets a remote console password so clients may change server settings without direct access to the server console." );
 	cl_activeAction = Cvar_Get( "activeAction", "", CVAR_TEMP );
 	Cvar_SetDescription( cl_activeAction, "Contents of this variable will be executed upon first frame of play.\nNote: It is cleared every time it is executed." );
@@ -4630,7 +4686,7 @@ void CL_Init( void ) {
 
 	// init cg_autoswitch so the ui will have it correctly even
 	// if the cgame hasn't been started
-	Cvar_Get ("cg_autoswitch", "1", CVAR_ARCHIVE);
+	Cvar_Get ("cg_autoswitch", "0", CVAR_ARCHIVE);
 
 	cl_motdString = Cvar_Get( "cl_motdString", "", CVAR_ROM );
 	Cvar_SetDescription( cl_motdString, "Message of the day string from id's master server, it is a read only variable." );
@@ -4680,8 +4736,7 @@ void CL_Init( void ) {
 
 	// cgame might not be initialized before menu is used
 	Cvar_Get ("cg_viewsize", "100", CVAR_ARCHIVE_ND );
-	// Make sure cg_stereoSeparation is zero as that variable is deprecated and should not be used anymore.
-	Cvar_Get ("cg_stereoSeparation", "0", CVAR_ROM);
+	Cvar_Get ("cg_stereoSeparation", "0.4", CVAR_ARCHIVE);
 
 	CL_WebHost_Init();
 
@@ -4826,7 +4881,9 @@ void CL_Shutdown( const char *finalmsg, qboolean quit ) {
 
 	recursive = false;
 
-	cls = {};
+	// clientStatic_t contains the full retail server browser arrays and is close
+	// to one MiB on Win32. Keep shutdown independent of compiler temporary size.
+	Com_Memset( &cls, 0, sizeof( cls ) );
 	Key_SetCatcher( 0 );
 	Com_Printf( "-----------------------\n" );
 }

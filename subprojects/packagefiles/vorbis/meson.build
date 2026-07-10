@@ -1,5 +1,15 @@
 project('vorbis', 'c', version : '1.3.7', license : 'bsd-style')
 
+# The upstream 1.3.7 sources intentionally use portable ISO C file/string
+# functions. Microsoft marks those declarations deprecated, which creates
+# clang-cl/MSVC diagnostics without identifying an actual portability defect.
+# Keep the suppression inside this fallback overlay so FnQL-owned targets
+# retain their strict warning policy and the fetched vendor sources stay
+# untouched.
+if host_machine.system() == 'windows'
+  add_project_arguments('-D_CRT_SECURE_NO_WARNINGS', language: 'c')
+endif
+
 ogg_dep = dependency('ogg')
 
 # configure.ac

@@ -23,6 +23,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_local.h"
 #include "../qcommon/bsp_v43.h"
+#include "../qcommon/ql_bsp.h"
+
+#include <limits.h>
 
 #define JSON_IMPLEMENTATION
 #include "../qcommon/json.h"
@@ -42,15 +45,6 @@ static	world_t		s_worldData;
 static	byte		*fileBase;
 
 static int	c_gridVerts;
-
-#define	LUMP_ADVERTISEMENTS_QL	17
-
-typedef struct {
-	int		cellId;
-	float	normal[3];
-	float	points[4][3];
-	char	model[MAX_QPATH];
-} dAdvertisement_t;
 
 //===============================================================================
 
@@ -1745,9 +1739,18 @@ static	void R_LoadSurfaces( const lump_t *surfs, const lump_t *verts, const lump
 
 		if (hdrVertColors)
 		{
+			const size_t vertexCount = (size_t)verts->filelen / sizeof(*dv);
+			const size_t componentsPerVertex = 3;
+			int expectedSize;
+
 			//ri.Printf(PRINT_ALL, "Found!\n");
-			if (size != sizeof(float) * 3 * (verts->filelen / sizeof(*dv)))
-				ri.Error(ERR_DROP, "Bad size for %s (%i, expected %i)!", filename, size, (int)((sizeof(float)) * 3 * (verts->filelen / sizeof(*dv))));
+			if (vertexCount > (size_t)INT_MAX / (sizeof(float) * componentsPerVertex)) {
+				ri.Error(ERR_DROP, "HDR vertex colors for %s exceed the filesystem size limit", filename);
+				return;
+			}
+			expectedSize = (int)(sizeof(float) * componentsPerVertex * vertexCount);
+			if (size != expectedSize)
+				ri.Error(ERR_DROP, "Bad size for %s (%i, expected %i)!", filename, size, expectedSize);
 		}
 	}
 
@@ -1876,7 +1879,7 @@ R_LoadAdvertisements
 =================
 */
 static void R_LoadAdvertisements( const lump_t *l ) {
-	const dAdvertisement_t	*in;
+	const byte				*records;
 	qlAdvertisement_t		*out;
 	bmodel_t				*bmodel;
 	int						count;
@@ -1891,21 +1894,33 @@ static void R_LoadAdvertisements( const lump_t *l ) {
 		return;
 	}
 
-	if ( l->filelen % sizeof( *in ) ) {
+	if ( l->filelen % sizeof( qlBspAdvertisementDisk_t ) ) {
 		ri.Error( ERR_DROP, "R_LoadAdvertisements: funny lump size\n" );
 	}
 
-	count = l->filelen / sizeof( *in );
+	count = l->filelen / sizeof( qlBspAdvertisementDisk_t );
 	if ( count >= MAX_MAP_ADVERTISEMENTS ) {
 		ri.Error( ERR_DROP, "R_LoadAdvertisements: number of advertisements exceeds level limit.\n" );
 	}
 
-	in = (const dAdvertisement_t *)( fileBase + l->fileofs );
+	records = fileBase + l->fileofs;
 	out = ri.Hunk_Alloc( count * sizeof( *out ), h_low );
 	s_worldData.advertisements = out;
 
-	for ( i = 0; i < count; i++, in++ ) {
-		modelNum = in->model[0] == '*' ? atoi( in->model + 1 ) : -1;
+	for ( i = 0; i < count; i++ ) {
+		qlBspAdvertisementDisk_t record;
+		const qlBspAdvertisementDisk_t *in = &record;
+
+		Com_Memcpy( &record, records + i * sizeof( record ), sizeof( record ) );
+		if ( !QLBSP_ParseAdvertisementModel( in->model, &modelNum ) ) {
+			modelNum = -1;
+		}
+		if ( !QLBSP_AdvertisementGeometryFinite( in ) ) {
+			ri.Printf( PRINT_DEVELOPER,
+				"cell ID %d has non-finite advertisement geometry. It has been ignored.\n",
+				LittleLong( in->cellId ) );
+			continue;
+		}
 		if ( modelNum < 0 || modelNum >= s_worldData.numBModels ) {
 			bmodel = NULL;
 		} else {
@@ -2265,6 +2280,8 @@ static void R_LoadLightGrid( const lump_t *l ) {
 	int		i;
 	vec3_t	maxs;
 	int		numGridPoints;
+	int64_t	numGridPoints64;
+	int		lightGrid16Size;
 	world_t	*w;
 	float	*wMins, *wMaxs;
 
@@ -2283,13 +2300,29 @@ static void R_LoadLightGrid( const lump_t *l ) {
 		w->lightGridBounds[i] = (maxs[i] - w->lightGridOrigin[i])/w->lightGridSize[i] + 1;
 	}
 
-	numGridPoints = w->lightGridBounds[0] * w->lightGridBounds[1] * w->lightGridBounds[2];
+	numGridPoints64 = 1;
+	for ( i = 0; i < 3; ++i ) {
+		if ( w->lightGridBounds[i] <= 0 ||
+			numGridPoints64 > INT_MAX / w->lightGridBounds[i] ) {
+			ri.Printf( PRINT_WARNING, "WARNING: invalid light grid bounds\n" );
+			w->lightGridData = NULL;
+			return;
+		}
+		numGridPoints64 *= w->lightGridBounds[i];
+	}
+	numGridPoints = (int)numGridPoints64;
 
-	if ( l->filelen != numGridPoints * 8 ) {
+	if ( (int64_t)l->filelen != numGridPoints64 * 8 ) {
 		ri.Printf( PRINT_WARNING, "WARNING: light grid mismatch\n" );
 		w->lightGridData = NULL;
 		return;
 	}
+	if ( numGridPoints > INT_MAX / ((int)sizeof(*w->lightGrid16) * 6) ) {
+		ri.Printf( PRINT_WARNING, "WARNING: light grid exceeds the renderer allocation limit\n" );
+		w->lightGridData = NULL;
+		return;
+	}
+	lightGrid16Size = (int)sizeof(*w->lightGrid16) * 6 * numGridPoints;
 
 	w->lightGridData = ri.Hunk_Alloc( l->filelen, h_low );
 	Com_Memcpy( w->lightGridData, (void *)(fileBase + l->fileofs), l->filelen );
@@ -2314,12 +2347,19 @@ static void R_LoadLightGrid( const lump_t *l ) {
 
 		if (hdrLightGrid)
 		{
+			const int componentsPerPoint = 6;
+			int expectedSize;
+
 			//ri.Printf(PRINT_ALL, "found!\n");
+			if ( numGridPoints > INT_MAX / ((int)sizeof(float) * componentsPerPoint) ) {
+				ri.Error(ERR_DROP, "HDR light grid for %s exceeds the filesystem size limit", filename);
+				return;
+			}
+			expectedSize = (int)sizeof(float) * componentsPerPoint * numGridPoints;
+			if (size != expectedSize)
+				ri.Error(ERR_DROP, "Bad size for %s (%i, expected %i)!", filename, size, expectedSize);
 
-			if (size != sizeof(float) * 6 * numGridPoints)
-				ri.Error(ERR_DROP, "Bad size for %s (%i, expected %i)!", filename, size, (int)(sizeof(float)) * 6 * numGridPoints);
-
-			w->lightGrid16 = ri.Hunk_Alloc(sizeof(w->lightGrid16) * 6 * numGridPoints, h_low);
+			w->lightGrid16 = ri.Hunk_Alloc(lightGrid16Size, h_low);
 
 			for (i = 0; i < numGridPoints ; i++)
 			{
@@ -2345,7 +2385,7 @@ static void R_LoadLightGrid( const lump_t *l ) {
 		else if (0)
 		{
 			// promote 8-bit lightgrid to 16-bit
-			w->lightGrid16 = ri.Hunk_Alloc(sizeof(w->lightGrid16) * 6 * numGridPoints, h_low);
+			w->lightGrid16 = ri.Hunk_Alloc(lightGrid16Size, h_low);
 
 			for (i = 0; i < numGridPoints; i++)
 			{
@@ -2891,29 +2931,24 @@ void RE_LoadWorldMap( const char *name ) {
 	for (i=0 ; i<sizeof(dheader_t)/4 ; i++) {
 		((int *)header)[i] = LittleLong ( ((int *)header)[i]);
 	}
+	if ( header->ident != BSP_IDENT ) {
+		ri.Error( ERR_DROP, "%s: %s has wrong file identifier", __func__, name );
+	}
 
 	for ( i = 0; i < HEADER_LUMPS; i++ ) {
-		int32_t ofs = header->lumps[i].fileofs;
-		int32_t len = header->lumps[i].filelen;
-		if ( (uint32_t)ofs > MAX_QINT || (uint32_t)len > MAX_QINT || ofs + len > size || ofs + len < 0 ) {
+		if ( !QLBSP_LumpRangeValid( &header->lumps[i], (size_t)size ) ) {
 			ri.Error( ERR_DROP, "%s: %s has wrong lump[%i] size/offset", __func__, name, i );
 		}
 	}
 
 	if ( header->version == BSP_VERSION_QL ) {
-		const lump_t *extraLump;
-
-		if ( size < (int)( sizeof( dheader_t ) + sizeof( lump_t ) ) ) {
+		const qlBspLumpResult_t lumpResult =
+			QLBSP_ReadAdvertisementLump( buffer.b, (size_t)size, &qlAdvertisementsLump );
+		if ( lumpResult == QL_BSP_LUMP_TRUNCATED_HEADER ) {
 			ri.Error( ERR_DROP, "%s: %s has truncated QL extra lump header", __func__, name );
 		}
-
-		extraLump = (const lump_t *)( (byte *)header + sizeof( dheader_t ) );
-		qlAdvertisementsLump.fileofs = LittleLong( extraLump[LUMP_ADVERTISEMENTS_QL - HEADER_LUMPS].fileofs );
-		qlAdvertisementsLump.filelen = LittleLong( extraLump[LUMP_ADVERTISEMENTS_QL - HEADER_LUMPS].filelen );
-		if ( (uint32_t)qlAdvertisementsLump.fileofs > MAX_QINT ||
-			(uint32_t)qlAdvertisementsLump.filelen > MAX_QINT ||
-			qlAdvertisementsLump.fileofs + qlAdvertisementsLump.filelen > size ||
-			qlAdvertisementsLump.fileofs + qlAdvertisementsLump.filelen < 0 ) {
+		if ( lumpResult != QL_BSP_LUMP_OK
+			|| !QLBSP_AdvertisementLumpShapeValid( &qlAdvertisementsLump ) ) {
 			ri.Error( ERR_DROP, "%s: %s has wrong QL advertisement lump size/offset", __func__, name );
 		}
 	}
@@ -2943,7 +2978,7 @@ void RE_LoadWorldMap( const char *name ) {
 		world_t	*w;
 		uint8_t *primaryLightGrid, *data;
 		int lightGridSize;
-		int i;
+		int lightGridIndex;
 
 		w = &s_worldData;
 
@@ -2953,7 +2988,7 @@ void RE_LoadWorldMap( const char *name ) {
 		memset(primaryLightGrid, 0, lightGridSize * sizeof(*primaryLightGrid));
 
 		data = w->lightGridData;
-		for (i = 0; i < lightGridSize; i++, data += 8)
+		for (lightGridIndex = 0; lightGridIndex < lightGridSize; lightGridIndex++, data += 8)
 		{
 			int lat, lng;
 			vec3_t gridLightDir, gridLightCol;
@@ -2983,38 +3018,38 @@ void RE_LoadWorldMap( const char *name ) {
 			// FIXME: magic number for determining if light direction is close enough to sunlight
 			if (DotProduct(gridLightDir, tr.sunDirection) > 0.75f)
 			{
-				primaryLightGrid[i] = 1;
+				primaryLightGrid[lightGridIndex] = 1;
 			}
 			else
 			{
-				primaryLightGrid[i] = 255;
+				primaryLightGrid[lightGridIndex] = 255;
 			}
 		}
 
 		if (0)
 		{
-			int i;
-			byte *buffer = ri.Malloc(w->lightGridBounds[0] * w->lightGridBounds[1] * 3 + 18);
+			int layerIndex;
+			byte *debugBuffer = ri.Malloc(w->lightGridBounds[0] * w->lightGridBounds[1] * 3 + 18);
 			byte *out;
 			uint8_t *in;
 			char fileName[MAX_QPATH];
 			
-			Com_Memset (buffer, 0, 18);
-			buffer[2] = 2;		// uncompressed type
-			buffer[12] = w->lightGridBounds[0] & 255;
-			buffer[13] = w->lightGridBounds[0] >> 8;
-			buffer[14] = w->lightGridBounds[1] & 255;
-			buffer[15] = w->lightGridBounds[1] >> 8;
-			buffer[16] = 24;	// pixel size
+			Com_Memset (debugBuffer, 0, 18);
+			debugBuffer[2] = 2;		// uncompressed type
+			debugBuffer[12] = w->lightGridBounds[0] & 255;
+			debugBuffer[13] = w->lightGridBounds[0] >> 8;
+			debugBuffer[14] = w->lightGridBounds[1] & 255;
+			debugBuffer[15] = w->lightGridBounds[1] >> 8;
+			debugBuffer[16] = 24;	// pixel size
 
 			in = primaryLightGrid;
-			for (i = 0; i < w->lightGridBounds[2]; i++)
+			for (layerIndex = 0; layerIndex < w->lightGridBounds[2]; layerIndex++)
 			{
 				int j;
 
-				sprintf(fileName, "primarylg%d.tga", i);
+				sprintf(fileName, "primarylg%d.tga", layerIndex);
 
-				out = buffer + 18;
+				out = debugBuffer + 18;
 				for (j = 0; j < w->lightGridBounds[0] * w->lightGridBounds[1]; j++)
 				{
 					if (*in == 1)
@@ -3038,10 +3073,10 @@ void RE_LoadWorldMap( const char *name ) {
 					in++;
 				}
 
-				ri.FS_WriteFile(fileName, buffer, w->lightGridBounds[0] * w->lightGridBounds[1] * 3 + 18);
+				ri.FS_WriteFile(fileName, debugBuffer, w->lightGridBounds[0] * w->lightGridBounds[1] * 3 + 18);
 			}
 
-			ri.Free(buffer);
+			ri.Free(debugBuffer);
 		}
 
 		for (i = 0; i < w->numWorldSurfaces; i++)

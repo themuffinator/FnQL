@@ -837,7 +837,7 @@ void CL_SetRetailClientMessageRendererNodeCount( int nodeCount ) {
 }
 
 static qboolean CL_UseRetailClientMessageSideband( void ) {
-	return ( com_protocol && com_protocol->integer == QL_RETAIL_PROTOCOL_VERSION ) ? qtrue : qfalse;
+	return clc.netchan.wireProfile == NETCHAN_WIRE_QL_RETAIL ? qtrue : qfalse;
 }
 
 static int CL_RetailClientMessageFlags( void ) {
@@ -1063,8 +1063,9 @@ void CL_InitInput( void ) {
 	Cvar_SetDescription( cl_mouseAccelStyle, "Choose between two different mouse acceleration styles." );
 	// offset for the power function (for style 1, ignored otherwise)
 	// this should be set to the max rate value
-	cl_mouseAccelOffset = Cvar_Get( "cl_mouseAccelOffset", "5", CVAR_ARCHIVE_ND );
-	Cvar_CheckRange( cl_mouseAccelOffset, "0.001", "50000", CV_FLOAT );
+	cl_mouseAccelOffset = Cvar_Get( "cl_mouseAccelOffset", "0",
+		CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_CLOUD );
+	Cvar_CheckRange( cl_mouseAccelOffset, "0", "50000", CV_FLOAT );
 	Cvar_SetDescription( cl_mouseAccelOffset, "Sets how much base mouse delta will be doubled by acceleration. Requires 'cl_mouseAccelStyle 1'." );
 
 	cl_showMouseRate = Cvar_Get( "cl_showMouseRate", "0", 0 );

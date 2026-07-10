@@ -311,6 +311,53 @@ const char *Sys_SteamPath( void )
 
 /*
 ================
+Sys_QuakeLiveProfilePath
+
+Retail Quake Live stores mutable files and extracted native modules below a
+SteamID-named directory in the install root. Resolve the active account from
+Steam's registry state without making Steamworks a filesystem dependency.
+================
+*/
+const char *Sys_QuakeLiveProfilePath( const char *installPath )
+{
+	static char profilePath[MAX_OSPATH];
+	fnql::win::ScopedRegistryKey key;
+	DWORD activeUser;
+	DWORD activeUserSize;
+	DWORD type;
+	unsigned long long steamId;
+	char profileName[32];
+
+	profilePath[0] = '\0';
+	if ( !installPath || !installPath[0] ) {
+		return profilePath;
+	}
+
+	if ( RegOpenKeyExA( HKEY_CURRENT_USER, "Software\\Valve\\Steam\\ActiveProcess",
+		0, KEY_QUERY_VALUE, key.receive() ) != ERROR_SUCCESS ) {
+		return profilePath;
+	}
+
+	activeUser = 0;
+	activeUserSize = sizeof( activeUser );
+	type = 0;
+	if ( RegQueryValueExA( key.get(), "ActiveUser", NULL, &type,
+		reinterpret_cast<LPBYTE>( &activeUser ), &activeUserSize ) != ERROR_SUCCESS ||
+		type != REG_DWORD || activeUserSize != sizeof( activeUser ) || activeUser == 0 ) {
+		return profilePath;
+	}
+
+	/* SteamID64 individual accounts use universe/type/instance 0x01100001
+	 * followed by the 32-bit account ID exposed as ActiveUser. */
+	steamId = 76561197960265728ull + (unsigned long long)activeUser;
+	Com_sprintf( profileName, sizeof( profileName ), "%llu", steamId );
+	Sys_SteamJoinPath( profilePath, sizeof( profilePath ), installPath, profileName );
+	return profilePath;
+}
+
+
+/*
+================
 Sys_SetAffinityMask
 ================
 */

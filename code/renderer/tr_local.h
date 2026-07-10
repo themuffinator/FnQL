@@ -2907,13 +2907,13 @@ void RE_VertexLighting( qboolean allowed );
 void R_BloomScreen( void );
 
 #define GLE( ret, name, ... ) extern ret ( APIENTRY * q##name )( __VA_ARGS__ );
-	QGL_Core_PROCS;
-	QGL_Ext_PROCS;
-	QGL_ARB_PROGRAM_PROCS;
-	QGL_VBO_PROCS;
-	QGL_OCCLUSION_QUERY_PROCS;
-	QGL_FBO_PROCS;
-	QGL_FBO_OPT_PROCS;
+	QGL_Core_PROCS
+	QGL_Ext_PROCS
+	QGL_ARB_PROGRAM_PROCS
+	QGL_VBO_PROCS
+	QGL_OCCLUSION_QUERY_PROCS
+	QGL_FBO_PROCS
+	QGL_FBO_OPT_PROCS
 #undef GLE
 
 // VBO functions

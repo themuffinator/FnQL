@@ -476,10 +476,14 @@ typedef struct MYDATA {
 	LONG  lX;                   // X axis goes here
 	LONG  lY;                   // Y axis goes here
 	LONG  lZ;                   // Z axis goes here
-	BYTE  bButtonA;             // One button goes here
-	BYTE  bButtonB;             // Another button goes here
-	BYTE  bButtonC;             // Another button goes here
-	BYTE  bButtonD;             // Another button goes here
+	BYTE  bButtonA;
+	BYTE  bButtonB;
+	BYTE  bButtonC;
+	BYTE  bButtonD;
+	BYTE  bButtonE;
+	BYTE  bButtonF;
+	BYTE  bButtonG;
+	BYTE  bButtonH;
 } MYDATA;
 
 static DIOBJECTDATAFORMAT rgodf[] = {
@@ -490,6 +494,10 @@ static DIOBJECTDATAFORMAT rgodf[] = {
   { 0,              FIELD_OFFSET(MYDATA, bButtonB), DIDFT_BUTTON | DIDFT_ANYINSTANCE, 0,},
   { 0,              FIELD_OFFSET(MYDATA, bButtonC), 0x80000000 | DIDFT_BUTTON | DIDFT_ANYINSTANCE, 0,},
   { 0,              FIELD_OFFSET(MYDATA, bButtonD), 0x80000000 | DIDFT_BUTTON | DIDFT_ANYINSTANCE, 0,},
+  { 0,              FIELD_OFFSET(MYDATA, bButtonE), 0x80000000 | DIDFT_BUTTON | DIDFT_ANYINSTANCE, 0,},
+  { 0,              FIELD_OFFSET(MYDATA, bButtonF), 0x80000000 | DIDFT_BUTTON | DIDFT_ANYINSTANCE, 0,},
+  { 0,              FIELD_OFFSET(MYDATA, bButtonG), 0x80000000 | DIDFT_BUTTON | DIDFT_ANYINSTANCE, 0,},
+  { 0,              FIELD_OFFSET(MYDATA, bButtonH), 0x80000000 | DIDFT_BUTTON | DIDFT_ANYINSTANCE, 0,},
 };
 
 #define NUM_OBJECTS (sizeof(rgodf) / sizeof(rgodf[0]))
@@ -506,9 +514,18 @@ static DIDATAFORMAT	df = {
 
 static LPDIRECTINPUT		g_pdi;
 static LPDIRECTINPUTDEVICE	g_pMouse;
-static constexpr DWORD kDInputMouseWheelOffset = static_cast<DWORD>( offsetof( DIMOUSESTATE, lZ ) );
+static constexpr DWORD kDInputMouseWheelOffset = static_cast<DWORD>( offsetof( MYDATA, lZ ) );
+static constexpr DWORD kDInputMouseFirstButtonOffset = static_cast<DWORD>( offsetof( MYDATA, bButtonA ) );
+static constexpr int kDInputMouseButtonKeys[] = {
+	K_MOUSE1, K_MOUSE2, K_MOUSE3, K_MOUSE4,
+	K_MOUSE5, K_MOUSE6, K_MOUSE7, K_MOUSE8
+};
+
+static_assert( offsetof( MYDATA, bButtonH ) - offsetof( MYDATA, bButtonA ) == 7,
+	"DirectInput mouse buttons must have contiguous byte offsets" );
 
 static void IN_DIMouse( int *mx, int *my );
+static void IN_ShutdownDIMouse( void );
 
 static qboolean IN_LoadDirectInput( void )
 {
@@ -566,6 +583,7 @@ static qboolean IN_InitDIMouse( void ) {
 
 	if (FAILED(hr)) {
 		Com_DPrintf ("iDirectInputCreate failed\n");
+		IN_ShutdownDIMouse();
 		return qfalse;
 	}
 
@@ -574,6 +592,7 @@ static qboolean IN_InitDIMouse( void ) {
 
 	if (FAILED(hr)) {
 		Com_DPrintf ("Couldn't open DI mouse device\n");
+		IN_ShutdownDIMouse();
 		return qfalse;
 	}
 
@@ -582,6 +601,7 @@ static qboolean IN_InitDIMouse( void ) {
 
 	if (FAILED(hr)) 	{
 		Com_DPrintf ("Couldn't set DI mouse format\n");
+		IN_ShutdownDIMouse();
 		return qfalse;
 	}
 
@@ -592,6 +612,7 @@ static qboolean IN_InitDIMouse( void ) {
 	// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=50
 	if (FAILED(hr)) {
 		Com_DPrintf ("Couldn't set DI coop level\n");
+		IN_ShutdownDIMouse();
 		return qfalse;
 	}
 
@@ -602,6 +623,7 @@ static qboolean IN_InitDIMouse( void ) {
 
 	if (FAILED(hr)) {
 		Com_DPrintf ("Couldn't set DI buffersize\n");
+		IN_ShutdownDIMouse();
 		return qfalse;
 	}
 
@@ -650,9 +672,14 @@ static void IN_ActivateDIMouse( void ) {
 	// we may fail to reacquire if the window has been recreated
 	hr = IDirectInputDevice_Acquire( g_pMouse );
 	if (FAILED(hr)) {
-		if ( !IN_InitDIMouse() ) {
+		IN_ShutdownDIMouse();
+		if ( !IN_InitDIMouse() || !g_pMouse ||
+			FAILED( IDirectInputDevice_Acquire( g_pMouse ) ) ) {
+			IN_ShutdownDIMouse();
 			Com_Printf ("Falling back to Win32 mouse support...\n");
 			Cvar_Set( "in_mouse", "-1" );
+			IN_ActivateWin32Mouse();
+			return;
 		}
 	}
 	while (ShowCursor (FALSE) >= 0)
@@ -680,10 +707,9 @@ IN_DIMouse
 */
 static void IN_DIMouse( int *mx, int *my ) {
 	DIDEVICEOBJECTDATA	od;
-	DIMOUSESTATE		state;
+	MYDATA				state;
 	DWORD				dwElements;
 	HRESULT				hr;
-	int value;
 
 	if ( !g_pMouse ) {
 		return;
@@ -709,75 +735,24 @@ static void IN_DIMouse( int *mx, int *my ) {
 			break;
 		}
 
-		switch (od.dwOfs) {
-		case DIMOFS_BUTTON0:
-			if (od.dwData & 0x80)
-				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE1, qtrue, 0, NULL );
-			else
-				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE1, qfalse, 0, NULL );
-			break;
+		const DWORD buttonIndex = od.dwOfs - kDInputMouseFirstButtonOffset;
+		if ( buttonIndex < ARRAY_LEN( kDInputMouseButtonKeys ) ) {
+			Sys_QueEvent( od.dwTimeStamp, SE_KEY,
+				kDInputMouseButtonKeys[buttonIndex],
+				( od.dwData & 0x80 ) ? qtrue : qfalse, 0, NULL );
+			continue;
+		}
 
-		case DIMOFS_BUTTON1:
-			if (od.dwData & 0x80)
-				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE2, qtrue, 0, NULL );
-			else
-				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE2, qfalse, 0, NULL );
-			break;
-			
-		case DIMOFS_BUTTON2:
-			if (od.dwData & 0x80)
-				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE3, qtrue, 0, NULL );
-			else
-				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE3, qfalse, 0, NULL );
-			break;
-
-		case DIMOFS_BUTTON3:
-			if (od.dwData & 0x80)
-				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE4, qtrue, 0, NULL );
-			else
-				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE4, qfalse, 0, NULL );
-			break;
-
-		case DIMOFS_BUTTON4:
-			if (od.dwData & 0x80)
-				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE5, qtrue, 0, NULL );
-			else
-				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE5, qfalse, 0, NULL );
-			break;
-
-		case DIMOFS_BUTTON5:
-			if (od.dwData & 0x80)
-				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE6, qtrue, 0, NULL );
-			else
-				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE6, qfalse, 0, NULL );
-			break;
-
-		case DIMOFS_BUTTON6:
-			if (od.dwData & 0x80)
-				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE7, qtrue, 0, NULL );
-			else
-				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE7, qfalse, 0, NULL );
-			break;
-
-		case DIMOFS_BUTTON7:
-			if (od.dwData & 0x80)
-				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE8, qtrue, 0, NULL );
-			else
-				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MOUSE8, qfalse, 0, NULL );
-			break;
 		// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=50
-		case kDInputMouseWheelOffset:
-			value = od.dwData;
-			if (value == 0) {
-
-			} else if (value < 0) {
+		if ( od.dwOfs == kDInputMouseWheelOffset ) {
+			const LONG value = static_cast<LONG>( od.dwData );
+			if ( value < 0 ) {
 				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MWHEELDOWN, qtrue, 0, NULL );
 				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MWHEELDOWN, qfalse, 0, NULL );
-			} else {
+			} else if ( value > 0 ) {
 				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MWHEELUP, qtrue, 0, NULL );
 				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MWHEELUP, qfalse, 0, NULL );
 			}
-			break;
 		}
 	}
 
@@ -1229,12 +1204,13 @@ void IN_Init( void ) {
 #endif
 
 	// mouse variables
-	in_mouse = Cvar_Get ("in_mouse", "1", CVAR_ARCHIVE |CVAR_LATCH );
-	Cvar_CheckRange( in_mouse, "-1", "1", CV_INTEGER );
+	in_mouse = Cvar_Get ("in_mouse", "2", CVAR_ARCHIVE | CVAR_LATCH | CVAR_CLOUD );
+	Cvar_CheckRange( in_mouse, "-1", "2", CV_INTEGER );
 	Cvar_SetDescription( in_mouse,
 		"Mouse data input source:\n" \
 		"  0 - disable mouse input\n" \
 		"  1 - di/raw mouse\n" \
+		"  2 - Quake Live raw mouse\n" \
 		" -1 - win32 mouse" );
 		
 	in_nograb = Cvar_Get( "in_nograb", "0", 0 );

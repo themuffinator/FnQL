@@ -9,7 +9,7 @@ param(
 	[ValidateSet('client', 'dedicated')]
 	[string]$Target = 'client',
 
-	[string]$BuildDir = $(if ($env:FNQ3_MESON_BUILD_DIR) { $env:FNQ3_MESON_BUILD_DIR } else { 'meson\build' })
+	[string]$BuildDir = $(if ($env:FNQL_MESON_BUILD_DIR) { $env:FNQL_MESON_BUILD_DIR } elseif ($env:FNQ3_MESON_BUILD_DIR) { $env:FNQ3_MESON_BUILD_DIR } else { 'meson\build' })
 )
 
 $ErrorActionPreference = 'Stop'
@@ -39,9 +39,9 @@ $buildRoot = if ([System.IO.Path]::IsPathRooted($BuildDir)) {
 
 $suffix = Get-BinarySuffix
 $executableName = if ($Target -eq 'dedicated') {
-	"fnquake3.ded$suffix.exe"
+	"fnql.ded$suffix.exe"
 } else {
-	"fnquake3$suffix.exe"
+	"fnql$suffix.exe"
 }
 $executablePath = Join-Path $buildRoot $executableName
 
@@ -54,6 +54,6 @@ Set-Location $buildRoot
 if ($Target -eq 'dedicated') {
 	& $executablePath
 } else {
-	& $executablePath '+set' 'cl_renderer' (Convert-RendererName)
+	& $executablePath '+set' 'r_fullscreen' '0' '+set' 'cl_renderer' (Convert-RendererName)
 }
 exit $LASTEXITCODE

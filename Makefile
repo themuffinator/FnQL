@@ -575,7 +575,7 @@ ifeq ($(COMPILE_PLATFORM),darwin)
 # SETUP AND BUILD -- MACOS
 #############################################################################
 
-  BASE_CFLAGS += -Wall -Wimplicit -Wstrict-prototypes -pipe
+  BASE_CFLAGS += -Wall -Wimplicit -Wstrict-prototypes -pipe -pthread
 
   BASE_CFLAGS += -Wno-unused-result
 
@@ -589,7 +589,7 @@ ifeq ($(COMPILE_PLATFORM),darwin)
 
   ARCHEXT = .$(ARCH)
 
-  LDFLAGS +=
+  LDFLAGS += -pthread
 
   ifeq ($(ARCH),x86_64)
     BASE_CFLAGS += -arch x86_64
@@ -633,7 +633,7 @@ else
 # SETUP AND BUILD -- *NIX PLATFORMS
 #############################################################################
 
-  BASE_CFLAGS += -Wall -Wimplicit -Wstrict-prototypes -pipe
+  BASE_CFLAGS += -Wall -Wimplicit -Wstrict-prototypes -pipe -pthread
 
   BASE_CFLAGS += -Wno-unused-result
 
@@ -676,7 +676,7 @@ else
   SHLIBCFLAGS = -fPIC -fvisibility=hidden
   SHLIBLDFLAGS = -shared $(LDFLAGS)
 
-  LDFLAGS += -lm
+  LDFLAGS += -lm -pthread
   LDFLAGS += -Wl,--gc-sections -fvisibility=hidden
 
   ifeq ($(USE_SDL),1)
@@ -1344,8 +1344,10 @@ Q3OBJ = \
   $(B)/client/sv_init.o \
   $(B)/client/sv_main.o \
   $(B)/client/sv_net_chan.o \
+  $(B)/client/sv_platform.o \
   $(B)/client/sv_snapshot.o \
   $(B)/client/sv_world.o \
+  $(B)/client/sv_zmq.o \
   \
   $(B)/client/q_math.o \
   $(B)/client/q_shared.o \
@@ -1558,8 +1560,10 @@ Q3DOBJ = \
   $(B)/ded/sv_init.o \
   $(B)/ded/sv_main.o \
   $(B)/ded/sv_net_chan.o \
+  $(B)/ded/sv_platform.o \
   $(B)/ded/sv_snapshot.o \
   $(B)/ded/sv_world.o \
+  $(B)/ded/sv_zmq.o \
   \
   $(B)/ded/cm_load.o \
   $(B)/ded/cm_patch.o \

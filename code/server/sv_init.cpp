@@ -24,62 +24,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include <array>
 
-static constexpr const char *SV_ONLINE_SERVICES_MODE = "Build-disabled (FnQL engine-only)";
-static constexpr const char *SV_ONLINE_SERVICES_POLICY = "compatibility-disabled (retail Steam install only)";
-static constexpr const char *SV_PLATFORM_AUTH_PROVIDER = "Build-disabled (FnQL engine-only)";
-static constexpr const char *SV_PLATFORM_AUTH_POLICY = "compatibility-disabled (LAN/local auth only)";
-static constexpr const char *SV_STEAM_SERVER_PROVIDER = "Build-disabled (FnQL engine-only)";
-static constexpr const char *SV_STEAM_SERVER_POLICY = "compatibility-disabled (no Steam GameServer owner)";
-static constexpr const char *SV_WORKSHOP_PROVIDER = "Build-disabled (FnQL engine-only)";
-static constexpr const char *SV_WORKSHOP_POLICY = "compatibility-disabled (retail assets only)";
-static constexpr const char *SV_SERVER_STATS_PROVIDER = "Build-disabled (FnQL engine-only)";
-static constexpr const char *SV_SERVER_STATS_POLICY = "compatibility-disabled (no live Steam stats owner)";
-
-const char *SV_GetPlatformAuthProviderLabel( void ) {
-	return SV_PLATFORM_AUTH_PROVIDER;
-}
-
-const char *SV_GetPlatformAuthPolicyLabel( void ) {
-	return SV_PLATFORM_AUTH_POLICY;
-}
-
-const char *SV_GetSteamServerProviderLabel( void ) {
-	return SV_STEAM_SERVER_PROVIDER;
-}
-
-const char *SV_GetSteamServerPolicyLabel( void ) {
-	return SV_STEAM_SERVER_POLICY;
-}
-
-const char *SV_GetWorkshopProviderLabel( void ) {
-	return SV_WORKSHOP_PROVIDER;
-}
-
-const char *SV_GetWorkshopPolicyLabel( void ) {
-	return SV_WORKSHOP_POLICY;
-}
-
-const char *SV_GetServerStatsProviderLabel( void ) {
-	return SV_SERVER_STATS_PROVIDER;
-}
-
-const char *SV_GetServerStatsPolicyLabel( void ) {
-	return SV_SERVER_STATS_POLICY;
-}
-
-void SV_RefreshPlatformServiceCvars( void ) {
-	Cvar_Set( "sv_onlineServicesMode", SV_ONLINE_SERVICES_MODE );
-	Cvar_Set( "sv_onlineServicesPolicy", SV_ONLINE_SERVICES_POLICY );
-	Cvar_Set( "sv_platformAuthProvider", SV_GetPlatformAuthProviderLabel() );
-	Cvar_Set( "sv_platformAuthPolicy", SV_GetPlatformAuthPolicyLabel() );
-	Cvar_Set( "sv_steamServerProvider", SV_GetSteamServerProviderLabel() );
-	Cvar_Set( "sv_steamServerPolicy", SV_GetSteamServerPolicyLabel() );
-	Cvar_Set( "sv_workshopProvider", SV_GetWorkshopProviderLabel() );
-	Cvar_Set( "sv_workshopPolicy", SV_GetWorkshopPolicyLabel() );
-	Cvar_Set( "sv_statsProvider", SV_GetServerStatsProviderLabel() );
-	Cvar_Set( "sv_statsPolicy", SV_GetServerStatsPolicyLabel() );
-}
-
 /*
 ===============
 SV_SendConfigstring
@@ -726,6 +670,7 @@ void SV_SpawnServer( const char *mapname, qboolean killBots ) {
 	// and any configstring changes should be reliably transmitted
 	// to all clients
 	sv.state = SS_GAME;
+	Zmq_InitStatsPublisher();
 
 	// send a heartbeat now so the master will get up to date info
 	SV_Heartbeat_f();
@@ -757,7 +702,9 @@ void SV_Init( void )
 
 	// serverinfo vars
 	Cvar_Get ("dmflags", "0", CVAR_SERVERINFO);
-	Cvar_Get ("fraglimit", "20", CVAR_SERVERINFO);
+	// The currently shipped retail qagame registers 50 here. Match the module
+	// boundary so startup does not retain a stale Quake III reset value.
+	Cvar_Get ("fraglimit", "50", CVAR_SERVERINFO);
 	Cvar_Get ("timelimit", "0", CVAR_SERVERINFO);
 	sv_gametype = Cvar_Get ("g_gametype", "0", CVAR_SERVERINFO | CVAR_LATCH );
 	Cvar_SetDescription( sv_gametype, "Set the gametype to mod." );
@@ -807,27 +754,17 @@ void SV_Init( void )
 	Cvar_Get( "sv_referencedPaks", "", CVAR_SYSTEMINFO | CVAR_ROM );
 	sv_referencedPakNames = Cvar_Get( "sv_referencedPakNames", "", CVAR_SYSTEMINFO | CVAR_ROM );
 	Cvar_SetDescription( sv_referencedPakNames, "Variable holds a list of all the pack archives the server loaded data from." );
-	Cvar_Get( "sv_onlineServicesMode", "Unavailable", CVAR_ROM );
-	Cvar_Get( "sv_onlineServicesPolicy", "compatibility-unavailable", CVAR_ROM );
-	Cvar_Get( "sv_platformAuthProvider", "Unavailable", CVAR_ROM );
-	Cvar_Get( "sv_platformAuthPolicy", "compatibility-unavailable", CVAR_ROM );
-	Cvar_Get( "sv_steamServerProvider", "Unavailable", CVAR_ROM );
-	Cvar_Get( "sv_steamServerPolicy", "compatibility-unavailable", CVAR_ROM );
-	Cvar_Get( "sv_workshopProvider", "Unavailable", CVAR_ROM );
-	Cvar_Get( "sv_workshopPolicy", "compatibility-unavailable", CVAR_ROM );
-	Cvar_Get( "sv_statsProvider", "Unavailable", CVAR_ROM );
-	Cvar_Get( "sv_statsPolicy", "compatibility-unavailable", CVAR_ROM );
 	Cvar_Get( "sv_rankingsProvider", "Unavailable", CVAR_ROM );
 	Cvar_Get( "sv_rankingsPolicy", "compatibility-unavailable", CVAR_ROM );
 	SV_RefreshPlatformServiceCvars();
 	SV_GameRefreshRankingsPolicyCvars();
 
 	// server vars
-	sv_rconPassword = Cvar_Get ("rconPassword", "", CVAR_TEMP );
+	sv_rconPassword = Cvar_Get ("rconPassword", "", CVAR_TEMP | CVAR_PRIVATE );
 	Cvar_SetDescription( sv_rconPassword, "Password for remote server commands." );
-	sv_privatePassword = Cvar_Get ("sv_privatePassword", "", CVAR_TEMP );
+	sv_privatePassword = Cvar_Get ("sv_privatePassword", "", CVAR_TEMP | CVAR_PRIVATE );
 	Cvar_SetDescription( sv_privatePassword, "Set password for private clients to login with." );
-	sv_fps = Cvar_Get ("sv_fps", "20", CVAR_TEMP );
+	sv_fps = Cvar_Get ("sv_fps", "40", CVAR_TEMP );
 	Cvar_CheckRange( sv_fps, "10", "125", CV_INTEGER );
 	Cvar_SetDescription( sv_fps, "Set the max frames per second the server sends the client." );
 	sv_audioPVS = Cvar_Get( "sv_audioPVS", "0", CVAR_ARCHIVE_ND );
@@ -912,6 +849,7 @@ void SV_Init( void )
 	// force initial check
 	SV_TrackCvarChanges();
 
+	Zmq_RegisterCvarsAndInitRcon();
 	SV_InitChallenger();
 }
 
@@ -976,6 +914,7 @@ void SV_Shutdown( const char *finalmsg ) {
 	SV_RemoveOperatorCommands();
 	SV_MasterShutdown();
 	SV_ShutdownGameProgs();
+	Zmq_ShutdownStatsPublisher();
 	SV_InitChallenger();
 
 	// free current level

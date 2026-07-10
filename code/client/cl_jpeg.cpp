@@ -135,6 +135,12 @@ void CL_LoadJPG( const char *filename, unsigned char **pic, int *width, int *hei
 	cinfo.err->output_message = CL_JPGOutputMessage;
 
 	/* Establish the setjmp return context for R_JPGErrorExit to use. */
+#if defined(_MSC_VER)
+#pragma warning(push)
+	// libjpeg's documented recovery contract requires setjmp here.  No C++
+	// object with a non-trivial destructor is live across this boundary.
+#pragma warning(disable: 4611)
+#endif
 	if ( Q_setjmp( jerr.setjmp_buffer ) )
 	{
 		/* If we get here, the JPEG code has signaled an error.
@@ -147,6 +153,9 @@ void CL_LoadJPG( const char *filename, unsigned char **pic, int *width, int *hei
 		Com_Printf( ", loading file %s\n", filename );
 		return;
 	}
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
   /* Now we can initialize the JPEG decompression object. */
   jpeg_create_decompress(&cinfo);
@@ -405,6 +414,12 @@ size_t CL_SaveJPGToBuffer(byte *buffer, size_t bufSize, int quality,
   cinfo.err->output_message = CL_JPGOutputMessage;
 
   /* Establish the setjmp return context for R_JPGErrorExit to use. */
+#if defined(_MSC_VER)
+#pragma warning(push)
+  // libjpeg's documented recovery contract requires setjmp here.  The live
+  // locals are trivially destructible C-compatible state.
+#pragma warning(disable: 4611)
+#endif
   if ( Q_setjmp( jerr.setjmp_buffer ) )
   {
     /* If we get here, the JPEG code has signaled an error.
@@ -415,6 +430,9 @@ size_t CL_SaveJPGToBuffer(byte *buffer, size_t bufSize, int quality,
     Com_Printf( "\n" );
     return 0;
   }
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
   /* Now we can initialize the JPEG compression object. */
   jpeg_create_compress(&cinfo);

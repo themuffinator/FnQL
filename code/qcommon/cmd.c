@@ -33,6 +33,7 @@ typedef struct {
 } cmd_t;
 
 static int   cmd_wait;
+static int   cmd_aliasExpansions;
 static cmd_t cmd_text;
 static byte  cmd_text_buf[MAX_CMD_BUFFER];
 
@@ -258,6 +259,8 @@ void Cbuf_Execute( void )
 	qboolean in_star_comment;
 	qboolean in_slash_comment;
 
+	cmd_aliasExpansions = 0;
+
 	if ( cmd_wait > 0 ) {
 		// delay command buffer execution
 		return;
@@ -380,6 +383,7 @@ Cmd_Exec_f
 */
 static void Cmd_Exec_f( void ) {
 	qboolean quiet;
+	qboolean profileConfig;
 	union {
 		char *c;
 		void *v;
@@ -396,11 +400,19 @@ static void Cmd_Exec_f( void ) {
 
 	Q_strncpyz( filename, Cmd_Argv(1), sizeof( filename ) );
 	COM_DefaultExtension( filename, sizeof( filename ), ".cfg" );
+	profileConfig = !Q_stricmp( filename, QL_CONFIG_HARDWARE_FILE ) ||
+		!Q_stricmp( filename, QL_CONFIG_REPLICATE_FILE );
 	FS_BypassPure();
-	FS_ReadFile( filename, &f.v );
+	if ( profileConfig ) {
+		FS_ReadProfileFile( filename, &f.v );
+	} else {
+		FS_ReadFile( filename, &f.v );
+	}
 	FS_RestorePure();
 	if ( f.v == NULL ) {
-		Com_Printf( "couldn't exec %s\n", filename );
+		if ( !quiet ) {
+			Com_Printf( "couldn't exec %s\n", filename );
+		}
 		return;
 	}
 	if (!quiet)
@@ -409,7 +421,7 @@ static void Cmd_Exec_f( void ) {
 	Cbuf_InsertText( f.c );
 
 #ifdef DELAY_WRITECONFIG
-	if ( !Q_stricmp( filename, Q3CONFIG_CFG ) ) {
+	if ( !Q_stricmp( filename, Q3CONFIG_CFG ) || profileConfig ) {
 		Com_WriteConfiguration(); // to avoid loading outdated values
 	}
 #endif
@@ -476,6 +488,17 @@ static	char		cmd_tokenized[BIG_INFO_STRING+MAX_STRING_TOKENS];	// will have 0 by
 static	char		cmd_cmd[BIG_INFO_STRING]; // the original command we received (no token processing)
 
 static	cmd_function_t	*cmd_functions;		// possible commands to execute
+
+#define MAX_CMD_ALIASES 256
+#define MAX_ALIAS_NAME  64
+
+typedef struct {
+	char name[MAX_ALIAS_NAME];
+	char command[MAX_CMD_LINE];
+	qboolean inUse;
+} cmdAlias_t;
+
+static cmdAlias_t cmd_aliases[MAX_CMD_ALIASES];
 
 /*
 ============
@@ -933,6 +956,133 @@ void Cmd_RemoveCgameCommands( void )
 
 
 /*
+=============
+Cmd_FindAlias
+=============
+*/
+static cmdAlias_t *Cmd_FindAlias( const char *name ) {
+	int index;
+
+	for ( index = 0; index < MAX_CMD_ALIASES; index++ ) {
+		if ( cmd_aliases[ index ].inUse &&
+			!Q_stricmp( name, cmd_aliases[ index ].name ) ) {
+			return &cmd_aliases[ index ];
+		}
+	}
+
+	return NULL;
+}
+
+
+static void Cmd_ListAliases( void ) {
+	int index;
+	int count;
+
+	count = 0;
+	for ( index = 0; index < MAX_CMD_ALIASES; index++ ) {
+		if ( cmd_aliases[ index ].inUse ) {
+			Com_Printf( "%s \"%s\"\n", cmd_aliases[ index ].name,
+				cmd_aliases[ index ].command );
+			count++;
+		}
+	}
+	Com_Printf( "%i aliases\n", count );
+}
+
+
+static void Cmd_Alias_f( void ) {
+	cmdAlias_t *alias;
+	int index;
+
+	if ( Cmd_Argc() == 1 ) {
+		Cmd_ListAliases();
+		return;
+	}
+
+	alias = Cmd_FindAlias( Cmd_Argv( 1 ) );
+	if ( Cmd_Argc() == 2 ) {
+		if ( alias ) {
+			Com_Printf( "%s \"%s\"\n", alias->name, alias->command );
+		}
+		return;
+	}
+
+	if ( !alias ) {
+		for ( index = 0; index < MAX_CMD_ALIASES; index++ ) {
+			if ( !cmd_aliases[ index ].inUse ) {
+				alias = &cmd_aliases[ index ];
+				break;
+			}
+		}
+	}
+
+	if ( !alias ) {
+		Com_Printf( "Alias capacity reached; remove an alias before adding '%s'.\n",
+			Cmd_Argv( 1 ) );
+		return;
+	}
+
+	Q_strncpyz( alias->name, Cmd_Argv( 1 ), sizeof( alias->name ) );
+	Q_strncpyz( alias->command, Cmd_Argv( 2 ), sizeof( alias->command ) );
+	alias->inUse = qtrue;
+	cvar_modifiedFlags |= CVAR_ARCHIVE;
+}
+
+
+static void Cmd_UnAlias_f( void ) {
+	cmdAlias_t *alias;
+
+	if ( Cmd_Argc() != 2 ) {
+		Com_Printf( "Usage: unalias <name>\n" );
+		return;
+	}
+
+	alias = Cmd_FindAlias( Cmd_Argv( 1 ) );
+	if ( alias ) {
+		Com_Memset( alias, 0, sizeof( *alias ) );
+		cvar_modifiedFlags |= CVAR_ARCHIVE;
+	}
+}
+
+
+static void Cmd_UnAliasAll_f( void ) {
+	Com_Memset( cmd_aliases, 0, sizeof( cmd_aliases ) );
+	cvar_modifiedFlags |= CVAR_ARCHIVE;
+}
+
+
+void Cmd_WriteAliases( fileHandle_t file ) {
+	int index;
+
+	FS_Printf( file, "unaliasall" Q_NEWLINE );
+	for ( index = 0; index < MAX_CMD_ALIASES; index++ ) {
+		if ( cmd_aliases[ index ].inUse ) {
+			FS_Printf( file, "alias %s \"%s\"" Q_NEWLINE,
+				cmd_aliases[ index ].name, cmd_aliases[ index ].command );
+		}
+	}
+}
+
+
+static qboolean Cmd_ExecuteAlias( const char *name ) {
+	cmdAlias_t *alias;
+
+	alias = Cmd_FindAlias( name );
+	if ( !alias ) {
+		return qfalse;
+	}
+
+	if ( ++cmd_aliasExpansions > 64 ) {
+		Com_Printf( "Alias expansion limit reached at '%s'.\n", name );
+		return qtrue;
+	}
+
+	Cbuf_InsertText( alias->command );
+	return qtrue;
+}
+
+
+/*
 ============
 Cmd_CommandCompletion
 ============
@@ -1026,7 +1176,13 @@ void Cmd_ExecuteString( const char *text ) {
 	if ( com_cl_running && com_cl_running->integer && UI_GameCommand() ) {
 		return;
 	}
+#endif
 
+	if ( Cmd_ExecuteAlias( cmd_argv[ 0 ] ) ) {
+		return;
+	}
+
+#ifndef DEDICATED
 	// send it as a server command if we are connected
 	// this will usually result in a chat message
 	CL_ForwardCommandToServer( text );
@@ -1092,6 +1248,7 @@ Cmd_Init
 ============
 */
 void Cmd_Init( void ) {
+	Com_Memset( cmd_aliases, 0, sizeof( cmd_aliases ) );
 	Cmd_AddCommand ("cmdlist",Cmd_List_f);
 	Cmd_AddCommand ("exec",Cmd_Exec_f);
 	Cmd_AddCommand ("execq",Cmd_Exec_f);
@@ -1101,4 +1258,7 @@ void Cmd_Init( void ) {
 	Cmd_SetCommandCompletionFunc( "vstr", Cvar_CompleteCvarName );
 	Cmd_AddCommand ("echo",Cmd_Echo_f);
 	Cmd_AddCommand ("wait", Cmd_Wait_f);
+	Cmd_AddCommand ("alias", Cmd_Alias_f);
+	Cmd_AddCommand ("unalias", Cmd_UnAlias_f);
+	Cmd_AddCommand ("unaliasall", Cmd_UnAliasAll_f);
 }

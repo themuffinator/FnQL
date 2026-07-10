@@ -429,7 +429,7 @@ static void IN_ActivateMouse( void )
 	const qboolean consoleActive = ( Key_GetCatcher() & KEYCATCH_CONSOLE ) ? qtrue : qfalse;
 	const qboolean browserActive = ( Key_GetCatcher() & KEYCATCH_BROWSER ) ? qtrue : qfalse;
 	const qboolean grabMouse = ( !in_nograb->integer || consoleActive ) ? qtrue : qfalse;
-	const qboolean relativeMouse = ( in_mouse->integer == 1 && grabMouse && !browserActive ) ? qtrue : qfalse;
+	const qboolean relativeMouse = ( in_mouse->integer > 0 && grabMouse && !browserActive ) ? qtrue : qfalse;
 
 	if ( !mouseAvailable )
 		return;
@@ -1575,12 +1575,13 @@ void IN_Init( void )
 	Cvar_SetDescription( in_forceCharset, "Try to translate non-ASCII chars in keyboard input or force EN/US keyboard layout." );
 
 	// mouse variables
-	in_mouse = Cvar_Get( "in_mouse", "1", CVAR_ARCHIVE );
-	Cvar_CheckRange( in_mouse, "-1", "1", CV_INTEGER );
+	in_mouse = Cvar_Get( "in_mouse", "2", CVAR_ARCHIVE | CVAR_LATCH | CVAR_CLOUD );
+	Cvar_CheckRange( in_mouse, "-1", "2", CV_INTEGER );
 	Cvar_SetDescription( in_mouse,
 		"Mouse data input source:\n" \
 		"  0 - disable mouse input\n" \
-		"  1 - di/raw mouse\n" \
+		"  1 - SDL relative mouse\n" \
+		"  2 - Quake Live raw/relative mouse\n" \
 		" -1 - win32 mouse" );
 
 #ifdef USE_JOYSTICK

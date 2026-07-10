@@ -150,7 +150,7 @@ struct punctuation_s
 {
 	const char *p;						//punctuation character(s)
 	int n;							//punctuation indication
-	punctuation_s *next;				//next punctuation
+	punctuation_s *next = nullptr;		//next punctuation
 };
 using punctuation_t = punctuation_s;
 

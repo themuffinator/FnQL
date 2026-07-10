@@ -731,6 +731,26 @@ static void mov_rx_ptr( uint32_t reg, const void *ptr )
 #endif
 }
 
+static void mov_rx_syscall( uint32_t reg, syscall_t function )
+{
+	intptr_t address = 0;
+
+	/* The native x86 JIT stores the syscall entrypoint as an immediate machine
+	 * address. Fail explicitly on an ABI where it cannot fit rather than using
+	 * an implementation-defined function-to-data-pointer conversion. */
+	if ( sizeof( address ) != sizeof( function ) ) {
+		Com_Error( ERR_FATAL, "VM JIT function pointer has an incompatible size" );
+		return;
+	}
+	Com_Memcpy( &address, &function, sizeof( address ) );
+
+#if idx64
+	mov_rx_imm64( reg, address );
+#else
+	mov_rx_imm32( reg, address );
+#endif
+}
+
 static void emit_not_rx( uint32_t reg )
 {
 	modrm_t modrm;
@@ -1518,7 +1538,7 @@ static void VM_FreeBuffers( void )
 }
 
 
-static const ID_INLINE qboolean HasFCOM( void )
+static ID_INLINE qboolean HasFCOM( void )
 {
 #if id386
 	return ( CPU_Flags & CPU_FCOM );
@@ -1528,7 +1548,7 @@ static const ID_INLINE qboolean HasFCOM( void )
 }
 
 
-static const ID_INLINE qboolean HasSSEFP( void )
+static ID_INLINE qboolean HasSSEFP( void )
 {
 #if id386
 	return ( CPU_Flags & CPU_SSE );
@@ -2725,7 +2745,7 @@ __compile:
 
 	emit_load4( R_OPSTACK | R_REX, R_EAX, 0 );		// mov rdi, [rax]
 
-	mov_rx_ptr( R_SYSCALL, vm->systemCall );		// mov r13, vm->systemCall
+	mov_rx_syscall( R_SYSCALL, vm->systemCall );		// mov r13, vm->systemCall
 
 	mov_rx_ptr( R_EAX, &vm->programStack );			// mov rax, &vm->programStack
 

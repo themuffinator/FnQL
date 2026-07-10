@@ -5,9 +5,20 @@ string(REGEX REPLACE "^#define FNQL_VERSION_STRING \"([^\"]+)\"$" "\\1" FNQL_VER
 
 PROJECT(FnQL VERSION ${FNQL_VERSION_STRING} LANGUAGES C CXX)
 
+find_package(Threads REQUIRED)
+
 SET(CMAKE_CXX_STANDARD 17)
 SET(CMAKE_CXX_STANDARD_REQUIRED ON)
 SET(CMAKE_CXX_EXTENSIONS OFF)
+
+IF(MSVC)
+	# Standard-library templates use exception-aware cleanup even though the
+	# engine does not throw across its C ABI boundaries.
+	ADD_COMPILE_OPTIONS(
+		$<$<COMPILE_LANGUAGE:CXX>:/EHsc>
+		$<$<COMPILE_LANGUAGE:C>:/wd4201>
+		$<$<COMPILE_LANGUAGE:CXX>:/wd4201>)
+ENDIF()
 
 SET(CNAME "fnql")
 SET(DNAME "fnql.ded")
@@ -104,16 +115,20 @@ SET(SERVER_SRCS
 	code/server/sv_init.cpp
 	code/server/sv_main.cpp
 	code/server/sv_net_chan.cpp
+	code/server/sv_platform.cpp
 	code/server/sv_snapshot.cpp
 	code/server/sv_world.cpp
+	code/server/sv_zmq.cpp
 )
 
 # universal binary
 ADD_LIBRARY(qcommon OBJECT ${QCOMMON_SRCS} ${SERVER_SRCS} ${PLATFORM_ASM_SRCS})
+TARGET_LINK_LIBRARIES(qcommon PRIVATE Threads::Threads)
 
 # dedicated server
 ADD_LIBRARY(qcommon_ded OBJECT ${QCOMMON_SRCS} ${SERVER_SRCS} ${PLATFORM_ASM_SRCS})
 TARGET_COMPILE_DEFINITIONS(qcommon_ded PUBLIC DEDICATED)
+TARGET_LINK_LIBRARIES(qcommon_ded PRIVATE Threads::Threads)
 
 IF(NO_VM_COMPILED)
 	TARGET_COMPILE_DEFINITIONS(qcommon PRIVATE NO_VM_COMPILED)
@@ -267,7 +282,9 @@ ENDIF()
 
 IF(FNQL_GLX_LOGIC_TESTS)
 	enable_testing()
-	ADD_EXECUTABLE(fnql_glx_logic_tests tests/glx/glx_logic_tests.cpp)
+	ADD_EXECUTABLE(fnql_glx_logic_tests
+		tests/glx/glx_logic_tests.cpp
+		code/rendererglx/glx_executor.cpp)
 	target_compile_features(fnql_glx_logic_tests PRIVATE cxx_std_17)
 	target_include_directories(fnql_glx_logic_tests PRIVATE
 		code/rendererglx
@@ -279,6 +296,50 @@ IF(FNQL_GLX_LOGIC_TESTS)
 		add_test(NAME fnql_glx_header_boundary
 			COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/glx/glx_header_boundary_tests.py")
 	ENDIF()
+ENDIF()
+
+enable_testing()
+ADD_EXECUTABLE(fnql_ql_bsp_contract_tests tests/ql_bsp_contract_tests.cpp)
+target_compile_features(fnql_ql_bsp_contract_tests PRIVATE cxx_std_17)
+target_include_directories(fnql_ql_bsp_contract_tests PRIVATE code/qcommon)
+add_test(NAME fnql_ql_bsp_contract COMMAND fnql_ql_bsp_contract_tests)
+
+ADD_EXECUTABLE(fnql_netchan_profile_tests tests/netchan_profile_tests.cpp)
+target_compile_features(fnql_netchan_profile_tests PRIVATE cxx_std_17)
+target_include_directories(fnql_netchan_profile_tests PRIVATE code/qcommon)
+add_test(NAME fnql_netchan_profiles COMMAND fnql_netchan_profile_tests)
+
+ADD_EXECUTABLE(fnql_netchan_codec_tests tests/netchan_codec_tests.cpp)
+target_compile_features(fnql_netchan_codec_tests PRIVATE cxx_std_17)
+target_include_directories(fnql_netchan_codec_tests PRIVATE code/qcommon)
+add_test(NAME fnql_netchan_codec COMMAND fnql_netchan_codec_tests)
+
+ADD_EXECUTABLE(fnql_demo_stream_tests tests/demo_stream_tests.cpp)
+target_compile_features(fnql_demo_stream_tests PRIVATE cxx_std_17)
+target_include_directories(fnql_demo_stream_tests PRIVATE code/client)
+add_test(NAME fnql_demo_stream COMMAND fnql_demo_stream_tests)
+
+ADD_EXECUTABLE(fnql_webpak_format_tests tests/webpak_format_tests.cpp)
+target_compile_features(fnql_webpak_format_tests PRIVATE cxx_std_17)
+target_include_directories(fnql_webpak_format_tests PRIVATE code/client)
+add_test(NAME fnql_webpak_format COMMAND fnql_webpak_format_tests)
+
+ADD_EXECUTABLE(fnql_webui_backend_tests tests/webui_backend_tests.cpp)
+target_compile_features(fnql_webui_backend_tests PRIVATE cxx_std_17)
+target_include_directories(fnql_webui_backend_tests PRIVATE code/client)
+add_test(NAME fnql_webui_backend COMMAND fnql_webui_backend_tests)
+
+ADD_EXECUTABLE(fnql_zmq_endpoint_tests tests/zmq_endpoint_tests.cpp)
+target_compile_features(fnql_zmq_endpoint_tests PRIVATE cxx_std_17)
+target_include_directories(fnql_zmq_endpoint_tests PRIVATE code/server)
+add_test(NAME fnql_zmq_endpoint COMMAND fnql_zmq_endpoint_tests)
+
+find_package(Python3 COMPONENTS Interpreter)
+IF(Python3_Interpreter_FOUND)
+	add_test(NAME fnql_ql_services_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/ql_services_source_tests.py")
+	add_test(NAME fnql_ql_demo_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/ql_demo_source_tests.py")
 ENDIF()
 
 # renderers
@@ -416,7 +477,7 @@ ENDIF()
 # client executable
 
 ADD_EXECUTABLE(${CNAME}${BINEXT} ${EXE_TYPE} ${Q3_SRCS})
-TARGET_LINK_LIBRARIES(${CNAME}${BINEXT} qcommon botlib client q3ui ${FNQL_CLIENT_LINK_LIBS})
+TARGET_LINK_LIBRARIES(${CNAME}${BINEXT} qcommon botlib client q3ui Threads::Threads ${FNQL_CLIENT_LINK_LIBS})
 set_property(TARGET ${CNAME}${BINEXT} PROPERTY LINKER_LANGUAGE CXX)
 #TARGET_LINK_OPTIONS(${CNAME} PRIVATE -fno-pie) # v3.13+
 
@@ -433,7 +494,7 @@ ENDIF()
 # dedicated server executable
 
 ADD_EXECUTABLE(${DNAME}${BINEXT} ${EXE_TYPE} ${Q3_SRCS})
-TARGET_LINK_LIBRARIES(${DNAME}${BINEXT} qcommon_ded botlib)
+TARGET_LINK_LIBRARIES(${DNAME}${BINEXT} qcommon_ded botlib Threads::Threads)
 set_property(TARGET ${DNAME}${BINEXT} PROPERTY LINKER_LANGUAGE CXX)
 #TARGET_LINK_OPTIONS(${DNAME} PRIVATE -fno-pie) # v3.13+
 

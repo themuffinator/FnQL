@@ -69,3 +69,8 @@ option('glx-tests',
   type: 'boolean',
   value: true,
   description: 'Build deterministic GLx renderer logic tests')
+
+option('strict-warnings',
+  type: 'boolean',
+  value: false,
+  description: 'Treat warnings in FnQL-owned targets as build errors')
