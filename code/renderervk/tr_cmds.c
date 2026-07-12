@@ -562,6 +562,24 @@ static void R_IssueRenderCommands( void ) {
 
 
 /*
+====================
+R_IssuePendingRenderCommands
+
+Drain queued front-end quads before a retained resource is resized or reset.
+====================
+*/
+void R_IssuePendingRenderCommands( void ) {
+	if ( !tr.registered ) {
+		return;
+	}
+	R_IssueRenderCommands();
+#ifdef USE_VULKAN
+	vk_wait_idle();
+#endif
+}
+
+
+/*
 ============
 R_GetCommandBufferReserved
 

@@ -8,10 +8,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class WebUiWiringTests(unittest.TestCase):
-    def test_webui_source_registers_default_off_awesomium_policy(self) -> None:
+    def test_webui_source_enables_retail_adapter_only_on_windows_x86(self) -> None:
         source = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
 
-        self.assertIn('Cvar_Get( "cl_webuiEnable", "0", CVAR_ARCHIVE_ND )', source)
+        self.assertIn("defined( _M_IX86 ) || defined( __i386__ )", source)
+        self.assertIn('"1",\n#else\n\t\t"0",', source)
         self.assertIn('Cvar_Get( "web_browserActive", "0", CVAR_ROM )', source)
         self.assertIn('Cvar_Get( "ui_browserAwesomium", "0", CVAR_ROM )', source)
         self.assertIn('"runtime-backend-unavailable"', source)
@@ -20,7 +21,7 @@ class WebUiWiringTests(unittest.TestCase):
             source.index("static qboolean CL_WebUI_RuntimeAvailable"):
             source.index("static void CL_WebUI_SetLastError")
         ]
-        self.assertIn("return qfalse;", runtime_available)
+        self.assertIn("ClientBackendHost().IsAvailable()", runtime_available)
 
     def test_retail_web_commands_are_registered_and_removed_together(self) -> None:
         source = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
@@ -126,7 +127,8 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("key >= K_MOUSE1 && key <= K_MOUSE9", keys)
         self.assertIn("CL_WebView_OnMouseButtonEvent( key, down );", keys)
         self.assertIn("CL_WebView_OnMouseWheelEvent( 1 );", keys)
-        self.assertIn("CL_WebView_OnKeyEvent( key | K_CHAR_FLAG, qtrue );", keys)
+        self.assertIn("fnql::input::EncodeUtf8( *codepoint )", keys)
+        self.assertIn("CL_WebView_OnKeyEvent( utf8Byte | K_CHAR_FLAG, qtrue );", keys)
         self.assertIn("Key_GetCatcher( ) & KEYCATCH_BROWSER", keys)
         self.assertIn("CL_WebView_OnMouseMove( dx, dy );", input_source)
         self.assertIn("CL_AdvertisementBridge_IsDelayElapsed()", input_source)
@@ -333,7 +335,7 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("RequestUserStats:function(steamId){return queueSocial('requestuserstats'", source)
         self.assertIn("ActivateGameOverlayToUser:function(dialog,steamId){return queueSocial('activategameoverlaytouser'", source)
         self.assertIn("Invite:function(steamId){return queueSocial('invite'", source)
-        self.assertIn("GetAllUGC:function(filter){ugcPrimed=true;queueSocial('getallugc',String(typeof filter==='undefined'?0:filter));return ugcList;}", source)
+        self.assertIn("GetAllUGC:function(filter){ugcPrimed=true;queueSocial('getallugc',String(typeof filter==='undefined'?1:filter));return ugcList;}", source)
         self.assertIn("RequestServers:function(source){return queue('servers',String(typeof source==='undefined'?2:source));}", source)
         self.assertIn("RequestServerDetails:function(ip,port){return queue('serverdetails',String(ip||'')+'\\\\n'+String(port||''));}", source)
         self.assertIn("RefreshList:function(){return queue('refreshservers','');}", source)
@@ -407,9 +409,11 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("window.__qlr_add_native_factories=addNativeFactories", source)
         self.assertIn("window.__qlr_commit_native_factories=commitNativeFactories", source)
         self.assertIn("window.__qlr_browser_helpers_ready=true", source)
-        self.assertIn("document.addEventListener('DOMContentLoaded',window.main_hook_v2,false)", source)
+        self.assertIn("window.__fnql_retry_qz_bridge=syncQzBridge", source)
+        self.assertIn("document.addEventListener('DOMContentLoaded',syncQzBridge,false)", source)
         self.assertIn("var qlrBridgeTries=0", source)
-        self.assertIn("setInterval(function(){window.main_hook_v2();", source)
+        self.assertIn("setInterval(function(){syncQzBridge();", source)
+        self.assertNotIn("setInterval(function(){window.main_hook_v2();", source)
         self.assertIn("clearInterval(qlrBridgeTimer)", source)
         self.assertIn("qz_instance.ready", source)
         self.assertIn("CL_WebView_PublishEvent( \"web.object.ready\", NULL );", source)

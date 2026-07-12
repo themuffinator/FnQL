@@ -61,12 +61,56 @@ class QLServicesSourceTests(unittest.TestCase):
         self.assertIn("compatibility-disabled (no Steam GameServer owner)", source)
         self.assertNotIn("SteamAPI_Init", source)
 
+    def test_stats_imports_use_bounded_engine_owned_sessions(self) -> None:
+        source = (ROOT / "code/server/sv_client.cpp").read_text(encoding="utf-8")
+        session = (ROOT / "code/server/stats_session.hpp").read_text(encoding="utf-8")
+        self.assertIn("clientStatsSessions", source)
+        self.assertIn("PendingCounterCount", source)
+        self.assertIn("FieldCount = 88", session)
+        self.assertIn("AchievementCount = 59", session)
+        self.assertIn("numeric_limits<std::int32_t>::max", session)
+        self.assertIn("FNQL_Steam_StoreUserStats", source)
+        self.assertIn("SV_FlushAllSteamStats", source)
+        self.assertNotIn("SV_LogSteamStatsStubLifecycle", source)
+
+    def test_retail_native_steam_imports_keep_distinct_abi_adapters(self) -> None:
+        source = (ROOT / "code/server/sv_game.cpp").read_text(encoding="utf-8")
+        self.assertIn("QL_G_trap_GetSteamIdLow( int clientNum )", source)
+        self.assertIn(
+            "QL_BIND( G_QL_IMPORT_STEAMID_QUERY, QL_G_trap_GetSteamIdLow )",
+            source,
+        )
+        self.assertIn("QL_G_trap_BeginSteamAuthSession( int clientNum )", source)
+        self.assertIn(
+            "QL_BIND( G_QL_IMPORT_STEAM_AUTH_VALIDATE, QL_G_trap_BeginSteamAuthSession )",
+            source,
+        )
+        self.assertIn(
+            "QL_BIND_COMPAT( G_STEAMID_QUERY, QL_G_trap_GetSteamId )", source
+        )
+        self.assertIn(
+            "QL_BIND_COMPAT( G_STEAM_AUTH_VALIDATE, QL_G_trap_VerifySteamAuth )",
+            source,
+        )
+
     def test_retail_connect_response_preserves_retail_and_fnql_shapes(self) -> None:
         source = (ROOT / "code/server/sv_client.cpp").read_text(encoding="utf-8")
+        client = (ROOT / "code/client/cl_main.cpp").read_text(encoding="utf-8")
         self.assertIn("cl_proto == QL_RETAIL_PROTOCOL_VERSION && !longstr", source)
         self.assertIn('NET_OutOfBandPrint( NS_SERVER, from, "connectResponse" );', source)
         self.assertIn('"connectResponse %d %d", challenge, sv_proto', source)
         self.assertIn('"connectResponse %d", challenge', source)
+        self.assertIn("fnql::protocol::FnqlHandshakeMarker.data()", source)
+        self.assertIn("contract->family != fnql::protocol::Family::QuakeLive", client)
+        self.assertIn("Protocol 91 server is not an FnQL host", client)
+
+    def test_protocol_91_is_the_canonical_runtime_default(self) -> None:
+        header = (ROOT / "code/qcommon/qcommon.h").read_text(encoding="utf-8")
+        client = (ROOT / "code/client/cl_main.cpp").read_text(encoding="utf-8")
+        server = (ROOT / "code/server/sv_client.cpp").read_text(encoding="utf-8")
+        self.assertIn("#define DEFAULT_PROTOCOL_VERSION\tQL_RETAIL_PROTOCOL_VERSION", header)
+        self.assertIn("clc.netchan.wireProfile ).demoProtocol", client)
+        self.assertIn("SV_DemoProtocol( const client_t *client )", server)
 
     def test_collision_loader_validates_ql_advertisement_contract(self) -> None:
         source = (ROOT / "code/qcommon/cm_load.c").read_text(encoding="utf-8")

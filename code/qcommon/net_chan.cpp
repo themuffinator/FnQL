@@ -22,6 +22,13 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "q_shared.h"
 #include "qcommon.h"
+#include "netchan_safety.hpp"
+
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <limits>
 
 /*
 
@@ -46,9 +53,38 @@ to the new value before sending out any replies.
 
 */
 
-#define	FRAGMENT_SIZE			(MAX_PACKETLEN - 100)
+namespace {
 
-#define	FRAGMENT_BIT			(1U<<31)
+constexpr int FragmentSize = MAX_PACKETLEN - 100;
+constexpr std::uint32_t FragmentBit = 1u << 31;
+
+[[nodiscard]] constexpr int SequenceHeader( int sequence, bool fragmented ) noexcept {
+	const std::uint32_t bits = static_cast<std::uint32_t>( sequence ) |
+		( fragmented ? FragmentBit : 0u );
+	return static_cast<int>( bits );
+}
+
+[[nodiscard]] constexpr int SequenceChecksum( int challenge,
+	int sequence ) noexcept {
+	return static_cast<int>( fnql::net::SequenceChecksum( challenge, sequence ) );
+}
+
+[[nodiscard]] bool IsConnectionlessPacket( const void *data, int length ) noexcept {
+	if ( !data || length < static_cast<int>( sizeof( std::int32_t ) ) ) {
+		return false;
+	}
+
+	std::int32_t header = 0;
+	std::memcpy( &header, data, sizeof( header ) );
+	return header == -1;
+}
+
+void ReportInvalidPacket( const char *operation, int length ) {
+	Com_Printf( S_COLOR_YELLOW "%s: rejected invalid packet length %d\n",
+		operation, length );
+}
+
+} // namespace
 
 cvar_t		*showpackets;
 cvar_t		*showdrop;
@@ -86,6 +122,11 @@ called to open a channel to a remote system
 void Netchan_Setup( netsrc_t sock, netchan_t *chan, const netadr_t *adr, int port,
 	int challenge, netchanWireProfile_t wireProfile )
 {
+	if ( !chan || !adr ) {
+		Com_Error( ERR_DROP, "%s: null channel or address", __func__ );
+		return;
+	}
+
 	Com_Memset (chan, 0, sizeof(*chan));
 	
 	chan->sock = sock;
@@ -112,10 +153,17 @@ void Netchan_TransmitNextFragment( netchan_t *chan ) {
 	int			fragmentLength;
 	int			outgoingSequence;
 
+	if ( !chan || !chan->unsentFragments || chan->unsentFragmentStart < 0 ||
+		chan->unsentLength < 0 || chan->unsentLength > MAX_MSGLEN ||
+		chan->unsentFragmentStart > chan->unsentLength ) {
+		Com_Error( ERR_DROP, "%s: invalid fragment state", __func__ );
+		return;
+	}
+
 	// write the packet header
 	MSG_InitOOB( &send, send_buf, sizeof(send_buf)-8 );
 
-	outgoingSequence = chan->outgoingSequence | FRAGMENT_BIT;
+	outgoingSequence = SequenceHeader( chan->outgoingSequence, true );
 	MSG_WriteLong( &send, outgoingSequence );
 
 	// send the qport if we are a client
@@ -126,10 +174,11 @@ void Netchan_TransmitNextFragment( netchan_t *chan ) {
 
 	if ( Netchan_WireHasFeature( chan->wireProfile,
 		NETCHAN_FEATURE_SEQUENCE_CHECKSUM ) )
-		MSG_WriteLong(&send, NETCHAN_GENCHECKSUM(chan->challenge, chan->outgoingSequence));
+		MSG_WriteLong( &send, SequenceChecksum( chan->challenge,
+			chan->outgoingSequence ) );
 
 	// copy the reliable message to the packet first
-	fragmentLength = FRAGMENT_SIZE;
+	fragmentLength = FragmentSize;
 	if ( chan->unsentFragmentStart + fragmentLength > chan->unsentLength ) {
 		fragmentLength = chan->unsentLength - chan->unsentFragmentStart;
 	}
@@ -159,8 +208,8 @@ void Netchan_TransmitNextFragment( netchan_t *chan ) {
 	// that is exactly the fragment length still needs to send
 	// a second packet of zero length so that the other side
 	// can tell there aren't more to follow
-	if ( chan->unsentFragmentStart == chan->unsentLength && fragmentLength != FRAGMENT_SIZE ) {
-		chan->outgoingSequence++;
+	if ( chan->unsentFragmentStart == chan->unsentLength && fragmentLength != FragmentSize ) {
+		chan->outgoingSequence = fnql::net::NextSequence( chan->outgoingSequence );
 		chan->unsentFragments = qfalse;
 	}
 }
@@ -181,7 +230,7 @@ static void Netchan_EnqueueFragments( const netchan_t *chan, const int length, c
 		// write the packet header
 		MSG_InitOOB( &send, send_buf, sizeof( send_buf ) - 8 );
 
-		MSG_WriteLong( &send, chan->outgoingSequence | FRAGMENT_BIT );
+		MSG_WriteLong( &send, SequenceHeader( chan->outgoingSequence, true ) );
 
 		// send the qport if we are a client
 		if ( chan->sock == NS_CLIENT && Netchan_WireHasFeature(
@@ -191,11 +240,12 @@ static void Netchan_EnqueueFragments( const netchan_t *chan, const int length, c
 
 		if ( Netchan_WireHasFeature( chan->wireProfile,
 			NETCHAN_FEATURE_SEQUENCE_CHECKSUM ) ) {
-			MSG_WriteLong( &send, NETCHAN_GENCHECKSUM( chan->challenge, chan->outgoingSequence ) );
+			MSG_WriteLong( &send, SequenceChecksum( chan->challenge,
+				chan->outgoingSequence ) );
 		}
 
 		// copy the reliable message to the packet first
-		fragmentLength = FRAGMENT_SIZE;
+		fragmentLength = FragmentSize;
 		if ( unsentFragmentStart + fragmentLength > length ) {
 			fragmentLength = length - unsentFragmentStart;
 		}
@@ -215,7 +265,7 @@ static void Netchan_EnqueueFragments( const netchan_t *chan, const int length, c
 		// that is exactly the fragment length still needs to send
 		// a second packet of zero length so that the other side
 		// can tell there aren't more to follow
-		if ( unsentFragmentStart == length && fragmentLength != FRAGMENT_SIZE ) {
+		if ( unsentFragmentStart == length && fragmentLength != FragmentSize ) {
 			break;
 		}
 	}
@@ -234,14 +284,15 @@ void Netchan_Transmit( netchan_t *chan, int length, const byte *data ) {
 	msg_t		send;
 	byte		send_buf[MAX_PACKETLEN+8];
 
-	if ( length > MAX_MSGLEN ) {
+	if ( !fnql::net::IsValidPayload( data, length, MAX_MSGLEN ) ) {
 		Com_Error( ERR_DROP, "%s: length = %i", __func__, length );
+		return;
 	}
 
 	chan->unsentFragmentStart = 0;
 
 	// fragment large reliable messages
-	if ( length >= FRAGMENT_SIZE ) {
+	if ( length >= FragmentSize ) {
 		chan->unsentFragments = qtrue;
 		chan->unsentLength = length;
 		Com_Memcpy( chan->unsentBuffer, data, length );
@@ -263,9 +314,10 @@ void Netchan_Transmit( netchan_t *chan, int length, const byte *data ) {
 
 	if ( Netchan_WireHasFeature( chan->wireProfile,
 		NETCHAN_FEATURE_SEQUENCE_CHECKSUM ) )
-		MSG_WriteLong(&send, NETCHAN_GENCHECKSUM(chan->challenge, chan->outgoingSequence));
+		MSG_WriteLong( &send, SequenceChecksum( chan->challenge,
+			chan->outgoingSequence ) );
 
-	chan->outgoingSequence++;
+	chan->outgoingSequence = fnql::net::NextSequence( chan->outgoingSequence );
 
 	MSG_WriteData( &send, data, length );
 
@@ -298,12 +350,13 @@ void Netchan_Enqueue( netchan_t *chan, int length, const byte *data ) {
 	byte		send_buf[MAX_PACKETLEN + 8];
 	msg_t		send;
 
-	if ( length > MAX_MSGLEN ) {
+	if ( !fnql::net::IsValidPayload( data, length, MAX_MSGLEN ) ) {
 		Com_Error( ERR_DROP, "%s: length = %i", __func__, length );
+		return;
 	}
 
 	// fragment large reliable messages
-	if ( length >= FRAGMENT_SIZE ) {
+	if ( length >= FragmentSize ) {
 		Netchan_EnqueueFragments( chan, length, data );
 		return;
 	}
@@ -320,7 +373,8 @@ void Netchan_Enqueue( netchan_t *chan, int length, const byte *data ) {
 
 	if ( Netchan_WireHasFeature( chan->wireProfile,
 		NETCHAN_FEATURE_SEQUENCE_CHECKSUM ) )
-		MSG_WriteLong( &send, NETCHAN_GENCHECKSUM( chan->challenge, chan->outgoingSequence ) );
+		MSG_WriteLong( &send, SequenceChecksum( chan->challenge,
+			chan->outgoingSequence ) );
 
 	MSG_WriteData( &send, data, length );
 
@@ -348,6 +402,11 @@ qboolean Netchan_Process( netchan_t *chan, msg_t *msg ) {
 	int			fragmentStart, fragmentLength;
 	qboolean	fragmented;
 
+	if ( !chan || !msg || !msg->data || msg->maxsize < 0 || msg->cursize < 4 ||
+		msg->cursize > msg->maxsize ) {
+		return qfalse;
+	}
+
 	// XOR unscramble all data in the packet after the header
 //	Netchan_UnScramblePacket( msg );
 
@@ -356,8 +415,9 @@ qboolean Netchan_Process( netchan_t *chan, msg_t *msg ) {
 	sequence = MSG_ReadLong( msg );
 
 	// check for fragment information
-	if ( sequence & FRAGMENT_BIT ) {
-		sequence &= ~FRAGMENT_BIT;
+	if ( static_cast<std::uint32_t>( sequence ) & FragmentBit ) {
+		sequence = static_cast<int>(
+			static_cast<std::uint32_t>( sequence ) & fnql::net::SequenceMask );
 		fragmented = qtrue;
 	} else {
 		fragmented = qfalse;
@@ -374,14 +434,21 @@ qboolean Netchan_Process( netchan_t *chan, msg_t *msg ) {
 		int checksum = MSG_ReadLong( msg );
 
 		// UDP spoofing protection
-		if (NETCHAN_GENCHECKSUM( chan->challenge, sequence ) != checksum )
+		if ( msg->readcount > msg->cursize ||
+			SequenceChecksum( chan->challenge, sequence ) != checksum )
 			return qfalse;
+	}
+	else if ( msg->readcount > msg->cursize ) {
+		return qfalse;
 	}
 
 	// read the fragment information
 	if ( fragmented ) {
 		fragmentStart = MSG_ReadShort( msg );
 		fragmentLength = MSG_ReadShort( msg );
+		if ( msg->readcount > msg->cursize ) {
+			return qfalse;
+		}
 	} else {
 		fragmentStart = 0;		// stop warning message
 		fragmentLength = 0;
@@ -405,7 +472,7 @@ qboolean Netchan_Process( netchan_t *chan, msg_t *msg ) {
 	//
 	// discard out of order or duplicated packets
 	//
-	if ( sequence - chan->incomingSequence <= 0 ) {
+	if ( !fnql::net::IsNewerSequence( sequence, chan->incomingSequence ) ) {
 		if ( showdrop->integer || showpackets->integer ) {
 			Com_Printf( "%s:Out of order packet %i at %i\n"
 				, NET_AdrToString( &chan->remoteAddress )
@@ -418,7 +485,8 @@ qboolean Netchan_Process( netchan_t *chan, msg_t *msg ) {
 	//
 	// dropped packets don't keep the message from being used
 	//
-	chan->dropped = sequence - (chan->incomingSequence+1);
+	chan->dropped = static_cast<int>(
+		fnql::net::SequenceDistance( sequence, chan->incomingSequence ) - 1u );
 	if ( chan->dropped > 0 ) {
 		if ( showdrop->integer || showpackets->integer ) {
 			Com_Printf( "%s:Dropped %i packets at %i\n"
@@ -456,8 +524,8 @@ qboolean Netchan_Process( netchan_t *chan, msg_t *msg ) {
 		}
 
 		// copy the fragment to the fragment buffer
-		if ( fragmentLength < 0 || msg->readcount + fragmentLength > msg->cursize ||
-			chan->fragmentLength + fragmentLength > sizeof( chan->fragmentBuffer ) ) {
+		if ( !fnql::net::FragmentFits( msg->readcount, msg->cursize,
+			chan->fragmentLength, sizeof( chan->fragmentBuffer ), fragmentLength ) ) {
 			if ( showdrop->integer || showpackets->integer ) {
 				Com_Printf ("%s:illegal fragment length\n"
 				, NET_AdrToString( &chan->remoteAddress ) );
@@ -471,7 +539,7 @@ qboolean Netchan_Process( netchan_t *chan, msg_t *msg ) {
 		chan->fragmentLength += fragmentLength;
 
 		// if this wasn't the last fragment, don't process anything
-		if ( fragmentLength == FRAGMENT_SIZE ) {
+		if ( fragmentLength == FragmentSize ) {
 			return qfalse;
 		}
 
@@ -485,7 +553,8 @@ qboolean Netchan_Process( netchan_t *chan, msg_t *msg ) {
 		// copy the full message over the partial fragment
 
 		// make sure the sequence number is still there
-		*(int32_t *)msg->data = LittleLong( sequence );
+		const std::int32_t sequenceHeader = LittleLong( sequence );
+		Com_Memcpy( msg->data, &sequenceHeader, sizeof( sequenceHeader ) );
 
 		Com_Memcpy( msg->data + 4, chan->fragmentBuffer, chan->fragmentLength );
 		msg->cursize = chan->fragmentLength + 4;
@@ -526,13 +595,13 @@ LOOPBACK BUFFERS FOR LOCAL PLAYER
 #define	MAX_LOOPBACK	32
 
 typedef struct {
-	byte	data[MAX_PACKETLEN];
+	byte	data[MAX_MSGLEN];
 	int		datalen;
 } loopmsg_t;
 
 typedef struct {
 	loopmsg_t	msgs[MAX_LOOPBACK];
-	int			get, send;
+	std::uint32_t	get, send;
 } loopback_t;
 
 static loopback_t loopbacks[2]; // NS_CLIENT, NS_SERVER
@@ -543,16 +612,29 @@ qboolean NET_GetLoopPacket( netsrc_t sock, netadr_t *net_from, msg_t *net_messag
 	int		i;
 	loopback_t	*loop;
 
+	if ( sock < NS_CLIENT || sock > NS_SERVER || !net_from || !net_message ||
+		!net_message->data || net_message->maxsize < 0 ) {
+		return qfalse;
+	}
+
 	loop = &loopbacks[sock];
 
 	if ( loop->send - loop->get > MAX_LOOPBACK )
 		loop->get = loop->send - MAX_LOOPBACK;
 
-	if ( loop->send - loop->get <= 0 )
+	if ( loop->send == loop->get )
 		return qfalse;
 
 	i = loop->get & (MAX_LOOPBACK-1);
 	loop->get++;
+
+	if ( loop->msgs[i].datalen < 0 ||
+		loop->msgs[i].datalen > net_message->maxsize ) {
+		Com_Printf( S_COLOR_YELLOW
+			"NET_GetLoopPacket: dropped oversized loopback packet (%d > %d)\n",
+			loop->msgs[i].datalen, net_message->maxsize );
+		return qfalse;
+	}
 
 	Com_Memcpy (net_message->data, loop->msgs[i].data, loop->msgs[i].datalen);
 	net_message->cursize = loop->msgs[i].datalen;
@@ -567,12 +649,20 @@ static void NET_SendLoopPacket( netsrc_t sock, int length, const void *data )
 	int		i;
 	loopback_t	*loop;
 
+	if ( sock < NS_CLIENT || sock > NS_SERVER ||
+		!fnql::net::IsValidPayload( data, length, MAX_MSGLEN ) ) {
+		ReportInvalidPacket( "NET_SendLoopPacket", length );
+		return;
+	}
+
 	loop = &loopbacks[sock^1];
 
 	i = loop->send & (MAX_LOOPBACK-1);
 	loop->send++;
 
-	Com_Memcpy (loop->msgs[i].data, data, length);
+	if ( length > 0 ) {
+		Com_Memcpy (loop->msgs[i].data, data, length);
+	}
 	loop->msgs[i].datalen = length;
 }
 
@@ -587,7 +677,7 @@ typedef struct packetQueue_s {
 		byte *data;
 		netadr_t to;
 		netsrc_t sock;
-		int release;
+		std::uint32_t release;
 } packetQueue_t;
 
 static packetQueue_t *packetQueue = NULL;
@@ -624,7 +714,9 @@ static packetQueue_t *list_process( packetQueue_t *head, const int time_diff )
 {
 	packetQueue_t *item = head;
 	int do_break = 0;
-	int now;
+	std::uint32_t now;
+	const std::uint32_t minimumAge = static_cast<std::uint32_t>(
+		std::max( time_diff, 0 ) );
 	do {
 		if ( head == NULL ) {
 			break;
@@ -632,8 +724,9 @@ static packetQueue_t *list_process( packetQueue_t *head, const int time_diff )
 		if ( head->prev == item ) {
 			do_break = 1;
 		}
-		now = Sys_Milliseconds();
-		if ( now - item->release >= time_diff ) {
+		now = static_cast<std::uint32_t>( Sys_Milliseconds() );
+		const std::uint32_t elapsed = now - item->release;
+		if ( elapsed < fnql::net::SequenceHalfRange && elapsed >= minimumAge ) {
 			packetQueue_t *next = item->next;
 #ifndef DEDICATED
 			if ( item->to.type == NA_LOOPBACK )
@@ -655,7 +748,14 @@ static packetQueue_t *list_process( packetQueue_t *head, const int time_diff )
 
 void NET_QueuePacket( netsrc_t sock, int length, const void *data, const netadr_t *to, int offset )
 {
-	packetQueue_t *new;
+	packetQueue_t *queuedPacket;
+
+	if ( !to || sock < NS_CLIENT || sock > NS_SERVER ||
+		!fnql::net::IsValidPayload( data, length,
+			fnql::net::MaximumUdpPayload ) ) {
+		ReportInvalidPacket( "NET_QueuePacket", length );
+		return;
+	}
 
 	if ( to->type == NA_BOT ) {
 		return;
@@ -664,20 +764,23 @@ void NET_QueuePacket( netsrc_t sock, int length, const void *data, const netadr_
 		return;
 	}
 
-	if ( offset > 999 ) {
-		offset = 999;
+	offset = std::clamp( offset, 0, 999 );
+
+	const std::size_t allocationSize = sizeof( *queuedPacket ) +
+		static_cast<std::size_t>( length );
+	queuedPacket = static_cast<packetQueue_t *>( S_Malloc( allocationSize ) );
+	queuedPacket->data = reinterpret_cast<byte *>( queuedPacket + 1 );
+	if ( length > 0 ) {
+		Com_Memcpy( queuedPacket->data, data, length );
 	}
+	queuedPacket->length = length;
+	queuedPacket->to = *to;
+	queuedPacket->sock = sock;
+	queuedPacket->release = static_cast<std::uint32_t>( Sys_Milliseconds() ) +
+		static_cast<std::uint32_t>( offset );
+	queuedPacket->next = nullptr;
 
-	new = S_Malloc(sizeof(*new) + length);
-	new->data = (byte *)( new + 1 );
-	Com_Memcpy(new->data, data, length);
-	new->length = length;
-	new->to = *to;
-	new->sock = sock;
-	new->release = Sys_Milliseconds() + offset;
-	new->next = NULL;
-
-	packetQueue = list_insert( packetQueue, new );
+	packetQueue = list_insert( packetQueue, queuedPacket );
 }
 
 
@@ -688,9 +791,16 @@ void NET_FlushPacketQueue( int time_diff )
 
 
 void NET_SendPacket( netsrc_t sock, int length, const void *data, const netadr_t *to ) {
+	if ( !to || sock < NS_CLIENT || sock > NS_SERVER ||
+		!fnql::net::IsValidPayload( data, length,
+			fnql::net::MaximumUdpPayload ) ) {
+		ReportInvalidPacket( "NET_SendPacket", length );
+		return;
+	}
 
 	// sequenced packets are shown in netchan, so just show oob
-	if ( showpackets->integer && *(int32_t *)data == -1 ) {
+	if ( showpackets && showpackets->integer &&
+		IsConnectionlessPacket( data, length ) ) {
 		Com_Printf ("send packet %4i\n", length);
 	}
 
@@ -731,6 +841,11 @@ void QDECL NET_OutOfBandPrint( netsrc_t sock, const netadr_t *adr, const char *f
 	char		string[ MAX_PACKETLEN ];
 	int			len;
 
+	if ( !adr || !format ) {
+		ReportInvalidPacket( "NET_OutOfBandPrint", -1 );
+		return;
+	}
+
 	// set the header
 	string[0] = -1;
 	string[1] = -1;
@@ -738,8 +853,9 @@ void QDECL NET_OutOfBandPrint( netsrc_t sock, const netadr_t *adr, const char *f
 	string[3] = -1;
 
 	va_start( argptr, format );
-	len = Q_vsnprintf( string+4, sizeof(string)-4, format, argptr ) + 4;
+	Q_vsnprintf( string+4, sizeof(string)-4, format, argptr );
 	va_end( argptr );
+	len = 4 + static_cast<int>( std::strlen( string + 4 ) );
 
 	// send the datagram
 	NET_SendPacket( sock, len, string, adr );
@@ -754,9 +870,16 @@ Sends a compressed message in an out-of-band datagram (only used for "connect")
 ================
 */
 void NET_OutOfBandCompress( netsrc_t sock, const netadr_t *adr, const byte *data, int len ) {
-	byte		string[MAX_INFO_STRING*2];
-	int			i;
+	// Huff_Compress writes its worst-case temporary stream at the requested
+	// offset, so reserve both the codec bound and its 12-byte connect prefix.
+	byte		string[MAX_INFO_STRING * 4 + 2 + 256 + 12];
 	msg_t		mbuf;
+
+	if ( !adr || !fnql::net::IsValidPayload( data, len,
+		MAX_INFO_STRING * 2 ) ) {
+		ReportInvalidPacket( "NET_OutOfBandCompress", len );
+		return;
+	}
 
 	// set the header
 	string[0] = 0xff;
@@ -764,11 +887,11 @@ void NET_OutOfBandCompress( netsrc_t sock, const netadr_t *adr, const byte *data
 	string[2] = 0xff;
 	string[3] = 0xff;
 
-	for(i=0;i<len;i++) {
-		string[i+4] = data[i];
+	if ( len > 0 ) {
+		Com_Memcpy( string + 4, data, len );
 	}
 
-	mbuf.data = string;
+	MSG_InitOOB( &mbuf, string, sizeof( string ) );
 	mbuf.cursize = len+4;
 	Huff_Compress( &mbuf, 12 );
 

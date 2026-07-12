@@ -21,6 +21,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 #include "server.h"
+#include "../qcommon/netchan_safety.hpp"
 
 #include <algorithm>
 #include <array>
@@ -151,6 +152,7 @@ not have future snapshot_t executed before it is executed
 */
 void SV_AddServerCommand( client_t *client, const char *cmd ) {
 	int		index;
+	std::uint32_t pendingCount = 0;
 
 	// this is very ugly but it's also a waste to for instance send multiple config string updates
 	// for the same config string index in one snapshot
@@ -162,19 +164,23 @@ void SV_AddServerCommand( client_t *client, const char *cmd ) {
 	if ( client->state < CS_PRIMED )
 		return;
 
-	client->reliableSequence++;
+	client->reliableSequence = fnql::net::NextCounter( client->reliableSequence );
 	// if we would be losing an old command that hasn't been acknowledged,
 	// we must drop the connection
 	// we check == instead of >= so a broadcast print added by SV_DropClient()
 	// doesn't cause a recursive drop client
-	if ( client->reliableSequence - client->reliableAcknowledge == MAX_RELIABLE_COMMANDS + 1 ) {
+	if ( !fnql::net::PendingCounterCount( client->reliableSequence,
+		client->reliableAcknowledge, pendingCount ) ||
+		pendingCount >= MAX_RELIABLE_COMMANDS + 1u ) {
 		Com_Printf( "===== pending server commands =====\n" );
-		const int pendingCount = client->reliableSequence - client->reliableAcknowledge;
-		for ( int i : SV_Indices( pendingCount ) ) {
-			const int idx = client->reliableAcknowledge + 1 + i;
+		const int printableCount = static_cast<int>( std::min<std::uint32_t>(
+			pendingCount, MAX_RELIABLE_COMMANDS ) );
+		for ( int i : SV_Indices( printableCount ) ) {
+			const int idx = fnql::net::CounterAdd( client->reliableAcknowledge,
+				static_cast<std::uint32_t>( i + 1 ) );
 			Com_Printf( "cmd %5d: %s\n", i, client->reliableCommands[ idx & ( MAX_RELIABLE_COMMANDS - 1 ) ] );
 		}
-		Com_Printf( "cmd %5d: %s\n", pendingCount, cmd );
+		Com_Printf( "cmd %5u: %s\n", pendingCount, cmd );
 		SV_DropClient( client, "Server command overflow" );
 		return;
 	}
@@ -936,10 +942,9 @@ static void SV_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 		const char *name;
 		void ( *func )( const netadr_t *from );
 	};
-	static constexpr std::array<connectionlessCommand_t, 4> commands = {{
+	static constexpr std::array<connectionlessCommand_t, 3> commands = {{
 		{ "getstatus", SVC_Status },
 		{ "getinfo", SVC_Info },
-		{ "getchallenge", SV_GetChallenge },
 		{ "connect", SV_DirectConnect },
 	}};
 	const char *s;
@@ -977,6 +982,11 @@ static void SV_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 		return;
 	}
 
+	if ( !Q_stricmp( c, "getchallenge" ) ) {
+		SV_GetChallenge( from, msg );
+		return;
+	}
+
 	for ( const auto &command : commands ) {
 		if ( !Q_stricmp( c, command.name ) ) {
 			command.func( from );
@@ -1010,12 +1020,15 @@ SV_PacketEvent
 */
 void SV_PacketEvent( const netadr_t *from, msg_t *msg ) {
 	int			qport;
+	SV_SteamHandleIncomingPacket( from, msg );
 
 	if ( msg->cursize < 6 ) // too short for anything
 		return;
 
 	// check for connectionless packet (0xffffffff) first
-	if ( *reinterpret_cast<int32_t *>( msg->data ) == -1 ) {
+	int32_t packetMarker = 0;
+	Com_Memcpy( &packetMarker, msg->data, sizeof( packetMarker ) );
+	if ( packetMarker == -1 ) {
 		SV_ConnectionlessPacket( from, msg );
 		return;
 	}
@@ -1141,6 +1154,11 @@ static void SV_CheckTimeouts( void ) {
 
 	for ( client_t &client : SV_Clients() ) {
 		if ( client.state == CS_FREE ) {
+			continue;
+		}
+		if ( client.platformAuthSession && !client.platformAuthValidated &&
+			static_cast<uint32_t>( svs.time ) - client.platformAuthStartedTime > 10000u ) {
+			SV_DropClient( &client, "Platform authentication timed out" );
 			continue;
 		}
 		// message times may be wrong across a changelevel
@@ -1338,6 +1356,7 @@ void SV_Frame( int msec, int realMsec ) {
 	Zmq_PumpRcon();
 
 	svs.time += realMsec;
+	SV_SteamP2PFrame();
 
 	// allow pause if only the local client is connected
 	if ( SV_CheckPaused() ) {
@@ -1489,7 +1508,7 @@ Return the time in msec until we expect to be called next
 */
 int SV_SendQueuedPackets( void )
 {
-	int numBlocks;
+	int downloadBytes;
 	int dlStart, deltaT, delayT;
 	static int dlNextRound = 0;
 	int timeVal = INT_MAX;
@@ -1513,14 +1532,14 @@ int SV_SendQueuedPackets( void )
 		}
 		else
 		{
-			numBlocks = SV_SendDownloadMessages();
+			downloadBytes = SV_SendDownloadMessages();
 
-			if(numBlocks)
+			if(downloadBytes)
 			{
 				// There are active downloads
 				deltaT = Sys_Milliseconds() - dlStart;
 
-				delayT = 1000 * numBlocks * MAX_DOWNLOAD_BLKSIZE;
+				delayT = 1000 * downloadBytes;
 				delayT /= sv_dlRate->integer * 1024;
 
 				if(delayT <= deltaT + 1)

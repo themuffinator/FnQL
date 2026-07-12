@@ -46,10 +46,10 @@
     <ClCompile Include="..\..\qcommon\md5.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\qcommon\msg.c">
+    <ClCompile Include="..\..\qcommon\msg.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\qcommon\net_chan.c">
+    <ClCompile Include="..\..\qcommon\net_chan.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\qcommon\net_ip.c">
@@ -88,6 +88,9 @@
     <ClCompile Include="..\..\server\sv_platform.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+	<ClCompile Include="..\..\platform\fnql_steam.cpp">
+	  <Filter>Source Files</Filter>
+	</ClCompile>
     <ClCompile Include="..\..\server\sv_snapshot.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -171,6 +174,12 @@
     <ClInclude Include="..\..\server\server.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+	<ClInclude Include="..\..\platform\fnql_steam.h">
+	  <Filter>Header Files</Filter>
+	</ClInclude>
+	<ClInclude Include="..\..\platform\fnql_steam_api.h">
+	  <Filter>Header Files</Filter>
+	</ClInclude>
     <ClInclude Include="..\..\qcommon\surfaceflags.h">
       <Filter>Header Files</Filter>
     </ClInclude>

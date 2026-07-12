@@ -280,8 +280,8 @@
     <ClCompile Include="..\..\qcommon\keys.c" />
     <ClCompile Include="..\..\qcommon\md4.c" />
     <ClCompile Include="..\..\qcommon\md5.c" />
-    <ClCompile Include="..\..\qcommon\msg.c" />
-    <ClCompile Include="..\..\qcommon\net_chan.c" />
+    <ClCompile Include="..\..\qcommon\msg.cpp" />
+    <ClCompile Include="..\..\qcommon\net_chan.cpp" />
     <ClCompile Include="..\..\qcommon\net_ip.c" />
     <ClCompile Include="..\..\qcommon\q_math.c" />
     <ClCompile Include="..\..\qcommon\q_shared.c" />
@@ -307,6 +307,7 @@
     <ClCompile Include="..\..\server\sv_main.cpp" />
     <ClCompile Include="..\..\server\sv_net_chan.cpp" />
     <ClCompile Include="..\..\server\sv_platform.cpp" />
+	<ClCompile Include="..\..\platform\fnql_steam.cpp" />
     <ClCompile Include="..\..\server\sv_snapshot.cpp" />
     <ClCompile Include="..\..\server\sv_world.cpp" />
     <ClCompile Include="..\..\server\sv_zmq.cpp" />
@@ -333,6 +334,8 @@
     <ClInclude Include="..\..\qcommon\unzip.h" />
     <ClInclude Include="..\..\qcommon\vm_local.h" />
     <ClInclude Include="..\..\server\server.h" />
+	<ClInclude Include="..\..\platform\fnql_steam.h" />
+	<ClInclude Include="..\..\platform\fnql_steam_api.h" />
     <ClInclude Include="..\..\ui\ui_public.h" />
     <ClInclude Include="..\resource.h" />
     <ClInclude Include="..\win_local.h" />

@@ -28,6 +28,7 @@ extern "C" {
 }
 
 #include "client_cpp.h"
+#include "ql_font_bridge.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1757,16 +1758,18 @@ static void QDECL QL_CG_trap_R_MirrorVector( vec3_t in, orientation_t *surface, 
 }
 
 static void QDECL QL_CG_trap_DrawScaledText( int x, int y, const char *text, int fontHandle,
-		float scale, int maxX, float *outMaxX, int forceColor ) {
-	RE_DrawScaledText( x, y, text, fontHandle, scale, maxX, outMaxX, forceColor != qfalse ? qtrue : qfalse, ql_cgame_currentColor );
+		float scale, int limit, float *maxX, int forceColor ) {
+	RE_DrawScaledText( x, y, text, fontHandle, scale, limit, maxX, forceColor != qfalse ? qtrue : qfalse, ql_cgame_currentColor );
 }
 
 static uint64_t QDECL QL_CG_trap_MeasureText( const char *text, const char *end, int fontHandle,
-		float scale, int maxX, float *outLeft ) {
+		float scale, int limit, float *outLeft ) {
 	float width;
 	float height;
+	float left;
 
-	RE_MeasureScaledText( text, end, fontHandle, scale, maxX, &width, &height, outLeft );
+	RE_MeasureScaledText( text, end, fontHandle, scale, limit, &width, &height, &left );
+	fnql::font::WriteMeasureBounds( outLeft, left, width, height );
 
 	return QL_CG_PackFloatBits64( width, height );
 }
@@ -1977,9 +1980,11 @@ static vm_t *CL_LoadCGameVM( vmInterpret_t interpret ) {
 
 	CL_InitCGameImports();
 
-	if ( !cl_connectedToPureServer && interpret != VMI_COMPILED ) {
+	if ( interpret != VMI_COMPILED &&
+		( !cl_connectedToPureServer || interpret == VMI_PINNED_NATIVE ) ) {
 		vm = VM_CreateNative( VM_CGAME, CL_CgameSystemCalls, CL_DllSyscall,
-			VMI_NATIVE, ql_cgame_imports, CGAME_NATIVE_API_VERSION );
+			interpret == VMI_PINNED_NATIVE ? VMI_PINNED_NATIVE : VMI_NATIVE,
+			ql_cgame_imports, CGAME_NATIVE_API_VERSION );
 		if ( vm ) {
 			if ( vm->dllHandle || interpret != VMI_BYTECODE || !vm->compiled ) {
 				return vm;
@@ -2060,9 +2065,12 @@ void CL_InitCGame( void ) {
 	interpret = static_cast<vmInterpret_t>( Cvar_VariableIntegerValue( "vm_cgame" ) );
 	if ( cl_connectedToPureServer )
 	{
-		// if sv_pure is set we only allow qvms to be loaded
-		if ( interpret != VMI_COMPILED && interpret != VMI_BYTECODE )
-			interpret = VMI_COMPILED;
+		// Retail QL has no cgame QVM. Permit only the exact native image
+		// pinned before the server's pure filesystem policy took effect.
+		if ( interpret != VMI_COMPILED && interpret != VMI_BYTECODE ) {
+			interpret = VM_HasPinnedNativeModule( VM_CGAME )
+				? VMI_PINNED_NATIVE : VMI_COMPILED;
+		}
 	}
 
 	cgvm = CL_LoadCGameVM( interpret );

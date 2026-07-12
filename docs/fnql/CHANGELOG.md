@@ -15,8 +15,9 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
 - Corrected native DLL entry-point selection so retail structured modules and
   legacy `vmMain` modules use their respective ABIs without an incompatible
   probe call.
-- Added a browser-neutral, versioned WebUI backend host with deterministic
-  null/fake implementations while keeping live Awesomium loading default-off.
+- Added a browser-neutral, versioned WebUI backend host plus an independently
+  written Windows-x86 adapter for the legitimately installed retail Awesomium
+  runtime; other platforms retain deterministic null/native-UI fallback.
 - Added explicit legacy, ioquake3, and retail Quake Live netchan profiles,
   bounded reliable-command XOR handling, and a checked `.dm_91` record reader,
   discovery, and input validation while retaining supported legacy paths.
@@ -26,16 +27,37 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
 - Matched the retail protocol-91 bare `connectResponse` while preserving the
   extended FnQL handshake, and kept retail clients joinable under the explicit
   unverified Steamworks-stub policy.
+- Made protocol 91 the canonical runtime/default demo identity, added bounded
+  retail binary challenge-ticket capture with replay/expiry protection, and
+  replaced signed acknowledgement arithmetic with wrap-safe sequence domains.
+- Preserved the exact retail UI/cgame DLL bytes across pure-filesystem restarts
+  with a bounded, process-private native-module pin; pure reloads cannot select
+  a different on-disk DLL and still retain compiled-QVM fallback.
+- Added the open, size-tagged FnQL Steam provider ABI and a secure default-off
+  runtime loader. A separately versioned closed-source `FnQL-Steam` sibling can
+  now be built and staged explicitly for identity/subscription, overlays,
+  callbacks, lobbies, server browsing, Workshop, stats/auth, and dedicated
+  GameServer services without importing private source or SDK files into FnQL.
 - Added an external, default-off ZMQ server bridge with bounded authenticated
   RCON and stats publication, fail-closed authentication, correct IPv6 and
   REQ/DEALER framing, and explicit unavailable Steamworks capability reporting
   for the engine-only default build.
+- Added engine-owned bounded stat/achievement sessions and strict depth-, size-,
+  grammar-, and UTF-8-checked JSON publication input for optional stats sinks.
+- Added retail-shaped player-event/report aggregation, exact match-summary and
+  achievement gates, provider-baseline merging, and generation-aware async stat
+  stores so late completions cannot discard newer counters or unlocks.
 - Matched the retail Steam-user filesystem layout and priority: active-user
   profile files override retail packages, while managed `qzconfig.cfg` and
   `repconfig.cfg` live at the profile root and preserve QL aliases/bindings.
+- Added the retail QL CPI/signed-acceleration/view-filter mouse profile and
+  UTF-8 character path while preserving both FnQ3 mouse styles and SDL3
+  gamepads; the non-SDL Windows joystick mapping is available as an opt-in.
 
 ### Rendering and Display
-- _None yet._
+- Added a dedicated non-power-of-two RGBA WebUI surface to OpenGL, OpenGL2,
+  GLx, and Vulkan without consuming cinematic handles; verified the complete
+  retail menu through an engine renderer screenshot.
 
 ### Audio
 - _None yet._
@@ -67,6 +89,11 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
   or being printed verbatim by cvar diagnostics.
 - Restricted privileged WebUI navigation to `asset://ql/`, rejected ambiguous
   or oversized native requests, and added lossless checked UTF-8 conversion.
+- Moved browser/DataPak startup ahead of renderer initialization with a bounded
+  provisional surface, then resized it to the live renderer; this avoids the
+  observed 32-bit Vulkan package-load failure. The full qz bridge now installs
+  pre-document, lightweight retries cannot re-enter a page-owned main hook, and
+  the legacy native `web_stopRefresh` action cannot abort the browser document.
 - Rejected malformed BSP identifiers and advertisement record shapes in every
   loader, bounded all WebPak allocations, and made ZMQ multipart recovery and
   Windows runtime loading fail closed.
@@ -81,3 +108,6 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
 ### Documentation and Tooling
 - Added a subsystem-by-subsystem Quake Live porting roadmap and permanent
   independent-rewrite, retail-compatibility, and non-regression agent rules.
+- Added windowed local probes for protocol-91 discovery/auth hardening, a full
+  pure session with `.dm_91` finalization/replay, and authenticated ZMQ
+  DEALER/PUB interoperability against administrator-supplied runtimes.

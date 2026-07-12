@@ -285,6 +285,8 @@
     <ClCompile Include="..\..\client\cl_ui.cpp" />
     <ClCompile Include="..\..\client\cl_webpak.cpp" />
     <ClCompile Include="..\..\client\cl_webui.cpp" />
+    <ClCompile Include="..\..\client\awesomium_backend_win32.cpp" />
+	<ClCompile Include="..\..\platform\fnql_steam.cpp" />
     <ClCompile Include="..\..\client\audio\legacy\snd_adpcm.cpp" />
     <ClCompile Include="..\..\client\audio\codecs\snd_codec.cpp" />
     <ClCompile Include="..\..\client\audio\codecs\snd_codec_ogg.cpp" />
@@ -309,8 +311,8 @@
     <ClCompile Include="..\..\qcommon\keys.c" />
     <ClCompile Include="..\..\qcommon\md4.c" />
     <ClCompile Include="..\..\qcommon\md5.c" />
-    <ClCompile Include="..\..\qcommon\msg.c" />
-    <ClCompile Include="..\..\qcommon\net_chan.c" />
+    <ClCompile Include="..\..\qcommon\msg.cpp" />
+    <ClCompile Include="..\..\qcommon\net_chan.cpp" />
     <ClCompile Include="..\..\qcommon\net_ip.c" />
     <ClCompile Include="..\..\qcommon\puff.c" />
     <ClCompile Include="..\..\qcommon\q_math.c" />
@@ -380,6 +382,8 @@
     <ClInclude Include="..\..\client\audio\openal\AudioSystemWorld.inl" />
     <ClInclude Include="..\..\cgame\cg_public.h" />
     <ClInclude Include="..\..\client\client.h" />
+	<ClInclude Include="..\..\platform\fnql_steam.h" />
+	<ClInclude Include="..\..\platform\fnql_steam_api.h" />
     <ClInclude Include="..\..\client\cl_curl.h" />
     <ClInclude Include="..\..\client\keycodes.h" />
     <ClInclude Include="..\..\client\keys.h" />

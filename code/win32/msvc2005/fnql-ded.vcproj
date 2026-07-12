@@ -456,11 +456,11 @@
 				>
 			</File>
 			<File
-				RelativePath="..\..\qcommon\msg.c"
+				RelativePath="..\..\qcommon\msg.cpp"
 				>
 			</File>
 			<File
-				RelativePath="..\..\qcommon\net_chan.c"
+				RelativePath="..\..\qcommon\net_chan.cpp"
 				>
 			</File>
 			<File
@@ -610,6 +610,18 @@
 			</File>
 			<File
 				RelativePath="..\..\server\server.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\platform\fnql_steam.cpp"
+				>
+			</File>
+			<File
+				RelativePath="..\..\platform\fnql_steam.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\platform\fnql_steam_api.h"
 				>
 			</File>
 			<File

@@ -26,6 +26,7 @@ extern "C" {
 }
 
 #include "client_cpp.h"
+#include "../qcommon/netchan_safety.hpp"
 
 #include <algorithm>
 #include <array>
@@ -50,17 +51,19 @@ static constexpr std::array svc_strings = {
 };
 
 static void CL_ValidateReliableAcknowledge( void ) {
-	if ( clc.reliableSequence - clc.reliableAcknowledge > MAX_RELIABLE_COMMANDS ) {
-		if ( !clc.demoplaying ) {
-			Com_Printf( S_COLOR_YELLOW "WARNING: dropping %i commands from server\n", clc.reliableSequence - clc.reliableAcknowledge );
-		}
-		clc.reliableAcknowledge = clc.reliableSequence;
-	} else if ( clc.reliableSequence - clc.reliableAcknowledge < 0 ) {
+	std::uint32_t pending = 0;
+	if ( !fnql::net::PendingCounterCount( clc.reliableSequence,
+		clc.reliableAcknowledge, pending ) ) {
 		if ( clc.demoplaying ) {
 			clc.reliableSequence = clc.reliableAcknowledge;
 		} else {
 			Com_Error( ERR_DROP, "%s: incorrect reliable sequence acknowledge number", __func__ );
 		}
+	} else if ( pending > MAX_RELIABLE_COMMANDS ) {
+		if ( !clc.demoplaying ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: dropping %u commands from server\n", pending );
+		}
+		clc.reliableAcknowledge = clc.reliableSequence;
 	}
 }
 
@@ -566,7 +569,6 @@ static void CL_ParseSnapshot( msg_t *msg ) {
 	const clSnapshot_t *old;
 	clSnapshot_t	newSnap{};
 	int			deltaNum;
-	int			oldMessageNum;
 	int			i, n, packetNum;
 
 	// read in the new snapshot to a temporary buffer
@@ -591,7 +593,8 @@ static void CL_ParseSnapshot( msg_t *msg ) {
 	if ( !deltaNum ) {
 		newSnap.deltaNum = -1;
 	} else {
-		newSnap.deltaNum = newSnap.messageNum - deltaNum;
+		newSnap.deltaNum = fnql::net::RetreatSequence(
+			newSnap.messageNum, static_cast<std::uint32_t>( deltaNum ) );
 	}
 	newSnap.snapFlags = MSG_ReadByte( msg );
 
@@ -599,7 +602,7 @@ static void CL_ParseSnapshot( msg_t *msg ) {
 	// no longer have available, we must suck up the rest of
 	// the frame, but not use it, then ask for a non-compressed
 	// message
-	if ( newSnap.deltaNum <= 0 ) {
+	if ( deltaNum == 0 ) {
 		newSnap.valid = qtrue;		// uncompressed frame
 		old = nullptr;
 		clc.demowaiting = qfalse;	// we can start recording now
@@ -663,14 +666,16 @@ static void CL_ParseSnapshot( msg_t *msg ) {
 	// received and this one, so if there was a dropped packet
 	// it won't look like something valid to delta from next
 	// time we wrap around in the buffer
-	oldMessageNum = cl.snap.messageNum + 1;
-
-	if ( newSnap.messageNum - oldMessageNum >= PACKET_BACKUP ) {
-		oldMessageNum = newSnap.messageNum - ( PACKET_BACKUP - 1 );
-	}
-
-	for ( i = 0, n = newSnap.messageNum - oldMessageNum; i < n; i++ ) {
-		cl.snapshots[ ( oldMessageNum + i ) & PACKET_MASK ].valid = qfalse;
+	const std::uint32_t messageGap = fnql::net::SequenceDistance(
+		newSnap.messageNum, cl.snap.messageNum );
+	n = static_cast<int>( std::min<std::uint32_t>(
+		messageGap > 0 ? messageGap - 1u : 0u, PACKET_BACKUP - 1u ) );
+	const int firstMissing = fnql::net::RetreatSequence(
+		newSnap.messageNum, static_cast<std::uint32_t>( n ) );
+	for ( i = 0; i < n; i++ ) {
+		const int missing = fnql::net::AdvanceSequence( firstMissing,
+			static_cast<std::uint32_t>( i ) );
+		cl.snapshots[ missing & PACKET_MASK ].valid = qfalse;
 	}
 
 	// copy to the current good spot
@@ -678,7 +683,8 @@ static void CL_ParseSnapshot( msg_t *msg ) {
 	cl.snap.ping = 999;
 	// calculate ping time
 	for ( i = 0 ; i < PACKET_BACKUP ; i++ ) {
-		packetNum = ( clc.netchan.outgoingSequence - 1 - i ) & PACKET_MASK;
+		packetNum = fnql::net::RetreatSequence(
+			clc.netchan.outgoingSequence, static_cast<std::uint32_t>( i + 1 ) ) & PACKET_MASK;
 		if ( cl.snap.ps.commandTime - cl.outPackets[packetNum].p_serverTime >= 0 ) {
 			cl.snap.ping = cls.realtime - cl.outPackets[ packetNum ].p_realtime;
 			break;

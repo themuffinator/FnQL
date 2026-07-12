@@ -215,6 +215,10 @@ struct StartupParameters {
 	std::string_view initialConfigJson{};
 	std::string_view initialMapJson{};
 	std::string_view initialFactoryJson{};
+	// Executed by capable runtimes before document scripts and reinjected by
+	// the client after navigation. This lets retail pages observe qz_instance
+	// during their original bootstrap order without exposing runtime objects.
+	std::string_view startupScript{};
 };
 
 struct BackendStatus {

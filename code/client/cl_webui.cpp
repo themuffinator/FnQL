@@ -22,9 +22,17 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // cl_webui.cpp -- Quake Live WebUI/Awesomium host wiring
 
 #include "client.h"
+#include "awesomium_backend_win32.hpp"
 #include "webui_backend.hpp"
+#include "../platform/fnql_steam.h"
+#include "../platform/fnql_steam_stats.hpp"
+
+extern "C" {
+#include "../qcommon/unzip.h"
+}
 
 #include <cstdint>
+#include <array>
 
 #if defined( _WIN32 )
 #ifndef WIN32_LEAN_AND_MEAN
@@ -43,6 +51,10 @@ BackendHost &ClientBackendHost() noexcept {
 } // namespace fnql::webui
 
 #define CL_WEB_DEFAULT_URL "asset://ql/index.html"
+// Reserve the retail DataPak before renderer/driver startup; the view is
+// resized to the authoritative renderer dimensions on the first client frame.
+#define CL_WEB_BOOTSTRAP_WIDTH 1280
+#define CL_WEB_BOOTSTRAP_HEIGHT 720
 #define CL_WEB_BROWSER_EVENT_COUNT 32
 #define CL_WEB_EVENT_NAME_LENGTH 128
 #define CL_WEB_EVENT_PAYLOAD_LENGTH 4096
@@ -58,11 +70,14 @@ BackendHost &ClientBackendHost() noexcept {
 #define CL_WEB_CATALOG_JSON_LENGTH 65536
 #define CL_WEB_CATALOG_FILE_LIST_LENGTH 32768
 #define CL_WEB_CATALOG_SYNC_CHUNK_CHARS 8192
+#define CL_WEB_STARTUP_SCRIPT_LENGTH 65536
 #define CL_WEB_MAX_CATALOG_ITEMS 512
 #define CL_WEB_SERVER_LOCAL_REFRESH_WAIT_MSEC 1000
 #define CL_WEB_SERVER_REMOTE_REFRESH_WAIT_MSEC 5000
 #define CL_WEB_SERVER_REFRESH_TIMEOUT_MSEC 15000
 #define CL_WEB_SERVER_DETAILS_TIMEOUT_MSEC 5000
+#define CL_STEAM_FRIEND_FLAGS 4u
+#define CL_STEAM_MAX_FRIENDS 512u
 #define CL_WEB_KEYBOARD_EVENT_KEYDOWN_TYPE 0u
 #define CL_WEB_KEYBOARD_EVENT_KEYUP_TYPE 1u
 #define CL_WEB_KEYBOARD_EVENT_CHAR_TYPE 2u
@@ -108,20 +123,27 @@ typedef struct {
 	qboolean	factoryCatalogSynced;
 	qboolean	serverRefreshInitialized;
 	qboolean	serverRefreshActive;
+	qboolean	serverRefreshSteam;
 	int			serverRefreshRequestMode;
 	int			serverRefreshSource;
 	int			serverRefreshTime;
 	int			serverRefreshTimeoutTime;
 	qboolean	serverDetailActive;
+	qboolean	serverDetailSteam;
 	netadr_t	serverDetailAddress;
 	unsigned int serverDetailIp;
 	unsigned short serverDetailPort;
 	int			serverDetailTimeoutTime;
 	char		serverDetailId[32];
+	uint64_t	activeLobbyId;
 	qboolean	cursorPositionValid;
 	int			cursorX;
 	int			cursorY;
 	char		tooltip[MAX_QPATH];
+	byte		*surfacePixels;
+	size_t		surfaceBytes;
+	fnql::webui::SurfaceSize surfaceSize;
+	qboolean	surfaceCopied;
 #if defined( _WIN32 )
 	HCURSOR		activeCursorHandle;
 	HCURSOR		restoreCursorHandle;
@@ -161,12 +183,26 @@ static qboolean CL_WebUI_RuntimeAvailable( void );
 static void CL_WebView_ReplayRetainedEvents( void );
 static void CL_AdvertisementBridge_UpdateCvars( void );
 static void CL_Steam_OverlayCommand_f( void );
+static void CL_Steam_OnProviderEvent( const fnqlSteamEvent_t *event, void *context );
+static qboolean CL_Steam_ResultAccepted( fnqlSteamResult_t result );
+static qboolean CL_Steam_ParseIdentity( const char *text, uint64_t *identity );
 static void CL_WebHost_BuildConfigJson( char *buffer, size_t bufferSize );
 static void CL_WebHost_BuildMapListJson( char *buffer, size_t bufferSize );
 static void CL_WebHost_BuildFactoryListJson( char *buffer, size_t bufferSize );
 static void CL_WebHost_BuildDemoListJson( char *buffer, size_t bufferSize );
+static void CL_WebHost_BuildFriendListJson( char *buffer, size_t bufferSize );
 static void CL_WebHost_ReadClipboardText( char *buffer, size_t bufferSize );
 static qboolean CL_WebUI_EnsureBackendStarted( void );
+
+static void CL_WebUI_FreeSurfaceBuffer( void ) {
+	if ( cl_webui.surfacePixels ) {
+		Z_Free( cl_webui.surfacePixels );
+	}
+	cl_webui.surfacePixels = NULL;
+	cl_webui.surfaceBytes = 0;
+	cl_webui.surfaceSize = {};
+	cl_webui.surfaceCopied = qfalse;
+}
 
 static void CL_WebUI_SetCvarIfChanged( const char *name, const char *value ) {
 	const char *current;
@@ -205,11 +241,12 @@ static const char *CL_AdvertisementBridgePolicyLabel( void ) {
 }
 
 static const char *CL_WebHost_OnlineServicesModeLabel( void ) {
-	return "Unavailable";
+	return FNQL_Steam_Available( FNQL_STEAM_CAP_CLIENT ) ? "FnQL-Steam" : "Unavailable";
 }
 
 static const char *CL_WebHost_OnlineServicesPolicyLabel( void ) {
-	return "compatibility-unavailable";
+	return FNQL_Steam_Available( FNQL_STEAM_CAP_CLIENT )
+		? "explicit-external-provider" : "compatibility-unavailable";
 }
 
 static const char *CL_WebHost_OnlineServicesParityScopeLabel( void ) {
@@ -217,31 +254,37 @@ static const char *CL_WebHost_OnlineServicesParityScopeLabel( void ) {
 }
 
 static const char *CL_WebHost_OnlineServicesParityReasonLabel( void ) {
-	return "backend scaffold only; Steamworks online services are not bundled";
+	return FNQL_Steam_Available( FNQL_STEAM_CAP_CLIENT )
+		? "versioned external provider active; retail Steam runtime remains external"
+		: "external Steam provider is disabled or unavailable";
 }
 
 static const char *CL_WebHost_MatchmakingProviderLabel( void ) {
-	return "Unavailable";
+	return FNQL_Steam_Available( FNQL_STEAM_CAP_LOBBIES ) ? "FnQL-Steam" : "Unavailable";
 }
 
 static const char *CL_WebHost_MatchmakingPolicyLabel( void ) {
-	return "Steamworks bridge unavailable";
+	return FNQL_Steam_Available( FNQL_STEAM_CAP_LOBBIES )
+		? "external-provider" : "Steamworks bridge unavailable";
 }
 
 static const char *CL_WebHost_WorkshopProviderLabel( void ) {
-	return "Unavailable";
+	return FNQL_Steam_Available( FNQL_STEAM_CAP_UGC ) ? "FnQL-Steam" : "Unavailable";
 }
 
 static const char *CL_WebHost_WorkshopPolicyLabel( void ) {
-	return "Steamworks bridge unavailable";
+	return FNQL_Steam_Available( FNQL_STEAM_CAP_UGC )
+		? "external-provider" : "Steamworks bridge unavailable";
 }
 
 static const char *CL_WebHost_ResourceBridgeProviderLabel( void ) {
-	return "Unavailable";
+	return FNQL_Steam_Available( FNQL_STEAM_CAP_AVATARS )
+		? "FnQL-Steam" : "Unavailable";
 }
 
 static const char *CL_WebHost_ResourceBridgePolicyLabel( void ) {
-	return "Steamworks resource bridge unavailable";
+	return FNQL_Steam_Available( FNQL_STEAM_CAP_AVATARS )
+		? "avatar-provider" : "Steamworks resource bridge unavailable";
 }
 
 static const char *CL_WebHost_ResourceBridgeParityScopeLabel( void ) {
@@ -249,7 +292,9 @@ static const char *CL_WebHost_ResourceBridgeParityScopeLabel( void ) {
 }
 
 static const char *CL_WebHost_ResourceBridgeParityReasonLabel( void ) {
-	return "backend scaffold only; Steamworks resource data source is not bundled";
+	return FNQL_Steam_Available( FNQL_STEAM_CAP_AVATARS )
+		? "large-avatar renderer bridge active; non-avatar SteamDataSource resources remain unavailable"
+		: "external Steam avatar provider is disabled or unavailable";
 }
 
 static qboolean CL_WebHost_IsResourceURI( const char *url ) {
@@ -683,6 +728,27 @@ static qboolean CL_WebUI_RecordBackendResult( fnql::webui::BackendResult result 
 	return qfalse;
 }
 
+static qboolean CL_Steam_GetLocalIdentityWords( unsigned int *identityLow,
+	unsigned int *identityHigh ) {
+	fnqlSteamStatus_t status = {};
+
+	if ( identityLow ) {
+		*identityLow = 0u;
+	}
+	if ( identityHigh ) {
+		*identityHigh = 0u;
+	}
+	status.size = sizeof( status );
+	if ( !identityLow || !identityHigh
+		|| !FNQL_Steam_Available( FNQL_STEAM_CAP_IDENTITY )
+		|| !FNQL_Steam_GetStatus( &status ) || !status.local_steam_id ) {
+		return qfalse;
+	}
+	*identityLow = (unsigned int)( status.local_steam_id & 0xffffffffull );
+	*identityHigh = (unsigned int)( status.local_steam_id >> 32 );
+	return qtrue;
+}
+
 static qboolean CL_WebUI_EnsureBackendStarted( void ) {
 	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
 	char runtimePath[MAX_OSPATH];
@@ -695,6 +761,8 @@ static qboolean CL_WebUI_EnsureBackendStarted( void ) {
 	char *mapJson;
 	char *factoryJson;
 	qboolean started;
+	int initialWidth;
+	int initialHeight;
 
 	if ( host.IsRunning() ) {
 		return qtrue;
@@ -702,11 +770,10 @@ static qboolean CL_WebUI_EnsureBackendStarted( void ) {
 	if ( !CL_WebUI_RuntimeRequested() || !host.IsAvailable() ) {
 		return qfalse;
 	}
-	if ( cls.glconfig.vidWidth <= 0 || cls.glconfig.vidHeight <= 0 ) {
-		CL_WebUI_SetLastError( "WebUI runtime cannot start before the renderer has valid dimensions.",
-			static_cast<int>( fnql::webui::BackendError::InvalidState ) );
-		return qfalse;
-	}
+	initialWidth = cls.glconfig.vidWidth > 0
+		? cls.glconfig.vidWidth : CL_WEB_BOOTSTRAP_WIDTH;
+	initialHeight = cls.glconfig.vidHeight > 0
+		? cls.glconfig.vidHeight : CL_WEB_BOOTSTRAP_HEIGHT;
 
 	runtimePath[0] = '\0';
 	basePath[0] = '\0';
@@ -717,6 +784,8 @@ static qboolean CL_WebUI_EnsureBackendStarted( void ) {
 	if ( CL_CopyClientIdentity( clc.clientNum, &identity ) ) {
 		identityLow = identity.identityLow;
 		identityHigh = identity.identityHigh;
+	} else {
+		CL_Steam_GetLocalIdentityWords( &identityLow, &identityHigh );
 	}
 
 	configJson = static_cast<char *>( Z_Malloc( CL_WEB_CONFIG_JSON_LENGTH ) );
@@ -750,8 +819,8 @@ static qboolean CL_WebUI_EnsureBackendStarted( void ) {
 		(unsigned int)atoi( STEAMPATH_APPID ),
 		identityLow,
 		identityHigh,
-		cls.glconfig.vidWidth,
-		cls.glconfig.vidHeight,
+		initialWidth,
+		initialHeight,
 		configJson,
 		mapJson,
 		factoryJson );
@@ -839,14 +908,21 @@ void CL_RefreshOnlineServicesBridgeState( void ) {
 	CL_WebUI_SetCvarIfChanged( "ui_resourceBridgePolicy", CL_WebHost_ResourceBridgePolicyLabel() );
 	CL_WebUI_SetCvarIfChanged( "ui_resourceBridgeParityScope", CL_WebHost_ResourceBridgeParityScopeLabel() );
 	CL_WebUI_SetCvarIfChanged( "ui_resourceBridgeParityReason", CL_WebHost_ResourceBridgeParityReasonLabel() );
-	CL_WebUI_SetCvarIfChanged( "ui_resourceBridgeSteamDataSourceSubset", "avatars and live image resources" );
-	CL_WebUI_SetCvarIfChanged( "ui_resourceBridgeSteamDataSourceNativeGap", "SteamDataSource and avatar callbacks are unavailable" );
+	CL_WebUI_SetCvarIfChanged( "ui_resourceBridgeSteamDataSourceSubset",
+		FNQL_Steam_Available( FNQL_STEAM_CAP_AVATARS ) ? "large avatars" : "none" );
+	CL_WebUI_SetCvarIfChanged( "ui_resourceBridgeSteamDataSourceNativeGap",
+		FNQL_Steam_Available( FNQL_STEAM_CAP_AVATARS )
+			? "non-avatar SteamDataSource resources are unavailable"
+			: "SteamDataSource and avatar callbacks are unavailable" );
 	CL_WebUI_SetCvarIfChanged( "ui_resourceBridgeSteamDataSourceFallbackOwner", "renderer pak shader registry" );
 	CL_AdvertisementBridge_UpdateCvars();
 	CL_WebHost_UpdateOverlayOwnership();
 }
 
 qboolean CL_IsSubscribedApp( int appId ) {
+	if ( appId > 0 && FNQL_Steam_Available( FNQL_STEAM_CAP_CLIENT ) ) {
+		return FNQL_Steam_IsSubscribedApp( (uint32_t)appId );
+	}
 	Com_DPrintf( "UI subscription bridge ignored for app %d: %s (%s [%s])\n",
 		appId,
 		"subscription bridge provider unavailable",
@@ -855,15 +931,120 @@ qboolean CL_IsSubscribedApp( int appId ) {
 	return qfalse;
 }
 
+struct clSteamAvatarCacheEntry_t {
+	uint64_t steamId;
+	uint32_t size;
+	qhandle_t shader;
+};
+
+static std::array<clSteamAvatarCacheEntry_t, 64> cl_steamAvatarCache;
+static qboolean cl_steamVoiceRecording;
+static qboolean cl_steamVoicePacketLogged;
+static uint64_t cl_steamPendingP2PRemote;
+static uint64_t cl_steamAcceptedP2PServer;
+static uint32_t cl_steamAvatarGeneration = 1;
+
+void CL_ClearAvatarImageHandles( void ) {
+	cl_steamAvatarCache.fill( {} );
+	if ( ++cl_steamAvatarGeneration == 0 ) {
+		cl_steamAvatarGeneration = 1;
+	}
+}
+
+static void CL_InvalidateAvatarImageHandle( uint64_t steamId ) {
+	for ( clSteamAvatarCacheEntry_t &entry : cl_steamAvatarCache ) {
+		if ( entry.steamId == steamId ) {
+			entry = {};
+		}
+	}
+	if ( ++cl_steamAvatarGeneration == 0 ) {
+		cl_steamAvatarGeneration = 1;
+	}
+}
+
+static qhandle_t CL_GetSteamAvatarImageHandle( uint64_t steamId,
+		uint32_t avatarSize ) {
+	clSteamAvatarCacheEntry_t *freeEntry = nullptr;
+	uint32_t width = 0;
+	uint32_t height = 0;
+	uint32_t required = 0;
+	char shaderName[MAX_QPATH];
+	byte *rgba;
+	qhandle_t shader;
+
+	if ( !steamId || avatarSize > FNQL_STEAM_AVATAR_LARGE
+		|| !re.RegisterShaderFromRGBA
+		|| !FNQL_Steam_Available( FNQL_STEAM_CAP_AVATARS ) ) {
+		return 0;
+	}
+	for ( clSteamAvatarCacheEntry_t &entry : cl_steamAvatarCache ) {
+		if ( entry.steamId == steamId && entry.size == avatarSize ) {
+			return entry.shader;
+		}
+		if ( !entry.steamId && !freeEntry ) {
+			freeEntry = &entry;
+		}
+	}
+	if ( !freeEntry ) {
+		return 0;
+	}
+	if ( FNQL_Steam_GetAvatarRGBA( steamId, avatarSize,
+		NULL, 0, &width, &height, &required ) != FNQL_STEAM_RESULT_BUFFER_TOO_SMALL
+		|| !width || !height || required != width * height * 4u
+		|| required > 4u * 1024u * 1024u ) {
+		return 0;
+	}
+	rgba = static_cast<byte *>( Z_Malloc( required ) );
+	if ( !rgba ) {
+		return 0;
+	}
+	if ( FNQL_Steam_GetAvatarRGBA( steamId, avatarSize,
+		rgba, required, &width, &height, &required ) != FNQL_STEAM_RESULT_OK ) {
+		Z_Free( rgba );
+		return 0;
+	}
+	Com_sprintf( shaderName, sizeof( shaderName ), "*steam/avatar/%u/%u/%llu",
+		cl_steamAvatarGeneration, avatarSize, (unsigned long long)steamId );
+	shader = re.RegisterShaderFromRGBA( shaderName, rgba, (int)width, (int)height );
+	Z_Free( rgba );
+	if ( shader ) {
+		freeEntry->steamId = steamId;
+		freeEntry->size = avatarSize;
+		freeEntry->shader = shader;
+	}
+	return shader;
+}
+
 qhandle_t CL_GetAvatarImageHandle( unsigned int identityLow, unsigned int identityHigh ) {
-	(void)identityLow;
-	(void)identityHigh;
-	return 0;
+	return CL_GetSteamAvatarImageHandle(
+		( (uint64_t)identityHigh << 32 ) | identityLow,
+		FNQL_STEAM_AVATAR_LARGE );
 }
 
 qhandle_t CL_Steam_RegisterShader( const char *url ) {
+	struct AvatarPrefix {
+		const char *text;
+		uint32_t size;
+	};
+	static const AvatarPrefix avatarPrefixes[] = {
+		{ "asset://steam/avatar/small/", FNQL_STEAM_AVATAR_SMALL },
+		{ "asset://steam/avatar/medium/", FNQL_STEAM_AVATAR_MEDIUM },
+		{ "asset://steam/avatar/large/", FNQL_STEAM_AVATAR_LARGE },
+		{ "steam://avatar/small/", FNQL_STEAM_AVATAR_SMALL },
+		{ "steam://avatar/medium/", FNQL_STEAM_AVATAR_MEDIUM },
+		{ "steam://avatar/large/", FNQL_STEAM_AVATAR_LARGE }
+	};
+	uint64_t avatarSteamId;
+
 	if ( !url || !url[0] || !re.RegisterShaderNoMip ) {
 		return 0;
+	}
+	for ( const AvatarPrefix &prefix : avatarPrefixes ) {
+		const size_t prefixLength = strlen( prefix.text );
+		if ( !Q_stricmpn( url, prefix.text, (int)prefixLength )
+			&& CL_Steam_ParseIdentity( url + prefixLength, &avatarSteamId ) ) {
+			return CL_GetSteamAvatarImageHandle( avatarSteamId, prefix.size );
+		}
 	}
 
 	if ( !CL_WebHost_IsResourceURI( url ) ) {
@@ -880,7 +1061,13 @@ qhandle_t CL_Steam_RegisterShader( const char *url ) {
 }
 
 static void CL_WebUI_RegisterCvars( void ) {
-	cl_webuiEnable = Cvar_Get( "cl_webuiEnable", "0", CVAR_ARCHIVE_ND );
+	cl_webuiEnable = Cvar_Get( "cl_webuiEnable",
+#if defined( _WIN32 ) && ( defined( _M_IX86 ) || defined( __i386__ ) )
+		"1",
+#else
+		"0",
+#endif
+		CVAR_ARCHIVE_ND );
 	Cvar_CheckRange( cl_webuiEnable, "0", "1", CV_INTEGER );
 	Cvar_SetDescription( cl_webuiEnable, "Enable the Quake Live WebUI host when a supported Awesomium backend is available." );
 
@@ -892,6 +1079,9 @@ static void CL_WebUI_RegisterCvars( void ) {
 	Cvar_SetDescription( cl_webConsole, "Print WebUI console messages when a live browser backend publishes them." );
 	cl_webBrowserActive = Cvar_Get( "web_browserActive", "0", CVAR_ROM );
 	Cvar_SetDescription( cl_webBrowserActive, "Read-only state for the active Quake Live WebUI browser overlay." );
+	cvar_t *steamMaxLobbyClients = Cvar_Get( "steam_maxLobbyClients", "16", CVAR_ARCHIVE );
+	Cvar_CheckRange( steamMaxLobbyClients, "1", "64", CV_INTEGER );
+	Cvar_SetDescription( steamMaxLobbyClients, "Maximum members requested for a Steam friends lobby." );
 
 	Cvar_SetDescription( Cvar_Get( "ui_browserAwesomium", "0", CVAR_ROM ), "Read-only state for Quake Live WebUI availability." );
 	Cvar_SetDescription( Cvar_Get( "ui_browserAwesomiumPending", "0", CVAR_ROM ), "Read-only state for a WebUI browser waiting on a drawable surface." );
@@ -972,7 +1162,7 @@ static qboolean CL_WebHost_SetLocationHash( const char *hash ) {
 	Com_sprintf(
 		script,
 		sizeof( script ),
-		"(function(){var h=\"%s\";if(window.location.hash.replace(/^#/,\"\")!==h){window.location.hash=h;}if(window.main_hook_v2){window.main_hook_v2();}})();",
+		"(function(){var h=\"%s\";if(window.location.hash.replace(/^#/,\"\")!==h){window.location.hash=h;}if(window.__fnql_retry_qz_bridge){window.__fnql_retry_qz_bridge();}})();",
 		escapedHash
 	);
 	return CL_Awesomium_ExecuteJavascript( script, "" );
@@ -1123,10 +1313,229 @@ static void CL_Web_StopRefresh_f( void ) {
 		Com_DPrintf( "web_stopRefresh ignored: Awesomium/WebUI runtime backend is unavailable.\n" );
 		return;
 	}
-	CL_Awesomium_Stop();
-	if ( CL_Awesomium_LastError()[0] ) {
-		Com_DPrintf( "web_stopRefresh failed: %s\n", CL_Awesomium_LastError() );
+
+	// This verb is inherited from the native UI's server-list refresh flow.
+	// Retail does not register it as an Awesomium navigation command. Stopping
+	// the WebView here races index.html startup and can leave a complete but
+	// empty document on renderers with a longer initialization path.
+	Com_DPrintf( "web_stopRefresh ignored for the live WebUI document.\n" );
+}
+
+static void CL_Web_DumpSurface_f( void ) {
+	const int width = cl_webui.surfaceSize.width;
+	const int height = cl_webui.surfaceSize.height;
+	size_t pixelCount;
+	size_t outputSize;
+	byte *output;
+	byte *destination;
+	size_t index;
+
+	if ( !cl_webui.surfaceCopied || !cl_webui.surfacePixels
+		|| width <= 0 || height <= 0 || width > 65535 || height > 65535 ) {
+		Com_Printf( "WebUI surface is not available for capture.\n" );
+		return;
 	}
+
+	pixelCount = static_cast<size_t>( width ) * static_cast<size_t>( height );
+	if ( pixelCount > ( ( std::numeric_limits<size_t>::max )() - 18u ) / 3u
+		|| pixelCount > static_cast<size_t>( ( std::numeric_limits<int>::max )() - 18 ) / 3u ) {
+		Com_Printf( "WebUI surface is too large for capture.\n" );
+		return;
+	}
+
+	outputSize = 18u + pixelCount * 3u;
+	output = static_cast<byte *>( Z_Malloc( outputSize ) );
+	if ( !output ) {
+		Com_Printf( "Could not allocate the WebUI surface capture.\n" );
+		return;
+	}
+
+	Com_Memset( output, 0, 18 );
+	output[2] = 2; // Uncompressed true-colour TGA.
+	output[12] = static_cast<byte>( width & 0xff );
+	output[13] = static_cast<byte>( ( width >> 8 ) & 0xff );
+	output[14] = static_cast<byte>( height & 0xff );
+	output[15] = static_cast<byte>( ( height >> 8 ) & 0xff );
+	output[16] = 24;
+	output[17] = 0x20; // The Awesomium copy is top-to-bottom.
+	destination = output + 18;
+	for ( index = 0; index < pixelCount; ++index ) {
+		const byte *source = cl_webui.surfacePixels + index * 4u;
+		destination[index * 3u + 0u] = source[2];
+		destination[index * 3u + 1u] = source[1];
+		destination[index * 3u + 2u] = source[0];
+	}
+
+	FS_WriteFile( "screenshots/webui-surface.tga", output,
+		static_cast<int>( outputSize ) );
+	Z_Free( output );
+	Com_Printf( "Wrote screenshots/webui-surface.tga\n" );
+}
+
+static void CL_Web_Status_f( void ) {
+	struct Query {
+		const char *label;
+		const char *script;
+	};
+	static const Query queries[] = {
+		{ "ready", "(function(){return document.readyState==='complete'?2:(document.readyState==='interactive'?1:0);})()" },
+		{ "assetLocation", "(function(){return String(window.location.href).indexOf('asset://ql/index.html')===0?1:0;})()" },
+		{ "blankLocation", "(function(){return String(window.location.href)==='about:blank'?1:0;})()" },
+		{ "locationLength", "(function(){return String(window.location.href).length;})()" },
+		{ "hidden", "(function(){return document.hidden?1:0;})()" },
+		{ "headChildren", "(function(){return document.head?document.head.children.length:-1;})()" },
+		{ "bodyChildren", "(function(){return document.body?document.body.children.length:-1;})()" },
+		{ "bodyWidth", "(function(){return document.body?document.body.offsetWidth:-1;})()" },
+		{ "bodyHeight", "(function(){return document.body?document.body.offsetHeight:-1;})()" },
+		{ "bodyDisplayNone", "(function(){return document.body&&getComputedStyle(document.body).display==='none'?1:0;})()" },
+		{ "bodyOpacity", "(function(){return document.body?Math.round(parseFloat(getComputedStyle(document.body).opacity||'0')*100):-1;})()" },
+		{ "elements", "(function(){return document.getElementsByTagName('*').length;})()" },
+		{ "images", "(function(){return document.images.length;})()" },
+		{ "imagesLoaded", "(function(){var n=0;for(var i=0;i<document.images.length;i++){if(document.images[i].complete&&document.images[i].naturalWidth>0){n++;}}return n;})()" },
+		{ "textLength", "(function(){return document.body?(document.body.textContent||'').length:-1;})()" },
+		{ "titleLength", "(function(){return String(document.title||'').length;})()" },
+		{ "app", "(function(){return document.getElementById('app')?1:0;})()" },
+		{ "bridge", "(function(){return window.__qlr_qz_instance_script_complete?1:0;})()" },
+		{ "qz", "(function(){return window.qz_instance?1:0;})()" },
+		{ "mainHook", "(function(){return typeof window.main_hook_v2==='function'?1:0;})()" }
+	};
+
+	if ( !CL_WebHost_HasLiveView() ) {
+		Com_Printf( "WebUI status is unavailable without a live browser.\n" );
+		return;
+	}
+
+	const fnql::webui::BackendStatus backendStatus =
+		fnql::webui::ClientBackendHost().Status();
+	Com_Printf( "WebUI document status: loading=%d crashed=%d nativeError=%d",
+		backendStatus.loading ? 1 : 0,
+		backendStatus.crashed ? 1 : 0,
+		backendStatus.nativeErrorCode );
+	for ( const Query &query : queries ) {
+		int value = 0;
+		if ( CL_Awesomium_ExecuteJavascriptInteger( query.script, "", &value ) ) {
+			Com_Printf( " %s=%d", query.label, value );
+		} else {
+			Com_Printf( " %s=?", query.label );
+		}
+	}
+	Com_Printf( "\n" );
+	char location[256];
+	int locationLength = 0;
+	for ( ; locationLength + 1 < static_cast<int>( sizeof( location ) ); ++locationLength ) {
+		char script[160];
+		int codeUnit = 0;
+		Com_sprintf( script, sizeof( script ),
+			"(function(){return String(window.location.href).charCodeAt(%d)||0;})()",
+			locationLength );
+		if ( !CL_Awesomium_ExecuteJavascriptInteger( script, "", &codeUnit )
+			|| codeUnit <= 0 || codeUnit > 0x7f ) {
+			break;
+		}
+		location[locationLength] = static_cast<char>( codeUnit );
+	}
+	location[locationLength] = '\0';
+	Com_Printf( "WebUI location: %s\n", location[0] ? location : "<unavailable>" );
+}
+
+static void CL_Steam_AvatarTest_f( void ) {
+	uint64_t steamId;
+	qhandle_t shader;
+	uint32_t avatarSize = FNQL_STEAM_AVATAR_LARGE;
+	const char *sizeName = "large";
+	if ( ( Cmd_Argc() != 2 && Cmd_Argc() != 3 )
+		|| !CL_Steam_ParseIdentity( Cmd_Argv( 1 ), &steamId ) ) {
+		Com_Printf( "usage: steam_avatar_test <steamid64> [small|medium|large]\n" );
+		return;
+	}
+	if ( Cmd_Argc() == 3 ) {
+		sizeName = Cmd_Argv( 2 );
+		if ( !Q_stricmp( sizeName, "small" ) ) avatarSize = FNQL_STEAM_AVATAR_SMALL;
+		else if ( !Q_stricmp( sizeName, "medium" ) ) avatarSize = FNQL_STEAM_AVATAR_MEDIUM;
+		else if ( Q_stricmp( sizeName, "large" ) ) {
+			Com_Printf( "usage: steam_avatar_test <steamid64> [small|medium|large]\n" );
+			return;
+		}
+	}
+	shader = CL_GetSteamAvatarImageHandle( steamId, avatarSize );
+	Com_Printf( "Steam %s avatar shader for %llu: %d\n", sizeName,
+		(unsigned long long)steamId, shader );
+}
+
+static void CL_Steam_FriendsTest_f( void ) {
+	char *snapshot = static_cast<char *>( Z_Malloc( CL_WEB_CONFIG_JSON_LENGTH ) );
+	if ( !snapshot ) return;
+	CL_WebHost_BuildFriendListJson( snapshot, CL_WEB_CONFIG_JSON_LENGTH );
+	Com_Printf( "Steam friends snapshot: %s\n", snapshot );
+	Z_Free( snapshot );
+}
+
+static void CL_Steam_UgcQueryTest_f( void ) {
+	/* Retail forwards this value as Steam's one-based query page. */
+	int filter = 1;
+	if ( Cmd_Argc() > 2 ) {
+		Com_Printf( "usage: steam_ugc_query_test [filter]\n" );
+		return;
+	}
+	if ( Cmd_Argc() == 2 ) filter = atoi( Cmd_Argv( 1 ) );
+	if ( CL_Steam_RequestAllUGC( filter ) ) {
+		Com_Printf( "Steam UGC query requested with filter %d.\n", filter );
+	}
+}
+
+static void CL_Steam_ClearStats_f( void ) {
+	if ( FNQL_Steam_ResetClientStats( qtrue ) == FNQL_STEAM_RESULT_OK ) {
+		Com_Printf( "Steam client stats and achievements reset.\n" );
+	} else {
+		Com_Printf( S_COLOR_YELLOW "Steam client stats reset is unavailable.\n" );
+	}
+}
+
+static void CL_Steam_UserStatsTest_f( void ) {
+	uint64_t steamId = 0;
+	fnqlSteamStatus_t status = {};
+	if ( Cmd_Argc() > 2 ) {
+		Com_Printf( "usage: steam_user_stats_test [steamid64]\n" );
+		return;
+	}
+	if ( Cmd_Argc() == 2 ) {
+		if ( !CL_Steam_ParseIdentity( Cmd_Argv( 1 ), &steamId ) ) {
+			Com_Printf( "usage: steam_user_stats_test [steamid64]\n" );
+			return;
+		}
+	} else {
+		status.size = sizeof( status );
+		if ( FNQL_Steam_GetStatus( &status ) ) steamId = status.local_steam_id;
+	}
+	if ( steamId && FNQL_Steam_RequestClientUserStats( steamId )
+		== FNQL_STEAM_RESULT_PENDING ) {
+		Com_Printf( "Steam user stats requested for %llu.\n",
+			(unsigned long long)steamId );
+	} else {
+		Com_Printf( S_COLOR_YELLOW "Steam user stats request is unavailable.\n" );
+	}
+}
+
+static void CL_Steam_VoiceStart_f( void ) {
+	if ( cl_steamVoiceRecording ) return;
+	if ( FNQL_Steam_StartVoiceRecording() != FNQL_STEAM_RESULT_OK ) {
+		Com_DPrintf( "Steam voice recording is unavailable.\n" );
+		return;
+	}
+	cl_steamVoiceRecording = qtrue;
+	cl_steamVoicePacketLogged = qfalse;
+	(void)FNQL_Steam_SetLocalVoiceSpeaking( qtrue );
+	CL_SetLocalSpeakingState( qtrue );
+	Com_DPrintf( "Steam voice recording started at decoder rate %u.\n",
+		FNQL_Steam_GetVoiceSampleRate() );
+}
+
+static void CL_Steam_VoiceStop_f( void ) {
+	if ( !cl_steamVoiceRecording ) return;
+	(void)FNQL_Steam_SetLocalVoiceSpeaking( qfalse );
+	FNQL_Steam_StopVoiceRecording();
+	cl_steamVoiceRecording = qfalse;
+	CL_SetLocalSpeakingState( qfalse );
 }
 
 void QLWebHost_RegisterCommands( void ) {
@@ -1142,6 +1551,17 @@ void QLWebHost_RegisterCommands( void ) {
 	Cmd_AddCommand( "web_clearCache", CL_Web_ClearCache_f );
 	Cmd_AddCommand( "web_reload", CL_Web_Reload_f );
 	Cmd_AddCommand( "web_stopRefresh", CL_Web_StopRefresh_f );
+	Cmd_AddCommand( "web_dumpSurface", CL_Web_DumpSurface_f );
+	Cmd_AddCommand( "web_status", CL_Web_Status_f );
+	Cmd_AddCommand( "steam_avatar_test", CL_Steam_AvatarTest_f );
+	Cmd_AddCommand( "steam_friends_test", CL_Steam_FriendsTest_f );
+	Cmd_AddCommand( "steam_ugc_query_test", CL_Steam_UgcQueryTest_f );
+	Cmd_AddCommand( "stats_clear", CL_Steam_ClearStats_f );
+	Cmd_AddCommand( "steam_user_stats_test", CL_Steam_UserStatsTest_f );
+	Cmd_AddCommand( "+voice", CL_Steam_VoiceStart_f );
+	Cmd_AddCommand( "-voice", CL_Steam_VoiceStop_f );
+	Cmd_AddCommand( "steam_voice_start", CL_Steam_VoiceStart_f );
+	Cmd_AddCommand( "steam_voice_stop", CL_Steam_VoiceStop_f );
 	Cmd_AddCommand( "clientviewprofile", CL_Steam_OverlayCommand_f );
 	Cmd_AddCommand( "clientfriendinvite", CL_Steam_OverlayCommand_f );
 	cl_webui.commandsRegistered = qtrue;
@@ -1160,6 +1580,18 @@ void QLWebHost_UnregisterCommands( void ) {
 	Cmd_RemoveCommand( "web_clearCache" );
 	Cmd_RemoveCommand( "web_reload" );
 	Cmd_RemoveCommand( "web_stopRefresh" );
+	Cmd_RemoveCommand( "web_dumpSurface" );
+	Cmd_RemoveCommand( "web_status" );
+	Cmd_RemoveCommand( "steam_avatar_test" );
+	Cmd_RemoveCommand( "steam_friends_test" );
+	Cmd_RemoveCommand( "steam_ugc_query_test" );
+	Cmd_RemoveCommand( "stats_clear" );
+	Cmd_RemoveCommand( "steam_user_stats_test" );
+	Cmd_RemoveCommand( "+voice" );
+	Cmd_RemoveCommand( "-voice" );
+	Cmd_RemoveCommand( "steam_voice_start" );
+	Cmd_RemoveCommand( "steam_voice_stop" );
+	CL_Steam_VoiceStop_f();
 	Cmd_RemoveCommand( "clientviewprofile" );
 	Cmd_RemoveCommand( "clientfriendinvite" );
 	cl_webui.commandsRegistered = qfalse;
@@ -1168,10 +1600,16 @@ void QLWebHost_UnregisterCommands( void ) {
 void CL_WebHost_Init( void ) {
 	const qboolean commandsRegistered = cl_webui.commandsRegistered;
 
+	CL_WebUI_FreeSurfaceBuffer();
 	Com_Memset( &cl_webui, 0, sizeof( cl_webui ) );
 	cl_webui.initialized = qtrue;
 	cl_webui.commandsRegistered = commandsRegistered;
 	cl_webui.appActive = qtrue;
+	cl_steamPendingP2PRemote = 0;
+	cl_steamAcceptedP2PServer = 0;
+	fnql::webui::InstallRetailAwesomiumBackend(
+		fnql::webui::ClientBackendHost() );
+	FNQL_Steam_SetEventSink( CL_Steam_OnProviderEvent, NULL );
 	CL_WebUI_RegisterCvars();
 	CL_RefreshOnlineServicesBridgeState();
 }
@@ -1180,9 +1618,17 @@ void CL_WebHost_Shutdown( void ) {
 	if ( !cl_webui.initialized ) {
 		return;
 	}
+	if ( cl_steamAcceptedP2PServer ) {
+		(void)FNQL_Steam_CloseP2PSession( FNQL_STEAM_ROLE_CLIENT,
+			cl_steamAcceptedP2PServer );
+	}
+	cl_steamPendingP2PRemote = 0;
+	cl_steamAcceptedP2PServer = 0;
 
 	CL_Awesomium_Shutdown();
+	FNQL_Steam_SetEventSink( NULL, NULL );
 	CL_WebUI_ClearBrowserState();
+	CL_WebUI_FreeSurfaceBuffer();
 	CL_RefreshOnlineServicesBridgeState();
 }
 
@@ -1192,7 +1638,6 @@ void CL_WebHost_Frame( void ) {
 	}
 
 	cl_webui.frameSequence++;
-
 	if ( !CL_WebUI_RuntimeRequested() ) {
 		CL_Awesomium_Shutdown();
 		CL_WebUI_ClearBrowserState();
@@ -1202,7 +1647,8 @@ void CL_WebHost_Frame( void ) {
 		if ( CL_WebHost_HasLiveView() ) {
 			const fnql::webui::BackendStatus backendStatus =
 				fnql::webui::ClientBackendHost().Status();
-			if ( cls.glconfig.vidWidth > 0 && cls.glconfig.vidHeight > 0
+			if ( backendStatus.surface.IsValid()
+				&& cls.glconfig.vidWidth > 0 && cls.glconfig.vidHeight > 0
 				&& backendStatus.surface != fnql::webui::SurfaceSize{
 					cls.glconfig.vidWidth, cls.glconfig.vidHeight } ) {
 				CL_Awesomium_Resize( cls.glconfig.vidWidth, cls.glconfig.vidHeight );
@@ -1238,7 +1684,6 @@ void CL_WebHost_BootstrapAwesomiumMenu( void ) {
 		CL_RefreshOnlineServicesBridgeState();
 		return;
 	}
-
 	CL_WebHost_OpenRequestedURL( "#", "CL_WebHost_BootstrapAwesomiumMenu" );
 }
 
@@ -1254,15 +1699,11 @@ qboolean CL_WebHost_HasBoundWindowObject( void ) {
 
 qboolean CL_WebHost_HasDrawableSurface( void ) {
 	const fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
-	if ( !host.IsRunning() || !host.Status().HasSurface() ) {
+	if ( !host.IsRunning() || !host.Status().HasSurface()
+		|| !re.DrawWebUISurface ) {
 		return qfalse;
 	}
-
-	// The backend surface contract is live, but the renderer-neutral upload
-	// path still needs its own compatibility slice.  Do not claim overlay
-	// ownership until pixels can actually be presented; native UI remains the
-	// safe fallback even when an adapter has started successfully.
-	return qfalse;
+	return qtrue;
 }
 
 static qboolean CL_WebHost_CanDispatchLiveEvent( void ) {
@@ -1270,6 +1711,56 @@ static qboolean CL_WebHost_CanDispatchLiveEvent( void ) {
 }
 
 void CL_WebHost_DrawBrowserSurface( void ) {
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	const fnql::webui::BackendStatus status = host.Status();
+	size_t rowBytes;
+	size_t requiredBytes;
+	qboolean dirty;
+
+	if ( !CL_WebHost_SurfaceReadyForOverlay() || !re.DrawWebUISurface
+		|| !status.surface.MinimumRowBytes( &rowBytes )
+		|| rowBytes > static_cast<size_t>( ( std::numeric_limits<int>::max )() )
+		|| static_cast<size_t>( status.surface.height )
+			> ( std::numeric_limits<size_t>::max )() / rowBytes ) {
+		return;
+	}
+
+	requiredBytes = rowBytes * static_cast<size_t>( status.surface.height );
+	if ( cl_webui.surfaceSize != status.surface
+		|| cl_webui.surfaceBytes != requiredBytes ) {
+		CL_WebUI_FreeSurfaceBuffer();
+		cl_webui.surfacePixels = static_cast<byte *>( Z_Malloc( requiredBytes ) );
+		if ( !cl_webui.surfacePixels ) {
+			CL_WebUI_SetLastError( "WebUI compositor surface allocation failed.",
+				static_cast<int>( fnql::webui::BackendError::ResourceUnavailable ) );
+			return;
+		}
+		cl_webui.surfaceBytes = requiredBytes;
+		cl_webui.surfaceSize = status.surface;
+	}
+
+	dirty = ( status.surfaceDirty || !cl_webui.surfaceCopied ) ? qtrue : qfalse;
+	if ( dirty ) {
+		if ( !CL_Awesomium_CopySurface(
+			cl_webui.surfacePixels,
+			status.surface.width,
+			status.surface.height,
+			static_cast<int>( rowBytes ) ) ) {
+			return;
+		}
+		cl_webui.surfaceCopied = qtrue;
+	}
+
+	re.SetColor( NULL );
+	re.DrawWebUISurface(
+		0,
+		0,
+		cls.glconfig.vidWidth,
+		cls.glconfig.vidHeight,
+		status.surface.width,
+		status.surface.height,
+		cl_webui.surfacePixels,
+		dirty );
 }
 
 #if defined( _WIN32 )
@@ -1488,7 +1979,7 @@ static void CL_WebHost_BuildStartupBridgeScript( char *buffer, size_t bufferSize
 	Q_strncpyz(
 		buffer,
 		"(function(){"
-		"if(window.__qlr_qz_instance_ready){if(window.main_hook_v2){window.main_hook_v2();}return;}"
+		"if(window.__qlr_qz_instance_ready){if(window.__fnql_retry_qz_bridge){window.__fnql_retry_qz_bridge();}return;}"
 		"window.__qlr_qz_instance_ready=true;"
 		"var noop=function(){return true;};var empty=function(){return [];};"
 		"var maps={campgrounds:{id:'campgrounds',name:'Campgrounds',sysname:'campgrounds',gametypes:{0:true}}};"
@@ -1535,17 +2026,17 @@ static void CL_WebHost_BuildStartupBridgeScript( char *buffer, size_t bufferSize
 		"ActivateGameOverlayToUser:function(dialog,steamId){return queueSocial('activategameoverlaytouser',String(dialog||'')+'\\n'+String(steamId||''));},Invite:function(steamId){return queueSocial('invite',String(steamId||''));},"
 		"FileExists:function(path){path=String(path||'');if(!Object.prototype.hasOwnProperty.call(fileExistsCache,path)){queue('exists',path);}return !!fileExistsCache[path];},"
 		"GetConfig:function(){return config;},GetCursorPosition:function(){return {x:cursorPosition.x,y:cursorPosition.y};},"
-		"GetAllUGC:function(filter){ugcPrimed=true;queueSocial('getallugc',String(typeof filter==='undefined'?0:filter));return ugcList;},GetNextKeyDown:function(active){if(typeof active==='undefined'){return queue('keycapture','1');}var activeText=String(active).toLowerCase();var activeValue=(active===false||activeText==='false')?0:parseInt(active,10);return queue('keycapture',((isNaN(activeValue)?1:activeValue)!==0?'1':'0'));},"
+		"GetAllUGC:function(filter){ugcPrimed=true;queueSocial('getallugc',String(typeof filter==='undefined'?1:filter));return ugcList;},GetNextKeyDown:function(active){if(typeof active==='undefined'){return queue('keycapture','1');}var activeText=String(active).toLowerCase();var activeValue=(active===false||activeText==='false')?0:parseInt(active,10);return queue('keycapture',((isNaN(activeValue)?1:activeValue)!==0?'1':'0'));},"
 		"SetFavoriteServer:function(ip,port,add){var addText=String(add).toLowerCase();var addValue=(add===false||addText==='false')?0:parseInt(add,10);return queue('favorite',String(ip||'')+'\\n'+String(port||'')+'\\n'+((isNaN(addValue)?1:addValue)!==0?'1':'0'));},NoOp:noop};"
 		"if(!window.FakeClient){window.FakeClient={};}if(!window.FakeClient.qz_instance){window.FakeClient.qz_instance={};}"
 		"window.__qlr_set_native_cvar=setNativeCvar;window.__qlr_set_file_exists=setFileExists;window.__qlr_set_cursor_position=setCursorPosition;window.__qlr_set_clipboard_text=setClipboardText;window.__qlr_set_demo_list=setDemoList;window.__qlr_set_friend_list=setFriendList;window.__qlr_set_ugc_list=setUGCList;window.__qlr_set_native_maps=setMapList;window.__qlr_set_native_factories=setFactoryList;window.__qlr_begin_native_maps=beginNativeMaps;window.__qlr_add_native_maps=addNativeMaps;window.__qlr_commit_native_maps=commitNativeMaps;window.__qlr_begin_native_factories=beginNativeFactories;window.__qlr_add_native_factories=addNativeFactories;window.__qlr_commit_native_factories=commitNativeFactories;window.__qlr_set_native_state=setNativeState;window.__qlr_set_native_config=setNativeConfig;"
-		"window.main_hook_v2=function(){var f=window.FakeClient&&window.FakeClient.qz_instance;if(f){for(var k in qz){f[k]=qz[k];}}"
+		"var syncQzBridge=function(){var f=window.FakeClient&&window.FakeClient.qz_instance;if(f){for(var k in qz){f[k]=qz[k];}}"
 		"window.qz_instance=qz;if(typeof window.EnginePublish==='function'&&!window.EnginePublish.__qlr_wrapped){var oldPublish=window.EnginePublish;"
 		"var wrapped=function(topic,data){try{if(String(topic).indexOf('cvar.')===0){var d=typeof data==='string'?JSON.parse(data):data;if(d){setNativeCvar(d.name||String(topic).substr(5),d.value||'');}}}catch(e){}return oldPublish.apply(this,arguments);};"
 		"wrapped.__qlr_wrapped=true;window.EnginePublish=wrapped;}};"
-		"window.main_hook_v2();if(document.addEventListener){document.addEventListener('DOMContentLoaded',window.main_hook_v2,false);}window.__qlr_browser_helpers_ready=true;"
+		"window.__fnql_retry_qz_bridge=syncQzBridge;if(typeof window.main_hook_v2!=='function'){window.main_hook_v2=syncQzBridge;}syncQzBridge();if(document.addEventListener){document.addEventListener('DOMContentLoaded',syncQzBridge,false);}window.__qlr_browser_helpers_ready=true;"
 		"try{var e=document.createEvent('Event');e.initEvent('qz_instance.ready',false,false);document.dispatchEvent(e);}catch(err){}"
-		"var qlrBridgeTries=0;var qlrBridgeTimer=setInterval(function(){window.main_hook_v2();if(++qlrBridgeTries>=40){clearInterval(qlrBridgeTimer);}},250);"
+		"var qlrBridgeTries=0;var qlrBridgeTimer=setInterval(function(){syncQzBridge();if(++qlrBridgeTries>=40){clearInterval(qlrBridgeTimer);}},250);"
 		"window.__qlr_qz_instance_script_complete=true;"
 		"})();",
 		(int)bufferSize
@@ -1557,23 +2048,37 @@ static void CL_WebHost_BuildStartupBridgeRetryScript( char *buffer, size_t buffe
 		return;
 	}
 
-	Q_strncpyz( buffer, "(function(){if(window.main_hook_v2){window.main_hook_v2();}})();", (int)bufferSize );
+	Q_strncpyz( buffer, "(function(){if(window.__fnql_retry_qz_bridge){window.__fnql_retry_qz_bridge();}})();", (int)bufferSize );
 }
 
 static qboolean CL_WebHost_InjectStartupBridge( qboolean retryOnly ) {
-	char script[MAX_STRING_CHARS];
+	char retryScript[MAX_STRING_CHARS];
+	char *script = retryScript;
+	qboolean executed;
 
 	if ( !CL_WebHost_HasLiveView() ) {
 		return qfalse;
 	}
 
 	if ( retryOnly ) {
-		CL_WebHost_BuildStartupBridgeRetryScript( script, sizeof( script ) );
+		CL_WebHost_BuildStartupBridgeRetryScript(
+			retryScript, sizeof( retryScript ) );
 	} else {
-		CL_WebHost_BuildStartupBridgeScript( script, sizeof( script ) );
+		script = static_cast<char *>( Z_Malloc( CL_WEB_STARTUP_SCRIPT_LENGTH ) );
+		if ( !script ) {
+			CL_WebUI_SetLastError( "WebUI bridge reinjection allocation failed.",
+				static_cast<int>( fnql::webui::BackendError::ResourceUnavailable ) );
+			return qfalse;
+		}
+		CL_WebHost_BuildStartupBridgeScript(
+			script, CL_WEB_STARTUP_SCRIPT_LENGTH );
 	}
 
-	if ( !CL_Awesomium_ExecuteJavascript( script, "" ) ) {
+	executed = CL_Awesomium_ExecuteJavascript( script, "" );
+	if ( !retryOnly ) {
+		Z_Free( script );
+	}
+	if ( !executed ) {
 		return qfalse;
 	}
 
@@ -1719,19 +2224,49 @@ static void CL_WebHost_UpdateBrowserFriendList( const char *friendListJson ) {
 }
 
 static void CL_WebHost_UpdateBrowserUGCList( const char *ugcListJson ) {
-	char script[CL_WEB_EVENT_PAYLOAD_LENGTH];
+	const char *json;
+	char *script;
+	int scriptSize;
 
 	if ( !CL_WebHost_HasLiveView() || !CL_WebHost_HasBoundWindowObject() ) {
 		return;
 	}
+	json = ( ugcListJson && ugcListJson[0] ) ? ugcListJson : "[]";
+	if ( strlen( json ) > (size_t)( ( std::numeric_limits<int>::max )() - 128 ) ) {
+		return;
+	}
+	scriptSize = (int)strlen( json ) + 128;
+	script = static_cast<char *>( Z_Malloc( scriptSize ) );
+	if ( !script ) return;
 
 	Com_sprintf(
 		script,
-		sizeof( script ),
+		scriptSize,
 		"(function(){if(window.__qlr_set_ugc_list){window.__qlr_set_ugc_list(%s);}})();",
-		( ugcListJson && ugcListJson[0] ) ? ugcListJson : "[]"
+		json
 	);
 	CL_Awesomium_ExecuteJavascript( script, "" );
+	Z_Free( script );
+}
+
+static void CL_WebHost_PublishDynamicJsonEvent( const char *eventName,
+		const char *json ) {
+	char *script;
+	int scriptSize;
+	if ( !eventName || !eventName[0] || !json || !json[0]
+		|| !CL_WebHost_HasLiveView() || !CL_WebHost_HasBoundWindowObject() ) {
+		return;
+	}
+	if ( strlen( eventName ) + strlen( json )
+		> (size_t)( ( std::numeric_limits<int>::max )() - 160 ) ) return;
+	scriptSize = (int)( strlen( eventName ) + strlen( json ) ) + 160;
+	script = static_cast<char *>( Z_Malloc( scriptSize ) );
+	if ( !script ) return;
+	Com_sprintf( script, scriptSize,
+		"(function(){if(window.EnginePublish){window.EnginePublish('%s',%s);}})();",
+		eventName, json );
+	CL_Awesomium_ExecuteJavascript( script, "" );
+	Z_Free( script );
 }
 
 static void CL_WebHost_UpdateBrowserCatalogCache( const char *setterName, const char *catalogJson ) {
@@ -2403,6 +2938,111 @@ static unsigned long long CL_WebHost_SteamIdFromWords( unsigned int identityLow,
 	return ( (unsigned long long)identityHigh << 32 ) | identityLow;
 }
 
+static const char *CL_Steam_PersonaStateText( int state ) {
+	switch ( state ) {
+		case 0: return "Offline";
+		case 1: return "Online";
+		case 2: return "Busy";
+		case 3: return "Away";
+		case 4: return "Snooze";
+		case 5: return "Looking to trade";
+		case 6: return "Looking to play";
+		case 7: return "Invisible";
+		default: return "Unknown";
+	}
+}
+
+static qboolean CL_WebHost_AppendSteamFriendJson( char *buffer,
+		size_t bufferSize, const fnqlSteamFriend_t *friendInfo,
+		qboolean first ) {
+	char name[FNQL_STEAM_NAME_CAPACITY * 2];
+	char nickname[FNQL_STEAM_NAME_CAPACITY * 2];
+	char status[FNQL_STEAM_TEXT_CAPACITY * 2];
+	char presence[FNQL_STEAM_TEXT_CAPACITY * 2];
+	char lanIp[128];
+	char connect[FNQL_STEAM_TEXT_CAPACITY * 2];
+	char nicknameJson[FNQL_STEAM_NAME_CAPACITY * 2 + 3];
+	char gameJson[256];
+	char item[CL_WEB_CONFIG_JSON_LENGTH];
+	const char *presenceText;
+
+	if ( !buffer || !friendInfo || !friendInfo->steam_id ) {
+		return qfalse;
+	}
+	CL_WebUI_JsonEscape( friendInfo->persona_name, name, sizeof( name ) );
+	CL_WebUI_JsonEscape( friendInfo->nickname, nickname, sizeof( nickname ) );
+	CL_WebUI_JsonEscape( friendInfo->status, status, sizeof( status ) );
+	CL_WebUI_JsonEscape( friendInfo->lan_ip, lanIp, sizeof( lanIp ) );
+	CL_WebUI_JsonEscape( friendInfo->connect, connect, sizeof( connect ) );
+	if ( friendInfo->flags & FNQL_STEAM_FRIEND_HAS_NICKNAME ) {
+		Com_sprintf( nicknameJson, sizeof( nicknameJson ), "\"%s\"", nickname );
+	} else {
+		Q_strncpyz( nicknameJson, "null", sizeof( nicknameJson ) );
+	}
+	if ( friendInfo->status[0] ) {
+		presenceText = friendInfo->status;
+	} else if ( friendInfo->flags & FNQL_STEAM_FRIEND_PLAYING_QUAKE_LIVE ) {
+		presenceText = friendInfo->lobby_id ? "In a lobby" : "Playing Quake Live";
+	} else if ( friendInfo->flags & FNQL_STEAM_FRIEND_HAS_GAME ) {
+		presenceText = "Playing other game";
+	} else {
+		presenceText = CL_Steam_PersonaStateText( friendInfo->persona_state );
+	}
+	CL_WebUI_JsonEscape( presenceText, presence, sizeof( presence ) );
+	if ( friendInfo->flags & FNQL_STEAM_FRIEND_HAS_GAME ) {
+		Com_sprintf( gameJson, sizeof( gameJson ),
+			"{\"lobby\":\"%llu\",\"appid\":%u,\"ip\":%u,\"port\":%u,\"queryport\":%u}",
+			(unsigned long long)friendInfo->lobby_id, friendInfo->app_id,
+			friendInfo->server_ip, (unsigned int)friendInfo->server_port,
+			(unsigned int)friendInfo->query_port );
+	} else {
+		Q_strncpyz( gameJson, "null", sizeof( gameJson ) );
+	}
+	Com_sprintf( item, sizeof( item ),
+		"%s{\"id\":\"%llu\",\"steamId\":\"%llu\",\"name\":\"%s\",\"personaName\":\"%s\",\"avatar\":\"asset://steam/avatar/large/%llu\",\"avatarUrl\":\"asset://steam/avatar/large/%llu\",\"avatarSmall\":\"asset://steam/avatar/small/%llu\",\"avatarLarge\":\"asset://steam/avatar/large/%llu\",\"image\":\"asset://steam/avatar/large/%llu\",\"profileUrl\":\"https://steamcommunity.com/profiles/%llu\",\"avatarSize\":\"large\",\"state\":%d,\"personaState\":%d,\"stateText\":\"%s\",\"relationship\":%d,\"nickname\":%s,\"status\":\"%s\",\"richPresence\":\"%s\",\"statusText\":\"%s\",\"presence\":\"%s\",\"lanIp\":\"%s\",\"connect\":\"%s\",\"playingQuake\":%d,\"playingQuakeLive\":%d,\"appId\":%u,\"lobbyId\":\"%llu\",\"gameId\":\"%llu\",\"game\":%s}",
+		first ? "" : ",", (unsigned long long)friendInfo->steam_id,
+		(unsigned long long)friendInfo->steam_id, name, name,
+		(unsigned long long)friendInfo->steam_id,
+		(unsigned long long)friendInfo->steam_id,
+		(unsigned long long)friendInfo->steam_id,
+		(unsigned long long)friendInfo->steam_id,
+		(unsigned long long)friendInfo->steam_id,
+		(unsigned long long)friendInfo->steam_id,
+		friendInfo->persona_state, friendInfo->persona_state,
+		CL_Steam_PersonaStateText( friendInfo->persona_state ),
+		friendInfo->relationship, nicknameJson, status, status,
+		presence, presence, lanIp, connect,
+		( friendInfo->flags & FNQL_STEAM_FRIEND_PLAYING_QUAKE_LIVE ) ? 1 : 0,
+		( friendInfo->flags & FNQL_STEAM_FRIEND_PLAYING_QUAKE_LIVE ) ? 1 : 0,
+		friendInfo->app_id, (unsigned long long)friendInfo->lobby_id,
+		(unsigned long long)friendInfo->game_id, gameJson );
+	return CL_WebUI_AppendJsonLiteralIfFits( buffer, bufferSize, item );
+}
+
+static void CL_WebHost_FormatSteamFriendEventJson(
+		const fnqlSteamFriend_t *friendInfo, char *buffer, size_t bufferSize ) {
+	char name[FNQL_STEAM_NAME_CAPACITY * 2];
+	char status[FNQL_STEAM_TEXT_CAPACITY * 2];
+	char lanIp[128];
+	if ( !buffer || bufferSize == 0 ) return;
+	if ( !friendInfo || !friendInfo->steam_id ) {
+		Q_strncpyz( buffer, "{}", (int)bufferSize );
+		return;
+	}
+	CL_WebUI_JsonEscape( friendInfo->persona_name, name, sizeof( name ) );
+	CL_WebUI_JsonEscape( friendInfo->status, status, sizeof( status ) );
+	CL_WebUI_JsonEscape( friendInfo->lan_ip, lanIp, sizeof( lanIp ) );
+	Com_sprintf( buffer, (int)bufferSize,
+		"{\"id\":\"%llu\",\"steamId\":\"%llu\",\"name\":\"%s\",\"personaName\":\"%s\",\"state\":%d,\"personaState\":%d,\"relationship\":%d,\"status\":\"%s\",\"richPresence\":\"%s\",\"lanIp\":\"%s\",\"playingQuake\":%d,\"playingQuakeLive\":%d,\"appId\":%u,\"lobbyId\":\"%llu\"}",
+		(unsigned long long)friendInfo->steam_id,
+		(unsigned long long)friendInfo->steam_id, name, name,
+		friendInfo->persona_state, friendInfo->persona_state,
+		friendInfo->relationship, status, status, lanIp,
+		( friendInfo->flags & FNQL_STEAM_FRIEND_PLAYING_QUAKE_LIVE ) ? 1 : 0,
+		( friendInfo->flags & FNQL_STEAM_FRIEND_PLAYING_QUAKE_LIVE ) ? 1 : 0,
+		friendInfo->app_id, (unsigned long long)friendInfo->lobby_id );
+}
+
 static void CL_WebHost_BuildFriendListJson( char *buffer, size_t bufferSize ) {
 	qboolean first;
 
@@ -2412,6 +3052,40 @@ static void CL_WebHost_BuildFriendListJson( char *buffer, size_t bufferSize ) {
 
 	buffer[0] = '\0';
 	Q_strcat( buffer, bufferSize, "[" );
+	if ( FNQL_Steam_Available( FNQL_STEAM_CAP_FRIENDS ) ) {
+		uint32_t count = 0;
+		fnqlSteamResult_t result = FNQL_Steam_GetFriends(
+			CL_STEAM_FRIEND_FLAGS, NULL, 0, &count );
+		if ( result == FNQL_STEAM_RESULT_OK && count == 0 ) {
+			Q_strcat( buffer, (int)bufferSize, "]" );
+			return;
+		}
+		if ( result == FNQL_STEAM_RESULT_BUFFER_TOO_SMALL
+			&& count > 0 && count <= CL_STEAM_MAX_FRIENDS ) {
+			fnqlSteamFriend_t *friends = static_cast<fnqlSteamFriend_t *>(
+				Z_Malloc( sizeof( *friends ) * count ) );
+			if ( friends ) {
+				result = FNQL_Steam_GetFriends( CL_STEAM_FRIEND_FLAGS,
+					friends, count, &count );
+				if ( result == FNQL_STEAM_RESULT_OK ) {
+					fnqlSteamStatus_t status = {};
+					status.size = sizeof( status );
+					(void)FNQL_Steam_GetStatus( &status );
+					first = qtrue;
+					for ( uint32_t i = 0; i < count; ++i ) {
+						if ( friends[i].steam_id == status.local_steam_id ) continue;
+						if ( !CL_WebHost_AppendSteamFriendJson( buffer, bufferSize,
+							&friends[i], first ) ) break;
+						first = qfalse;
+					}
+					Z_Free( friends );
+					Q_strcat( buffer, (int)bufferSize, "]" );
+					return;
+				}
+				Z_Free( friends );
+			}
+		}
+	}
 	first = qtrue;
 	for ( int i = 0; i < MAX_CLIENTS; ++i ) {
 		cgameClientIdentity_t identity;
@@ -2516,6 +3190,8 @@ static void CL_WebHost_BuildConfigJson( char *buffer, size_t bufferSize ) {
 	if ( CL_CopyClientIdentity( clc.clientNum, &identity ) ) {
 		identityLow = identity.identityLow;
 		identityHigh = identity.identityHigh;
+	} else {
+		CL_Steam_GetLocalIdentityWords( &identityLow, &identityHigh );
 	}
 
 	CL_WebHost_FormatSteamId( identityLow, identityHigh, steamId, sizeof( steamId ) );
@@ -2873,6 +3549,21 @@ static qboolean CL_WebHost_SetFavoriteServer( const char *payload ) {
 		return qfalse;
 	}
 
+	if ( adr.type == NA_IP && FNQL_Steam_Available( FNQL_STEAM_CAP_FAVORITES ) ) {
+		const uint32_t packedIp = static_cast<uint32_t>( adr.ipv._4[0] )
+			| ( static_cast<uint32_t>( adr.ipv._4[1] ) << 8u )
+			| ( static_cast<uint32_t>( adr.ipv._4[2] ) << 16u )
+			| ( static_cast<uint32_t>( adr.ipv._4[3] ) << 24u );
+		const uint16_t port = static_cast<uint16_t>( BigShort( adr.port ) );
+		const fnqlSteamResult_t result = FNQL_Steam_SetFavoriteServer(
+			static_cast<uint32_t>( atoi( STEAMPATH_APPID ) ), packedIp, port,
+			port, add );
+		if ( result != FNQL_STEAM_RESULT_OK ) {
+			Com_DPrintf( "Steam favorite %s failed for %s (%d); retained local cache fallback.\n",
+				add ? "add" : "remove", address, result );
+		}
+	}
+
 	for ( int i = 0; i < cls.numfavoriteservers; ++i ) {
 		if ( NET_CompareAdr( &cls.favoriteServers[i].adr, &adr ) ) {
 			if ( !add ) {
@@ -2991,6 +3682,7 @@ static void CL_WebHost_ResetServerPings( int source ) {
 static void CL_WebHost_StartServerRefresh( int requestMode, int source ) {
 	cl_webui.serverRefreshInitialized = qtrue;
 	cl_webui.serverRefreshActive = qtrue;
+	cl_webui.serverRefreshSteam = qfalse;
 	cl_webui.serverRefreshRequestMode = requestMode;
 	cl_webui.serverRefreshSource = source;
 	cl_webui.serverRefreshTime = cls.realtime + ( source == AS_LOCAL ? CL_WEB_SERVER_LOCAL_REFRESH_WAIT_MSEC : CL_WEB_SERVER_REMOTE_REFRESH_WAIT_MSEC );
@@ -3002,6 +3694,13 @@ static void CL_WebHost_StartServerRefresh( int requestMode, int source ) {
 
 static void CL_WebHost_PublishServerBrowserRefreshEnd( void ) {
 	if ( !cl_webui.serverRefreshActive ) {
+		return;
+	}
+	if ( cl_webui.serverRefreshSteam ) {
+		if ( cls.realtime >= cl_webui.serverRefreshTimeoutTime ) {
+			FNQL_Steam_CancelServers();
+			CL_WebHost_PublishServerBrowserRefreshEnd();
+		}
 		return;
 	}
 
@@ -3098,6 +3797,7 @@ static serverInfo_t *CL_WebHost_FindServerInfoByAddress( const netadr_t *address
 
 static void CL_WebHost_ClearServerDetailRequest( void ) {
 	cl_webui.serverDetailActive = qfalse;
+	cl_webui.serverDetailSteam = qfalse;
 	cl_webui.serverDetailTimeoutTime = 0;
 	cl_webui.serverDetailIp = 0u;
 	cl_webui.serverDetailPort = 0;
@@ -3281,6 +3981,46 @@ static void CL_WebHost_PublishServerDetailPlayerResponse( const char *playerLine
 	CL_WebView_PublishEvent( eventName, payload );
 }
 
+static void CL_WebHost_PublishSteamServerDetailPlayer( const fnqlSteamEvent_t *event ) {
+	char eventName[CL_WEB_EVENT_NAME_LENGTH];
+	char payload[CL_WEB_EVENT_PAYLOAD_LENGTH];
+	char escapedName[FNQL_STEAM_TEXT_CAPACITY * 2];
+	const int score = event ? static_cast<int>( static_cast<int32_t>( event->value ) ) : 0;
+	const double timePlayed = event ? atof( event->detail ) : 0.0;
+
+	if ( !event || !cl_webui.serverDetailActive ) return;
+	CL_WebUI_JsonEscape( event->text, escapedName, sizeof( escapedName ) );
+	Com_sprintf( eventName, sizeof( eventName ), "servers.players.%s.response", cl_webui.serverDetailId );
+	Com_sprintf( payload, sizeof( payload ),
+		"{\"id\":\"%s\",\"ip\":%u,\"port\":%u,\"name\":\"%s\",\"score\":%d,\"time\":%.3f}",
+		cl_webui.serverDetailId, cl_webui.serverDetailIp,
+		(unsigned int)cl_webui.serverDetailPort, escapedName, score, timePlayed );
+	CL_WebView_PublishEvent( eventName, payload );
+}
+
+static void CL_WebHost_PublishSteamServerDetailResponse( const fnqlSteamServer_t *server ) {
+	char eventName[CL_WEB_EVENT_NAME_LENGTH];
+	char payload[CL_WEB_EVENT_PAYLOAD_LENGTH];
+	char name[sizeof( server->server_name ) * 2];
+	char map[sizeof( server->map ) * 2];
+	char tags[sizeof( server->game_tags ) * 2];
+
+	if ( !server || !cl_webui.serverDetailActive ||
+		server->ip != cl_webui.serverDetailIp ) return;
+	CL_WebUI_JsonEscape( server->server_name, name, sizeof( name ) );
+	CL_WebUI_JsonEscape( server->map, map, sizeof( map ) );
+	CL_WebUI_JsonEscape( server->game_tags, tags, sizeof( tags ) );
+	Com_sprintf( eventName, sizeof( eventName ), "servers.details.%s.response", cl_webui.serverDetailId );
+	Com_sprintf( payload, sizeof( payload ),
+		"{\"name\":\"%s\",\"numPlayers\":%d,\"maxPlayers\":%d,\"ping\":%d,\"map\":\"%s\",\"botPlayers\":%d,\"password\":%u,\"vac\":%u,\"ip\":%u,\"port\":%u,\"id\":\"%s\",\"steam_id\":\"%llu\",\"tags\":\"%s\",\"gametype\":0,\"lastPlayed\":%u}",
+		name, server->players, server->max_players, server->ping, map,
+		server->bot_players, server->password_protected, server->secure,
+		cl_webui.serverDetailIp, (unsigned int)cl_webui.serverDetailPort,
+		cl_webui.serverDetailId, (unsigned long long)server->steam_id, tags,
+		server->last_played );
+	CL_WebView_PublishEvent( eventName, payload );
+}
+
 static void CL_WebHost_PublishServerDetailResponse( const netadr_t *address, const char *infoString ) {
 	serverInfo_t *server;
 	char eventName[CL_WEB_EVENT_NAME_LENGTH];
@@ -3426,6 +4166,7 @@ static void CL_WebHost_ServerDetailsFrame( void ) {
 	}
 
 	if ( cls.realtime >= cl_webui.serverDetailTimeoutTime ) {
+		if ( cl_webui.serverDetailSteam ) FNQL_Steam_CancelServerDetails();
 		CL_WebHost_PublishServerDetailFailed();
 	}
 }
@@ -3514,6 +4255,12 @@ qboolean CL_Steam_RequestServers( int requestMode ) {
 
 	CL_WebHost_StartServerRefresh( requestMode, source );
 	CL_WebView_PublishEvent( "servers.refresh.start", NULL );
+	if ( FNQL_Steam_Available( FNQL_STEAM_CAP_SERVER_BROWSER )
+		&& CL_Steam_ResultAccepted( FNQL_Steam_RequestServers(
+			(uint32_t)requestMode, (uint32_t)atoi( STEAMPATH_APPID ) ) ) ) {
+		cl_webui.serverRefreshSteam = qtrue;
+		return qtrue;
+	}
 	CL_WebHost_PublishServerBrowserCompatibility( requestMode, source );
 	if ( source == AS_LOCAL ) {
 		Cbuf_ExecuteText( EXEC_APPEND, "localservers\n" );
@@ -3535,7 +4282,19 @@ qboolean CL_Steam_RequestServerDetails( unsigned int serverIp, unsigned short se
 		return qfalse;
 	}
 
+	if ( cl_webui.serverDetailSteam ) FNQL_Steam_CancelServerDetails();
 	CL_WebHost_StartServerDetailRequest( &adr );
+	if ( FNQL_Steam_Available( FNQL_STEAM_CAP_SERVER_DETAILS ) ) {
+		cl_webui.serverDetailSteam = qtrue;
+		if ( CL_Steam_ResultAccepted( FNQL_Steam_RequestServerDetails( serverIp,
+			serverPort ) ) ) {
+			return qtrue;
+		}
+		if ( !cl_webui.serverDetailActive || !cl_webui.serverDetailSteam ) {
+			return qtrue;
+		}
+		cl_webui.serverDetailSteam = qfalse;
+	}
 	Cbuf_ExecuteText( EXEC_APPEND, va( "serverstatus %s\n", address ) );
 	return qtrue;
 }
@@ -3545,6 +4304,12 @@ qboolean CL_Steam_RefreshServerList( void ) {
 		return qfalse;
 	}
 
+	if ( cl_webui.serverRefreshSteam
+		&& CL_Steam_ResultAccepted( FNQL_Steam_RefreshServers() ) ) {
+		cl_webui.serverRefreshActive = qtrue;
+		cl_webui.serverRefreshTimeoutTime = cls.realtime + CL_WEB_SERVER_REFRESH_TIMEOUT_MSEC;
+		return qtrue;
+	}
 	return CL_Steam_RequestServers( cl_webui.serverRefreshRequestMode );
 }
 
@@ -3557,8 +4322,8 @@ static void CL_WebHost_RequestServerDetails( const char *payload ) {
 	netadr_t adr;
 
 	if ( CL_WebHost_ParseServerEndpoint( payload, address, sizeof( address ) ) && NET_StringToAdr( address, &adr, NA_UNSPEC ) ) {
-		CL_WebHost_StartServerDetailRequest( &adr );
-		Cbuf_ExecuteText( EXEC_APPEND, va( "serverstatus %s\n", address ) );
+		CL_Steam_RequestServerDetails( CL_WebHost_PackedIPv4FromAddress( &adr ),
+			CL_WebHost_PortFromAddress( &adr ) );
 	}
 }
 
@@ -3640,82 +4405,1057 @@ static void CL_Steam_LogOnlineCallbackIgnored( const char *callbackName, const c
 		CL_WebHost_OnlineServicesPolicyLabel() );
 }
 
+static qboolean CL_Steam_ResultAccepted( fnqlSteamResult_t result ) {
+	return ( result == FNQL_STEAM_RESULT_OK || result == FNQL_STEAM_RESULT_PENDING )
+		? qtrue : qfalse;
+}
+
+static qboolean CL_Steam_ParseIdentity( const char *text, uint64_t *identity ) {
+	uint64_t value = 0;
+	int length = 0;
+
+	if ( identity ) {
+		*identity = 0;
+	}
+	if ( !text || !text[0] || !identity ) {
+		return qfalse;
+	}
+	for ( ; text[length]; ++length ) {
+		const uint64_t digit = (uint64_t)( text[length] - '0' );
+		if ( text[length] < '0' || text[length] > '9'
+			|| value > ( ~(uint64_t)0 - digit ) / 10u ) {
+			return qfalse;
+		}
+		value = value * 10u + digit;
+	}
+	if ( length > 20 || !value ) {
+		return qfalse;
+	}
+	*identity = value;
+	return qtrue;
+}
+
+static qboolean CL_Steam_SafeCommandText( const char *text ) {
+	return text && text[0] && !strpbrk( text, "\r\n;\"" ) ? qtrue : qfalse;
+}
+
+static void CL_Steam_ResetServerResponseList( int source ) {
+	serverInfo_t *servers;
+	int capacity;
+
+	servers = CL_WebHost_GetServerList( source, NULL, &capacity );
+	if ( servers ) {
+		Com_Memset( servers, 0, sizeof( *servers ) * capacity );
+	}
+	if ( source == AS_LOCAL ) {
+		cls.numlocalservers = 0;
+	} else if ( source == AS_GLOBAL ) {
+		cls.numglobalservers = 0;
+	} else if ( source == AS_FAVORITES ) {
+		cls.numfavoriteservers = 0;
+	}
+}
+
+static void CL_Steam_StoreServerResponse( const fnqlSteamServer_t *response ) {
+	serverInfo_t *servers;
+	serverInfo_t *server;
+	int *count;
+	int capacity;
+	char address[MAX_TOKEN_CHARS];
+
+	if ( !response || response->size < sizeof( *response )
+		|| !response->connection_port ) {
+		return;
+	}
+	servers = CL_WebHost_GetServerList( cl_webui.serverRefreshSource, NULL, &capacity );
+	if ( !servers ) {
+		return;
+	}
+	if ( cl_webui.serverRefreshSource == AS_LOCAL ) {
+		count = &cls.numlocalservers;
+	} else if ( cl_webui.serverRefreshSource == AS_FAVORITES ) {
+		count = &cls.numfavoriteservers;
+	} else {
+		count = &cls.numglobalservers;
+	}
+	if ( *count < 0 ) {
+		*count = 0;
+	}
+	if ( *count >= capacity ) {
+		return;
+	}
+	server = &servers[*count];
+	Com_Memset( server, 0, sizeof( *server ) );
+	CL_WebHost_FormatNumericAddress( response->ip, response->connection_port,
+		address, sizeof( address ) );
+	if ( !NET_StringToAdr( address, &server->adr, NA_UNSPEC ) ) {
+		return;
+	}
+	Q_strncpyz( server->hostName, response->server_name[0]
+		? response->server_name : address, sizeof( server->hostName ) );
+	Q_strncpyz( server->mapName, response->map, sizeof( server->mapName ) );
+	Q_strncpyz( server->game, response->game_directory, sizeof( server->game ) );
+	server->clients = response->players;
+	server->maxClients = response->max_players;
+	server->ping = response->ping;
+	server->visible = qtrue;
+	server->g_humanplayers = response->players - response->bot_players;
+	server->g_needpass = response->password_protected ? 1 : 0;
+	++*count;
+}
+
+static qboolean CL_Steam_ConsumeUgcQueryResults( void ) {
+	uint32_t count = 0;
+	uint32_t totalMatching = 0;
+	fnqlSteamResult_t result = FNQL_Steam_GetUgcQueryResults(
+		NULL, 0, &count, &totalMatching );
+	if ( result == FNQL_STEAM_RESULT_OK && count == 0 ) {
+		Com_Printf( "Steam UGC query returned 0 of %u matching items.\n",
+			totalMatching );
+		CL_WebHost_UpdateBrowserUGCList( "[]" );
+		CL_WebHost_PublishDynamicJsonEvent( "web.ugc.results", "[]" );
+		CL_WebView_PublishEvent( "web.ugc.complete", NULL );
+		return qtrue;
+	}
+	if ( result != FNQL_STEAM_RESULT_BUFFER_TOO_SMALL || count == 0
+		|| count > 50u ) return qfalse;
+
+	fnqlSteamUgcItem_t *items = static_cast<fnqlSteamUgcItem_t *>(
+		Z_Malloc( sizeof( *items ) * count ) );
+	const size_t perItemCapacity = FNQL_STEAM_UGC_TITLE_CAPACITY * 2u
+		+ FNQL_STEAM_UGC_DESCRIPTION_CAPACITY * 2u
+		+ FNQL_STEAM_UGC_PREVIEW_URL_CAPACITY * 2u + 256u;
+	const size_t jsonCapacity = perItemCapacity * count + 2u;
+	char *json = jsonCapacity <= 1024u * 1024u
+		? static_cast<char *>( Z_Malloc( jsonCapacity ) ) : NULL;
+	char *item = static_cast<char *>( Z_Malloc( perItemCapacity ) );
+	char *escapedDescription = static_cast<char *>( Z_Malloc(
+		FNQL_STEAM_UGC_DESCRIPTION_CAPACITY * 2u ) );
+	if ( !items || !json || !item || !escapedDescription ) {
+		if ( escapedDescription ) Z_Free( escapedDescription );
+		if ( item ) Z_Free( item );
+		if ( json ) Z_Free( json );
+		if ( items ) Z_Free( items );
+		return qfalse;
+	}
+	result = FNQL_Steam_GetUgcQueryResults( items, count, &count,
+		&totalMatching );
+	if ( result != FNQL_STEAM_RESULT_OK ) {
+		Z_Free( escapedDescription );
+		Z_Free( item );
+		Z_Free( json );
+		Z_Free( items );
+		return qfalse;
+	}
+	Com_Printf( "Steam UGC query returned %u of %u matching items.\n",
+		count, totalMatching );
+	json[0] = '\0';
+	(void)CL_WebUI_AppendJsonLiteralIfFits( json, jsonCapacity, "[" );
+	qboolean first = qtrue;
+	for ( uint32_t i = 0; i < count; ++i ) {
+		char escapedTitle[FNQL_STEAM_UGC_TITLE_CAPACITY * 2];
+		char escapedPreview[FNQL_STEAM_UGC_PREVIEW_URL_CAPACITY * 2];
+		CL_WebUI_JsonEscape( items[i].title, escapedTitle,
+			sizeof( escapedTitle ) );
+		CL_WebUI_JsonEscape( items[i].description, escapedDescription,
+			FNQL_STEAM_UGC_DESCRIPTION_CAPACITY * 2u );
+		CL_WebUI_JsonEscape( items[i].preview_url, escapedPreview,
+			sizeof( escapedPreview ) );
+		Com_sprintf( item, (int)perItemCapacity,
+			"%s{\"title\":\"%s\",\"description\":\"%s\",\"id\":\"%llu\",\"image\":\"%s\"}",
+			first ? "" : ",", escapedTitle, escapedDescription,
+			(unsigned long long)items[i].published_file_id, escapedPreview );
+		if ( !CL_WebUI_AppendJsonLiteralIfFits( json, jsonCapacity, item ) ) break;
+		first = qfalse;
+	}
+	(void)CL_WebUI_AppendJsonLiteralIfFits( json, jsonCapacity, "]" );
+	CL_WebHost_UpdateBrowserUGCList( json );
+	CL_WebHost_PublishDynamicJsonEvent( "web.ugc.results", json );
+	CL_WebView_PublishEvent( "web.ugc.complete", NULL );
+	Z_Free( escapedDescription );
+	Z_Free( item );
+	Z_Free( json );
+	Z_Free( items );
+	return qtrue;
+}
+
+static qboolean CL_Steam_GetCurrentServerP2PIdentity( uint64_t *steamId ) {
+	static const int serverIdentityConfigstring = 0x2ca;
+	if ( steamId ) *steamId = 0;
+	if ( !steamId || cls.state != CA_ACTIVE
+		|| serverIdentityConfigstring < 0
+		|| serverIdentityConfigstring >= MAX_CONFIGSTRINGS ) return qfalse;
+	const int offset = cl.gameState.stringOffsets[serverIdentityConfigstring];
+	if ( offset < 0 || offset >= MAX_GAMESTATE_CHARS ) return qfalse;
+	return CL_Steam_ParseIdentity( cl.gameState.stringData + offset, steamId );
+}
+
+static void CL_Steam_HandleP2PEvent( const fnqlSteamEvent_t *event ) {
+	if ( !event || event->flags != FNQL_STEAM_ROLE_CLIENT ) return;
+	if ( event->type == FNQL_STEAM_EVENT_P2P_SESSION_FAILURE ) {
+		if ( cl_steamAcceptedP2PServer == event->subject_id ) {
+			cl_steamAcceptedP2PServer = 0;
+		}
+		Com_Printf( S_COLOR_YELLOW
+			"Steam client P2P session failed for %llu (error %llu).\n",
+			(unsigned long long)event->subject_id,
+			(unsigned long long)event->value );
+		return;
+	}
+	uint64_t serverId = 0;
+	if ( !CL_Steam_GetCurrentServerP2PIdentity( &serverId ) ) {
+		cl_steamPendingP2PRemote = event->subject_id;
+		Com_DPrintf( "Deferred Steam client P2P request from %llu until the active server identity arrives.\n",
+			(unsigned long long)event->subject_id );
+		return;
+	}
+	if ( serverId != event->subject_id ) {
+		Com_DPrintf( "Ignored Steam client P2P request from untracked peer %llu.\n",
+			(unsigned long long)event->subject_id );
+		return;
+	}
+	const fnqlSteamResult_t result = FNQL_Steam_AcceptP2PSession(
+		FNQL_STEAM_ROLE_CLIENT, serverId );
+	Com_DPrintf( "Steam client P2P request from active FnQL server %llu: %s\n",
+		(unsigned long long)serverId,
+		result == FNQL_STEAM_RESULT_OK ? "accepted" : "failed" );
+	if ( result == FNQL_STEAM_RESULT_OK ) {
+		cl_steamAcceptedP2PServer = serverId;
+		cl_steamPendingP2PRemote = 0;
+	}
+}
+
+void CL_SteamP2PFrame( void ) {
+	static const int statsChannel = 0;
+	static const int voiceChannel = 1;
+	static const uint32_t maxCompressedVoice = 0x4000u;
+	static const uint32_t maxDecompressedVoice = 0x8000u;
+	static const uint32_t sampleRate = 22050u;
+	static const int maxPacketsPerFrame = 64;
+	static const int maxStatsPacketsPerFrame = 8;
+	static const uint32_t maxStatsBytes = 1024u * 1024u;
+	uint64_t serverId = 0;
+	const qboolean hasVoice = FNQL_Steam_Available( FNQL_STEAM_CAP_VOICE );
+	if ( cls.state != CA_ACTIVE && cl_steamAcceptedP2PServer ) {
+		(void)FNQL_Steam_CloseP2PSession( FNQL_STEAM_ROLE_CLIENT,
+			cl_steamAcceptedP2PServer );
+		cl_steamAcceptedP2PServer = 0;
+	}
+	if ( !FNQL_Steam_Available( FNQL_STEAM_CAP_CLIENT_P2P )
+		|| !CL_Steam_GetCurrentServerP2PIdentity( &serverId ) ) return;
+	if ( cl_steamAcceptedP2PServer != serverId ) {
+		cl_steamAcceptedP2PServer = 0;
+		if ( cl_steamPendingP2PRemote != serverId ) {
+			if ( cl_steamPendingP2PRemote ) cl_steamPendingP2PRemote = 0;
+			return;
+		}
+		if ( FNQL_Steam_AcceptP2PSession( FNQL_STEAM_ROLE_CLIENT, serverId )
+			!= FNQL_STEAM_RESULT_OK ) return;
+		cl_steamAcceptedP2PServer = serverId;
+		cl_steamPendingP2PRemote = 0;
+		Com_DPrintf( "Accepted deferred Steam P2P request from active FnQL server %llu.\n",
+			(unsigned long long)serverId );
+	}
+	if ( hasVoice && cl_steamVoiceRecording ) {
+		byte compressedVoice[maxCompressedVoice];
+		uint32_t compressedSize = 0;
+		if ( FNQL_Steam_GetCompressedVoice( compressedVoice,
+			sizeof( compressedVoice ), &compressedSize ) == FNQL_STEAM_RESULT_OK
+			&& compressedSize > 0u && compressedSize <= sizeof( compressedVoice ) ) {
+			if ( FNQL_Steam_SendP2PPacket( FNQL_STEAM_ROLE_CLIENT, serverId,
+				compressedVoice, compressedSize, 1u, voiceChannel )
+				== FNQL_STEAM_RESULT_OK && !cl_steamVoicePacketLogged ) {
+				cl_steamVoicePacketLogged = qtrue;
+				Com_DPrintf( "Steam voice P2P packet sent: %u bytes.\n",
+					compressedSize );
+			}
+		}
+	}
+	for ( int packetIndex = 0; packetIndex < maxStatsPacketsPerFrame;
+		++packetIndex ) {
+		uint32_t packetSize = 0;
+		if ( FNQL_Steam_PeekP2PPacket( FNQL_STEAM_ROLE_CLIENT, statsChannel,
+			&packetSize ) != FNQL_STEAM_RESULT_OK ) break;
+		if ( packetSize == 0 || packetSize > maxStatsBytes ) {
+			Com_Printf( S_COLOR_YELLOW
+				"Rejected invalid Steam stats packet (%u bytes).\n", packetSize );
+			break;
+		}
+		byte *compressed = static_cast<byte *>( Z_Malloc( packetSize ) );
+		char *json = static_cast<char *>( Z_Malloc( maxStatsBytes + 1u ) );
+		if ( !compressed || !json ) {
+			if ( json ) Z_Free( json );
+			if ( compressed ) Z_Free( compressed );
+			break;
+		}
+		uint32_t bytesRead = 0;
+		uint64_t remoteId = 0;
+		const fnqlSteamResult_t readResult = FNQL_Steam_ReadP2PPacket(
+			FNQL_STEAM_ROLE_CLIENT, statsChannel, compressed, packetSize,
+			&bytesRead, &remoteId );
+		unsigned long jsonSize = maxStatsBytes;
+		if ( readResult == FNQL_STEAM_RESULT_OK && remoteId == serverId
+			&& bytesRead > 0u && bytesRead <= packetSize
+			&& QZ_Uncompress( reinterpret_cast<unsigned char *>( json ),
+				&jsonSize, compressed, bytesRead ) == 0
+			&& jsonSize > 1u && jsonSize <= maxStatsBytes ) {
+			json[jsonSize] = '\0';
+			const char first = json[0];
+			const char last = json[jsonSize - 1u];
+			if ( ( first == '{' && last == '}' )
+				|| ( first == '[' && last == ']' ) ) {
+				Com_DPrintf( "Steam stats P2P report decoded: %lu bytes.\n",
+					jsonSize );
+				CL_WebHost_PublishDynamicJsonEvent( "game.stats.report", json );
+			}
+		}
+		Z_Free( json );
+		Z_Free( compressed );
+	}
+
+	if ( !hasVoice ) return;
+	for ( int packetIndex = 0; packetIndex < maxPacketsPerFrame; ++packetIndex ) {
+		uint32_t packetSize = 0;
+		if ( FNQL_Steam_PeekP2PPacket( FNQL_STEAM_ROLE_CLIENT, voiceChannel,
+			&packetSize ) != FNQL_STEAM_RESULT_OK ) break;
+		if ( packetSize <= 1u || packetSize > maxCompressedVoice + 1u ) {
+			Com_Printf( S_COLOR_YELLOW
+				"Rejected invalid Steam voice relay packet (%u bytes).\n", packetSize );
+			break;
+		}
+		byte *packet = static_cast<byte *>( Z_Malloc( packetSize ) );
+		if ( !packet ) break;
+		uint32_t bytesRead = 0;
+		uint64_t remoteId = 0;
+		const fnqlSteamResult_t readResult = FNQL_Steam_ReadP2PPacket(
+			FNQL_STEAM_ROLE_CLIENT, voiceChannel, packet, packetSize,
+			&bytesRead, &remoteId );
+		if ( readResult != FNQL_STEAM_RESULT_OK || remoteId != serverId
+			|| bytesRead <= 1u || bytesRead > packetSize ) {
+			Z_Free( packet );
+			continue;
+		}
+		const int sender = packet[0];
+		if ( sender >= MAX_CLIENTS || CL_IsVoiceSenderMuted( sender ) ) {
+			Z_Free( packet );
+			continue;
+		}
+		byte pcm[maxDecompressedVoice];
+		uint32_t pcmSize = 0;
+		if ( FNQL_Steam_DecompressVoice( packet + 1, bytesRead - 1u, pcm,
+			sizeof( pcm ), &pcmSize, sampleRate ) == FNQL_STEAM_RESULT_OK
+			&& pcmSize >= 2u && pcmSize <= sizeof( pcm ) && !( pcmSize & 1u ) ) {
+			CL_SetClientSpeakingState( sender, qtrue );
+			S_RawSamples( static_cast<int>( pcmSize / 2u ),
+				static_cast<int>( sampleRate ), 2, 1, pcm, 1.0f );
+		}
+		Z_Free( packet );
+	}
+}
+
+static void CL_Steam_PublishUserStats( const fnqlSteamEvent_t *event ) {
+	static const size_t payloadCapacity = 256u * 1024u;
+	char *json;
+	char eventName[112];
+	fnqlSteamFriend_t friendInfo = {};
+	char escapedPersona[FNQL_STEAM_NAME_CAPACITY * 2];
+	size_t statsRead = 0;
+	size_t achievementsRead = 0;
+	size_t displayAttributesRead = 0;
+	const bool readValues = event->result == FNQL_STEAM_RESULT_OK
+		&& FNQL_Steam_Available( FNQL_STEAM_CAP_CLIENT_STATS );
+
+	json = static_cast<char *>( Z_Malloc( payloadCapacity ) );
+	if ( !json ) return;
+	json[0] = '\0';
+	friendInfo.size = sizeof( friendInfo );
+	escapedPersona[0] = '\0';
+	if ( FNQL_Steam_GetFriend( event->subject_id, &friendInfo )
+		== FNQL_STEAM_RESULT_OK ) {
+		CL_WebUI_JsonEscape( friendInfo.persona_name, escapedPersona,
+			sizeof( escapedPersona ) );
+	}
+	bool complete = CL_WebUI_AppendJsonFormattedIfFits( json,
+		payloadCapacity, "{\"ID\":\"%llu\",\"NAME\":\"%s\",\"STATS\":{",
+		(unsigned long long)event->subject_id, escapedPersona );
+	for ( size_t i = 0; complete && i < fnql::steam::stats::FieldNames.size(); ++i ) {
+		int32_t value = 0;
+		const char *name = fnql::steam::stats::FieldNames[i].data();
+		if ( readValues ) {
+			if ( FNQL_Steam_GetClientUserStatI32( event->subject_id, name, &value )
+				== FNQL_STEAM_RESULT_OK ) ++statsRead;
+		}
+		complete = CL_WebUI_AppendJsonFormattedIfFits( json, payloadCapacity,
+			"%s\"%s\":%d", i ? "," : "", name, value );
+	}
+	complete = complete && CL_WebUI_AppendJsonLiteralIfFits( json,
+		payloadCapacity, "},\"ACHIEVEMENTS\":{" );
+	for ( size_t i = 0; complete && i < fnql::steam::stats::AchievementNames.size(); ++i ) {
+		const char *name = fnql::steam::stats::AchievementNames[i].data();
+		char displayName[256];
+		char description[256];
+		char escapedName[sizeof( displayName ) * 2];
+		char escapedDescription[sizeof( description ) * 2];
+		qboolean unlocked = qfalse;
+		uint32_t unlockTime = 0;
+		displayName[0] = '\0';
+		description[0] = '\0';
+		if ( FNQL_Steam_GetAchievementDisplayAttribute( name, "name",
+			displayName, sizeof( displayName ) ) == FNQL_STEAM_RESULT_OK ) {
+			++displayAttributesRead;
+		}
+		if ( FNQL_Steam_GetAchievementDisplayAttribute( name, "desc",
+			description, sizeof( description ) ) == FNQL_STEAM_RESULT_OK ) {
+			++displayAttributesRead;
+		}
+		if ( readValues ) {
+			if ( FNQL_Steam_GetClientUserAchievement( event->subject_id, name,
+				&unlocked, &unlockTime ) == FNQL_STEAM_RESULT_OK ) {
+				++achievementsRead;
+			}
+		}
+		CL_WebUI_JsonEscape( displayName, escapedName, sizeof( escapedName ) );
+		CL_WebUI_JsonEscape( description, escapedDescription,
+			sizeof( escapedDescription ) );
+		complete = CL_WebUI_AppendJsonFormattedIfFits( json, payloadCapacity,
+			"%s\"%s\":{\"ID\":\"%s\",\"NAME\":\"%s\",\"DESC\":\"%s\",\"UNLOCKED\":%d,\"TIME_UNLOCKED\":%u}",
+			i ? "," : "", name, name, escapedName, escapedDescription,
+			unlocked ? 1 : 0, unlockTime );
+	}
+	complete = complete && CL_WebUI_AppendJsonLiteralIfFits( json,
+		payloadCapacity, "}}" );
+	if ( complete ) {
+		Com_sprintf( eventName, sizeof( eventName ),
+			"users.stats.%llu.received", (unsigned long long)event->subject_id );
+		CL_WebHost_PublishDynamicJsonEvent( eventName, json );
+		Com_DPrintf( "Steam user stats publication built for %llu: read %u/%u stats, %u/%u achievements, %u/%u display attributes.\n",
+			(unsigned long long)event->subject_id,
+			(unsigned int)statsRead,
+			(unsigned int)fnql::steam::stats::FieldNames.size(),
+			(unsigned int)achievementsRead,
+			(unsigned int)fnql::steam::stats::AchievementNames.size(),
+			(unsigned int)displayAttributesRead,
+			(unsigned int)( fnql::steam::stats::AchievementNames.size() * 2u ) );
+	} else {
+		Com_Printf( S_COLOR_YELLOW
+			"Steam user-stats publication exceeded its bounded payload.\n" );
+	}
+	Z_Free( json );
+}
+
+static void CL_Steam_PublishLobbyEnter( uint64_t lobbyId ) {
+	static const uint32_t maxMembers = 512;
+	static const uint32_t maxDataItems = 256;
+	static const size_t payloadCapacity = 1024u * 1024u;
+	uint32_t memberCount = 0;
+	uint32_t memberLimit = 0;
+	uint32_t dataCount = 0;
+	uint64_t ownerId = 0;
+	fnqlSteamLobbyMember_t *members = NULL;
+	fnqlSteamLobbyData_t *data = NULL;
+	char *json = NULL;
+	char eventName[96];
+	fnqlSteamStatus_t status = {};
+	bool complete = false;
+
+	const fnqlSteamResult_t memberQuery = FNQL_Steam_GetLobbyMembers( lobbyId,
+		NULL, 0, &memberCount, &ownerId, &memberLimit );
+	const fnqlSteamResult_t dataQuery = FNQL_Steam_GetLobbyData( lobbyId, NULL,
+		0, &dataCount );
+	if ( ( memberQuery != FNQL_STEAM_RESULT_OK
+			&& memberQuery != FNQL_STEAM_RESULT_BUFFER_TOO_SMALL )
+		|| ( dataQuery != FNQL_STEAM_RESULT_OK
+			&& dataQuery != FNQL_STEAM_RESULT_BUFFER_TOO_SMALL )
+		|| memberCount > maxMembers || dataCount > maxDataItems ) return;
+	if ( memberCount ) members = static_cast<fnqlSteamLobbyMember_t *>(
+		Z_Malloc( sizeof( *members ) * memberCount ) );
+	if ( dataCount ) data = static_cast<fnqlSteamLobbyData_t *>(
+		Z_Malloc( sizeof( *data ) * dataCount ) );
+	json = static_cast<char *>( Z_Malloc( payloadCapacity ) );
+	if ( ( memberCount && !members ) || ( dataCount && !data ) || !json ) goto cleanup;
+	if ( FNQL_Steam_GetLobbyMembers( lobbyId, members, memberCount, &memberCount,
+		&ownerId, &memberLimit ) != FNQL_STEAM_RESULT_OK
+		|| FNQL_Steam_GetLobbyData( lobbyId, data, dataCount, &dataCount )
+			!= FNQL_STEAM_RESULT_OK ) goto cleanup;
+	status.size = sizeof( status );
+	(void)FNQL_Steam_GetStatus( &status );
+	json[0] = '\0';
+	complete = CL_WebUI_AppendJsonFormattedIfFits( json, payloadCapacity,
+		"{\"id\":\"%llu\",\"is_owner\":%s,\"owner\":\"%llu\",\"lobbydata\":{",
+		(unsigned long long)lobbyId,
+		status.local_steam_id && status.local_steam_id == ownerId ? "true" : "false",
+		(unsigned long long)ownerId );
+	for ( uint32_t i = 0; complete && i < dataCount; ++i ) {
+		char boundedValue[256];
+		char escapedKey[FNQL_STEAM_NAME_CAPACITY * 2];
+		char escapedValue[sizeof( boundedValue ) * 2];
+		Q_strncpyz( boundedValue, data[i].value, sizeof( boundedValue ) );
+		CL_WebUI_JsonEscape( data[i].key, escapedKey, sizeof( escapedKey ) );
+		CL_WebUI_JsonEscape( boundedValue, escapedValue, sizeof( escapedValue ) );
+		complete = CL_WebUI_AppendJsonFormattedIfFits( json, payloadCapacity,
+			"%s\"%s\":\"%s\"", i ? "," : "", escapedKey, escapedValue );
+	}
+	complete = complete && CL_WebUI_AppendJsonFormattedIfFits( json,
+		payloadCapacity, "},\"num_players\":%u,\"max_players\":%u,\"players\":{",
+		memberCount, memberLimit );
+	for ( uint32_t i = 0; complete && i < memberCount; ++i ) {
+		char escapedName[FNQL_STEAM_NAME_CAPACITY * 2];
+		CL_WebUI_JsonEscape( members[i].persona_name, escapedName,
+			sizeof( escapedName ) );
+		complete = CL_WebUI_AppendJsonFormattedIfFits( json, payloadCapacity,
+			"%s\"%llu\":{\"id\":\"%llu\",\"name\":\"%s\"}",
+			i ? "," : "", (unsigned long long)members[i].steam_id,
+			(unsigned long long)members[i].steam_id, escapedName );
+	}
+	complete = complete && CL_WebUI_AppendJsonLiteralIfFits( json,
+		payloadCapacity, "}}" );
+	if ( complete ) {
+		Com_sprintf( eventName, sizeof( eventName ), "lobby.%llu.enter",
+			(unsigned long long)lobbyId );
+		CL_WebHost_PublishDynamicJsonEvent( eventName, json );
+		Com_DPrintf( "Steam lobby projection built: %u members, %u metadata entries.\n",
+			memberCount, dataCount );
+	}
+
+cleanup:
+	if ( json ) Z_Free( json );
+	if ( data ) Z_Free( data );
+	if ( members ) Z_Free( members );
+}
+
+static void CL_Steam_OnProviderEvent( const fnqlSteamEvent_t *event, void *context ) {
+	char payload[CL_WEB_EVENT_PAYLOAD_LENGTH];
+	(void)context;
+
+	if ( !event || event->size < sizeof( *event ) ) {
+		return;
+	}
+	switch ( event->type ) {
+		case FNQL_STEAM_EVENT_SERVER_LIST_START:
+			CL_Steam_ResetServerResponseList( cl_webui.serverRefreshSource );
+			break;
+		case FNQL_STEAM_EVENT_SERVER_RESPONSE: {
+			char escapedName[256];
+			char escapedMap[128];
+			char escapedTags[256];
+			CL_Steam_StoreServerResponse( &event->server );
+			CL_WebUI_JsonEscape( event->server.server_name, escapedName, sizeof( escapedName ) );
+			CL_WebUI_JsonEscape( event->server.map, escapedMap, sizeof( escapedMap ) );
+			CL_WebUI_JsonEscape( event->server.game_tags, escapedTags, sizeof( escapedTags ) );
+			Com_sprintf( payload, sizeof( payload ),
+				"{\"ip\":%u,\"port\":%u,\"queryPort\":%u,\"ping\":%d,\"name\":\"%s\",\"map\":\"%s\",\"players\":%d,\"maxPlayers\":%d,\"bots\":%d,\"password\":%s,\"secure\":%s,\"steamId\":\"%llu\",\"tags\":\"%s\"}",
+				event->server.ip, (unsigned int)event->server.connection_port,
+				(unsigned int)event->server.query_port, event->server.ping,
+				escapedName, escapedMap, event->server.players,
+				event->server.max_players, event->server.bot_players,
+				event->server.password_protected ? "true" : "false",
+				event->server.secure ? "true" : "false",
+				(unsigned long long)event->server.steam_id, escapedTags );
+			CL_WebView_PublishEvent( "servers.refresh.response", payload );
+			break;
+		}
+		case FNQL_STEAM_EVENT_SERVER_LIST_COMPLETE:
+			CL_WebHost_PublishServerBrowserRefreshEnd();
+			break;
+		case FNQL_STEAM_EVENT_SERVER_DETAIL_RESPONSE:
+			if ( cl_webui.serverDetailSteam ) {
+				CL_WebHost_PublishSteamServerDetailResponse( &event->server );
+			}
+			break;
+		case FNQL_STEAM_EVENT_SERVER_DETAIL_PLAYER:
+			if ( cl_webui.serverDetailSteam ) {
+				CL_WebHost_PublishSteamServerDetailPlayer( event );
+			}
+			break;
+		case FNQL_STEAM_EVENT_SERVER_DETAIL_RULE:
+			if ( cl_webui.serverDetailSteam ) {
+				CL_WebHost_PublishServerDetailRuleResponse( event->text, event->detail );
+			}
+			break;
+		case FNQL_STEAM_EVENT_SERVER_DETAIL_COMPLETE:
+			if ( cl_webui.serverDetailSteam && cl_webui.serverDetailActive ) {
+				if ( event->flags & 2u ) CL_WebHost_PublishServerDetailPlayersEnd();
+				else CL_WebHost_PublishServerDetailPlayersFailed();
+				if ( event->flags & 4u ) CL_WebHost_PublishServerDetailRulesEnd();
+				else CL_WebHost_PublishServerDetailRulesFailed();
+				if ( event->flags & 1u ) {
+					CL_WebHost_ClearServerDetailRequest();
+				} else {
+					cl_webui.serverDetailSteam = qfalse;
+					cl_webui.serverDetailTimeoutTime = cls.realtime +
+						CL_WEB_SERVER_DETAILS_TIMEOUT_MSEC;
+					Cbuf_ExecuteText( EXEC_APPEND, va( "serverstatus %s\n",
+						NET_AdrToStringwPort( &cl_webui.serverDetailAddress ) ) );
+				}
+			}
+			break;
+		case FNQL_STEAM_EVENT_RICH_PRESENCE_JOIN_REQUESTED:
+			CL_Steam_OnRichPresenceJoinRequested( event->text );
+			break;
+		case FNQL_STEAM_EVENT_GAME_SERVER_CHANGE_REQUESTED:
+			CL_Steam_OnGameServerChangeRequested( event->text, event->detail );
+			break;
+		case FNQL_STEAM_EVENT_LOBBY_CREATED: {
+			if ( event->result == FNQL_STEAM_RESULT_OK ) {
+				cl_webui.activeLobbyId = event->subject_id;
+				(void)FNQL_Steam_SetLobbyData( event->subject_id, "hello", "world" );
+			}
+			Com_sprintf( payload, sizeof( payload ),
+				"{\"lobbyId\":\"%llu\",\"result\":%d}",
+				(unsigned long long)event->subject_id, event->result );
+			CL_WebView_PublishEvent( "steam.lobby.created", payload );
+			if ( event->result == FNQL_STEAM_RESULT_OK ) {
+				char eventName[96];
+				Com_sprintf( eventName, sizeof( eventName ), "lobby.%llu.create",
+					(unsigned long long)event->subject_id );
+				Com_sprintf( payload, sizeof( payload ),
+					"{\"id\":\"%llu\",\"status\":1}",
+					(unsigned long long)event->subject_id );
+				CL_WebView_PublishEvent( eventName, payload );
+			} else {
+				Com_sprintf( payload, sizeof( payload ),
+					"{\"code\":%d,\"message\":\"Unable to create lobby\"}",
+					event->result );
+				CL_WebView_PublishEvent( "lobby.error", payload );
+			}
+			break;
+		}
+		case FNQL_STEAM_EVENT_LOBBY_ENTERED:
+			if ( event->result == FNQL_STEAM_RESULT_OK ) {
+				cl_webui.activeLobbyId = event->subject_id;
+			}
+			Com_sprintf( payload, sizeof( payload ),
+				"{\"lobbyId\":\"%llu\",\"result\":%d}",
+				(unsigned long long)event->subject_id, event->result );
+			CL_WebView_PublishEvent( "steam.lobby.entered", payload );
+			if ( event->result == FNQL_STEAM_RESULT_OK ) {
+				CL_Steam_PublishLobbyEnter( event->subject_id );
+			}
+			break;
+		case FNQL_STEAM_EVENT_LOBBY_LEFT:
+			cl_webui.activeLobbyId = 0;
+			CL_WebView_PublishEvent( "steam.lobby.left", NULL );
+			break;
+		case FNQL_STEAM_EVENT_LOBBY_CHAT_MESSAGE: {
+			char escapedMessage[FNQL_STEAM_TEXT_CAPACITY * 2];
+			char escapedName[FNQL_STEAM_NAME_CAPACITY * 2];
+			char eventName[96];
+			fnqlSteamFriend_t sender = {};
+			sender.size = sizeof( sender );
+			escapedName[0] = '\0';
+			if ( FNQL_Steam_GetFriend( event->value, &sender )
+				== FNQL_STEAM_RESULT_OK ) {
+				CL_WebUI_JsonEscape( sender.persona_name, escapedName,
+					sizeof( escapedName ) );
+			}
+			CL_WebUI_JsonEscape( event->text, escapedMessage,
+				sizeof( escapedMessage ) );
+			Com_sprintf( payload, sizeof( payload ),
+				"{\"id\":\"%llu\",\"name\":\"%s\",\"msg\":\"%s\"}",
+				(unsigned long long)event->value, escapedName, escapedMessage );
+			Com_sprintf( eventName, sizeof( eventName ), "lobby.%llu.chat",
+				(unsigned long long)event->subject_id );
+			CL_WebView_PublishEvent( eventName, payload );
+			break;
+		}
+		case FNQL_STEAM_EVENT_LOBBY_CHAT_UPDATE: {
+			char eventName[112];
+			char escapedName[FNQL_STEAM_NAME_CAPACITY * 2];
+			fnqlSteamFriend_t changedUser = {};
+			changedUser.size = sizeof( changedUser );
+			escapedName[0] = '\0';
+			if ( FNQL_Steam_GetFriend( event->value, &changedUser )
+				== FNQL_STEAM_RESULT_OK ) {
+				CL_WebUI_JsonEscape( changedUser.persona_name, escapedName,
+					sizeof( escapedName ) );
+			}
+			Com_sprintf( payload, sizeof( payload ),
+				"{\"id\":\"%llu\",\"name\":\"%s\",\"state\":%u,\"changedBy\":\"%s\"}",
+				(unsigned long long)event->value, escapedName, event->flags,
+				event->detail );
+			Com_sprintf( eventName, sizeof( eventName ), "lobby.%llu.user.%s",
+				(unsigned long long)event->subject_id,
+				( event->flags & 1u ) ? "joined" : "left" );
+			CL_WebView_PublishEvent( eventName, payload );
+			break;
+		}
+		case FNQL_STEAM_EVENT_LOBBY_DATA_UPDATED: {
+			char eventName[96];
+			Com_sprintf( payload, sizeof( payload ),
+				"{\"id\":\"%llu\",\"memberId\":\"%llu\",\"result\":%d}",
+				(unsigned long long)event->subject_id,
+				(unsigned long long)event->value, event->result );
+			Com_sprintf( eventName, sizeof( eventName ), "lobby.%llu.updated",
+				(unsigned long long)event->subject_id );
+			CL_WebView_PublishEvent( eventName, payload );
+			break;
+		}
+		case FNQL_STEAM_EVENT_LOBBY_GAME_CREATED: {
+			char eventName[96];
+			Com_sprintf( payload, sizeof( payload ),
+				"{\"ip\":%u,\"port\":%u,\"id\":\"%llu\",\"serverId\":\"%llu\"}",
+				event->server.ip, (unsigned int)event->server.connection_port,
+				(unsigned long long)event->subject_id,
+				(unsigned long long)event->value );
+			Com_sprintf( eventName, sizeof( eventName ), "lobby.%llu.game_created",
+				(unsigned long long)event->subject_id );
+			CL_WebView_PublishEvent( eventName, payload );
+			break;
+		}
+		case FNQL_STEAM_EVENT_LOBBY_KICKED: {
+			char eventName[96];
+			if ( cl_webui.activeLobbyId == event->subject_id ) {
+				cl_webui.activeLobbyId = 0;
+			}
+			Com_sprintf( payload, sizeof( payload ),
+				"{\"id\":\"%llu\",\"adminId\":\"%llu\",\"disconnected\":%s}",
+				(unsigned long long)event->subject_id,
+				(unsigned long long)event->value,
+				event->flags ? "true" : "false" );
+			Com_sprintf( eventName, sizeof( eventName ), "lobby.%llu.kicked",
+				(unsigned long long)event->subject_id );
+			CL_WebView_PublishEvent( eventName, payload );
+			break;
+		}
+		case FNQL_STEAM_EVENT_LOBBY_JOIN_REQUESTED: {
+			char eventName[104];
+			Com_sprintf( payload, sizeof( payload ),
+				"{\"id\":\"%llu\",\"friendId\":\"%llu\"}",
+				(unsigned long long)event->subject_id,
+				(unsigned long long)event->value );
+			Com_sprintf( eventName, sizeof( eventName ), "lobby.%llu.join_requested",
+				(unsigned long long)event->subject_id );
+			CL_WebView_PublishEvent( eventName, payload );
+			break;
+		}
+		case FNQL_STEAM_EVENT_UGC_DOWNLOAD_COMPLETE:
+		case FNQL_STEAM_EVENT_UGC_ITEM_INSTALLED: {
+			char escapedFolder[FNQL_STEAM_TEXT_CAPACITY * 2];
+			CL_WebUI_JsonEscape( event->text, escapedFolder,
+				sizeof( escapedFolder ) );
+			Com_sprintf( payload, sizeof( payload ),
+				"{\"itemId\":\"%llu\",\"result\":%d,\"folder\":\"%s\",\"sizeOnDisk\":\"%llu\",\"timestamp\":%u}",
+				(unsigned long long)event->subject_id, event->result, escapedFolder,
+				(unsigned long long)event->value, event->flags );
+			CL_WebView_PublishEvent(
+				event->type == FNQL_STEAM_EVENT_UGC_ITEM_INSTALLED
+					? "web.ugc.item.installed" : "web.ugc.download.complete",
+				payload );
+			break;
+		}
+		case FNQL_STEAM_EVENT_UGC_QUERY_COMPLETE:
+			if ( event->result == FNQL_STEAM_RESULT_OK
+				&& CL_Steam_ConsumeUgcQueryResults() ) break;
+			CL_WebHost_UpdateBrowserUGCList( "[]" );
+			CL_WebView_PublishEvent( "web.ugc.failed", NULL );
+			break;
+		case FNQL_STEAM_EVENT_MICROTRANSACTION_AUTHORIZATION:
+			Com_sprintf( payload, sizeof( payload ),
+				"{\"appid\":%u,\"orderid\":\"%llu\",\"authorized\":%u}",
+				event->flags, (unsigned long long)event->subject_id,
+				event->value ? 1u : 0u );
+			Com_DPrintf( "Steam microtransaction authorization: appid=%u order=%llu authorized=%u\n",
+				event->flags, (unsigned long long)event->subject_id,
+				event->value ? 1u : 0u );
+			CL_WebView_PublishEvent( "microtxn.authorization", payload );
+			break;
+		case FNQL_STEAM_EVENT_P2P_SESSION_REQUEST:
+		case FNQL_STEAM_EVENT_P2P_SESSION_FAILURE:
+			CL_Steam_HandleP2PEvent( event );
+			break;
+		case FNQL_STEAM_EVENT_AVATAR_IMAGE_LOADED:
+			CL_InvalidateAvatarImageHandle( event->subject_id );
+			Com_sprintf( payload, sizeof( payload ),
+				"{\"steamId\":\"%llu\",\"width\":%u,\"height\":%u}",
+				(unsigned long long)event->subject_id, event->flags & 0xffffu,
+				event->flags >> 16 );
+			CL_WebView_PublishEvent( "steam.avatar.loaded", payload );
+			break;
+		case FNQL_STEAM_EVENT_PERSONA_STATE_CHANGED:
+		case FNQL_STEAM_EVENT_FRIEND_RICH_PRESENCE_UPDATED: {
+			fnqlSteamFriend_t friendInfo = {};
+			char friendJson[4096];
+			char eventName[112];
+			friendInfo.size = sizeof( friendInfo );
+			friendJson[0] = '\0';
+			if ( FNQL_Steam_GetFriend( event->subject_id, &friendInfo )
+				== FNQL_STEAM_RESULT_OK ) {
+				CL_WebHost_FormatSteamFriendEventJson( &friendInfo,
+					friendJson, sizeof( friendJson ) );
+			}
+			if ( !friendJson[0] ) {
+				Com_sprintf( friendJson, sizeof( friendJson ),
+					"{\"id\":\"%llu\",\"steamId\":\"%llu\"}",
+					(unsigned long long)event->subject_id,
+					(unsigned long long)event->subject_id );
+			}
+			if ( event->type == FNQL_STEAM_EVENT_PERSONA_STATE_CHANGED ) {
+				if ( event->flags & 0x40u ) {
+					CL_InvalidateAvatarImageHandle( event->subject_id );
+				}
+				Com_sprintf( payload, sizeof( payload ),
+					"{\"id\":\"%llu\",\"state\":%u,\"friend\":%s}",
+					(unsigned long long)event->subject_id, event->flags,
+					friendJson );
+				Com_sprintf( eventName, sizeof( eventName ),
+					"users.persona.%llu.change",
+					(unsigned long long)event->subject_id );
+			} else {
+				char escapedStatus[FNQL_STEAM_TEXT_CAPACITY * 2];
+				char escapedLanIp[128];
+				CL_WebUI_JsonEscape( friendInfo.status, escapedStatus,
+					sizeof( escapedStatus ) );
+				CL_WebUI_JsonEscape( friendInfo.lan_ip, escapedLanIp,
+					sizeof( escapedLanIp ) );
+				Com_sprintf( payload, sizeof( payload ),
+					"{\"id\":\"%llu\",\"status\":\"%s\",\"lanIp\":\"%s\",\"friend\":%s}",
+					(unsigned long long)event->subject_id, escapedStatus,
+					escapedLanIp, friendJson );
+				Com_sprintf( eventName, sizeof( eventName ),
+					"users.presence.%llu.change",
+					(unsigned long long)event->subject_id );
+			}
+			CL_WebView_PublishEvent( eventName, payload );
+			break;
+		}
+		case FNQL_STEAM_EVENT_USER_STATS_RECEIVED:
+			CL_Steam_PublishUserStats( event );
+			Com_sprintf( payload, sizeof( payload ),
+				"{\"steamId\":\"%llu\",\"result\":%d}",
+				(unsigned long long)event->subject_id, event->result );
+			CL_WebView_PublishEvent( "steam.userstats.received", payload );
+			break;
+		case FNQL_STEAM_EVENT_OVERLAY_STATE:
+			CL_WebView_PublishEvent( "steam.overlay.active", event->text );
+			break;
+		case FNQL_STEAM_EVENT_WARNING:
+			Com_Printf( S_COLOR_YELLOW "Steam provider: %s\n", event->detail );
+			break;
+		default:
+			break;
+	}
+}
+
 qboolean CL_Steam_OpenOverlayUrl( const char *url ) {
 	if ( !url || !url[0] ) {
 		return qfalse;
 	}
-
+	if ( CL_Steam_ResultAccepted( FNQL_Steam_OpenOverlayUrl( url ) ) ) {
+		return qtrue;
+	}
 	return CL_WebHost_SteamBridgeUnavailable( "OpenSteamOverlayURL", url );
 }
 
 void CL_Steam_OnRichPresenceJoinRequested( const char *command ) {
+	const char *connectCommand = command;
+	if ( connectCommand && connectCommand[0] == '+' ) {
+		connectCommand++;
+	}
+	if ( CL_Steam_SafeCommandText( connectCommand )
+		&& !Q_stricmpn( connectCommand, "connect ", 8 ) ) {
+		Cbuf_ExecuteText( EXEC_APPEND, va( "%s\n", connectCommand ) );
+		CL_WebView_PublishEvent( "steam.rich_presence_join_requested", NULL );
+		return;
+	}
 	CL_Steam_LogOnlineCallbackIgnored(
 		"rich_presence_join_requested",
-		( command && command[0] ) ? "Steamworks callback bridge unavailable" : "missing join command" );
+		( command && command[0] ) ? "unsafe or unsupported join command" : "missing join command" );
 }
 
 void CL_Steam_OnGameServerChangeRequested( const char *server, const char *password ) {
-	(void)password;
+	if ( CL_Steam_SafeCommandText( server ) ) {
+		Cvar_Set( "password", password ? password : "" );
+		Cbuf_ExecuteText( EXEC_APPEND, va( "connect %s\n", server ) );
+		CL_WebView_PublishEvent( "steam.server_change_requested", NULL );
+		return;
+	}
 	CL_Steam_LogOnlineCallbackIgnored(
 		"server_change_requested",
-		( server && server[0] ) ? "Steamworks callback bridge unavailable" : "missing server target" );
+		( server && server[0] ) ? "unsafe server target" : "missing server target" );
 }
 
 qboolean CL_Steam_CreateLobby( void ) {
+	int maxMembers = Cvar_VariableIntegerValue( "steam_maxLobbyClients" );
+	if ( maxMembers < 1 ) {
+		maxMembers = 1;
+	} else if ( maxMembers > 64 ) {
+		maxMembers = 64;
+	}
+	if ( CL_Steam_ResultAccepted( FNQL_Steam_CreateLobby( 1u, (uint32_t)maxMembers ) ) ) {
+		return qtrue;
+	}
 	return CL_WebHost_SteamBridgeUnavailable( "createlobby", "" );
 }
 
 qboolean CL_Steam_LeaveLobby( void ) {
+	if ( CL_Steam_ResultAccepted( FNQL_Steam_LeaveLobby( cl_webui.activeLobbyId ) ) ) {
+		cl_webui.activeLobbyId = 0;
+		return qtrue;
+	}
 	return CL_WebHost_SteamBridgeUnavailable( "leavelobby", "" );
 }
 
 qboolean CL_Steam_JoinLobby( const char *lobbyId ) {
+	uint64_t parsedLobbyId;
+	if ( CL_Steam_ParseIdentity( lobbyId, &parsedLobbyId )
+		&& CL_Steam_ResultAccepted( FNQL_Steam_JoinLobby( parsedLobbyId ) ) ) {
+		cl_webui.activeLobbyId = parsedLobbyId;
+		return qtrue;
+	}
 	return CL_WebHost_SteamBridgeUnavailable( "joinlobby", lobbyId ? lobbyId : "" );
 }
 
 qboolean CL_Steam_SetLobbyServer( unsigned int serverIp, unsigned short serverPort ) {
 	char payload[64];
 
+	if ( CL_Steam_ResultAccepted( FNQL_Steam_SetLobbyServer(
+		cl_webui.activeLobbyId, serverIp, serverPort, 0 ) ) ) {
+		return qtrue;
+	}
 	Com_sprintf( payload, sizeof( payload ), "%u\n%u", serverIp, (unsigned int)serverPort );
 	return CL_WebHost_SteamBridgeUnavailable( "setlobbyserver", payload );
 }
 
 qboolean CL_Steam_ShowInviteOverlay( void ) {
+	if ( CL_Steam_ResultAccepted( FNQL_Steam_OpenOverlayUser(
+		"LobbyInvite", cl_webui.activeLobbyId ) ) ) {
+		return qtrue;
+	}
 	return CL_WebHost_SteamBridgeUnavailable( "showinviteoverlay", "" );
 }
 
 qboolean CL_Steam_Invite( const char *steamId ) {
+	uint64_t parsedSteamId;
+	if ( CL_Steam_ParseIdentity( steamId, &parsedSteamId ) ) {
+		if ( cls.state != CA_ACTIVE ) {
+			if ( CL_Steam_ResultAccepted( FNQL_Steam_InviteToLobby(
+				cl_webui.activeLobbyId, parsedSteamId ) ) ) return qtrue;
+		} else {
+			uint64_t serverId = 0;
+			char connectString[128];
+			/* Only advertise a target whose retail configstring proves it is an
+			 * FnQL Steam peer; never turn this into a retail-server invite path. */
+			if ( CL_Steam_GetCurrentServerP2PIdentity( &serverId ) ) {
+				Com_sprintf( connectString, sizeof( connectString ), "+connect %s",
+					NET_AdrToStringwPort( &clc.serverAddress ) );
+				if ( CL_Steam_ResultAccepted( FNQL_Steam_InviteToGame(
+					parsedSteamId, connectString ) ) ) return qtrue;
+			}
+		}
+	}
 	return CL_WebHost_SteamBridgeUnavailable( "invite", steamId ? steamId : "" );
 }
 
 qboolean CL_Steam_SayLobby( const char *message ) {
+	const uint32_t length = message ? (uint32_t)strlen( message ) + 1u : 0u;
+	if ( length > 1u && CL_Steam_ResultAccepted( FNQL_Steam_SendLobbyChat(
+		cl_webui.activeLobbyId, message, length ) ) ) {
+		return qtrue;
+	}
 	return CL_WebHost_SteamBridgeUnavailable( "saylobby", message ? message : "" );
 }
 
 qboolean CL_Steam_RequestAllUGC( int filter ) {
 	char payload[32];
+	uint32_t count = 0;
+	uint64_t *itemIds = NULL;
+	char *json = NULL;
+	fnqlSteamResult_t result;
+	qboolean success = qfalse;
 
 	Com_sprintf( payload, sizeof( payload ), "%d", filter );
+	if ( FNQL_Steam_Available( FNQL_STEAM_CAP_UGC_QUERY ) ) {
+		result = FNQL_Steam_RequestUgcQuery( (uint32_t)filter );
+		if ( result == FNQL_STEAM_RESULT_PENDING ) return qtrue;
+		CL_WebHost_UpdateBrowserUGCList( "[]" );
+		CL_WebView_PublishEvent( "web.ugc.failed", NULL );
+		return CL_WebHost_SteamBridgeUnavailable( "getallugc", payload );
+	}
+	result = FNQL_Steam_GetSubscribedItems( NULL, 0, &count );
+	if ( result == FNQL_STEAM_RESULT_OK && count == 0 ) {
+		CL_WebHost_UpdateBrowserUGCList( "[]" );
+		CL_WebView_PublishEvent( "web.ugc.complete", NULL );
+		return qtrue;
+	}
+	if ( result == FNQL_STEAM_RESULT_BUFFER_TOO_SMALL && count > 0 && count <= 4096u ) {
+		itemIds = (uint64_t *)Z_Malloc( sizeof( *itemIds ) * count );
+		json = (char *)Z_Malloc( CL_WEB_CATALOG_JSON_LENGTH );
+	}
+	if ( itemIds && json
+		&& FNQL_Steam_GetSubscribedItems( itemIds, count, &count ) == FNQL_STEAM_RESULT_OK ) {
+		static const uint32_t steamItemStateInstalled = 1u << 2;
+		json[0] = '\0';
+		CL_WebUI_AppendJsonLiteralIfFits( json, CL_WEB_CATALOG_JSON_LENGTH, "[" );
+		for ( uint32_t i = 0; i < count; ++i ) {
+			uint32_t stateFlags = 0;
+			uint64_t sizeOnDisk = 0;
+			uint32_t timestamp = 0;
+			char folder[FNQL_STEAM_PATH_CAPACITY];
+			char escapedFolder[FNQL_STEAM_PATH_CAPACITY * 2];
+			folder[0] = '\0';
+			escapedFolder[0] = '\0';
+			(void)FNQL_Steam_GetItemState( itemIds[i], &stateFlags );
+			if ( stateFlags & steamItemStateInstalled ) {
+				if ( FNQL_Steam_GetItemInstallInfo( itemIds[i], folder,
+					sizeof( folder ), &sizeOnDisk, &timestamp ) ==
+					FNQL_STEAM_RESULT_OK ) {
+					CL_WebUI_JsonEscape( folder, escapedFolder,
+						sizeof( escapedFolder ) );
+				}
+			}
+			if ( !CL_WebUI_AppendJsonFormattedIfFits( json, CL_WEB_CATALOG_JSON_LENGTH,
+				"%s{\"publishedFileId\":\"%llu\",\"id\":\"%llu\",\"state\":%u,\"installed\":%s,\"folder\":\"%s\",\"sizeOnDisk\":\"%llu\",\"timestamp\":%u}",
+				i ? "," : "", (unsigned long long)itemIds[i],
+				(unsigned long long)itemIds[i], stateFlags,
+				( stateFlags & steamItemStateInstalled ) ? "true" : "false",
+				escapedFolder, (unsigned long long)sizeOnDisk, timestamp ) ) {
+				break;
+			}
+		}
+		CL_WebUI_AppendJsonLiteralIfFits( json, CL_WEB_CATALOG_JSON_LENGTH, "]" );
+		CL_WebHost_UpdateBrowserUGCList( json );
+		CL_WebView_PublishEvent( "web.ugc.complete", NULL );
+		success = qtrue;
+	}
+	if ( json ) {
+		Z_Free( json );
+	}
+	if ( itemIds ) {
+		Z_Free( itemIds );
+	}
+	if ( success ) {
+		return qtrue;
+	}
 	CL_WebHost_UpdateBrowserUGCList( "[]" );
 	CL_WebView_PublishEvent( "web.ugc.failed", NULL );
 	return CL_WebHost_SteamBridgeUnavailable( "getallugc", payload );
 }
 
 qboolean CL_Steam_RequestUserStats( const char *steamId ) {
+	uint64_t parsedSteamId;
+	if ( CL_Steam_ParseIdentity( steamId, &parsedSteamId )
+		&& CL_Steam_ResultAccepted( FNQL_Steam_RequestClientUserStats(
+			parsedSteamId ) ) ) {
+		return qtrue;
+	}
 	return CL_WebHost_SteamBridgeUnavailable( "requestuserstats", steamId ? steamId : "" );
 }
 
 qboolean CL_Steam_ActivateOverlayToUser( const char *dialog, const char *steamId ) {
 	char payload[MAX_TOKEN_CHARS];
 
+	uint64_t parsedSteamId;
+	if ( dialog && dialog[0] && CL_Steam_ParseIdentity( steamId, &parsedSteamId )
+		&& CL_Steam_ResultAccepted( FNQL_Steam_OpenOverlayUser( dialog, parsedSteamId ) ) ) {
+		return qtrue;
+	}
 	Com_sprintf( payload, sizeof( payload ), "%s\n%s", dialog ? dialog : "", steamId ? steamId : "" );
 	return CL_WebHost_SteamBridgeUnavailable( "activategameoverlaytouser", payload );
 }
 
 qboolean CL_Steam_GetItemDownloadInfo( unsigned int itemIdLow, unsigned int itemIdHigh, unsigned long long *outDownloaded, unsigned long long *outTotal ) {
-	(void)itemIdLow;
-	(void)itemIdHigh;
-
+	uint64_t downloaded = 0;
+	uint64_t total = 0;
 	if ( outDownloaded ) {
 		*outDownloaded = 0ull;
 	}
@@ -3723,7 +5463,17 @@ qboolean CL_Steam_GetItemDownloadInfo( unsigned int itemIdLow, unsigned int item
 		*outTotal = 0ull;
 	}
 
-	return qfalse;
+	if ( !outDownloaded || !outTotal ) {
+		return qfalse;
+	}
+	if ( FNQL_Steam_GetItemDownloadInfo(
+		( (uint64_t)itemIdHigh << 32 ) | itemIdLow,
+		&downloaded, &total ) != FNQL_STEAM_RESULT_OK ) {
+		return qfalse;
+	}
+	*outDownloaded = (unsigned long long)downloaded;
+	*outTotal = (unsigned long long)total;
+	return qtrue;
 }
 
 static void CL_Steam_OverlayCommand_f( void ) {
@@ -4342,6 +6092,18 @@ void CL_WebView_PublishGameStartForAddress( const netadr_t *serverAddress ) {
 			port = PORT_SERVER;
 		}
 	}
+	if ( serverAddress->type == NA_LOOPBACK &&
+		FNQL_Steam_Available( FNQL_STEAM_CAP_GAME_SERVER_METADATA ) ) {
+		uint32_t publicIp = 0;
+		if ( FNQL_Steam_GetGameServerPublicIp( &publicIp ) ==
+			FNQL_STEAM_RESULT_OK && publicIp != 0u ) {
+			packedIp = publicIp;
+			const int configuredPort = Cvar_VariableIntegerValue( "net_port" );
+			if ( configuredPort > 0 && configuredPort <= 65535 ) {
+				port = static_cast<unsigned int>( configuredPort );
+			}
+		}
+	}
 
 	Com_sprintf( payload, sizeof( payload ), "{\"ip\":%u,\"port\":%u}", packedIp, port );
 	CL_WebView_PublishEvent( "game.start", payload );
@@ -4561,6 +6323,8 @@ static void CL_WebUI_BackendReleaseResource( void *,
 
 qboolean CL_Awesomium_Startup( const char *runtimePath, const char *basePath, const char *playerName, unsigned int appId, unsigned int steamIdLow, unsigned int steamIdHigh, int width, int height, const char *initialConfigJson, const char *initialMapJson, const char *initialFactoryJson ) {
 	fnql::webui::StartupParameters parameters;
+	char *startupScript;
+	qboolean started;
 	parameters.runtimePath = runtimePath ? runtimePath : "";
 	parameters.basePath = basePath ? basePath : "";
 	parameters.playerName = playerName ? playerName : "";
@@ -4573,8 +6337,20 @@ qboolean CL_Awesomium_Startup( const char *runtimePath, const char *basePath, co
 	parameters.initialConfigJson = initialConfigJson ? initialConfigJson : "";
 	parameters.initialMapJson = initialMapJson ? initialMapJson : "";
 	parameters.initialFactoryJson = initialFactoryJson ? initialFactoryJson : "";
-	return CL_WebUI_RecordBackendResult(
+
+	startupScript = static_cast<char *>( Z_Malloc( CL_WEB_STARTUP_SCRIPT_LENGTH ) );
+	if ( !startupScript ) {
+		return CL_WebUI_RecordBackendResult( fnql::webui::BackendResult::Failure(
+			fnql::webui::BackendError::ResourceUnavailable,
+			"WebUI startup script allocation failed" ) );
+	}
+	CL_WebHost_BuildStartupBridgeScript(
+		startupScript, CL_WEB_STARTUP_SCRIPT_LENGTH );
+	parameters.startupScript = startupScript;
+	started = CL_WebUI_RecordBackendResult(
 		fnql::webui::ClientBackendHost().Start( parameters ) );
+	Z_Free( startupScript );
+	return started;
 }
 
 qboolean CL_Awesomium_OpenURL( const char *url ) {

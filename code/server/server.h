@@ -180,6 +180,10 @@ typedef struct client_s {
 	sharedEntity_t	*gentity;			// SV_GentityNum(clientnum)
 	char			name[MAX_NAME_LENGTH];			// extracted from userinfo, high bits masked
 	char			platformSteamId[SV_PLATFORM_STEAM_ID_SIZE];	// server-owned QL SteamID
+	uint64_t		platformSteamIdValue;				// parsed provider identity
+	qboolean		platformAuthSession;				// provider auth session is active
+	qboolean		platformAuthValidated;			// provider delivered a successful auth result
+	uint32_t		platformAuthStartedTime;			// wrap-safe timeout origin for pending auth
 
 	gameStateAck_t	gamestateAck;
 	qboolean		downloading;		// set at "download", reset at gamestate retransmission
@@ -383,6 +387,9 @@ void Zmq_BroadcastRconOutput( const char *message );
 void Zmq_SubmitMatchReport( const void *report );
 void Zmq_ReportPlayerEvent( unsigned int steamIdLow, unsigned int steamIdHigh,
 	const void *clientStats, const char *eventName, const void *payload );
+void Zmq_SubmitMatchReportJson( const char *json );
+void Zmq_SubmitMatchSummaryJson( const char *json );
+void Zmq_ReportPlayerEventJson( const char *eventName, const char *json );
 qboolean Zmq_RconActive( void );
 
 
@@ -403,7 +410,7 @@ void SV_SpawnServer( const char *mapname, qboolean killBots );
 //
 // sv_client.cpp
 //
-void SV_GetChallenge( const netadr_t *from );
+void SV_GetChallenge( const netadr_t *from, const msg_t *msg );
 void SV_InitChallenger( void );
 
 void SV_DirectConnect( const netadr_t *from );
@@ -470,6 +477,12 @@ const char	*SV_GetWorkshopPolicyLabel( void );
 const char	*SV_GetServerStatsProviderLabel( void );
 const char	*SV_GetServerStatsPolicyLabel( void );
 void		SV_RefreshPlatformServiceCvars( void );
+void		SV_RegisterSteamEventSink( void );
+void		SV_SteamGameServerStart( const char *mapName );
+void		SV_SteamGameServerStop( void );
+void		SV_SteamP2PFrame( void );
+void		SV_SteamP2PCloseClient( uint64_t steamId );
+void		SV_SteamHandleIncomingPacket( const netadr_t *from, const msg_t *msg );
 void		SV_GameRefreshRankingsPolicyCvars( void );
 void		SV_ShutdownGameProgs ( void );
 void		SV_RestartGameProgs( void );
@@ -481,6 +494,9 @@ qboolean	SV_SteamStats_HasAchievement( int clientNum, int achievementId );
 const void	*SV_SteamStats_ProcessMatchReport( const void *report, char *buffer, int bufferSize );
 void		SV_SteamStats_ProcessEvent( unsigned int steamIdLow, unsigned int steamIdHigh,
 				const void *clientStats, const char *eventName, const void *payload );
+void		SV_FlushAllSteamStats( void );
+void		SV_HandleSteamProviderEvent( unsigned int type, int result,
+				uint64_t subjectId );
 qboolean	SV_GameShouldSuppressVoiceToClient( int senderClientNum, int recipientClientNum );
 qboolean	SV_GameIsClientAdmin( int clientNum );
 qboolean	SV_GameAreEnemyClients( int clientNumA, int clientNumB );

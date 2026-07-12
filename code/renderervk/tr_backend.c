@@ -1364,6 +1364,57 @@ static qboolean RB_DlightShadowsNeeded( void )
 	return qfalse;
 }
 
+void RE_DrawWebUISurface( int x, int y, int w, int h, int cols, int rows,
+	const byte *data, qboolean dirty ) {
+	image_t *image;
+
+	if ( !tr.registered || !data || cols <= 0 || rows <= 0 ) {
+		return;
+	}
+
+	if ( !tr.webUIImage ) {
+		tr.webUIImage = R_CreateImage(
+			"*webui", NULL, (byte *)data, cols, rows,
+			IMGFLAG_CLAMPTOEDGE | IMGFLAG_NO_COMPRESSION | IMGFLAG_NOSCALE );
+		if ( !tr.webUIImage ) {
+			return;
+		}
+		tr.webUIShader = RE_RegisterShaderFromImage(
+			"*webui", LIGHTMAP_2D, tr.webUIImage, qfalse );
+		dirty = qfalse;
+	}
+
+	image = tr.webUIImage;
+	if ( cols != image->width || rows != image->height ) {
+		image->width = image->uploadWidth = cols;
+		image->height = image->uploadHeight = rows;
+#ifdef USE_VULKAN
+		vk_create_image( image, cols, rows, 1 );
+		vk_upload_image_data( image, 0, 0, cols, rows, 1,
+			(byte *)data, cols * rows * 4, qfalse );
+#else
+		GL_Bind( image );
+		qglTexImage2D( GL_TEXTURE_2D, 0, image->internalFormat,
+			cols, rows, 0, GL_RGBA, GL_UNSIGNED_BYTE, data );
+		qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+		qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+		qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, gl_clamp_mode );
+		qglTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, gl_clamp_mode );
+#endif
+	} else if ( dirty ) {
+#ifdef USE_VULKAN
+		vk_upload_image_data( image, 0, 0, cols, rows, 1,
+			(byte *)data, cols * rows * 4, qtrue );
+#else
+		GL_Bind( image );
+		qglTexSubImage2D( GL_TEXTURE_2D, 0, 0, 0,
+			cols, rows, GL_RGBA, GL_UNSIGNED_BYTE, data );
+#endif
+	}
+
+	RE_StretchPic( x, y, w, h, 0.0f, 0.0f, 1.0f, 1.0f, tr.webUIShader );
+}
+
 static qboolean RB_ShadowCorrectnessRejectsAlphaTest( const shader_t *shader )
 {
 	int i;

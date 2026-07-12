@@ -25,8 +25,14 @@ extern "C" {
 #include "client.h"
 }
 
+#include "client_cpp.h"
+#include "input_compat.hpp"
+#include "../qcommon/netchan_safety.hpp"
+
 #include <array>
 #include <cstdlib>
+
+using fnql::ScopedFileHandle;
 
 namespace {
 
@@ -82,9 +88,13 @@ static cvar_t *cl_showSend;
 
 static cvar_t *cl_sensitivity;
 static cvar_t *cl_mouseAccel;
+static cvar_t *cl_mouseAccelDebug;
 static cvar_t *cl_mouseAccelOffset;
+static cvar_t *cl_mouseAccelPower;
 static cvar_t *cl_mouseAccelStyle;
+static cvar_t *cl_mouseSensCap;
 static cvar_t *cl_showMouseRate;
+static cvar_t *cl_viewAccel;
 
 static cvar_t *cl_run;
 static cvar_t *cl_freelook;
@@ -101,8 +111,12 @@ static cvar_t *m_yaw;
 static cvar_t *m_forward;
 static cvar_t *m_side;
 static cvar_t *m_filter;
+static cvar_t *m_cpi;
 
 static bool in_mlooking;
+static fnql::input::RetailViewAngleFilter retailMouseFilter;
+static ScopedFileHandle mouseAccelDebugLog;
+static bool mouseAccelDebugOpenFailed;
 
 static void IN_CenterView( void ) {
 	cl.viewangles[PITCH] = -SHORT2ANGLE(cl.snap.ps.delta_angles[PITCH]);
@@ -516,6 +530,116 @@ static void CL_JoystickMove( usercmd_t *cmd ) {
 }
 
 
+static void CL_UpdateMouseAccelDebugLog( bool enabled ) {
+	if ( !enabled ) {
+		mouseAccelDebugLog.reset();
+		mouseAccelDebugOpenFailed = false;
+		return;
+	}
+
+	if ( mouseAccelDebugLog || mouseAccelDebugOpenFailed ) {
+		return;
+	}
+
+	mouseAccelDebugLog.reset( FS_FOpenFileWrite( "mouse.log" ) );
+	if ( !mouseAccelDebugLog ) {
+		mouseAccelDebugOpenFailed = true;
+		Com_Printf( S_COLOR_YELLOW "Could not open mouse.log for cl_mouseAccelDebug\n" );
+		return;
+	}
+
+	static constexpr char header[] = "mx my frame_msec rate power\n";
+	FS_Write( header, static_cast<int>( sizeof( header ) - 1 ), mouseAccelDebugLog.get() );
+}
+
+
+static void CL_LogRetailMouseMotion(
+	const fnql::input::RetailMouseMotion& motion ) {
+	if ( !mouseAccelDebugLog ) {
+		return;
+	}
+
+	std::array<char, 192> line{};
+	const int length = Com_sprintf(
+		line.data(), static_cast<int>( line.size() ), "%g %g %u %g %g\n",
+		motion.sampleX, motion.sampleY, frame_msec, motion.rate,
+		motion.accelerationExponent );
+	if ( length > 0 ) {
+		FS_Write( line.data(), std::min( length, static_cast<int>( line.size() - 1 ) ),
+			mouseAccelDebugLog.get() );
+	}
+}
+
+
+/*
+=================
+CL_RetailMouseMove
+
+Independently implements the retail Quake Live gameplay transform while the
+legacy styles remain available through cl_mouseAccelStyle 0 and 1.
+=================
+*/
+static void CL_RetailMouseMove( usercmd_t *cmd ) {
+	const float rawX = static_cast<float>( cl.mouseDx[cl.mouseIndex] );
+	const float rawY = static_cast<float>( cl.mouseDy[cl.mouseIndex] );
+
+	cl.mouseIndex ^= 1;
+	cl.mouseDx[cl.mouseIndex] = 0;
+	cl.mouseDy[cl.mouseIndex] = 0;
+
+	CL_UpdateMouseAccelDebugLog( cl_mouseAccelDebug->integer != 0 );
+	const int filterSamples = std::clamp(
+		m_filter->integer, 0, fnql::input::kRetailMouseFilterMaximum );
+	if ( rawX == 0.0f && rawY == 0.0f && filterSamples == 0 ) {
+		retailMouseFilter.Reset( { cl.viewangles[YAW], cl.viewangles[PITCH] } );
+		return;
+	}
+
+	fnql::input::RetailMouseParameters parameters;
+	parameters.sensitivity = cl_sensitivity->value;
+	parameters.acceleration = cl_mouseAccel->value;
+	parameters.accelerationOffset = cl_mouseAccelOffset->value;
+	parameters.accelerationPower = cl_mouseAccelPower->value;
+	parameters.sensitivityCap = cl_mouseSensCap->value;
+	parameters.countsPerInch = m_cpi->value;
+	parameters.frameMilliseconds = static_cast<int>( frame_msec );
+	const fnql::input::RetailMouseMotion motion =
+		fnql::input::TranslateRetailMouseMotion( rawX, rawY, parameters );
+
+	CL_LogRetailMouseMotion( motion );
+	if ( cl_showMouseRate->integer && cl_mouseAccel->value != 0.0f ) {
+		Com_Printf( "rate: %g, power: %g, sensitivity: %g\n",
+			motion.rate, motion.accelerationExponent, motion.sensitivity );
+	}
+
+	fnql::input::ViewAngles view = retailMouseFilter.Begin(
+		{ cl.viewangles[YAW], cl.viewangles[PITCH] }, filterSamples );
+	cl.viewangles[YAW] = view.yaw;
+	cl.viewangles[PITCH] = view.pitch;
+
+	const float mx = motion.x * cl.cgameSensitivity;
+	const float my = motion.y * cl.cgameSensitivity;
+	const float viewAxisMultiplier =
+		fnql::input::RetailMouseAxisMultiplier( parameters.countsPerInch );
+
+	if ( in_strafe.active ) {
+		cmd->rightmove = ClampCharMove( cmd->rightmove + m_side->value * mx );
+	} else {
+		cl.viewangles[YAW] -= m_yaw->value * viewAxisMultiplier * mx;
+	}
+
+	if ( ( in_mlooking || cl_freelook->integer ) && !in_strafe.active ) {
+		cl.viewangles[PITCH] += m_pitch->value * viewAxisMultiplier * my;
+	} else {
+		cmd->forwardmove = ClampCharMove( cmd->forwardmove - m_forward->value * my );
+	}
+
+	view = retailMouseFilter.End( { cl.viewangles[YAW], cl.viewangles[PITCH] } );
+	cl.viewangles[YAW] = view.yaw;
+	cl.viewangles[PITCH] = view.pitch;
+}
+
+
 /*
 =================
 CL_MouseMove
@@ -524,6 +648,14 @@ CL_MouseMove
 static void CL_MouseMove( usercmd_t *cmd )
 {
 	float mx, my;
+
+	if ( cl_mouseAccelStyle->integer == 2 ) {
+		CL_RetailMouseMove( cmd );
+		return;
+	}
+
+	CL_UpdateMouseAccelDebugLog( false );
+	retailMouseFilter.Reset( { cl.viewangles[YAW], cl.viewangles[PITCH] } );
 
 	// allow mouse smoothing
 	if (m_filter->integer)
@@ -902,9 +1034,17 @@ void CL_WritePacket( int repeat ) {
 	}
 
 	// write any unacknowledged clientCommands
-	n = clc.reliableSequence - clc.reliableAcknowledge;
+	std::uint32_t pendingReliable = 0;
+	if ( !fnql::net::PendingCounterCount( clc.reliableSequence,
+		clc.reliableAcknowledge, pendingReliable ) ||
+		pendingReliable > MAX_RELIABLE_COMMANDS ) {
+		Com_Error( ERR_DROP, "CL_WritePacket: invalid reliable acknowledgement window" );
+		return;
+	}
+	n = static_cast<int>( pendingReliable );
 	for ( i = 0; i < n; i++ ) {
-		const int index = clc.reliableAcknowledge + 1 + i;
+		const int index = fnql::net::CounterAdd( clc.reliableAcknowledge,
+			static_cast<std::uint32_t>( i + 1 ) );
 		MSG_WriteByte( &buf, clc_clientCommand );
 		MSG_WriteLong( &buf, index );
 		MSG_WriteString( &buf, clc.reliableCommands[ index & ( MAX_RELIABLE_COMMANDS - 1 ) ] );
@@ -1053,20 +1193,38 @@ void CL_InitInput( void ) {
 	Cvar_SetDescription( cl_sensitivity, "Sets base mouse sensitivity (mouse speed)." );
 	Cvar_SetDescription( Cvar_Get( "cg_ignoreMouseInput", "0", CVAR_ROM ), "Read-only Quake Live cgame/UI bridge flag that blocks gameplay mouse deltas while retained overlays own input." );
 	cl_mouseAccel = Cvar_Get( "cl_mouseAccel", "0", CVAR_ARCHIVE_ND );
-	Cvar_SetDescription( cl_mouseAccel, "Toggle the use of mouse acceleration the mouse speeds up or becomes more sensitive as it continues in one direction." );
+	Cvar_SetDescription( cl_mouseAccel, "Mouse acceleration amount. Negative values select Quake Live deceleration when the retail input style is active." );
+	cl_mouseAccelDebug = Cvar_Get( "cl_mouseAccelDebug", "0", CVAR_TEMP );
+	Cvar_SetDescription( cl_mouseAccelDebug, "Write bounded Quake Live mouse-transform diagnostics to mouse.log." );
 	cl_freelook = Cvar_Get( "cl_freelook", "1", CVAR_ARCHIVE_ND );
 	Cvar_SetDescription( cl_freelook, "Allow pitching or up/down look with mouse." );
 
 	// 0: legacy mouse acceleration
-	// 1: new implementation
-	cl_mouseAccelStyle = Cvar_Get( "cl_mouseAccelStyle", "0", CVAR_ARCHIVE_ND );
-	Cvar_SetDescription( cl_mouseAccelStyle, "Choose between two different mouse acceleration styles." );
+	// 1: ioquake3 power implementation
+	// 2: retail Quake Live CPI/acceleration/filter implementation
+	cl_mouseAccelStyle = Cvar_Get( "cl_mouseAccelStyle", "2", CVAR_ARCHIVE_ND );
+	Cvar_CheckRange( cl_mouseAccelStyle, "0", "2", CV_INTEGER );
+	Cvar_SetDescription( cl_mouseAccelStyle,
+		"Mouse transform profile:\n"
+		" 0 - classic FnQ3/ioquake3 acceleration and delta filter\n"
+		" 1 - ioquake3 power acceleration and delta filter\n"
+		" 2 - retail Quake Live CPI, signed acceleration, cap, and view filter" );
 	// offset for the power function (for style 1, ignored otherwise)
 	// this should be set to the max rate value
 	cl_mouseAccelOffset = Cvar_Get( "cl_mouseAccelOffset", "0",
 		CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_CLOUD );
 	Cvar_CheckRange( cl_mouseAccelOffset, "0", "50000", CV_FLOAT );
-	Cvar_SetDescription( cl_mouseAccelOffset, "Sets how much base mouse delta will be doubled by acceleration. Requires 'cl_mouseAccelStyle 1'." );
+	Cvar_SetDescription( cl_mouseAccelOffset, "Acceleration rate offset used by ioquake3 power and retail Quake Live mouse profiles." );
+	cl_mouseAccelPower = Cvar_Get( "cl_mouseAccelPower", "2",
+		CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_CLOUD );
+	Cvar_CheckRange( cl_mouseAccelPower, "0", "16", CV_FLOAT );
+	Cvar_SetDescription( cl_mouseAccelPower, "Quake Live mouse acceleration exponent before the retail power-minus-one transform." );
+	cl_mouseSensCap = Cvar_Get( "cl_mouseSensCap", "0", CVAR_ARCHIVE | CVAR_CLOUD );
+	Cvar_CheckRange( cl_mouseSensCap, "0", "1000", CV_FLOAT );
+	Cvar_SetDescription( cl_mouseSensCap, "Optional upper sensitivity cap for the retail Quake Live mouse profile; zero disables the cap." );
+	cl_viewAccel = Cvar_Get( "cl_viewAccel", "1.7", CVAR_ARCHIVE | CVAR_CLOUD );
+	Cvar_CheckRange( cl_viewAccel, "0", "8", CV_FLOAT );
+	Cvar_SetDescription( cl_viewAccel, "Quake Live legacy joystick look acceleration exponent." );
 
 	cl_showMouseRate = Cvar_Get( "cl_showMouseRate", "0", 0 );
 	Cvar_SetDescription( cl_showMouseRate, "Prints mouse acceleration info when 'cl_mouseAccel' has a value set (rate of mouse samples per frame)." );
@@ -1085,7 +1243,11 @@ void CL_InitInput( void ) {
 #else
 	m_filter = Cvar_Get( "m_filter", "0", CVAR_ARCHIVE_ND );
 #endif
-	Cvar_SetDescription( m_filter, "Toggle use of mouse 'smoothing'." );
+	Cvar_CheckRange( m_filter, "0", "31", CV_INTEGER );
+	Cvar_SetDescription( m_filter, "Mouse smoothing strength. Styles 0/1 use the legacy two-delta average; style 2 averages 1-31 completed view angles like retail Quake Live." );
+	m_cpi = Cvar_Get( "m_cpi", "0", CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_CLOUD );
+	Cvar_CheckRange( m_cpi, "0", "100000", CV_FLOAT );
+	Cvar_SetDescription( m_cpi, "Physical mouse counts per inch for Quake Live input normalization; zero preserves count-based input." );
 }
 
 
@@ -1095,5 +1257,8 @@ CL_ClearInput
 ============
 */
 void CL_ClearInput( void ) {
+	mouseAccelDebugLog.reset();
+	mouseAccelDebugOpenFailed = false;
+	retailMouseFilter.Reset();
 	IN_RemoveCommandBindings();
 }

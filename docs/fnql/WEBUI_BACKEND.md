@@ -1,108 +1,103 @@
 # WebUI runtime backend boundary
 
-FnQL keeps the retail Quake Live WebUI path default-off and preserves the
-native UI as the fallback. The engine does not bundle Awesomium, load an
-unverified SDK DLL, or reproduce Awesomium C++ object layouts.
+FnQL presents the retail Quake Live WebUI on Windows x86 by adapting the
+Awesomium runtime from the user's legitimate retail installation. FnQL does
+not bundle Awesomium, copy its runtime into packages, import proprietary SDK
+headers, or reproduce C++ object layouts. Other platforms and x64 builds keep
+the deterministic native-UI fallback.
 
-## Static evidence
+The Windows x86 default is enabled because retail QL ships only 32-bit game
+modules and Awesomium. `cl_webuiEnable 0` remains an explicit opt-out. Runtime
+discovery is rooted in the configured QL base/home and executable paths and
+fails closed if `awesomium.dll`, `awesomium_process.exe`, `web.pak`, or a
+required generated C export is unavailable.
 
-The following are source observations, not claims from a live retail probe:
+## Verified retail runtime observations
 
-- FnQL already exposes the retail-shaped `CL_Awesomium_*` host façade and the
-  `asset://ql/` resource resolver, but its runtime methods were deterministic
-  stubs.
-- The QLSRP `cl_awesomium_win32.cpp` reference models a core/session/view
-  lifecycle followed by URL navigation, per-frame pumping, software-surface
-  queries and copies, input injection, JavaScript calls, and reverse-order
-  shutdown.
-- The QLSRP reference mixes documented-style C exports with decorated MSVC C++
-  imports, generated director callbacks, object upcasts, and inferred vtable
-  slots. Those boundaries are compiler-, architecture-, and SDK-version-
-  sensitive. They are not sufficient evidence for FnQL to call them safely.
-- The QLSRP host reference starts the runtime from the home/base paths, player
-  identity, render dimensions, and initial configuration/map/factory
-  snapshots. FnQL can prepare those values without importing the reference
-  implementation structure.
+The following facts were observed in windowed 2026-07-10/11 probes against the
+user's legitimate Steam installation; they are not inferred from QLSRP:
 
-Retail behavior remains authoritative. A future adapter must record the exact
-retail executable and external runtime versions used by its validation probes;
-QLSRP evidence alone is not enough to declare compatibility.
+- `awesomium.dll` reports Awesomium 1.7.4.2 and starts the retail
+  `awesomium_process.exe` helper.
+- The local retail `web.pak` is Chromium DataPack v4 with 1,024 resources.
+- A `QL` DataPak source resolves `asset://ql/index.html` into a live offscreen
+  view and exposes a non-power-of-two 1280×720 software surface.
+- The engine-owned pre-document bridge makes `qz_instance` available during
+  page bootstrap. The live page subsequently issued native bridge requests.
+- Engine renderer screenshots showed the complete retail menu surface under
+  OpenGL, OpenGL2, GLx, and Vulkan,
+  including Play, Statistics, Steam Workshop, Steam Community, Settings,
+  friends/lobby, and the retail background.
+- A Vulkan `vid_restart` rebuilt the renderer while retaining the browser
+  document and reproduced the identical full-menu screenshot without an engine
+  or Awesomium diagnostic.
+- Starting the legacy DataPak loader after Vulkan initialization made the same
+  verified absolute `web.pak` path fail with `DataPak.cc(102)` in the 32-bit
+  process. Starting WebCore and the DataPak source during the existing
+  pre-renderer client bootstrap loaded the same package successfully; the
+  provisional 1280x720 view then resized to the renderer dimensions.
 
-## Implemented boundary
+QLSRP was used separately as behavioral and ABI evidence for the expected
+core/session/view lifecycle and generated export names. The FnQL adapter is an
+independent typed implementation. Retail behavior remains authoritative.
 
-`code/client/webui_backend.hpp` defines a versioned, browser-neutral C++17
-contract with:
+## Implemented architecture
 
-- explicit non-owning backend installation and allocator ownership;
-- a guarded dormant/starting/running/failed lifecycle;
-- typed startup identity, surface size/format, input, script, and status data;
-- balanced request/release callbacks for bounded launcher resources, without
-  exposing the engine allocator to an adapter;
-- an `asset://ql/` navigation origin lock, exact request-size handling, and
-  checked UTF-16-to-UTF-8 decoding before privileged native dispatch;
-- 512 MiB archive and 64 MiB per-resource limits with checked filesystem reads;
-- checked row strides, capacities, dimensions, and surface-format matching;
-- bounded copied diagnostics rather than borrowed error pointers;
-- capability discovery for software surfaces and integer script results;
-- cleanup of partial startup failures and explicit failed-state recovery; and
-- a deterministic null backend on every platform.
+`code/client/webui_backend.hpp` defines a versioned browser-neutral C++17
+contract with explicit lifecycle, surface, input, navigation, script, resource,
+status, and ownership rules. `awesomium_backend_win32.cpp` implements the
+Windows x86 adapter around the runtime's generated stdcall C exports:
 
-The existing C-shaped `CL_Awesomium_*` façade delegates to this host. Runtime
-startup remains opt-in through both `cl_webuiEnable` and explicit backend
-installation. With no adapter installed, all availability cvars and native UI
-fallback behavior remain unchanged.
+- absolute-path DLL loading with dependency search rooted beside the selected
+  runtime and a legacy-Windows fallback that still uses an absolute path;
+- exact required-export validation before any runtime object is created;
+- owned UTF-8/UTF-16 conversion and copied diagnostics;
+- reverse-order cleanup of partial or complete startup;
+- WebCore, bitmap factory, WebSession, `QL` DataPak source, and offscreen
+  WebView ownership;
+- pre-renderer DataPak startup with a bounded provisional surface, followed by
+  normal renderer-driven resize, so the 32-bit Vulkan path does not contend
+  with the legacy package loader during its initial reservation;
+- pre-document and post-navigation qz bridge injection;
+- bounded script results and software-surface copies;
+- resize, focus, pause, mouse, wheel, keyboard, cache, reload, crash, and
+  loading-state operations; and
+- no Steamworks success emulation. Unavailable social/online operations remain
+  explicit and do not prevent the offline retail menu from rendering.
 
-Backend installation is intentionally a source/build integration seam, not a
-binary C++ plugin ABI. A Windows adapter may contain the unsafe SDK-facing
-details while presenting only this typed contract to the rest of the client.
-If a binary plugin is later required, it needs a separately versioned C ABI;
-the C++ interface must not be exported directly across arbitrary toolchains.
+The legacy native-UI `web_stopRefresh` verb is deliberately non-destructive
+when the live browser owns the document. Retail does not register it as an
+Awesomium navigation-stop command, and aborting an in-flight `index.html`
+load can leave Chromium's `chrome://chromewebdata/` error document active.
+Bridge retries use a private lightweight qz synchronizer rather than calling a
+page-owned `main_hook_v2` repeatedly after startup.
 
-## Non-regression gate
+The renderer API owns a dedicated arbitrary-size RGBA WebUI image and shader in
+OpenGL, OpenGL2, GLx, and Vulkan. It does not consume cinematic handles or
+inherit the cinematic power-of-two restriction. Native UI ownership transfers
+only after a live Awesomium bitmap surface and renderer presenter both exist.
 
-The deterministic fake backend tests cover:
+## Safety and non-regression
 
-- default null-backend behavior and explicit availability;
-- interface-version rejection;
-- startup, repeated start/resize, shutdown, replacement, crash, and retry;
-- partial-start cleanup;
-- navigation and script forwarding;
-- rejection of foreign navigation origins and ambiguous native request text;
-- integer script results;
-- typed mouse, wheel, keyboard, focus, pause, cache, and reload operations;
-- malformed, undersized, mismatched, padded, and successful surface copies; and
-- balanced browser resource request/release callbacks.
+- Privileged navigation remains locked to `asset://ql/`.
+- Browser resources remain bounded by the checked WebPak/launcher resolver.
+- The retail runtime and assets remain external and are never release inputs.
+- x64, Linux, and macOS retain the null backend and native UI fallback.
+- A missing, incompatible, or crashed browser yields to the native UI instead
+  of making the engine unusable.
+- `web_status` reports bounded document/backend state and `web_dumpSurface`
+  captures the copied CPU bitmap for renderer-independent diagnosis.
+- `FNQL_WEBUI_VERBOSE_LOG=1` enables the retail runtime's verbose log level for
+  an explicit diagnostic launch; normal launches retain the runtime default.
+- The typed fake-backend suite continues to cover interface mismatch, lifecycle,
+  crash/retry, navigation, scripts, input, surface bounds, and balanced resource
+  ownership without requiring the proprietary runtime.
 
-The client currently refuses to report a drawable browser overlay even when a
-backend exposes a surface. This is deliberate: the existing cinematic scratch
-API has power-of-two and shared-slot assumptions, so reusing it would risk
-renderer and cinematic regressions. Browser input and overlay ownership remain
-with the native UI until a dedicated presentation path exists.
+## Runtime validation
 
-## Remaining runtime work
-
-1. Establish a legitimate retail probe matrix: retail executable hash,
-   Awesomium SDK/runtime version, helper executable, exported symbol set, pixel
-   format, load callbacks, and shutdown behavior on Windows x86.
-2. Design an optional Windows-x86 adapter target that is excluded by default
-   and discovers only an explicitly configured external runtime. It must fail
-   closed on version/export mismatch and never search arbitrary working
-   directories.
-3. Prefer evidenced C exports. Any unavoidable decorated C++ import needs an
-   exact version/toolchain gate, isolated ownership, and focused failure tests;
-   inferred vtable offsets are not an acceptable general ABI.
-4. Add a renderer-neutral dynamic RGBA upload/presentation export with its own
-   resource ownership. Validate non-power-of-two dimensions, resize, alpha,
-   row padding, device loss, renderer restart, and simultaneous cinematics in
-   every supported renderer.
-5. Project load, window-object, cursor, tooltip, dialog, and resource callbacks
-   into browser-neutral events. Keep filesystem requests bounded by the
-   existing launcher resolver and keep Steam-backed resources unavailable
-   until the Steamworks compatibility slice provides them.
-6. Validate startup, navigation, script bridge, resize, focus, crash recovery,
-   cache clearing, and teardown against retail assets in windowed mode. Add
-   regression probes for the native UI, renderer switching, cinematics, and
-   platforms where no browser backend exists.
-
-Until those gates pass, the runtime is a tested integration boundary rather
-than a claim of working Awesomium support.
+Promotion still requires the proportionate non-regression matrix: strict x86
+and x64 builds, all source/contract tests, native fallback probes, and windowed
+retail launches. Full-menu screenshots now cover OpenGL, OpenGL2, GLx, and
+Vulkan, including a Vulkan `vid_restart` survival probe. Resize,
+cross-renderer switching, device-loss, simultaneous cinematic, and forced
+child-process failure probes remain useful follow-up stress gates.

@@ -25,6 +25,8 @@ extern "C" {
 #include "client.h"
 }
 
+#include "../renderercommon/ql_font_text.h"
+
 #include <algorithm>
 #include <array>
 
@@ -102,6 +104,7 @@ static cvar_t		*cl_debuggraph;
 static cvar_t		*cl_graphheight;
 static cvar_t		*cl_graphscale;
 static cvar_t		*cl_graphshift;
+static cvar_t		*r_debugFontAtlas;
 
 /*
 ================
@@ -221,45 +224,6 @@ void SCR_DrawPic( float x, float y, float width, float height, qhandle_t hShader
 
 
 /*
-** SCR_DrawChar
-** chars are drawn at 640*480 virtual screen size
-*/
-static void SCR_DrawChar( int x, int y, float size, int ch ) {
-	int row, col;
-	float frow, fcol;
-	float	ax, ay, aw, ah;
-
-	ch &= 255;
-
-	if ( ch == ' ' ) {
-		return;
-	}
-
-	if ( y < -size ) {
-		return;
-	}
-
-	ax = x;
-	ay = y;
-	aw = size;
-	ah = size;
-	SCR_AdjustFrom640( &ax, &ay, &aw, &ah );
-
-	row = ch>>4;
-	col = ch&15;
-
-	frow = row*0.0625;
-	fcol = col*0.0625;
-	size = 0.0625;
-
-	re.DrawStretchPic( ax, ay, aw, ah,
-					   fcol, frow, 
-					   fcol + size, frow + size, 
-					   cls.charSetShader );
-}
-
-
-/*
 ** SCR_DrawSmallChar
 ** small chars are drawn at native screen resolution
 */
@@ -326,56 +290,74 @@ void SCR_DrawSmallString( int x, int y, const char *s, int len ) {
 
 /*
 ==================
-SCR_DrawBigString[Color]
+SCR_DrawStringExt
 
-Draws a multi-colored string with a drop shadow, optionally forcing
-to a fixed color.
+Draws retail client-owned large text through host font 2, optionally forcing
+a fixed color. The deliberately separate small-string API retains the bitmap
+charset contract.
 
 Coordinates are at 640 by 480 virtual resolution
 ==================
 */
 void SCR_DrawStringExt( int x, int y, float size, const char *string, const float *setColor, qboolean forceColor,
 		qboolean noColorEscape ) {
-	vec4_t		color;
-	const char	*s;
-	int			xx;
+	constexpr int hostFontMono = 2;
+	float xscale;
+	float yscale;
+	float hostScale;
+	int screenX;
+	int screenY;
 
-	// draw the drop shadow
-	color[0] = color[1] = color[2] = 0.0;
-	color[3] = setColor[3];
-	ScopedRenderColor scopedColor( color );
-	s = string;
-	xx = x;
-	while ( *s ) {
-		if ( !noColorEscape && Q_IsColorString( s ) ) {
-			s += 2;
-			continue;
-		}
-		SCR_DrawChar( xx+2, y+2, size, *s );
-		xx += size;
-		s++;
+	if ( !string || !string[ 0 ] || !setColor ) {
+		return;
 	}
 
+	xscale = cls.glconfig.vidWidth / 640.0f;
+	yscale = cls.glconfig.vidHeight / 480.0f;
+	hostScale = size * yscale;
+	screenX = static_cast<int>( x * xscale );
+	screenY = static_cast<int>( y * yscale );
 
-	// draw the colored text
-	s = string;
-	xx = x;
-	re.SetColor( setColor );
-	while ( *s ) {
-		if ( Q_IsColorString( s ) ) {
-			if ( !forceColor ) {
-				std::copy_n( g_color_table[ ColorIndexFromChar( *(s+1) ) ], 4, color );
-				color[3] = setColor[3];
-				re.SetColor( color );
+	if ( !noColorEscape ) {
+		RE_DrawScaledText( screenX, screenY, string, hostFontMono,
+			hostScale, -1, nullptr, forceColor, setColor );
+		return;
+	}
+
+	// FnQL's literal-color-code mode is not a retail host-text option. Draw
+	// one decoded scalar at a time so ^0..^7 remain visible without breaking
+	// UTF-8 or diverging from the renderer's glyph advances.
+	{
+		const char *cursor = string;
+		const char *end = string + strlen( string );
+		float penX = static_cast<float>( screenX );
+
+		while ( cursor < end && *cursor ) {
+			const qlFontUtf8Result_t decoded = QL_FontDecodeUtf8( cursor, end );
+			std::array<char, 5> glyphText = {};
+			float extent = 0.0f;
+			int bytes;
+
+			if ( decoded.bytes <= 0 ) {
+				break;
 			}
-			if ( !noColorEscape ) {
-				s += 2;
-				continue;
+			bytes = decoded.bytes < static_cast<int>( glyphText.size() )
+				? decoded.bytes : static_cast<int>( glyphText.size() ) - 1;
+			std::copy_n( cursor, bytes, glyphText.data() );
+			RE_DrawScaledText( RoundToInt( penX ), screenY, glyphText.data(),
+				hostFontMono, hostScale, 1, &extent, qtrue, setColor );
+			if ( extent <= penX ) {
+				float measuredWidth = 0.0f;
+				RE_MeasureScaledText( glyphText.data(), nullptr, hostFontMono,
+					hostScale, 1, &measuredWidth, nullptr, nullptr );
+				extent = penX + measuredWidth;
 			}
+			if ( extent <= penX ) {
+				extent = penX + hostScale * 0.6f;
+			}
+			penX = extent;
+			cursor += decoded.bytes;
 		}
-		SCR_DrawChar( xx, y, size, *s );
-		xx += size;
-		s++;
 	}
 }
 
@@ -460,7 +442,7 @@ int SCR_GetBigStringWidth( const char *str ) {
 
 
 static qboolean SCR_IsHostTextColorEscape( const char *s, const char *end ) {
-	return ( s && *s == Q_COLOR_ESCAPE && ( !end || s + 1 < end ) && s[1] && s[1] != Q_COLOR_ESCAPE ) ? qtrue : qfalse;
+	return QL_FontColorEscape( s, end, nullptr ) ? qtrue : qfalse;
 }
 
 
@@ -499,21 +481,31 @@ static void SCR_DrawHostScaledChar( float x, float y, float width, float height,
 RE_DrawScaledText
 
 Quake Live native UI/cgame pass screen-space coordinates and a host text scale.
-FnQL does not yet carry QL's retained host-font atlas, so draw through the
-existing client charset while preserving QL import semantics.
+The renderer owns the retail TTF faces and retained glyph atlas.  The charset
+lane remains available for renderer builds without FreeType.
 =================
 */
-void RE_DrawScaledText( int x, int y, const char *text, int fontHandle, float scale, int maxX, float *outMaxX, qboolean forceColor, const float *baseColor ) {
+void RE_DrawScaledText( int x, int y, const char *text, int fontHandle, float scale, int limit, float *outMaxX, qboolean forceColor, const float *baseColor ) {
 	vec4_t color;
-	const char *s;
+	const char *cursor;
+	const char *end;
 	float penX;
 	float advance;
 	float height;
-	qboolean hasMaxX;
+	float clipX;
+	qboolean hasClipX;
+	int remaining;
 
-	(void)fontHandle;
+	if ( re.DrawScaledText && re.GetScaledFontMetrics &&
+		re.GetScaledFontMetrics( fontHandle, scale, nullptr, nullptr, nullptr ) ) {
+		re.DrawScaledText( x, y, text, fontHandle, scale, limit, outMaxX,
+			forceColor, baseColor );
+		return;
+	}
 
-	if ( outMaxX ) {
+	clipX = outMaxX ? *outMaxX : 0.0f;
+	hasClipX = outMaxX && clipX > 0.0f ? qtrue : qfalse;
+	if ( outMaxX && !hasClipX ) {
 		*outMaxX = static_cast<float>( x );
 	}
 	if ( !text || !text[0] ) {
@@ -533,36 +525,50 @@ void RE_DrawScaledText( int x, int y, const char *text, int fontHandle, float sc
 	}
 
 	penX = static_cast<float>( x );
-	hasMaxX = maxX > 0 ? qtrue : qfalse;
+	remaining = limit;
 
+	end = text + strlen( text );
 	ScopedRenderColor scopedColor( color );
-	for ( s = text; *s; ++s ) {
+	for ( cursor = text; cursor < end && *cursor; ) {
+		qlFontUtf8Result_t decoded;
 		float glyphMaxX;
+		if ( limit > 0 && remaining <= 0 ) {
+			break;
+		}
 
-		if ( SCR_IsHostTextColorEscape( s, nullptr ) ) {
+		if ( SCR_IsHostTextColorEscape( cursor, end ) ) {
 			if ( !forceColor ) {
 				vec4_t escapedColor;
 
-				std::copy_n( g_color_table[ ColorIndexFromChar( s[1] ) ], 4, escapedColor );
+				std::copy_n( g_color_table[ cursor[ 1 ] - '0' ], 4, escapedColor );
 				escapedColor[3] = color[3];
 				re.SetColor( escapedColor );
 			}
-			++s;
+			cursor += 2;
 			continue;
+		}
+		decoded = QL_FontDecodeUtf8( cursor, end );
+		if ( decoded.bytes <= 0 ) {
+			break;
 		}
 
 		glyphMaxX = penX + advance;
-		if ( hasMaxX && glyphMaxX > static_cast<float>( maxX ) ) {
+		if ( hasClipX && glyphMaxX > clipX ) {
 			if ( outMaxX ) {
-				*outMaxX = 0.0f;
+				*outMaxX = penX;
 			}
 			break;
 		}
 
-		SCR_DrawHostScaledChar( penX, static_cast<float>( y ), advance, height, *s );
+		SCR_DrawHostScaledChar( penX, static_cast<float>( y ), advance, height,
+			decoded.codepoint <= 255 ? static_cast<int>( decoded.codepoint ) : '?' );
 		penX = glyphMaxX;
-		if ( outMaxX ) {
+		cursor += decoded.bytes;
+		if ( outMaxX && !hasClipX ) {
 			*outMaxX = glyphMaxX;
+		}
+		if ( limit > 0 ) {
+			--remaining;
 		}
 	}
 }
@@ -573,15 +579,21 @@ void RE_DrawScaledText( int x, int y, const char *text, int fontHandle, float sc
 RE_MeasureScaledText
 =================
 */
-void RE_MeasureScaledText( const char *text, const char *end, int fontHandle, float scale, int maxX, float *outWidth, float *outHeight, float *outLeft ) {
-	const char *s;
+void RE_MeasureScaledText( const char *text, const char *end, int fontHandle, float scale, int limit, float *outWidth, float *outHeight, float *outLeft ) {
+	const char *cursor;
+	const char *textEnd;
 	float width;
 	float height;
 	float advance;
 	qboolean drewGlyph;
-	qboolean hasMaxX;
+	int remaining;
 
-	(void)fontHandle;
+	if ( re.MeasureScaledText && re.GetScaledFontMetrics &&
+		re.GetScaledFontMetrics( fontHandle, scale, nullptr, nullptr, nullptr ) ) {
+		re.MeasureScaledText( text, end, fontHandle, scale, limit,
+			outWidth, outHeight, outLeft );
+		return;
+	}
 
 	if ( outWidth ) {
 		*outWidth = 0.0f;
@@ -604,23 +616,32 @@ void RE_MeasureScaledText( const char *text, const char *end, int fontHandle, fl
 
 	width = 0.0f;
 	drewGlyph = qfalse;
-	hasMaxX = maxX > 0 ? qtrue : qfalse;
+	remaining = limit;
 
-	for ( s = text; *s && ( !end || s < end ); ++s ) {
+	textEnd = end ? end : text + strlen( text );
+	for ( cursor = text; cursor < textEnd && *cursor; ) {
+		qlFontUtf8Result_t decoded;
 		float glyphMaxX;
-
-		if ( SCR_IsHostTextColorEscape( s, end ) ) {
-			++s;
-			continue;
-		}
-
-		glyphMaxX = width + advance;
-		if ( hasMaxX && glyphMaxX > static_cast<float>( maxX ) ) {
+		if ( limit > 0 && remaining <= 0 ) {
 			break;
 		}
 
+		if ( SCR_IsHostTextColorEscape( cursor, textEnd ) ) {
+			cursor += 2;
+			continue;
+		}
+		decoded = QL_FontDecodeUtf8( cursor, textEnd );
+		if ( decoded.bytes <= 0 ) {
+			break;
+		}
+
+		glyphMaxX = width + advance;
 		width = glyphMaxX;
 		drewGlyph = qtrue;
+		cursor += decoded.bytes;
+		if ( limit > 0 ) {
+			--remaining;
+		}
 	}
 
 	if ( outWidth ) {
@@ -654,10 +675,12 @@ static void SCR_DrawDemoRecording( void ) {
 
 	if (cl_drawRecording->integer == 1) {
 		Com_sprintf( string.data(), static_cast<int>( string.size() ), "RECORDING %s: %ik", clc.recordNameShort, pos / 1024 );
-		SCR_DrawStringExt( 320 - strlen( string.data() ) * 4, 20, 8, string.data(), g_color_table[ ColorIndex( COLOR_WHITE ) ], qtrue, qfalse );
+		SCR_DrawStringExt( static_cast<int>( ( 80 - strlen( string.data() ) ) * 4 ),
+			420, 8, string.data(), g_color_table[ ColorIndex( COLOR_WHITE ) ], qtrue, qfalse );
 	} else if (cl_drawRecording->integer == 2) {
-		Com_sprintf( string.data(), static_cast<int>( string.size() ), "RECORDING: %ik", pos / 1024 );
-		SCR_DrawStringExt( 320 - strlen( string.data() ) * 4, 20, 8, string.data(), g_color_table[ ColorIndex( COLOR_WHITE ) ], qtrue, qfalse );
+		SCR_DrawPic( 1, 470, 11, 11, cls.recordShader );
+		SCR_DrawStringExt( 9, 477, 8, "REC",
+			g_color_table[ ColorIndex( COLOR_WHITE ) ], qtrue, qfalse );
 	}
 }
 
@@ -852,6 +875,7 @@ void SCR_Init( void ) {
 	cl_graphheight = Cvar_Get ("graphheight", "32", CVAR_CHEAT);
 	cl_graphscale = Cvar_Get ("graphscale", "1", CVAR_CHEAT);
 	cl_graphshift = Cvar_Get ("graphshift", "0", CVAR_CHEAT);
+	r_debugFontAtlas = Cvar_Get( "r_debugFontAtlas", "0", CVAR_TEMP );
 
 	scr_initialized = true;
 }
@@ -864,6 +888,41 @@ SCR_Done
 */
 void SCR_Done( void ) {
 	scr_initialized = false;
+}
+
+
+static void SCR_DrawFontAtlasDebug( void ) {
+	int atlasWidth = 0;
+	int atlasHeight = 0;
+	qhandle_t shader;
+	float scale = 1.0f;
+	float maxWidth;
+	float maxHeight;
+
+	if ( !r_debugFontAtlas || !r_debugFontAtlas->integer ||
+		!re.GetFontAtlasDebugShader ) {
+		return;
+	}
+	shader = re.GetFontAtlasDebugShader( &atlasWidth, &atlasHeight );
+	if ( !shader || atlasWidth <= 0 || atlasHeight <= 0 ) {
+		return;
+	}
+
+	maxWidth = cls.glconfig.vidWidth - 32.0f;
+	maxHeight = cls.glconfig.vidHeight - 32.0f;
+	if ( maxWidth <= 0.0f || maxHeight <= 0.0f ) {
+		return;
+	}
+	if ( atlasWidth > maxWidth ) {
+		scale = maxWidth / atlasWidth;
+	}
+	if ( atlasHeight * scale > maxHeight ) {
+		scale = maxHeight / atlasHeight;
+	}
+
+	ScopedRenderColor scopedColor( g_color_table[ ColorIndex( COLOR_WHITE ) ] );
+	re.DrawStretchPic( 16.0f, 16.0f, atlasWidth * scale, atlasHeight * scale,
+		0.0f, 0.0f, 1.0f, 1.0f, shader );
 }
 
 
@@ -979,6 +1038,8 @@ static void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 	if ( cl_debuggraph->integer || cl_timegraph->integer || cl_debugMove->integer ) {
 		SCR_DrawDebugGraph ();
 	}
+
+	SCR_DrawFontAtlasDebug();
 }
 
 

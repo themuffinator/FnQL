@@ -22,12 +22,72 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // sv_client.cpp -- server code for dealing with clients
 
 #include "server.h"
+#include "../qcommon/protocol_contract.hpp"
+#include "../qcommon/netchan_safety.hpp"
+#include "../platform/fnql_steam.h"
+#include "retail_auth_challenge.hpp"
+#include "stats_contract.hpp"
+#include "stats_event.hpp"
+#include "stats_report.hpp"
+#include "stats_session.hpp"
+#include "json_document.hpp"
 
 #include <array>
 #include <cstdint>
 #include <limits>
 
+namespace {
+
+constexpr std::size_t PendingRetailAuthCapacity = 256;
+fnql::server::auth::AuthCache<PendingRetailAuthCapacity> pendingRetailAuth;
+std::array<fnql::server::stats::Session, MAX_CLIENTS> clientStatsSessions;
+fnql::server::stats::ReportAccumulator statsReports;
+
+fnql::server::auth::AddressKey SV_AuthAddressKey( const netadr_t *address ) {
+	fnql::server::auth::AddressKey key{};
+	if ( !address ) {
+		return key;
+	}
+
+	auto append = [&key]( std::uint8_t value ) {
+		if ( key.used < key.bytes.size() ) {
+			key.bytes[key.used++] = value;
+		}
+	};
+	append( static_cast<std::uint8_t>( address->type ) );
+	append( static_cast<std::uint8_t>( address->port ) );
+	append( static_cast<std::uint8_t>( address->port >> 8u ) );
+	if ( address->type == NA_IP ) {
+		for ( std::uint8_t value : address->ipv._4 ) {
+			append( value );
+		}
+	}
+#ifdef USE_IPV6
+	else if ( address->type == NA_IP6 || address->type == NA_MULTICAST6 ) {
+		for ( std::uint8_t value : address->ipv._6 ) {
+			append( value );
+		}
+		for ( unsigned int shift = 0; shift < 32; shift += 8 ) {
+			append( static_cast<std::uint8_t>( address->scope_id >> shift ) );
+		}
+	}
+#endif
+	return key;
+}
+
+} // namespace
+
 static void SV_CloseDownload( client_t *cl );
+
+static int SV_DownloadWindow( const client_t *client ) {
+	return static_cast<int>( fnql::protocol::ForWireProfile(
+		client->netchan.wireProfile ).limits.downloadWindow );
+}
+
+static int SV_DownloadBlockBytes( const client_t *client ) {
+	return static_cast<int>( fnql::protocol::ForWireProfile(
+		client->netchan.wireProfile ).limits.downloadBlockBytes );
+}
 
 static bool SV_IsPackExtension( const char *ext )
 {
@@ -103,6 +163,8 @@ SV_InitChallenger
 */
 void SV_InitChallenger( void )
 {
+	pendingRetailAuth.Clear();
+	statsReports.Reset();
 	Com_MD5Init();
 }
 
@@ -132,7 +194,7 @@ as well as IPv6 connections, since there is no way to use the
 v4-only auth server for these new types of connections.
 =================
 */
-void SV_GetChallenge( const netadr_t *from ) {
+void SV_GetChallenge( const netadr_t *from, const msg_t *msg ) {
 	int		challenge;
 	int		clientChallenge;
 
@@ -155,21 +217,46 @@ void SV_GetChallenge( const netadr_t *from ) {
 	// Create a unique challenge for this client without storing state on the server
 	challenge = SV_CreateChallenge( svs.time >> TS_SHIFT, from );
 
+	const fnql::server::auth::ParsedChallenge retail =
+		fnql::server::auth::ParseChallengePayload(
+			msg ? reinterpret_cast<const std::uint8_t *>( msg->data ) : nullptr,
+			msg && msg->cursize > 0 ? static_cast<std::size_t>( msg->cursize ) : 0u );
+	if ( retail.kind == fnql::server::auth::ChallengePayloadKind::MalformedRetail ) {
+		Com_DPrintf( "SV_GetChallenge: malformed retail auth payload from %s\n",
+			NET_AdrToString( from ) );
+		return;
+	}
+	if ( retail.kind == fnql::server::auth::ChallengePayloadKind::Retail ) {
+		if ( !pendingRetailAuth.Store( SV_AuthAddressKey( from ), challenge,
+			retail.steamId, retail.ticket, retail.ticketBytes,
+			static_cast<std::uint32_t>( Sys_Milliseconds() ) ) ) {
+			Com_DPrintf( "SV_GetChallenge: could not retain retail auth payload from %s\n",
+				NET_AdrToString( from ) );
+			return;
+		}
+		if ( retail.fnqlExtension ) {
+			NET_OutOfBandPrint( NS_SERVER, from, "challengeResponse %i %i %i %s",
+				challenge, static_cast<std::int32_t>( retail.clientChallenge ),
+				com_protocol->integer,
+				fnql::protocol::FnqlHandshakeMarker.data() );
+		} else {
+			NET_OutOfBandPrint( NS_SERVER, from, "challengeResponse %i", challenge );
+		}
+		return;
+	}
+
 	if ( Cmd_Argc() < 2 ) {
 		// legacy client query, don't send unneeded information
 		NET_OutOfBandPrint( NS_SERVER, from, "challengeResponse %i", challenge );
 	} else {
-		int sv_proto = com_protocol->integer;
-		if ( sv_proto == DEFAULT_PROTOCOL_VERSION ) {
-			// we support new protocol features by default
-			sv_proto = NEW_PROTOCOL_VERSION;
-		}
+		const int sv_proto = com_protocol->integer;
 
 		// Grab the client's challenge to echo back (if given)
 		clientChallenge = SV_ParseInt( Cmd_Argv( 1 ) );
 
-		NET_OutOfBandPrint( NS_SERVER, from, "challengeResponse %i %i %i",
-			challenge, clientChallenge, sv_proto );
+		NET_OutOfBandPrint( NS_SERVER, from, "challengeResponse %i %i %i %s",
+			challenge, clientChallenge, sv_proto,
+			fnql::protocol::FnqlHandshakeMarker.data() );
 	}
 }
 
@@ -474,13 +561,10 @@ void SV_PrintClientStateChange( const client_t *cl, clientState_t newState ) {
 }
 
 
-static int SV_DemoProtocol( void )
+static int SV_DemoProtocol( const client_t *client )
 {
-	if ( com_protocol->integer != DEFAULT_PROTOCOL_VERSION ) {
-		return com_protocol->integer;
-	}
-
-	return NEW_PROTOCOL_VERSION;
+	return client ? fnql::protocol::ForWireProfile(
+		client->netchan.wireProfile ).demoProtocol : com_protocol->integer;
 }
 
 
@@ -761,7 +845,7 @@ void SV_StopDemoRecord( client_t *client, qboolean discard )
 
 	if ( !discard ) {
 		sequence = 0;
-		protocol = SV_DemoProtocol();
+		protocol = SV_DemoProtocol( client );
 
 		len = -1;
 		FS_Write( &len, 4, client->demoRecordFile );
@@ -832,12 +916,16 @@ static const char *SV_ClientSteamIdFromUserinfo( const char *userinfo ) {
 
 /*
 ==================
-SV_IsClientSteamIdString
+SV_ParseClientSteamIdString
 ==================
 */
-static qboolean SV_IsClientSteamIdString( const char *steamId ) {
+static qboolean SV_ParseClientSteamIdString( const char *steamId,
+		std::uint64_t *outValue ) {
 	int length;
 	std::uint64_t value = 0;
+	if ( outValue ) {
+		*outValue = 0;
+	}
 
 	if ( !steamId || !steamId[0] ) {
 		return qfalse;
@@ -856,7 +944,13 @@ static qboolean SV_IsClientSteamIdString( const char *steamId ) {
 		value = value * 10u + digit;
 	}
 
-	return SV_QBool( value != 0 && length > 0 && length < SV_PLATFORM_STEAM_ID_SIZE );
+	if ( value == 0 || length <= 0 || length >= SV_PLATFORM_STEAM_ID_SIZE ) {
+		return qfalse;
+	}
+	if ( outValue ) {
+		*outValue = value;
+	}
+	return qtrue;
 }
 
 
@@ -867,12 +961,15 @@ SV_CaptureClientSteamId
 */
 static void SV_CaptureClientSteamId( client_t *client, const char *userinfo ) {
 	const char *steamId;
+	std::uint64_t value = 0;
 
 	client->platformSteamId[0] = '\0';
+	client->platformSteamIdValue = 0;
 
 	steamId = SV_ClientSteamIdFromUserinfo( userinfo );
-	if ( SV_IsClientSteamIdString( steamId ) ) {
+	if ( SV_ParseClientSteamIdString( steamId, &value ) ) {
 		Q_strncpyz( client->platformSteamId, steamId, SV_ArraySize( client->platformSteamId ) );
+		client->platformSteamIdValue = value;
 	}
 }
 
@@ -900,11 +997,6 @@ static void SV_MirrorClientSteamIdToUserinfo( const client_t *client, char *user
 /*
 ==================
 SV_VerifyClientSteamAuth
-
-FnQL has no live Steam auth owner yet. Preserve retail-client interoperability
-by accepting active clients explicitly as unverified; the platform capability
-and policy cvars remain unavailable so game code cannot mistake this for a
-successful Steam authentication round trip.
 ==================
 */
 qboolean SV_VerifyClientSteamAuth( int clientNum ) {
@@ -921,17 +1013,261 @@ qboolean SV_VerifyClientSteamAuth( int clientNum ) {
 		return qfalse;
 	}
 
-	Com_DPrintf( "Server auth validate client %d via %s [%s]: accepted without identity verification\n",
+	if ( SV_PlatformServiceAvailable( SV_PLATFORM_CAPABILITY_AUTH ) ) {
+		return client.platformAuthSession && client.platformAuthValidated
+			? qtrue : qfalse;
+	}
+
+	Com_DPrintf( "Server auth validate client %d via %s [%s]: compatibility-unverified\n",
 		clientNum, SV_GetPlatformAuthProviderLabel(), SV_GetPlatformAuthPolicyLabel() );
 	return qtrue;
 }
 
-static void SV_LogSteamStatsStubLifecycle( const char *stage, const char *detail ) {
+static void SV_LogSteamStatsLifecycle( const char *stage, const char *detail ) {
 	Com_DPrintf( "Server stats %s via %s [%s]: %s\n",
 		stage ? stage : "update",
 		SV_GetServerStatsProviderLabel(),
 		SV_GetServerStatsPolicyLabel(),
 		detail ? detail : "no detail" );
+}
+
+static bool SV_SerializeStatsJson( const void *value,
+		std::array<char, fnql::server::json::MaximumDocumentBytes + 1> &document,
+		std::uint32_t &documentBytes ) {
+	document.fill( '\0' );
+	documentBytes = 0;
+	if ( !value || FNQL_Steam_SerializeRetailJson( value, document.data(),
+		static_cast<std::uint32_t>( document.size() ), &documentBytes ) !=
+		FNQL_STEAM_RESULT_OK || documentBytes == 0 ||
+		documentBytes > fnql::server::json::MaximumDocumentBytes ||
+		document[documentBytes] != '\0' ||
+		!fnql::server::json::DocumentIsValid(
+			std::string_view( document.data(), documentBytes ) ) ) {
+		document.fill( '\0' );
+		documentBytes = 0;
+		return false;
+	}
+	return true;
+}
+
+static int SV_FindStatsClientByIdentity( std::uint64_t identity ) {
+	if ( identity == 0 || !svs.clients ) {
+		return -1;
+	}
+	for ( int clientNum = 0; clientNum < sv.maxclients; ++clientNum ) {
+		const client_t &client = svs.clients[clientNum];
+		if ( client.platformSteamIdValue == identity && client.state != CS_FREE &&
+			client.state != CS_ZOMBIE && client.netchan.remoteAddress.type != NA_BOT ) {
+			return clientNum;
+		}
+	}
+	return -1;
+}
+
+static fnql::server::stats::Session *SV_ClientStatsSession( int clientNum,
+		const char *stage ) {
+	if ( !SV_IsClientIndex( clientNum ) ) {
+		SV_LogSteamStatsLifecycle( stage, "invalid client slot" );
+		return nullptr;
+	}
+	client_t &client = SV_ClientForIndex( clientNum );
+	if ( client.state == CS_FREE || client.state == CS_ZOMBIE ||
+		client.netchan.remoteAddress.type == NA_BOT ) {
+		SV_LogSteamStatsLifecycle( stage, "inactive or bot client slot" );
+		return nullptr;
+	}
+
+	fnql::server::stats::Session &session = clientStatsSessions[clientNum];
+	session.Begin( client.platformSteamIdValue );
+	if ( client.platformAuthSession && client.platformAuthValidated &&
+		client.platformSteamIdValue != 0 &&
+		!session.RequestIssued() &&
+		( FNQL_Steam_Capabilities() &
+			( FNQL_STEAM_CAP_STATS | FNQL_STEAM_CAP_GAME_SERVER_STATS ) ) ) {
+		const fnqlSteamResult_t result =
+			FNQL_Steam_RequestUserStats( client.platformSteamIdValue );
+		if ( result == FNQL_STEAM_RESULT_OK || result == FNQL_STEAM_RESULT_PENDING ) {
+			session.MarkRequestIssued();
+		}
+	}
+	return &session;
+}
+
+static bool SV_StatsProviderReady( const client_t &client ) {
+	return client.platformAuthSession && client.platformAuthValidated &&
+		client.platformSteamIdValue != 0 &&
+		FNQL_Steam_Available( FNQL_STEAM_CAP_GAME_SERVER_STATS );
+}
+
+static bool SV_ShouldUnlockSteamAchievement() {
+	std::array<char, MAX_STRING_CHARS> gameState{};
+	Cvar_VariableStringBuffer( "g_gameState", gameState.data(),
+		static_cast<int>( gameState.size() ) );
+	return !gameState[0] || !Q_stricmp( gameState.data(), "IN_PROGRESS" ) ||
+		Cvar_VariableIntegerValue( "g_training" ) != 0 ||
+		Cvar_VariableIntegerValue( "practiceflags" ) != 0;
+}
+
+static void SV_LoadStatsField( const client_t &client,
+		fnql::server::stats::Session &session, int statIndex ) {
+	if ( !SV_StatsProviderReady( client ) || session.FieldLoaded( statIndex ) ||
+		statIndex < 0 || static_cast<std::size_t>( statIndex ) >=
+			fnql::server::stats::FieldNames.size() ) {
+		return;
+	}
+	std::int32_t value = 0;
+	if ( FNQL_Steam_GetUserStatI32( client.platformSteamIdValue,
+		fnql::server::stats::FieldNames[statIndex].data(), &value ) ==
+		FNQL_STEAM_RESULT_OK ) {
+		(void)session.LoadField( statIndex, value );
+	}
+}
+
+static void SV_LoadStatsAchievement( const client_t &client,
+		fnql::server::stats::Session &session, int achievementId ) {
+	if ( !SV_StatsProviderReady( client ) ||
+		session.AchievementLoaded( achievementId ) || achievementId < 0 ||
+		static_cast<std::size_t>( achievementId ) >=
+			fnql::server::stats::AchievementNames.size() ) {
+		return;
+	}
+	qboolean unlocked = qfalse;
+	if ( FNQL_Steam_GetUserAchievement( client.platformSteamIdValue,
+		fnql::server::stats::AchievementNames[achievementId].data(), &unlocked ) ==
+		FNQL_STEAM_RESULT_OK ) {
+		(void)session.LoadAchievement( achievementId, unlocked != qfalse );
+	}
+}
+
+static void SV_AddEventStatsField( int clientNum,
+		fnql::server::stats::Session &session, int statIndex, int delta ) {
+	if ( delta == 0 ) {
+		return;
+	}
+	SV_LoadStatsField( SV_ClientForIndex( clientNum ), session, statIndex );
+	if ( !session.AddField( statIndex, delta ) ) {
+		SV_LogSteamStatsLifecycle( "event-process", "invalid mapped retail stat index" );
+	}
+}
+
+static void SV_UnlockEventAchievement( int clientNum,
+		fnql::server::stats::Session &session, int achievementId ) {
+	if ( !SV_ShouldUnlockSteamAchievement() ) {
+		return;
+	}
+	SV_LoadStatsAchievement( SV_ClientForIndex( clientNum ), session, achievementId );
+	if ( !session.HasAchievement( achievementId ) ) {
+		(void)session.UnlockAchievement( achievementId );
+	}
+}
+
+static void SV_FlushClientStats( int clientNum ) {
+	if ( clientNum < 0 || clientNum >= MAX_CLIENTS || !svs.clients ) {
+		return;
+	}
+	client_t &client = svs.clients[clientNum];
+	fnql::server::stats::Session &session = clientStatsSessions[clientNum];
+	if ( !session.Active() || session.StorePending() ||
+		!SV_StatsProviderReady( client ) ) {
+		return;
+	}
+
+	std::array<bool, fnql::server::stats::FieldCount> storedFields{};
+	std::array<bool, fnql::server::stats::AchievementCount> storedAchievements{};
+	bool changed = false;
+	for ( std::size_t index = 0; index < fnql::server::stats::FieldCount; ++index ) {
+		if ( !session.FieldDirty( static_cast<int>( index ) ) ) {
+			continue;
+		}
+		SV_LoadStatsField( client, session, static_cast<int>( index ) );
+		if ( !session.FieldLoaded( static_cast<int>( index ) ) ) {
+			continue;
+		}
+		if ( FNQL_Steam_SetUserStatI32( client.platformSteamIdValue,
+			fnql::server::stats::FieldNames[index].data(),
+			session.Field( static_cast<int>( index ) ) ) == FNQL_STEAM_RESULT_OK ) {
+			storedFields[index] = true;
+			changed = true;
+		}
+	}
+	for ( std::size_t index = 0; index < fnql::server::stats::AchievementCount; ++index ) {
+		if ( !session.AchievementDirty( static_cast<int>( index ) ) ) {
+			continue;
+		}
+		if ( FNQL_Steam_SetUserAchievement( client.platformSteamIdValue,
+			fnql::server::stats::AchievementNames[index].data() ) ==
+			FNQL_STEAM_RESULT_OK ) {
+			storedAchievements[index] = true;
+			changed = true;
+		}
+	}
+	if ( !changed ) {
+		return;
+	}
+	const fnqlSteamResult_t storeResult =
+		FNQL_Steam_StoreUserStats( client.platformSteamIdValue );
+	// Retain the submitted generation until USER_STATS_STORED reports the final
+	// asynchronous outcome; newer changes remain dirty independently.
+	if ( storeResult != FNQL_STEAM_RESULT_OK ) {
+		if ( storeResult == FNQL_STEAM_RESULT_PENDING ) {
+			session.BeginStorePending( storedFields, storedAchievements );
+		}
+		return;
+	}
+	for ( std::size_t index = 0; index < storedFields.size(); ++index ) {
+		if ( storedFields[index] ) {
+			session.MarkFieldStored( static_cast<int>( index ) );
+		}
+	}
+	for ( std::size_t index = 0; index < storedAchievements.size(); ++index ) {
+		if ( storedAchievements[index] ) {
+			session.MarkAchievementStored( static_cast<int>( index ) );
+		}
+	}
+}
+
+void SV_FlushAllSteamStats( void ) {
+	for ( int clientNum = 0; clientNum < sv.maxclients; ++clientNum ) {
+		SV_FlushClientStats( clientNum );
+	}
+}
+
+void SV_HandleSteamProviderEvent( unsigned int type, int result,
+		uint64_t subjectId ) {
+	if ( subjectId == 0 || !svs.clients ) {
+		return;
+	}
+
+	for ( int clientNum = 0; clientNum < sv.maxclients; ++clientNum ) {
+		client_t &client = svs.clients[clientNum];
+		if ( client.platformSteamIdValue != subjectId ||
+			client.state == CS_FREE || client.state == CS_ZOMBIE ) {
+			continue;
+		}
+		if ( type == FNQL_STEAM_EVENT_AUTH_RESULT && client.platformAuthSession ) {
+			if ( result == FNQL_STEAM_RESULT_OK ) {
+				if ( !client.platformAuthValidated ) {
+					client.platformAuthValidated = qtrue;
+					Com_DPrintf( "Platform authentication validated client %d.\n", clientNum );
+				}
+			} else if ( result != FNQL_STEAM_RESULT_PENDING ) {
+				Com_Printf( S_COLOR_YELLOW
+					"Platform authentication rejected client %d (result %d).\n",
+					clientNum, result );
+				SV_DropClient( &client, "Platform authentication failed" );
+			}
+		} else if ( type == FNQL_STEAM_EVENT_USER_STATS_RECEIVED ) {
+			if ( result == FNQL_STEAM_RESULT_OK ) {
+				SV_FlushClientStats( clientNum );
+			} else if ( result != FNQL_STEAM_RESULT_PENDING ) {
+				// Permit a later game request or flush to retry a transient failure.
+				clientStatsSessions[clientNum].ClearRequestIssued();
+			}
+		} else if ( type == FNQL_STEAM_EVENT_USER_STATS_STORED ) {
+			clientStatsSessions[clientNum].CompletePendingStore(
+				result == FNQL_STEAM_RESULT_OK );
+		}
+	}
 }
 
 
@@ -941,19 +1277,17 @@ SV_SteamStats_AddFieldValue
 ==================
 */
 void SV_SteamStats_AddFieldValue( int clientNum, int statIndex, int delta ) {
-	char detail[128];
-
 	if ( delta == 0 ) {
 		return;
 	}
-
-	Com_sprintf( detail, sizeof( detail ),
-		"ignored stat index %d delta %d for client %d", statIndex, delta, clientNum );
-	SV_LogSteamStatsStubLifecycle( "field-delta", detail );
-
-	(void)clientNum;
-	(void)statIndex;
-	(void)delta;
+	fnql::server::stats::Session *session =
+		SV_ClientStatsSession( clientNum, "field-delta" );
+	if ( session ) {
+		SV_LoadStatsField( SV_ClientForIndex( clientNum ), *session, statIndex );
+	}
+	if ( session && !session->AddField( statIndex, delta ) ) {
+		SV_LogSteamStatsLifecycle( "field-delta", "invalid retail stat index" );
+	}
 }
 
 
@@ -963,14 +1297,23 @@ SV_SteamStats_UnlockAchievement
 ==================
 */
 void SV_SteamStats_UnlockAchievement( int clientNum, int achievementId ) {
-	char detail[128];
-
-	Com_sprintf( detail, sizeof( detail ),
-		"ignored achievement %d for client %d", achievementId, clientNum );
-	SV_LogSteamStatsStubLifecycle( "achievement-unlock", detail );
-
-	(void)clientNum;
-	(void)achievementId;
+	if ( achievementId < 0 || static_cast<std::size_t>( achievementId ) >=
+		fnql::server::stats::AchievementCount ) {
+		SV_LogSteamStatsLifecycle( "achievement-unlock", "invalid retail achievement index" );
+		return;
+	}
+	if ( !SV_ShouldUnlockSteamAchievement() ) {
+		SV_LogSteamStatsLifecycle( "achievement-unlock", "blocked by gameplay gate" );
+		return;
+	}
+	fnql::server::stats::Session *session =
+		SV_ClientStatsSession( clientNum, "achievement-unlock" );
+	if ( session ) {
+		SV_LoadStatsAchievement( SV_ClientForIndex( clientNum ), *session, achievementId );
+	}
+	if ( session && !session->UnlockAchievement( achievementId ) ) {
+		SV_LogSteamStatsLifecycle( "achievement-unlock", "invalid retail achievement index" );
+	}
 }
 
 
@@ -980,15 +1323,12 @@ SV_SteamStats_HasAchievement
 ==================
 */
 qboolean SV_SteamStats_HasAchievement( int clientNum, int achievementId ) {
-	char detail[128];
-
-	Com_sprintf( detail, sizeof( detail ),
-		"query unavailable for achievement %d on client %d", achievementId, clientNum );
-	SV_LogSteamStatsStubLifecycle( "achievement-query", detail );
-
-	(void)clientNum;
-	(void)achievementId;
-	return qfalse;
+	fnql::server::stats::Session *session =
+		SV_ClientStatsSession( clientNum, "achievement-query" );
+	if ( session ) {
+		SV_LoadStatsAchievement( SV_ClientForIndex( clientNum ), *session, achievementId );
+	}
+	return session && session->HasAchievement( achievementId ) ? qtrue : qfalse;
 }
 
 
@@ -998,11 +1338,36 @@ SV_SteamStats_ProcessMatchReport
 ==================
 */
 const void *SV_SteamStats_ProcessMatchReport( const void *report, char *buffer, int bufferSize ) {
-	SV_LogSteamStatsStubLifecycle( "match-report", "ignored MATCH_REPORT for disabled Steam stats owner" );
-	Zmq_SubmitMatchReport( report );
-
-	(void)buffer;
-	(void)bufferSize;
+	std::array<char, fnql::server::json::MaximumDocumentBytes + 1> document{};
+	std::array<char, fnql::server::json::MaximumDocumentBytes + 1> summary{};
+	std::uint32_t documentBytes = 0;
+	SV_FlushAllSteamStats();
+	if ( SV_SerializeStatsJson( report, document, documentBytes ) ) {
+		const std::string_view reportDocument( document.data(), documentBytes );
+		const bool summaryAllowed =
+			fnql::server::stats::ReportAccumulator::MatchSummaryAllowed( reportDocument );
+		const bool merged = summaryAllowed && statsReports.Build(
+			reportDocument, summary.data(), summary.size() );
+		if ( buffer && bufferSize > 0 ) {
+			Q_strncpyz( buffer, merged ? summary.data() : document.data(), bufferSize );
+		}
+		Zmq_SubmitMatchReportJson( document.data() );
+		if ( merged ) {
+			Zmq_SubmitMatchSummaryJson( summary.data() );
+		}
+		SV_LogSteamStatsLifecycle( "match-report",
+			merged ? "published report and eligible PLYR_STATS/PLYR_EVENTS summary"
+				: summaryAllowed ? "published report; bounded summary merge failed"
+					: "published report; training or aborted summary suppressed" );
+	} else {
+		if ( buffer && bufferSize > 0 ) {
+			buffer[0] = '\0';
+		}
+		Zmq_SubmitMatchReport( report );
+		SV_LogSteamStatsLifecycle( "match-report",
+			"retail JSON adapter unavailable; published a null payload envelope" );
+	}
+	statsReports.Reset();
 	return report;
 }
 
@@ -1014,20 +1379,89 @@ SV_SteamStats_ProcessEvent
 */
 void SV_SteamStats_ProcessEvent( unsigned int steamIdLow, unsigned int steamIdHigh,
 		const void *clientStats, const char *eventName, const void *payload ) {
-	char detail[128];
+	std::array<char, fnql::server::json::MaximumDocumentBytes + 1> document{};
+	std::uint32_t documentBytes = 0;
+	const std::uint64_t identity =
+		( static_cast<std::uint64_t>( steamIdHigh ) << 32u ) | steamIdLow;
+	if ( !eventName || !eventName[0] ) {
+		return;
+	}
+	if ( !SV_SerializeStatsJson( payload, document, documentBytes ) ) {
+		Zmq_ReportPlayerEvent( steamIdLow, steamIdHigh, clientStats, eventName, payload );
+		SV_LogSteamStatsLifecycle( "event-process",
+			"retail JSON adapter unavailable; event side effects safely deferred" );
+		return;
+	}
 
-	Com_sprintf( detail, sizeof( detail ),
-		"ignored %s event for %llu",
-		eventName && eventName[0] ? eventName : "unnamed",
-		( (unsigned long long)steamIdHigh << 32 ) | steamIdLow );
-	SV_LogSteamStatsStubLifecycle( "event-process", detail );
-	Zmq_ReportPlayerEvent( steamIdLow, steamIdHigh, clientStats, eventName, payload );
+	Zmq_ReportPlayerEventJson( eventName, document.data() );
+	const fnql::server::stats::ParsedPlayerEvent event =
+		fnql::server::stats::ParsePlayerEvent( eventName,
+			std::string_view( document.data(), documentBytes ) );
+	if ( !event.valid || event.ignored ||
+		event.kind == fnql::server::stats::PlayerEventKind::Unknown ) {
+		return;
+	}
+	using fnql::server::stats::PlayerEventKind;
+	const bool race = Cvar_VariableIntegerValue( "g_gametype" ) == GT_SINGLE_PLAYER;
+	if ( event.kind == PlayerEventKind::Stats ) {
+		if ( !statsReports.CachePlayerStats(
+			std::string_view( document.data(), documentBytes ) ) ) {
+			SV_LogSteamStatsLifecycle( "event-process", "PLAYER_STATS summary cache full" );
+		}
+	} else if ( event.kind == PlayerEventKind::Death && !race ) {
+		if ( !statsReports.CachePlayerDeath(
+			std::string_view( document.data(), documentBytes ) ) ) {
+			SV_LogSteamStatsLifecycle( "event-process", "PLAYER_DEATH summary cache full" );
+		}
+	}
+	const int clientNum = SV_FindStatsClientByIdentity( identity );
+	if ( clientNum < 0 ) {
+		SV_LogSteamStatsLifecycle( "event-process", "no live session for event identity" );
+		return;
+	}
+	fnql::server::stats::Session *session =
+		SV_ClientStatsSession( clientNum, "event-process" );
+	if ( !session ) {
+		return;
+	}
 
-	(void)steamIdLow;
-	(void)steamIdHigh;
+	if ( event.kind == PlayerEventKind::Stats ) {
+		SV_AddEventStatsField( clientNum, *session, 0x51, event.wins );
+		SV_AddEventStatsField( clientNum, *session, 0x52, event.losses );
+		SV_AddEventStatsField( clientNum, *session, 0x53, 1 );
+		if ( event.wins > 0 && !Q_stricmp( Cvar_VariableString( "mapname" ), "qztraining" ) &&
+			Cvar_VariableIntegerValue( "g_training" ) > 0 ) {
+			SV_UnlockEventAchievement( clientNum, *session, 9 );
+		}
+		if ( Cvar_VariableIntegerValue( "g_gametype" ) == 5 && event.score == 666 ) {
+			SV_UnlockEventAchievement( clientNum, *session, 0x0e );
+		}
+	} else if ( event.kind == PlayerEventKind::Kill && !race ) {
+		SV_AddEventStatsField( clientNum, *session, 0x56, 1 );
+		if ( event.mappedStat > 0 ) {
+			SV_AddEventStatsField( clientNum, *session, event.mappedStat, 1 );
+		}
+		if ( event.speed > 500.0 ) {
+			SV_UnlockEventAchievement( clientNum, *session, 1 );
+		}
+	} else if ( event.kind == PlayerEventKind::Death && !race ) {
+		SV_AddEventStatsField( clientNum, *session, 0x57, 1 );
+		if ( event.mappedStat > 0 ) {
+			SV_AddEventStatsField( clientNum, *session, event.mappedStat, 1 );
+		}
+	} else if ( event.kind == PlayerEventKind::Medal && event.mappedStat >= 0 ) {
+		SV_AddEventStatsField( clientNum, *session, event.mappedStat, 1 );
+		SV_LoadStatsField( SV_ClientForIndex( clientNum ), *session, 0x4a );
+		SV_LoadStatsField( SV_ClientForIndex( clientNum ), *session, 0x4b );
+		SV_LoadStatsField( SV_ClientForIndex( clientNum ), *session, 0x4c );
+		if ( static_cast<std::int64_t>( session->Field( 0x4a ) ) +
+			session->Field( 0x4b ) + session->Field( 0x4c ) >= 1000 ) {
+			SV_UnlockEventAchievement( clientNum, *session, 0x2e );
+		}
+	}
+	SV_FlushClientStats( clientNum );
+
 	(void)clientStats;
-	(void)eventName;
-	(void)payload;
 }
 
 
@@ -1056,6 +1490,9 @@ void SV_DirectConnect( const netadr_t *from ) {
 	const char	*ip, *info, *v;
 	bool		compat;
 	bool		longstr;
+	std::uint64_t retailSteamId = 0;
+	bool		platformAuthSession = false;
+	bool		platformAuthValidated = false;
 
 	Com_DPrintf( "SVC_DirectConnect()\n" );
 
@@ -1136,11 +1573,6 @@ void SV_DirectConnect( const netadr_t *from ) {
 	cl_proto = SV_ParseInt( v );
 
 	sv_proto = com_protocol->integer;
-	if ( sv_proto == DEFAULT_PROTOCOL_VERSION )
-	{
-		// we support new protocol features by default
-		sv_proto = NEW_PROTOCOL_VERSION;
-	}
 
 	if ( cl_proto <= OLD_PROTOCOL_VERSION )
 		compat = true;
@@ -1329,12 +1761,45 @@ void SV_DirectConnect( const netadr_t *from ) {
 	}
 
 gotnewcl:
+	if ( cl_proto == QL_RETAIL_PROTOCOL_VERSION && !NET_IsLocalAddress( from ) ) {
+		fnql::server::auth::AuthRecord auth{};
+		const bool hasRetailAuth = pendingRetailAuth.Consume(
+			SV_AuthAddressKey( from ), challenge,
+			static_cast<std::uint32_t>( Sys_Milliseconds() ), auth );
+		const bool providerAvailable =
+			SV_PlatformServiceAvailable( SV_PLATFORM_CAPABILITY_AUTH ) != qfalse;
+
+		if ( providerAvailable && !hasRetailAuth ) {
+			NET_OutOfBandPrint( NS_SERVER, from,
+				"print\nA valid platform authentication ticket is required.\n" );
+			return;
+		}
+		if ( hasRetailAuth ) {
+			retailSteamId = auth.steamId;
+			if ( providerAvailable ) {
+				const fnqlSteamResult_t result = FNQL_Steam_BeginAuthSession(
+					auth.ticket.data(), static_cast<std::uint32_t>( auth.ticketBytes ),
+					auth.steamId );
+				if ( result != FNQL_STEAM_RESULT_OK && result != FNQL_STEAM_RESULT_PENDING ) {
+					fnql::server::auth::SecureErase( &auth, sizeof( auth ) );
+					NET_OutOfBandPrint( NS_SERVER, from,
+						"print\nPlatform authentication rejected the connection.\n" );
+					return;
+				}
+				platformAuthSession = true;
+				platformAuthValidated = result == FNQL_STEAM_RESULT_OK;
+			}
+		}
+		fnql::server::auth::SecureErase( &auth, sizeof( auth ) );
+	}
+
 	// build a new connection
 	// accept the new client
 	// this is the only place a client_t is ever initialized
 	// we got a newcl, so reset the reliableSequence and reliableAcknowledge
 	*newcl = {};
 	clientNum = SV_ClientIndex( newcl );
+	clientStatsSessions[clientNum].Reset();
 #if 0 // skip this until CS_PRIMED
 	//ent = SV_GentityNum( clientNum );
 	//newcl->gentity = ent;
@@ -1352,6 +1817,14 @@ gotnewcl:
 	newcl->netchan_end_queue = &newcl->netchan_start_queue;
 
 	SV_CaptureClientSteamId( newcl, userinfo.data() );
+	if ( retailSteamId != 0 ) {
+		newcl->platformSteamIdValue = retailSteamId;
+		newcl->platformAuthSession = platformAuthSession ? qtrue : qfalse;
+		newcl->platformAuthValidated = platformAuthValidated ? qtrue : qfalse;
+		newcl->platformAuthStartedTime = static_cast<std::uint32_t>( svs.time );
+		Com_sprintf( newcl->platformSteamId, SV_ArraySize( newcl->platformSteamId ),
+			"%llu", static_cast<unsigned long long>( retailSteamId ) );
+	}
 	SV_MirrorClientSteamIdToUserinfo( newcl, userinfo.data(), SV_ArraySize( userinfo ) );
 
 	// save the userinfo
@@ -1376,6 +1849,8 @@ gotnewcl:
 
 		NET_OutOfBandPrint( NS_SERVER, from, "print\n%s\n", str );
 		Com_DPrintf( "Game rejected a connection: %s.\n", str );
+		SV_FreeClient( newcl );
+		*newcl = {};
 		return;
 	}
 
@@ -1406,7 +1881,8 @@ gotnewcl:
 	// when we receive the first packet from the client, we will
 	// notice that it is from a different serverid and that the
 	// gamestate message was not just sent, forcing a retransmit
-	newcl->gamestateMessageNum = newcl->messageAcknowledge - 1; // force gamestate retransmit
+	newcl->gamestateMessageNum = fnql::net::PreviousSequence(
+		newcl->messageAcknowledge ); // force gamestate retransmit
 
 	// if this was the first client on the server, or the last client
 	// the server can hold, send a heartbeat to the master.
@@ -1431,6 +1907,19 @@ Destructor for data allocated in a client structure
 */
 void SV_FreeClient(client_t *client)
 {
+	if ( client && svs.clients ) {
+		const int clientNum = SV_ClientIndex( client );
+		if ( clientNum >= 0 && clientNum < MAX_CLIENTS ) {
+			SV_FlushClientStats( clientNum );
+			clientStatsSessions[clientNum].Reset();
+		}
+	}
+	if ( client->platformAuthSession && client->platformSteamIdValue != 0 ) {
+		SV_SteamP2PCloseClient( client->platformSteamIdValue );
+		FNQL_Steam_EndAuthSession( client->platformSteamIdValue );
+		client->platformAuthSession = qfalse;
+		client->platformAuthValidated = qfalse;
+	}
 	SV_StopDemoRecord( client, qfalse );
 	SV_Netchan_FreeQueue(client);
 	SV_CloseDownload(client);
@@ -1740,7 +2229,8 @@ void SV_ClientEnterWorld( client_t *client ) {
 	ent->s.number = clientNum;
 	client->gentity = ent;
 
-	client->deltaMessage = client->netchan.outgoingSequence - (PACKET_BACKUP + 1); // force delta reset
+	client->deltaMessage = fnql::net::RetreatSequence(
+		client->netchan.outgoingSequence, PACKET_BACKUP + 1u ); // force delta reset
 	client->lastSnapshotTime = svs.time - 9999; // generate a snapshot immediately
 
 	// call the game begin function
@@ -1823,12 +2313,13 @@ the same as cl->downloadClientBlock
 static void SV_NextDownload_f( client_t *cl )
 {
 	int block = SV_ParseInt( Cmd_Argv(1) );
+	const int downloadWindow = SV_DownloadWindow( cl );
 
 	if (block == cl->downloadClientBlock) {
 	Com_DPrintf( "clientDownload: %d : client acknowledge of block %d\n", SV_ClientIndex( cl ), block );
 
 		// Find out if we are done.  A zero-length block indicates EOF
-		if (cl->downloadBlockSize[cl->downloadClientBlock % MAX_DOWNLOAD_WINDOW] == 0) {
+		if (cl->downloadBlockSize[cl->downloadClientBlock % downloadWindow] == 0) {
 			Com_Printf( "clientDownload: %d : file \"%s\" completed\n", SV_ClientIndex( cl ), cl->downloadName );
 			SV_CloseDownload( cl );
 			return;
@@ -1880,12 +2371,15 @@ static void SV_BeginDownload_f( client_t *cl ) {
 SV_WriteDownloadToClient
 
 Check to see if the client wants a file, open it if needed and start pumping the client
-Fill up msg with data, return number of download blocks added
+Fill up msg with data, returning the profile-sized byte charge used by the
+global download throttle (zero when no packet was sent).
 ==================
 */
 static int SV_WriteDownloadToClient( client_t *cl )
 {
 	int curindex;
+	const int downloadWindow = SV_DownloadWindow( cl );
+	const int downloadBlockBytes = SV_DownloadBlockBytes( cl );
 	int unreferenced = 1;
 	std::array<char, 1024> errorMessage{};
 	std::array<char, MAX_QPATH> referencedName{};
@@ -2006,7 +2500,7 @@ static int SV_WriteDownloadToClient( client_t *cl )
 
 			SV_CloseFileHandle( cl->download );
 
-			return 1;
+			return downloadBlockBytes;
 		}
 
 		Com_Printf( "clientDownload: %d : beginning \"%s\"\n", SV_ClientIndex( cl ), cl->downloadName );
@@ -2017,15 +2511,16 @@ static int SV_WriteDownloadToClient( client_t *cl )
 	}
 
 	// Perform any reads that we need to
-	while (cl->downloadCurrentBlock - cl->downloadClientBlock < MAX_DOWNLOAD_WINDOW &&
+	while (cl->downloadCurrentBlock - cl->downloadClientBlock < downloadWindow &&
 		cl->downloadSize != cl->downloadCount) {
 
-		curindex = (cl->downloadCurrentBlock % MAX_DOWNLOAD_WINDOW);
+		curindex = (cl->downloadCurrentBlock % downloadWindow);
 
 		if (!cl->downloadBlocks[curindex])
-			cl->downloadBlocks[curindex] = SV_ZMallocArray<unsigned char>( MAX_DOWNLOAD_BLKSIZE );
+			cl->downloadBlocks[curindex] = SV_ZMallocArray<unsigned char>( downloadBlockBytes );
 
-		cl->downloadBlockSize[curindex] = FS_Read( cl->downloadBlocks[curindex], MAX_DOWNLOAD_BLKSIZE, cl->download );
+		cl->downloadBlockSize[curindex] = FS_Read( cl->downloadBlocks[curindex],
+			downloadBlockBytes, cl->download );
 
 		if (cl->downloadBlockSize[curindex] < 0) {
 			// EOF right now
@@ -2042,9 +2537,9 @@ static int SV_WriteDownloadToClient( client_t *cl )
 	// Check to see if we have eof condition and add the EOF block
 	if (cl->downloadCount == cl->downloadSize &&
 		!cl->downloadEOF &&
-		cl->downloadCurrentBlock - cl->downloadClientBlock < MAX_DOWNLOAD_WINDOW) {
+		cl->downloadCurrentBlock - cl->downloadClientBlock < downloadWindow) {
 
-		cl->downloadBlockSize[cl->downloadCurrentBlock % MAX_DOWNLOAD_WINDOW] = 0;
+		cl->downloadBlockSize[cl->downloadCurrentBlock % downloadWindow] = 0;
 		cl->downloadCurrentBlock++;
 
 		cl->downloadEOF = qtrue;  // We have added the EOF block
@@ -2065,7 +2560,7 @@ static int SV_WriteDownloadToClient( client_t *cl )
 	}
 
 	// Send current block
-	curindex = (cl->downloadXmitBlock % MAX_DOWNLOAD_WINDOW);
+	curindex = (cl->downloadXmitBlock % downloadWindow);
 
 	MSG_Init( &msg, msgBuffer.data(), SV_ArraySize(msgBuffer) - 8 );
 	MSG_WriteLong( &msg, cl->lastClientCommand );
@@ -2093,7 +2588,7 @@ static int SV_WriteDownloadToClient( client_t *cl )
 	cl->downloadXmitBlock++;
 	cl->downloadSendTime = svs.time;
 
-	return 1;
+	return downloadBlockBytes;
 }
 
 
@@ -2136,17 +2631,17 @@ Send one round of download messages to all clients
 */
 int SV_SendDownloadMessages( void )
 {
-	int numDLs = 0;
+	int chargedBytes = 0;
 
 	for( client_t &client : SV_Clients() )
 	{
 		if ( client.state >= CS_CONNECTED && *client.downloadName )
 		{
-			numDLs += SV_WriteDownloadToClient( &client );
+			chargedBytes += SV_WriteDownloadToClient( &client );
 		}
 	}
 
-	return numDLs;
+	return chargedBytes;
 }
 
 
@@ -2734,7 +3229,8 @@ static void SV_UserMove( client_t *cl, msg_t *msg, bool delta ) {
 	if ( delta ) {
 		cl->deltaMessage = cl->messageAcknowledge;
 	} else {
-		cl->deltaMessage = cl->netchan.outgoingSequence - ( PACKET_BACKUP + 1 ); // force delta reset
+		cl->deltaMessage = fnql::net::RetreatSequence(
+			cl->netchan.outgoingSequence, PACKET_BACKUP + 1u ); // force delta reset
 	}
 
 	cmdCount = MSG_ReadByte( msg );
@@ -2790,7 +3286,8 @@ static void SV_UserMove( client_t *cl, msg_t *msg, bool delta ) {
 	}
 
 	if ( cl->state != CS_ACTIVE ) {
-		cl->deltaMessage = cl->netchan.outgoingSequence - ( PACKET_BACKUP + 1 ); // force delta reset
+		cl->deltaMessage = fnql::net::RetreatSequence(
+			cl->netchan.outgoingSequence, PACKET_BACKUP + 1u ); // force delta reset
 		return;
 	}
 
@@ -2833,9 +3330,10 @@ SV_AcknowledgeGamestate
 static bool SV_AcknowledgeGamestate( client_t *cl, int serverId )
 {
 	if ( serverId == sv.serverId ) {
-		const int messageDelta = cl->messageAcknowledge - cl->gamestateMessageNum;
 		// accept either exact message delta or any positive delta with known identical gamestate sent before
-		if ( messageDelta == 0 || ( messageDelta > 0 && cl->gamestateAck == GSA_SENT_ONCE ) ) {
+		if ( cl->messageAcknowledge == cl->gamestateMessageNum ||
+			( fnql::net::IsNewerSequence( cl->messageAcknowledge,
+				cl->gamestateMessageNum ) && cl->gamestateAck == GSA_SENT_ONCE ) ) {
 			cl->gamestateAck = GSA_ACKED;
 			// this client has acknowledged the new gamestate so it's
 			// safe to start sending it the real time again
@@ -2859,6 +3357,7 @@ void SV_ExecuteClientMessage( client_t *cl, msg_t *msg ) {
 	int	c;
 	int	serverId;
 	int reliableAcknowledge;
+	std::uint32_t pendingReliable = 0;
 
 	MSG_Bitstream( msg );
 
@@ -2867,7 +3366,8 @@ void SV_ExecuteClientMessage( client_t *cl, msg_t *msg ) {
 	cl->messageAcknowledge = MSG_ReadLong( msg );
 
 	//if ( cl->messageAcknowledge < 0 ) {
-	if ( cl->netchan.outgoingSequence - cl->messageAcknowledge <= 0 ) {
+	if ( !fnql::net::IsNewerSequence( cl->netchan.outgoingSequence,
+		cl->messageAcknowledge ) ) {
 		// usually only hackers create messages like this
 		// it is more annoying for them to let them hanging
 #ifdef _DEBUG
@@ -2878,7 +3378,8 @@ void SV_ExecuteClientMessage( client_t *cl, msg_t *msg ) {
 
 	reliableAcknowledge = MSG_ReadLong( msg );
 
-	if ( cl->reliableSequence - reliableAcknowledge < 0 ) {
+	if ( !fnql::net::PendingCounterCount( cl->reliableSequence,
+		reliableAcknowledge, pendingReliable ) ) {
 #ifdef _DEBUG
 		SV_DropClient( cl, "DEBUG: illegible client message" );
 #endif
@@ -2888,13 +3389,14 @@ void SV_ExecuteClientMessage( client_t *cl, msg_t *msg ) {
 	// NOTE: when the client message is fux0red the acknowledgement numbers
 	// can be out of range, this could cause the server to send thousands of server
 	// commands which the server thinks are not yet acknowledged in SV_UpdateServerCommandsToClient
-	if ( cl->reliableSequence - reliableAcknowledge > MAX_RELIABLE_COMMANDS ) {
+	if ( pendingReliable > MAX_RELIABLE_COMMANDS ) {
 		// usually only hackers create messages like this
 		// it is more annoying for them to let them hanging
 #ifdef _DEBUG
 		SV_DropClient( cl, "DEBUG: illegible client message" );
 #else
-		Com_Printf( S_COLOR_YELLOW "WARNING: dropping %i commands from %s\n", cl->reliableSequence - cl->reliableAcknowledge, cl->name );
+		Com_Printf( S_COLOR_YELLOW "WARNING: dropping %u commands from %s\n",
+			pendingReliable, cl->name );
 #endif
 		cl->reliableAcknowledge = cl->reliableSequence;
 		return;

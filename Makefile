@@ -233,6 +233,7 @@ BR=$(BUILD_DIR)/release-$(PLATFORM)-$(ARCH)
 ADIR=$(MOUNT_DIR)/asm
 CDIR=$(MOUNT_DIR)/client
 SDIR=$(MOUNT_DIR)/server
+PDIR=$(MOUNT_DIR)/platform
 RCDIR=$(MOUNT_DIR)/renderercommon
 R1DIR=$(MOUNT_DIR)/renderer
 R2DIR=$(MOUNT_DIR)/renderer2
@@ -1302,6 +1303,7 @@ Q3OBJ = \
   $(B)/client/cl_ui.o \
   $(B)/client/cl_webpak.o \
   $(B)/client/cl_webui.o \
+  $(B)/client/awesomium_backend_win32.o \
   $(B)/client/cl_avi.o \
   $(B)/client/cl_jpeg.o \
   \
@@ -1311,6 +1313,8 @@ Q3OBJ = \
   $(B)/client/cm_test.o \
   $(B)/client/cm_trace.o \
   \
+	$(B)/client/fnql_steam.o \
+	\
   $(B)/client/cmd.o \
   $(B)/client/common.o \
   $(B)/client/cvar.o \
@@ -1570,6 +1574,7 @@ Q3DOBJ = \
   $(B)/ded/cm_polylib.o \
   $(B)/ded/cm_test.o \
   $(B)/ded/cm_trace.o \
+	$(B)/ded/fnql_steam.o \
   $(B)/ded/cmd.o \
   $(B)/ded/common.o \
   $(B)/ded/cvar.o \
@@ -1696,6 +1701,12 @@ $(B)/client/%.o: $(SDIR)/%.cpp
 $(B)/client/%.o: $(CMDIR)/%.c
 	$(DO_CC)
 
+$(B)/client/%.o: $(CMDIR)/%.cpp
+	$(DO_CXX)
+
+$(B)/client/%.o: $(PDIR)/%.cpp
+	$(DO_CXX)
+
 $(B)/client/qvm/%.o: $(CMDIR)/%.c
 	$(DO_CC_QVM)
 
@@ -1791,6 +1802,12 @@ $(B)/ded/%.o: $(SDIR)/%.cpp
 
 $(B)/ded/%.o: $(CMDIR)/%.c
 	$(DO_DED_CC)
+
+$(B)/ded/%.o: $(CMDIR)/%.cpp
+	$(DO_DED_CXX)
+
+$(B)/ded/%.o: $(PDIR)/%.cpp
+	$(DO_DED_CXX)
 
 $(B)/ded/qvm/%.o: $(CMDIR)/%.c
 	$(DO_DED_CC_QVM)

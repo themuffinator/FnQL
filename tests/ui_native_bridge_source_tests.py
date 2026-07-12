@@ -161,12 +161,29 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
     def test_vm_loader_can_materialize_native_modules_from_paks(self) -> None:
         vm_c = read_repo_file("code/qcommon/vm.c")
 
-        self.assertIn("static void *VM_LoadDllFromPakCache", vm_c)
+        self.assertIn("static void *VM_LoadDllFromPakCache( vmIndex_t index", vm_c)
         self.assertIn("length = FS_ReadFile( filename, &buffer );", vm_c)
-        self.assertIn('Com_sprintf( cacheName, sizeof( cacheName ), "native/%s", filename );', vm_c)
+        self.assertIn('"native/%s/%s"', vm_c)
         self.assertIn('FS_BuildOSPath( basePath, ".tmp", cacheName )', vm_c)
         self.assertIn("libHandle = Sys_LoadLibrary( cachePath );", vm_c)
-        self.assertIn("libHandle = VM_LoadDllFromPakCache( filename );", vm_c)
+        self.assertIn("libHandle = VM_LoadDllFromPakCache( index, filename );", vm_c)
+        self.assertIn("VM_PinNativeModule( index, filename, buffer, length );", vm_c)
+
+    def test_pure_restarts_only_reload_previously_pinned_native_bytes(self) -> None:
+        qcommon_h = read_repo_file("code/qcommon/qcommon.h")
+        vm_c = read_repo_file("code/qcommon/vm.c")
+        ui = read_repo_file("code/client/cl_ui.cpp")
+        cgame = read_repo_file("code/client/cl_cgame.cpp")
+
+        self.assertIn("VMI_PINNED_NATIVE", qcommon_h)
+        self.assertIn("VM_PINNED_NATIVE_MAX_BYTES", vm_c)
+        self.assertIn("VM_LoadPinnedDll", vm_c)
+        self.assertIn("Com_RandomBytes( nonce", vm_c)
+        self.assertIn("pinnedOnly", vm_c)
+        self.assertIn("VM_HasPinnedNativeModule( VM_UI )", ui)
+        self.assertIn("VM_HasPinnedNativeModule( VM_CGAME )", cgame)
+        self.assertIn("? VMI_PINNED_NATIVE : VMI_COMPILED", ui)
+        self.assertIn("? VMI_PINNED_NATIVE : VMI_COMPILED", cgame)
 
     def test_vm_loader_selects_retail_or_legacy_dllentry_before_calling_it(self) -> None:
         vm_c = read_repo_file("code/qcommon/vm.c")
@@ -223,9 +240,10 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
 
         self.assertIn("void\tRE_DrawScaledText(", client_h)
         self.assertIn("void\tRE_MeasureScaledText(", client_h)
-        self.assertIn("RE_DrawScaledText( x, y, text, fontHandle, scale, maxX, outMaxX", cl_ui)
+        self.assertIn("RE_DrawScaledText( x, y, text, fontHandle, scale, limit, maxX", cl_ui)
         self.assertIn("ql_ui_currentColor", cl_ui)
-        self.assertIn("RE_MeasureScaledText( text, end, fontHandle, scale, maxX, &width, &height, outLeft );", cl_ui)
+        self.assertIn("RE_MeasureScaledText( text, end, fontHandle, scale, limit, &width, &height, &left );", cl_ui)
+        self.assertIn("fnql::font::WriteMeasureBounds( outLeft, left, width, height );", cl_ui)
         self.assertIn("QL_UI_PackFloatBits64( width, height )", cl_ui)
         self.assertNotIn("QL_UI_MeasureFallbackText", cl_ui)
 
@@ -345,7 +363,7 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
         self.assertIn("((void (QDECL *)( int, qboolean, int ))exportFunc)", read_repo_file("code/qcommon/vm.c"))
         self.assertIn("VM_Call( uivm, 3, UI_KEY_EVENT, key, qtrue, time );", cl_keys)
         self.assertIn("VM_Call( uivm, 3, UI_KEY_EVENT, key, qfalse, time );", cl_keys)
-        self.assertIn("VM_Call( uivm, 3, UI_KEY_EVENT, key | K_CHAR_FLAG, qtrue, cls.realtime );", cl_keys)
+        self.assertIn("VM_Call( uivm, 3, UI_KEY_EVENT, utf8Byte | K_CHAR_FLAG, qtrue, cls.realtime );", cl_keys)
         self.assertNotIn("VM_Call( uivm, 2, UI_KEY_EVENT", cl_keys)
 
     def test_ui_native_import_table_has_no_unbound_recovered_slots(self) -> None:
@@ -426,14 +444,23 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
         self.assertIn("SV_GetPlatformAuthPolicyLabel()", sv_client)
         self.assertIn("SV_GetServerStatsProviderLabel()", sv_client)
         self.assertIn("SV_GetServerStatsPolicyLabel()", sv_client)
-        self.assertIn("static void SV_LogSteamStatsStubLifecycle", sv_client)
-        self.assertIn("accepted without identity verification", sv_client)
+        self.assertIn("static void SV_LogSteamStatsLifecycle", sv_client)
+        self.assertIn("static fnql::server::stats::Session *SV_ClientStatsSession", sv_client)
+        self.assertIn("compatibility-unverified", sv_client)
         self.assertIn("std::numeric_limits<std::uint64_t>::max", sv_client)
-        self.assertIn('SV_LogSteamStatsStubLifecycle( "field-delta", detail );', sv_client)
-        self.assertIn('SV_LogSteamStatsStubLifecycle( "achievement-unlock", detail );', sv_client)
-        self.assertIn('SV_LogSteamStatsStubLifecycle( "achievement-query", detail );', sv_client)
-        self.assertIn('SV_LogSteamStatsStubLifecycle( "match-report", "ignored MATCH_REPORT for disabled Steam stats owner" );', sv_client)
-        self.assertIn('SV_LogSteamStatsStubLifecycle( "event-process", detail );', sv_client)
+        self.assertIn("client.platformAuthSession && client.platformAuthValidated", sv_client)
+        self.assertIn("FNQL_Steam_Capabilities()", sv_client)
+        self.assertIn("FNQL_STEAM_CAP_STATS | FNQL_STEAM_CAP_GAME_SERVER_STATS", sv_client)
+        self.assertIn("FNQL_Steam_RequestUserStats( client.platformSteamIdValue )", sv_client)
+        self.assertIn('SV_LogSteamStatsLifecycle( "field-delta", "invalid retail stat index" );', sv_client)
+        self.assertIn('SV_LogSteamStatsLifecycle( "achievement-unlock", "invalid retail achievement index" );', sv_client)
+        self.assertIn("statsReports.Build", sv_client)
+        self.assertIn("published report and eligible PLYR_STATS/PLYR_EVENTS summary", sv_client)
+        self.assertIn("Zmq_SubmitMatchReportJson( document.data() );", sv_client)
+        self.assertIn("Zmq_SubmitMatchSummaryJson( summary.data() );", sv_client)
+        self.assertIn("Zmq_SubmitMatchReport( report );", sv_client)
+        self.assertIn("Zmq_ReportPlayerEvent( steamIdLow, steamIdHigh, clientStats, eventName, payload );", sv_client)
+        self.assertIn("Zmq_ReportPlayerEventJson( eventName, document.data() );", sv_client)
         self.assertGreaterEqual(sv_bot.count("platformSteamId[0] = '\\0';"), 2)
         self.assertIn("static ql_import_f ql_game_imports[GAME_NATIVE_IMPORT_COUNT];", sv_game)
         self.assertGreaterEqual(sv_game.count("std::array<intptr_t, MAX_VMMAIN_CALL_ARGS> args{}"), 2)
@@ -585,6 +612,7 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
             "sv_statsPolicy",
         ]:
             self.assertIn(f'SetReadOnlyStatus( "{cvar}",', sv_platform)
+        self.assertIn('cvar_t *cvar = Cvar_Get( name, "", CVAR_ROM );', sv_platform)
 
         self.assertIn("SV_RefreshPlatformServiceCvars();", sv_init)
         self.assertLess(

@@ -23,6 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "q_shared.h"
 #include "qcommon.h"
+#include "../platform/fnql_steam.h"
 #include <setjmp.h>
 #ifndef _WIN32
 #include <netinet/in.h>
@@ -3852,7 +3853,7 @@ void Com_Init( char *commandLine ) {
 	Cvar_SetDescription( com_journal, "When enabled, writes events and its data to 'journal.dat' and 'journaldata.dat'.");
 
 	com_protocol = Cvar_Get( "protocol", XSTRING( DEFAULT_PROTOCOL_VERSION ), 0 );
-	Cvar_SetDescription( com_protocol, "Specify network protocol version number, use -compat suffix for OpenArena compatibility.");
+	Cvar_SetDescription( com_protocol, "Network protocol version. FnQL defaults to retail Quake Live protocol 91; select 68 or 71 only for explicit compatibility testing." );
 	if ( Q_stristr( com_protocol->string, "-compat" ) > com_protocol->string ) {
 		// strip -compat suffix
 		Cvar_Set2( "protocol", va( "%i", com_protocol->integer ), qtrue );
@@ -4028,6 +4029,9 @@ void Com_Init( char *commandLine ) {
 	VM_Init();
 	SV_Init();
 	SV_RegisterGameCvars();
+	FNQL_Steam_Init( com_dedicated->integer
+		? FNQL_STEAM_ROLE_GAME_SERVER : FNQL_STEAM_ROLE_CLIENT );
+	SV_RefreshPlatformServiceCvars();
 
 	com_dedicated->modified = qfalse;
 
@@ -4435,6 +4439,7 @@ void Com_Frame( qboolean noDelay ) {
 	realMsec = com_frameTime - lastTime;
 
 	Cbuf_Execute();
+	FNQL_Steam_Pump();
 
 	// mess with msec if needed
 	gameMsec = Com_ModifyMsec( realMsec );
@@ -4476,6 +4481,9 @@ void Com_Frame( qboolean noDelay ) {
 			SV_AddDedicatedCommands();
 			gw_minimized = qtrue;
 		}
+		FNQL_Steam_Reconfigure( com_dedicated->integer
+			? FNQL_STEAM_ROLE_GAME_SERVER : FNQL_STEAM_ROLE_CLIENT );
+		SV_RefreshPlatformServiceCvars();
 	}
 
 #ifdef DEDICATED
@@ -4564,6 +4572,7 @@ Com_Shutdown
 =================
 */
 static void Com_Shutdown( void ) {
+	FNQL_Steam_Shutdown();
 	Zmq_ShutdownRuntime();
 
 	if ( logfile != FS_INVALID_HANDLE ) {

@@ -126,8 +126,8 @@ if get_option('strict-warnings')
 endif
 
 if win32
-  common_c_args += ['-DWIN32', '-D_WINDOWS', '-D_CRT_SECURE_NO_WARNINGS', '-D_CRT_NONSTDC_NO_WARNINGS', '-D_WINSOCK_DEPRECATED_NO_WARNINGS']
-  common_cpp_args += ['-DWIN32', '-D_WINDOWS', '-D_CRT_SECURE_NO_WARNINGS', '-D_CRT_NONSTDC_NO_WARNINGS', '-D_WINSOCK_DEPRECATED_NO_WARNINGS']
+	common_c_args += ['-DWIN32', '-D_WINDOWS', '-DNOMINMAX', '-D_CRT_SECURE_NO_WARNINGS', '-D_CRT_NONSTDC_NO_WARNINGS', '-D_WINSOCK_DEPRECATED_NO_WARNINGS']
+	common_cpp_args += ['-DWIN32', '-D_WINDOWS', '-DNOMINMAX', '-D_CRT_SECURE_NO_WARNINGS', '-D_CRT_NONSTDC_NO_WARNINGS', '-D_WINSOCK_DEPRECATED_NO_WARNINGS']
 elif darwin
   common_c_args += ['-DMACOS_X']
   common_cpp_args += ['-DMACOS_X']
@@ -180,7 +180,8 @@ include_dirs = include_directories(
 )
 
 qcommon_src = [
-  'code/qcommon/cm_load.c',
+	'code/platform/fnql_steam.cpp',
+	'code/qcommon/cm_load.c',
   'code/qcommon/cm_patch.c',
   'code/qcommon/cm_polylib.c',
   'code/qcommon/cm_test.c',
@@ -195,8 +196,8 @@ qcommon_src = [
   'code/qcommon/keys.c',
   'code/qcommon/md4.c',
   'code/qcommon/md5.c',
-  'code/qcommon/msg.c',
-  'code/qcommon/net_chan.c',
+  'code/qcommon/msg.cpp',
+  'code/qcommon/net_chan.cpp',
   'code/qcommon/net_ip.c',
   'code/qcommon/puff.c',
   'code/qcommon/q_math.c',
@@ -256,6 +257,7 @@ client_src = [
   'code/client/cl_ui.cpp',
   'code/client/cl_webpak.cpp',
   'code/client/cl_webui.cpp',
+  'code/client/awesomium_backend_win32.cpp',
   'code/client/audio/snd_main.cpp',
   'code/client/audio/legacy/snd_adpcm.cpp',
   'code/client/audio/legacy/snd_dma.cpp',
@@ -1016,6 +1018,87 @@ netchan_codec_tests = executable('fnql_netchan_codec_tests',
 )
 test('fnql_netchan_codec', netchan_codec_tests)
 
+ql_font_text_tests = executable('fnql_ql_font_text_tests',
+  'tests/ql_font_text_tests.cpp',
+  cpp_args: common_cpp_args,
+)
+test('fnql_ql_font_text', ql_font_text_tests)
+test('fnql_ql_font_source', python,
+  args: files('tests/ql_font_source_tests.py'),
+)
+
+netchan_safety_tests = executable('fnql_netchan_safety_tests',
+  'tests/netchan_safety_tests.cpp',
+  include_directories: include_directories('code/qcommon'),
+  cpp_args: common_cpp_args,
+)
+test('fnql_netchan_safety', netchan_safety_tests)
+
+input_compat_tests = executable('fnql_input_compat_tests',
+  'tests/input_compat_tests.cpp',
+  cpp_args: common_cpp_args,
+)
+test('fnql_input_compat', input_compat_tests)
+
+message_codec_tests = executable('fnql_message_codec_tests',
+  'tests/message_codec_tests.cpp',
+  'code/qcommon/msg.cpp',
+  'code/qcommon/huffman_static.c',
+  include_directories: include_directories('code/qcommon'),
+  c_args: common_c_args + ['-DDEDICATED'],
+  cpp_args: common_cpp_args + ['-DDEDICATED'],
+)
+test('fnql_message_codec', message_codec_tests)
+
+protocol_layout_tests = executable('fnql_protocol_layout_tests',
+  'tests/protocol_layout_tests.cpp',
+  include_directories: include_directories('code/qcommon'),
+  cpp_args: common_cpp_args,
+)
+test('fnql_protocol_layout', protocol_layout_tests)
+
+protocol_contract_tests = executable('fnql_protocol_contract_tests',
+  'tests/protocol_contract_tests.cpp',
+  include_directories: include_directories('code/qcommon'),
+  cpp_args: common_cpp_args,
+)
+test('fnql_protocol_contract', protocol_contract_tests)
+
+retail_auth_challenge_tests = executable('fnql_retail_auth_challenge_tests',
+  'tests/retail_auth_challenge_tests.cpp',
+  include_directories: include_directories('code/server'),
+  cpp_args: common_cpp_args,
+)
+test('fnql_retail_auth_challenge', retail_auth_challenge_tests)
+
+stats_session_tests = executable('fnql_stats_session_tests',
+  'tests/stats_session_tests.cpp',
+  include_directories: include_directories('code/server'),
+  cpp_args: common_cpp_args,
+)
+test('fnql_stats_session', stats_session_tests)
+
+json_document_tests = executable('fnql_json_document_tests',
+  'tests/json_document_tests.cpp',
+  include_directories: include_directories('code/server'),
+  cpp_args: common_cpp_args,
+)
+test('fnql_json_document', json_document_tests)
+
+stats_event_tests = executable('fnql_stats_event_tests',
+  'tests/stats_event_tests.cpp',
+  include_directories: include_directories('code/server'),
+  cpp_args: common_cpp_args,
+)
+test('fnql_stats_event', stats_event_tests)
+
+stats_report_tests = executable('fnql_stats_report_tests',
+  'tests/stats_report_tests.cpp',
+  include_directories: include_directories('code/server'),
+  cpp_args: common_cpp_args,
+)
+test('fnql_stats_report', stats_report_tests)
+
 demo_stream_tests = executable('fnql_demo_stream_tests',
   'tests/demo_stream_tests.cpp',
   include_directories: include_directories('code/client'),
@@ -1035,6 +1118,9 @@ ql_bsp_contract_tests = executable('fnql_ql_bsp_contract_tests',
 test('fnql_ql_bsp_contract', ql_bsp_contract_tests)
 test('fnql_ql_services_source', python,
   args: files('tests/ql_services_source_tests.py'),
+)
+test('fnql_steam_provider_source', python,
+  args: files('tests/steam_provider_source_tests.py'),
 )
 
 webpak_format_tests = executable('fnql_webpak_format_tests',

@@ -220,6 +220,20 @@ static int forced_unload;
 
 static struct vm_s vmTable[ VM_COUNT ];
 
+// Pure Quake Live servers still require the retail native UI and cgame.  Keep
+// a bounded copy of modules which the local installation opened successfully
+// before a server could influence filesystem search order.  A pure restart may
+// reload only these exact bytes; it never searches for a new native module.
+#define VM_PINNED_NATIVE_MAX_BYTES ( 16 * 1024 * 1024 )
+typedef struct {
+	byte	*bytes;
+	int	length;
+	char	filename[MAX_QPATH];
+} vmPinnedNative_t;
+
+static vmPinnedNative_t vmPinnedNative[VM_COUNT];
+static char vmNativeCacheNonce[33];
+
 static const char *vmName[ VM_COUNT ] = {
 	"qagame",
 	"cgame",
@@ -383,6 +397,8 @@ void VM_Init( void ) {
 	Cmd_AddCommand( "vminfo", VM_VmInfo_f );
 
 	Com_Memset( vmTable, 0, sizeof( vmTable ) );
+	Com_Memset( vmPinnedNative, 0, sizeof( vmPinnedNative ) );
+	vmNativeCacheNonce[0] = '\0';
 }
 
 
@@ -1869,6 +1885,71 @@ static qboolean VM_WriteNativeCacheFile( const char *path, const void *buffer, i
 	return qtrue;
 }
 
+static const char *VM_NativeCachePath( const char *filename, char *path, size_t pathSize ) {
+	byte	nonce[16];
+	char	cacheName[MAX_QPATH];
+	const char	*basePath;
+	int	i;
+
+	if ( !filename || !filename[0] || !path || pathSize == 0 ) {
+		return NULL;
+	}
+
+	if ( !vmNativeCacheNonce[0] ) {
+		Com_RandomBytes( nonce, sizeof( nonce ) );
+		for ( i = 0; i < (int)sizeof( nonce ); ++i ) {
+			Com_sprintf( vmNativeCacheNonce + i * 2,
+				sizeof( vmNativeCacheNonce ) - (size_t)i * 2, "%02x", nonce[i] );
+		}
+	}
+
+	basePath = Cvar_VariableString( "fs_homepath" );
+	if ( !basePath || !basePath[0] ) {
+		basePath = Sys_Pwd();
+	}
+
+	Com_sprintf( cacheName, sizeof( cacheName ), "native/%s/%s",
+		vmNativeCacheNonce, filename );
+	Q_strncpyz( path, FS_BuildOSPath( basePath, ".tmp", cacheName ), pathSize );
+	return path;
+}
+
+static void VM_PinNativeModule( vmIndex_t index, const char *filename,
+	const void *buffer, int length ) {
+	vmPinnedNative_t	*pinned;
+	byte	*copy;
+
+	if ( (unsigned)index >= VM_COUNT || !filename || !filename[0] ||
+		!buffer || length <= 0 || length > VM_PINNED_NATIVE_MAX_BYTES ) {
+		return;
+	}
+
+	pinned = &vmPinnedNative[index];
+	if ( pinned->bytes && pinned->length == length &&
+		!Q_stricmp( pinned->filename, filename ) &&
+		!memcmp( pinned->bytes, buffer, length ) ) {
+		return;
+	}
+
+	copy = Z_Malloc( length );
+	Com_Memcpy( copy, buffer, length );
+	if ( pinned->bytes ) {
+		Z_Free( pinned->bytes );
+	}
+	pinned->bytes = copy;
+	pinned->length = length;
+	Q_strncpyz( pinned->filename, filename, sizeof( pinned->filename ) );
+}
+
+qboolean VM_HasPinnedNativeModule( vmIndex_t index ) {
+	if ( (unsigned)index >= VM_COUNT ) {
+		return qfalse;
+	}
+
+	return vmPinnedNative[index].bytes && vmPinnedNative[index].length > 0
+		? qtrue : qfalse;
+}
+
 typedef enum {
 	VM_DLL_ENTRY_INVALID,
 	VM_DLL_ENTRY_LEGACY,
@@ -1901,11 +1982,9 @@ static vmDllEntryAbi_t VM_SelectDllEntryAbi( dllEntry_t dllEntry, vmMainFunc_t e
 	return VM_DLL_ENTRY_INVALID;
 }
 
-static void *VM_LoadDllFromPakCache( const char *filename ) {
+static void *VM_LoadDllFromPakCache( vmIndex_t index, const char *filename ) {
 	void	*buffer;
 	int		length;
-	const char	*basePath;
-	char	cacheName[MAX_QPATH];
 	char	cachePath[MAX_OSPATH * 3 + 1];
 	void	*libHandle;
 
@@ -1918,25 +1997,47 @@ static void *VM_LoadDllFromPakCache( const char *filename ) {
 		return NULL;
 	}
 
-	basePath = Cvar_VariableString( "fs_homepath" );
-	if ( !basePath || !basePath[0] ) {
-		basePath = Sys_Pwd();
+	if ( !VM_NativeCachePath( filename, cachePath, sizeof( cachePath ) ) ) {
+		FS_FreeFile( buffer );
+		return NULL;
 	}
-
-	Com_sprintf( cacheName, sizeof( cacheName ), "native/%s", filename );
-	Q_strncpyz( cachePath, FS_BuildOSPath( basePath, ".tmp", cacheName ), sizeof( cachePath ) );
 	if ( !VM_WriteNativeCacheFile( cachePath, buffer, length ) ) {
 		FS_FreeFile( buffer );
 		return NULL;
 	}
 
+	libHandle = Sys_LoadLibrary( cachePath );
+	if ( libHandle ) {
+		VM_PinNativeModule( index, filename, buffer, length );
+		Com_Printf( "VM_LoadDll: loaded native module cache '%s'\n", cachePath );
+	}
 	FS_FreeFile( buffer );
+
+	return libHandle;
+}
+
+static void *VM_LoadPinnedDll( vmIndex_t index, const char *filename ) {
+	const vmPinnedNative_t	*pinned;
+	char	cachePath[MAX_OSPATH * 3 + 1];
+	void	*libHandle;
+
+	if ( !VM_HasPinnedNativeModule( index ) ) {
+		return NULL;
+	}
+
+	pinned = &vmPinnedNative[index];
+	if ( Q_stricmp( pinned->filename, filename ) ) {
+		return NULL;
+	}
+	if ( !VM_NativeCachePath( filename, cachePath, sizeof( cachePath ) ) ||
+		 !VM_WriteNativeCacheFile( cachePath, pinned->bytes, pinned->length ) ) {
+		return NULL;
+	}
 
 	libHandle = Sys_LoadLibrary( cachePath );
 	if ( libHandle ) {
-		Com_Printf( "VM_LoadDll: loaded native module cache '%s'\n", cachePath );
+		Com_Printf( "VM_LoadDll: reloaded pinned native module '%s'\n", cachePath );
 	}
-
 	return libHandle;
 }
 
@@ -1954,8 +2055,9 @@ static qboolean VM_AssignDllFunction( void *destination, size_t destinationSize,
 	return qtrue;
 }
 
-static void * QDECL VM_LoadDll( const char *name, vmMainFunc_t *entryPoint, dllSyscall_t systemcalls,
-		void **dllExports, void *dllImports, int *dllApiVersion ) {
+static void * QDECL VM_LoadDll( vmIndex_t index, const char *name,
+		vmMainFunc_t *entryPoint, dllSyscall_t systemcalls, void **dllExports,
+		void *dllImports, int *dllApiVersion, qboolean pinnedOnly ) {
 
 	char		filename[ MAX_QPATH ];
 	void		*libHandle;
@@ -1967,14 +2069,26 @@ static void * QDECL VM_LoadDll( const char *name, vmMainFunc_t *entryPoint, dllS
 
 	Com_sprintf( filename, sizeof( filename ), "%s" ARCH_STRING DLL_EXT, name );
 
-	libHandle = FS_LoadLibrary( filename );
+	if ( pinnedOnly ) {
+		libHandle = VM_LoadPinnedDll( index, filename );
+	} else {
+		// Materialize the virtual-filesystem selection first so the bytes
+		// executed now are exactly the bytes a later pure restart can pin.
+		libHandle = VM_LoadDllFromPakCache( index, filename );
+		if ( !libHandle ) {
+			// Preserve development/system layouts whose library is visible to
+			// the OS loader but intentionally not readable as a virtual file.
+			libHandle = FS_LoadLibrary( filename );
+		}
+	}
 
 	if ( !libHandle ) {
-		libHandle = VM_LoadDllFromPakCache( filename );
-		if ( !libHandle ) {
+		if ( pinnedOnly ) {
+			Com_Printf( "VM_LoadDLL '%s' has no pinned native image\n", filename );
+		} else {
 			Com_Printf( "VM_LoadDLL '%s' failed\n", filename );
-			return NULL;
 		}
+		return NULL;
 	}
 
 	Com_Printf( "VM_LoadDLL '%s' ok\n", filename );
@@ -2076,11 +2190,12 @@ vm_t *VM_CreateNative( vmIndex_t index, syscall_t systemCalls, dllSyscall_t dllS
 		}
 	}
 
-	if ( interpret == VMI_NATIVE ) {
+	if ( interpret == VMI_NATIVE || interpret == VMI_PINNED_NATIVE ) {
 		// try to load as a system dll
 		Com_Printf( "Loading dll file %s.\n", name );
-		vm->dllHandle = VM_LoadDll( name, &vm->entryPoint, dllSyscalls,
-			&vm->dllExports, vm->dllImports, vm->dllImports ? &vm->dllApiVersion : NULL );
+		vm->dllHandle = VM_LoadDll( index, name, &vm->entryPoint, dllSyscalls,
+			&vm->dllExports, vm->dllImports, vm->dllImports ? &vm->dllApiVersion : NULL,
+			interpret == VMI_PINNED_NATIVE ? qtrue : qfalse );
 		if ( vm->dllHandle ) {
 			if ( vm->dllExports && !VM_ValidateNativeDllInterface( vm ) ) {
 				Sys_UnloadLibrary( vm->dllHandle );

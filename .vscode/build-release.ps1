@@ -21,7 +21,9 @@ param(
 	[switch]$Install,
 	[string]$DestDir = $(if ($env:FNQL_MESON_DESTDIR) { $env:FNQL_MESON_DESTDIR } elseif ($env:FNQ3_MESON_DESTDIR) { $env:FNQ3_MESON_DESTDIR } else { '' }),
 	[switch]$Archive,
-	[string]$RootArchiveName = $(if ($env:FNQL_MESON_ROOT_ARCHIVE_NAME) { $env:FNQL_MESON_ROOT_ARCHIVE_NAME } elseif ($env:FNQ3_MESON_ROOT_ARCHIVE_NAME) { $env:FNQ3_MESON_ROOT_ARCHIVE_NAME } else { 'FnQL-pkg.fnz' })
+	[string]$RootArchiveName = $(if ($env:FNQL_MESON_ROOT_ARCHIVE_NAME) { $env:FNQL_MESON_ROOT_ARCHIVE_NAME } elseif ($env:FNQ3_MESON_ROOT_ARCHIVE_NAME) { $env:FNQ3_MESON_ROOT_ARCHIVE_NAME } else { 'FnQL-pkg.fnz' }),
+	[switch]$WithSteam,
+	[string]$SteamRepo = $(if ($env:FNQL_STEAM_REPO) { $env:FNQL_STEAM_REPO } else { '..\FnQL-Steam' })
 )
 
 $ErrorActionPreference = 'Stop'
@@ -247,6 +249,36 @@ function Invoke-MesonInstall {
 	}
 }
 
+function Invoke-FnQLSteamBuild {
+	param(
+		[string]$Repository,
+		[string]$SelectedPlatform,
+		[string]$SelectedConfiguration,
+		[string]$FnQLRoot,
+		[string]$BuildPath
+	)
+
+	if ($SelectedPlatform -notin @('Win32', 'x64')) {
+		throw "FnQL-Steam currently supports Win32 and x64 provider builds, not $SelectedPlatform."
+	}
+	$repositoryPath = (Resolve-Path $Repository -ErrorAction Stop).Path
+	$buildScript = Join-Path $repositoryPath 'scripts\build.ps1'
+	if (-not (Test-Path -LiteralPath $buildScript)) {
+		throw "FnQL-Steam build script was not found: $buildScript"
+	}
+	Write-Host "==> FnQL-Steam $SelectedPlatform $SelectedConfiguration"
+	& $buildScript -Platform $SelectedPlatform -Configuration $SelectedConfiguration -FnQLRoot $FnQLRoot
+	if ($LASTEXITCODE -ne 0) {
+		throw 'FnQL-Steam build failed.'
+	}
+	$provider = Join-Path $repositoryPath "out\$($SelectedPlatform.ToLowerInvariant())\$($SelectedConfiguration.ToLowerInvariant())\fnql_steam.dll"
+	if (-not (Test-Path -LiteralPath $provider)) {
+		throw "FnQL-Steam provider was not produced: $provider"
+	}
+	Copy-Item -LiteralPath $provider -Destination (Join-Path $BuildPath 'fnql_steam.dll') -Force
+	Write-Host "Staged FnQL-Steam provider beside the engine: $(Join-Path $BuildPath 'fnql_steam.dll')"
+}
+
 $workspaceRoot = Split-Path -Parent $PSScriptRoot
 $buildPath = Resolve-BuildPath -WorkspaceRoot $workspaceRoot -SelectedBuildDir $BuildDir
 $canonicalRootArchiveName = 'FnQL-pkg.fnz'
@@ -323,6 +355,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Assert-WindowsOutputs -BuildPath $buildPath -SelectedPlatform $Platform -SelectedTarget $Target -RendererCsv $rendererCsv
+
+if ($WithSteam) {
+	Invoke-FnQLSteamBuild -Repository $SteamRepo -SelectedPlatform $Platform `
+		-SelectedConfiguration $Configuration -FnQLRoot $workspaceRoot -BuildPath $buildPath
+}
 
 if ($RunTests) {
 	$testArgs = @('test', '-C', $buildPath, '--print-errorlogs')

@@ -190,6 +190,7 @@ struct clientConnection_t {
 	char		serverMessage[MAX_STRING_CHARS]; // for display on connection dialog
 
 	int			challenge;					// from the server to use for connecting
+	int			handshakeProtocol;			// protocol selected by challengeResponse
 	int			checksumFeed;				// from the server for checksum calculations
 
 	// these are our reliable messages that go to the server
@@ -364,6 +365,7 @@ struct clientStatic_t {
 	// rendering info
 	glconfig_t	glconfig;
 	qhandle_t	charSetShader;
+	qhandle_t	recordShader;
 	qhandle_t	whiteShader;
 	qhandle_t	consoleShader;
 	qhandle_t	cursorShader;
@@ -613,8 +615,8 @@ void	SCR_DrawStringExt( int x, int y, float size, const char *string, const floa
 void	SCR_DrawSmallStringExt( int x, int y, const char *string, const float *setColor, qboolean forceColor, qboolean noColorEscape );
 void	SCR_DrawSmallChar( int x, int y, int ch );
 void	SCR_DrawSmallString( int x, int y, const char *s, int len );
-void	RE_DrawScaledText( int x, int y, const char *text, int fontHandle, float scale, int maxX, float *outMaxX, qboolean forceColor, const float *baseColor );
-void	RE_MeasureScaledText( const char *text, const char *end, int fontHandle, float scale, int maxX, float *outWidth, float *outHeight, float *outLeft );
+void	RE_DrawScaledText( int x, int y, const char *text, int fontHandle, float scale, int limit, float *maxX, qboolean forceColor, const float *baseColor );
+void	RE_MeasureScaledText( const char *text, const char *end, int fontHandle, float scale, int limit, float *outWidth, float *outHeight, float *outLeft );
 
 //
 // cl_cin.cpp
@@ -663,6 +665,7 @@ qboolean CL_LauncherRequestData( const char *virtualPath, void **outBuffer, int 
 void CL_RefreshOnlineServicesBridgeState( void );
 qboolean CL_IsSubscribedApp( int appId );
 qhandle_t CL_GetAvatarImageHandle( unsigned int identityLow, unsigned int identityHigh );
+void CL_ClearAvatarImageHandles( void );
 qboolean CL_Steam_OpenOverlayUrl( const char *url );
 qhandle_t CL_Steam_RegisterShader( const char *url );
 qboolean CL_Steam_RequestServers( int requestMode );
@@ -681,6 +684,7 @@ qboolean CL_Steam_ActivateOverlayToUser( const char *dialog, const char *steamId
 qboolean CL_Steam_GetItemDownloadInfo( unsigned int itemIdLow, unsigned int itemIdHigh, unsigned long long *outDownloaded, unsigned long long *outTotal );
 void CL_Steam_OnRichPresenceJoinRequested( const char *command );
 void CL_Steam_OnGameServerChangeRequested( const char *server, const char *password );
+void CL_SteamP2PFrame( void );
 void QLWebHost_RegisterCommands( void );
 void QLWebHost_UnregisterCommands( void );
 void CL_WebHost_Init( void );

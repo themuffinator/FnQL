@@ -1652,8 +1652,31 @@ static qboolean QDECL QL_G_trap_GetSteamId( int clientNum, unsigned int *steamId
 	return qtrue;
 }
 
+// Retail native import slot 200 returns only the low SteamID dword.  The
+// older compatibility syscall uses the three-argument output-pointer shape
+// above; sharing one function between those ABIs corrupts the caller stack.
+static unsigned int QDECL QL_G_trap_GetSteamIdLow( int clientNum ) {
+	unsigned int low = 0;
+	unsigned int high = 0;
+	return SV_ClientSteamId( clientNum, &low, &high ) ? low : 0u;
+}
+
 static qboolean QDECL QL_G_trap_VerifySteamAuth( int clientNum ) {
 	return SV_VerifyClientSteamAuth( clientNum );
+}
+
+// Retail slot 205 is invoked from GAME_CLIENT_CONNECT before the server moves
+// the provisional slot from CS_FREE to CS_CONNECTED.  It asks whether the
+// provider session was successfully started; final asynchronous rejection is
+// handled by the provider event callback and drops the client.
+static qboolean QDECL QL_G_trap_BeginSteamAuthSession( int clientNum ) {
+	if ( !svs.clients || clientNum < 0 || clientNum >= sv.maxclients ) {
+		return qfalse;
+	}
+	if ( SV_PlatformServiceAvailable( SV_PLATFORM_CAPABILITY_AUTH ) ) {
+		return svs.clients[clientNum].platformAuthSession;
+	}
+	return qtrue;
 }
 
 static void QDECL QL_G_trap_RankBegin( char *gameKey ) {
@@ -2194,12 +2217,12 @@ static void SV_InitGameImports( void ) {
 	QL_BIND( G_QL_IMPORT_MARK_CLIENT_GOT_CP, QL_G_trap_MarkClientGotCP );
 	QL_BIND( G_QL_IMPORT_RETURN_ZERO_198, QL_G_trap_ReturnZero );
 	QL_BIND( G_QL_IMPORT_RETURN_ZERO_199, QL_G_trap_ReturnZero );
-	QL_BIND( G_QL_IMPORT_STEAMID_QUERY, QL_G_trap_GetSteamId );
+	QL_BIND( G_QL_IMPORT_STEAMID_QUERY, QL_G_trap_GetSteamIdLow );
 	QL_BIND( G_QL_IMPORT_STEAM_STAT_ADD, QL_G_trap_AddSteamStat );
 	QL_BIND( G_QL_IMPORT_GENERATE_MATCH_GUID, QL_G_trap_GenerateMatchGuid );
 	QL_BIND( G_QL_IMPORT_STEAM_UNLOCK_ACHIEVEMENT, QL_G_trap_UnlockSteamAchievement );
 	QL_BIND( G_QL_IMPORT_STEAM_HAS_ACHIEVEMENT, QL_G_trap_HasSteamAchievement );
-	QL_BIND( G_QL_IMPORT_STEAM_AUTH_VALIDATE, QL_G_trap_VerifySteamAuth );
+	QL_BIND( G_QL_IMPORT_STEAM_AUTH_VALIDATE, QL_G_trap_BeginSteamAuthSession );
 	QL_BIND( G_QL_IMPORT_FACTORY_EXISTS, QL_G_trap_FactoryExists );
 
 	QL_BIND_COMPAT( G_PRINT, QL_G_trap_Printf );

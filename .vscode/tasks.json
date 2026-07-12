@@ -79,6 +79,34 @@
       ]
     },
     {
+      "label": "meson: build Win32 debug + Steam",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\.vscode\\build-release.ps1",
+        "-Configuration",
+        "Debug",
+        "-Platform",
+        "Win32",
+        "-BuildDir",
+        "meson\\build\\win32-debug",
+        "-Target",
+        "both",
+        "-Renderers",
+        "opengl,glx,vulkan,opengl2",
+        "-Archive",
+        "-WithSteam"
+      ],
+      "problemMatcher": [
+        "$gcc",
+        "$msCompile"
+      ]
+    },
+    {
       "label": "meson: build x64",
       "type": "shell",
       "command": "powershell",

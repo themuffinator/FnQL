@@ -2,6 +2,17 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "OpenGL + Steam (Retail QL / Win32)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\meson\\build\\win32-debug\\fnql.exe",
+      "args": ["+set", "r_fullscreen", "0", "+set", "cl_renderer", "opengl", "+set", "com_steamIntegration", "1"],
+      "cwd": "${workspaceFolder}\\meson\\build\\win32-debug",
+      "preLaunchTask": "meson: build Win32 debug + Steam",
+      "stopAtEntry": false,
+      "console": "internalConsole"
+    },
+    {
       "name": "OpenGL (Retail QL / Win32)",
       "type": "cppvsdbg",
       "request": "launch",

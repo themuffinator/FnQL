@@ -25,7 +25,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "tr_types.h"
 #include "vulkan/vulkan.h"
 
-#define	REF_API_VERSION		9
+#define	REF_API_VERSION		11
 
 //
 // these are the functions exported by the refresh module
@@ -86,6 +86,9 @@ typedef struct {
 	// Draw images for cinematic rendering, pass as 32 bit rgba
 	void	(*DrawStretchRaw)( int x, int y, int w, int h, int cols, int rows, const byte *data, int client, qboolean dirty );
 	void	(*UploadCinematic)( int w, int h, int cols, int rows, const byte *data, int client, qboolean dirty );
+	// Dedicated arbitrary-size RGBA surface for the client-owned WebUI. This
+	// avoids cinematic handle collisions and legacy power-of-two constraints.
+	void	(*DrawWebUISurface)( int x, int y, int w, int h, int cols, int rows, const byte *data, qboolean dirty );
 
 	void	(*BeginFrame)( stereoFrame_t stereoFrame );
 
@@ -104,6 +107,13 @@ typedef struct {
 	void    (*A3D_RenderGeometry) (void *pVoidA3D, void *pVoidGeom, void *pVoidMat, void *pVoidGeomStatus);
 #endif
 	void	(*RegisterFont)(const char *fontName, int pointSize, fontInfo_t *font);
+	void	(*DrawScaledText)( int x, int y, const char *text, int fontHandle, float scale,
+		int limit, float *maxX, qboolean forceColor, const float *baseColor );
+	void	(*MeasureScaledText)( const char *text, const char *end, int fontHandle, float scale,
+		int limit, float *outWidth, float *outHeight, float *outLeft );
+	qboolean (*GetScaledFontMetrics)( int fontHandle, float scale, float *outAscent,
+		float *outDescent, float *outLineHeight );
+	qhandle_t (*GetFontAtlasDebugShader)( int *outWidth, int *outHeight );
 	void	(*RemapShader)(const char *oldShader, const char *newShader, const char *offsetTime);
 	qboolean (*GetEntityToken)( char *buffer, int size );
 	qboolean (*inPVS)( const vec3_t p1, const vec3_t p2 );
@@ -122,6 +132,11 @@ typedef struct {
 
 	void	(*VertexLighting)( qboolean allowed );
 	void	(*SyncRender)( void );
+
+	// Registers caller-owned RGBA pixels as a stable 2D shader. The renderer
+	// consumes the pixels synchronously and retains no pointer to the buffer.
+	qhandle_t (*RegisterShaderFromRGBA)( const char *name, byte *rgba,
+		int width, int height );
 
 
 } refexport_t;

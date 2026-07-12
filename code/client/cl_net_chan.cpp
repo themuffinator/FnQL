@@ -26,6 +26,7 @@ extern "C" {
 
 #include "client_cpp.h"
 #include "../qcommon/netchan_codec.hpp"
+#include "../qcommon/netchan_safety.hpp"
 
 using fnql::ReadUnaligned;
 
@@ -195,7 +196,7 @@ extern "C" void CL_Netchan_Enqueue( netchan_t *chan, msg_t *msg, int times ) {
 		Netchan_Enqueue( chan, msg->cursize, msg->data );
 	}
 
-	chan->outgoingSequence++;
+	chan->outgoingSequence = fnql::net::NextSequence( chan->outgoingSequence );
 }
 
 

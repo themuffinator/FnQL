@@ -322,6 +322,11 @@ extern int unzeof (unzFile file);
 
 extern int unzGetLocalExtrafield (unzFile file, void* buf, unsigned len);
 
+/* Bounded whole-buffer zlib decompression for retail protocol sidecars.
+ * Returns 0 on success and updates destLen with bytes written. */
+extern int QZ_Uncompress(unsigned char *dest, unsigned long *destLen,
+	const unsigned char *source, unsigned long sourceLen);
+
 /*
   Read extra field from the current file (opened by unzOpenCurrentFile)
   This is the local-header version of the extra field (sometimes, there is

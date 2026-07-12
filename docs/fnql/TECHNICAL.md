@@ -27,6 +27,7 @@ Compatibility-sensitive areas include:
 - VM ABI and bytecode execution
 - native module ABI and loader behavior
 - renderer defaults that affect demo output or deterministic behavior
+- keyboard, mouse, joystick, and text-input translation
 
 Windows retail validation is intentionally Win32: the legitimate retail
 `bin.pk3` contains x86 native game modules only. The active Steam account maps
@@ -55,8 +56,16 @@ The subsystem inventory, execution order, and non-regression gates for the
 native API, WebUI/Awesomium, protocol/demos, BSP/advertisements, ZMQ, and
 Steamworks work are maintained in
 [`QL_COMPATIBILITY_ROADMAP.md`](./QL_COMPATIBILITY_ROADMAP.md).
-The browser-neutral runtime boundary and the reason a live Awesomium adapter
-remains opt-in are detailed in [`WEBUI_BACKEND.md`](./WEBUI_BACKEND.md).
+The browser-neutral runtime boundary, external-runtime policy, Windows-x86
+default, and deterministic fallback on unsupported targets are detailed in
+[`WEBUI_BACKEND.md`](./WEBUI_BACKEND.md).
+The closed-source sibling Steam implementation and FnQL's open ABI/loader
+boundary are documented in [`STEAM_PROVIDER.md`](./STEAM_PROVIDER.md).
+Retail mouse math, UTF-8 character dispatch, the legacy WinMM joystick profile,
+and the preserved FnQ3/SDL3 input paths are recorded in
+[`INPUT_COMPATIBILITY.md`](./INPUT_COMPATIBILITY.md).
+Retail TTF face mapping, UTF-8 host-text semantics, fallback order, and atlas
+validation are recorded in [`FONT_COMPATIBILITY.md`](./FONT_COMPATIBILITY.md).
 
 ## Repository Layout
 

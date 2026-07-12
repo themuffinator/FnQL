@@ -21,6 +21,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 #include "server.h"
+#include "../qcommon/netchan_safety.hpp"
 
 #include <array>
 
@@ -126,6 +127,8 @@ static void SV_WriteSnapshotToClient( const client_t *client, msg_t *msg ) {
 	int					lastframe;
 	int					i;
 	int					snapFlags;
+	const std::uint32_t deltaDistance = fnql::net::SequenceDistance(
+		client->netchan.outgoingSequence, client->deltaMessage );
 
 	// this is the snapshot we are creating
 	frame = &client->frames[ client->netchan.outgoingSequence & PACKET_MASK ];
@@ -135,10 +138,12 @@ static void SV_WriteSnapshotToClient( const client_t *client, msg_t *msg ) {
 		// client is asking for a retransmit
 		oldframe = nullptr;
 		lastframe = 0;
-	} else if ( client->netchan.outgoingSequence - client->deltaMessage >= (PACKET_BACKUP - 3) ) {
+	} else if ( !fnql::net::IsNewerSequence( client->netchan.outgoingSequence,
+		client->deltaMessage ) || deltaDistance >= ( PACKET_BACKUP - 3u ) ) {
 		// client hasn't gotten a good message through in a long time
 		if ( com_developer->integer ) {
-			if ( client->deltaMessage != client->netchan.outgoingSequence - ( PACKET_BACKUP + 1 ) ) {
+			if ( client->deltaMessage != fnql::net::RetreatSequence(
+				client->netchan.outgoingSequence, PACKET_BACKUP + 1u ) ) {
 				Com_Printf( "%s: Delta request from out of date packet.\n", client->name );
 			}
 		}
@@ -147,7 +152,7 @@ static void SV_WriteSnapshotToClient( const client_t *client, msg_t *msg ) {
 	} else {
 		// we have a valid snapshot to delta from
 		oldframe = &client->frames[ client->deltaMessage & PACKET_MASK ];
-		lastframe = client->netchan.outgoingSequence - client->deltaMessage;
+		lastframe = static_cast<int>( deltaDistance );
 		// we may refer on outdated frame
 		if ( oldframe->frameNum - svs.lastValidFrame < 0 ) {
 			Com_DPrintf( "%s: Delta request from out of date frame.\n", client->name );
@@ -231,10 +236,17 @@ SV_UpdateServerCommandsToClient
 */
 void SV_UpdateServerCommandsToClient( client_t *client, msg_t *msg ) {
 	// write any unacknowledged serverCommands
-	const int n = client->reliableSequence - client->reliableAcknowledge;
+	std::uint32_t pending = 0;
+	if ( !fnql::net::PendingCounterCount( client->reliableSequence,
+		client->reliableAcknowledge, pending ) || pending > MAX_RELIABLE_COMMANDS ) {
+		Com_Error( ERR_DROP, "SV_UpdateServerCommandsToClient: invalid reliable window" );
+		return;
+	}
+	const int n = static_cast<int>( pending );
 
 	for ( int i : SV_Indices( n ) ) {
-		const int index = client->reliableAcknowledge + 1 + i;
+		const int index = fnql::net::CounterAdd( client->reliableAcknowledge,
+			static_cast<std::uint32_t>( i + 1 ) );
 		MSG_WriteByte( msg, svc_serverCommand );
 		MSG_WriteLong( msg, index );
 		MSG_WriteString( msg, client->reliableCommands[ index & (MAX_RELIABLE_COMMANDS-1) ] );

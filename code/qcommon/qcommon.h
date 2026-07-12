@@ -234,9 +234,11 @@ qboolean	NET_Sleep( int timeout );
 #define	MAX_MSGLEN_BUF	(MAX_MSGLEN+8)	// real buffer size that we need to allocate
 										// to safely handle overflows
 
-#define MAX_DOWNLOAD_WINDOW		48	// ACK window of 48 download chunks. Cannot set this higher, or clients
-						// will overflow the reliable commands buffer
-#define MAX_DOWNLOAD_BLKSIZE		1024	// 896 byte block chunks
+// Storage maxima across retained ioq3/FnQ3 and retail QL profiles. Runtime
+// send limits come from protocol_contract.hpp: 48x1024 for the modernized Q3
+// path and the retail QL 8x2048 contract.
+#define MAX_DOWNLOAD_WINDOW		48
+#define MAX_DOWNLOAD_BLKSIZE		2048
 
 #define NETCHAN_GENCHECKSUM(challenge, sequence) ((challenge) ^ ((sequence) * (challenge)))
 
@@ -305,7 +307,7 @@ PROTOCOL
 #define	QL_NATIVE_CGAME_DLL	"cgamex86.dll"
 // 1.31 - 67
 
-#define DEFAULT_PROTOCOL_VERSION	OLD_PROTOCOL_VERSION
+#define DEFAULT_PROTOCOL_VERSION	QL_RETAIL_PROTOCOL_VERSION
 
 
 // maintain a list of compatible protocols for demo playing
@@ -382,7 +384,10 @@ typedef struct vm_s vm_t;
 typedef enum {
 	VMI_NATIVE,
 	VMI_BYTECODE,
-	VMI_COMPILED
+	VMI_COMPILED,
+	// Internal-only mode: reload bytes pinned from a native module that was
+	// successfully opened before pure-server restrictions were applied.
+	VMI_PINNED_NATIVE
 } vmInterpret_t;
 
 typedef enum {
@@ -426,6 +431,7 @@ typedef void (QDECL *dllEntryNative_t)( void **exports, void *imports, int *apiV
 void	VM_Init( void );
 vm_t	*VM_Create( vmIndex_t index, syscall_t systemCalls, dllSyscall_t dllSyscalls, vmInterpret_t interpret );
 vm_t	*VM_CreateNative( vmIndex_t index, syscall_t systemCalls, dllSyscall_t dllSyscalls, vmInterpret_t interpret, void *dllImports, int dllApiVersion );
+qboolean VM_HasPinnedNativeModule( vmIndex_t index );
 
 void	VM_Free( vm_t *vm );
 void	VM_Clear(void);
@@ -1272,6 +1278,7 @@ qboolean CL_GameSwitch( void );
 // server interface
 //
 void SV_Init( void );
+void SV_RefreshPlatformServiceCvars( void );
 void SV_RegisterGameCvars( void );
 void SV_Shutdown( const char *finalmsg );
 void SV_Frame( int msec, int realMsec );
@@ -1413,9 +1420,12 @@ void Huff_Decompress( msg_t *buf, int offset );
 
 // static huffman functions
 void HuffmanPutBit( byte* fout, int32_t bitIndex, int bit );
-int HuffmanPutSymbol( byte* fout, uint32_t offset, int symbol );
 int HuffmanGetBit( const byte* buffer, int bitIndex );
-int HuffmanGetSymbol( unsigned int* symbol, const byte* buffer, int bitIndex );
+int HuffmanSymbolBitCount( int symbol );
+int HuffmanPutSymbolBounded( byte *output, uint32_t bitOffset,
+	uint32_t bitCapacity, int symbol );
+int HuffmanGetSymbolBounded( unsigned int *symbol, const byte *input,
+	int bitOffset, int bitLimit );
 
 #define	SV_ENCODE_START		4
 #define	SV_DECODE_START		12

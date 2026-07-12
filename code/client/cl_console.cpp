@@ -26,6 +26,7 @@ extern "C" {
 }
 
 #include "client_cpp.h"
+#include "ql_font_bridge.hpp"
 
 #include <algorithm>
 #include <array>
@@ -41,6 +42,11 @@ namespace {
 
 constexpr int DEFAULT_CONSOLE_WIDTH = 78;
 constexpr int MAX_CONSOLE_WIDTH = 120;
+constexpr float RETAIL_CONSOLE_CHAR_WIDTH = 12.0f;
+constexpr float RETAIL_CONSOLE_CHAR_HEIGHT = 24.0f;
+constexpr float RETAIL_CONSOLE_REFERENCE_HEIGHT = 768.0f;
+// FnQL exposes the retail half-size default as the normalized cvar value 1.
+constexpr float RETAIL_CONSOLE_SCALE_UNIT = 0.5f;
 
 constexpr int NUM_CON_TIMES = 4;
 
@@ -55,6 +61,9 @@ constexpr float CON_SELECTION_ALPHA = 0.35f;
 constexpr int CON_COMPLETION_MAX_MATCHES = 64;
 constexpr int CON_COMPLETION_MAX_VISIBLE = 8;
 constexpr float CON_TEXT_DRAG_THRESHOLD = 4.0f;
+constexpr int CONSOLE_HOST_FONT_MONO = 2;
+// Retail Quake Live sizes its console mono face from the fixed cell width.
+constexpr float CONSOLE_TTF_SCALE_PER_CELL = 2.1597f;
 
 static int RoundToInt( float value )
 {
@@ -74,6 +83,9 @@ int bigchar_width;
 int bigchar_height;
 int smallchar_width;
 int smallchar_height;
+
+static int console_char_width;
+static int console_char_height;
 
 struct console_t {
 	bool	initialized;
@@ -176,6 +188,12 @@ static cvar_t	*con_versionColor;
 static cvar_t	*con_fade;
 static cvar_t	*con_speedLegacy;
 static cvar_t	*con_scrollLines;
+
+static const vec4_t con_chatBackgroundColor = { 0.0f, 0.0f, 0.0f, 0.6f };
+static const vec4_t con_chatPromptColor = { 1.0f, 0.8f, 0.0f, 1.0f };
+static bool		con_ttfFontAvailable;
+static float	con_ttfCellWidth = RETAIL_CONSOLE_CHAR_WIDTH;
+static vec4_t	con_drawColor = { 1.0f, 1.0f, 1.0f, 1.0f };
 
 int			g_console_field_width;
 
@@ -287,13 +305,11 @@ static void Con_GetBackgroundColor( vec4_t outColor ) {
 
 
 static void Con_SetScaledColor( const vec4_t color, float alphaScale ) {
-	vec4_t scaledColor;
-
-	scaledColor[ 0 ] = color[ 0 ];
-	scaledColor[ 1 ] = color[ 1 ];
-	scaledColor[ 2 ] = color[ 2 ];
-	scaledColor[ 3 ] = color[ 3 ] * alphaScale;
-	re.SetColor( scaledColor );
+	con_drawColor[ 0 ] = color[ 0 ];
+	con_drawColor[ 1 ] = color[ 1 ];
+	con_drawColor[ 2 ] = color[ 2 ];
+	con_drawColor[ 3 ] = color[ 3 ] * alphaScale;
+	re.SetColor( con_drawColor );
 }
 
 
@@ -341,10 +357,65 @@ static float Con_GetFadeAlpha( float frac ) {
 }
 
 
+static float Con_GetTtfScale( void ) {
+	return con_ttfCellWidth * CONSOLE_TTF_SCALE_PER_CELL;
+}
+
+
+static void Con_UpdateTtfFontAvailability( void ) {
+	float lineHeight;
+
+	con_ttfFontAvailable = re.DrawScaledText && re.GetScaledFontMetrics &&
+		re.GetScaledFontMetrics( CONSOLE_HOST_FONT_MONO, Con_GetTtfScale(),
+			nullptr, nullptr, &lineHeight ) && lineHeight > 0.0f;
+}
+
+
+static bool Con_DrawHostText( float x, float y, const char *text,
+	qboolean forceColor, const vec4_t color ) {
+	if ( !con_ttfFontAvailable || !text || !text[ 0 ] ) {
+		return false;
+	}
+
+	re.DrawScaledText( RoundToInt( x ), RoundToInt( y + console_char_height ),
+		text, CONSOLE_HOST_FONT_MONO, Con_GetTtfScale(), 0, nullptr,
+		forceColor, color );
+	return true;
+}
+
+
+static bool Con_DrawHostTextSpan( float x, float y, const char *text, int length,
+	qboolean forceColor, const vec4_t color ) {
+	std::array<char, MAX_STRING_CHARS> buffer;
+
+	if ( !con_ttfFontAvailable || !text || length <= 0 ) {
+		return false;
+	}
+	if ( length >= static_cast<int>( buffer.size() ) ) {
+		length = static_cast<int>( buffer.size() ) - 1;
+	}
+	std::copy_n( text, length, buffer.data() );
+	buffer[ length ] = '\0';
+	return Con_DrawHostText( x, y, buffer.data(), forceColor, color );
+}
+
+
+static float Con_MeasureHostText( const char *text, const char *end ) {
+	float width = 0.0f;
+
+	if ( con_ttfFontAvailable && re.MeasureScaledText && text ) {
+		re.MeasureScaledText( text, end, CONSOLE_HOST_FONT_MONO,
+			Con_GetTtfScale(), 0, &width, nullptr, nullptr );
+	}
+	return width;
+}
+
+
 static void Con_DrawSmallCharFloat( float x, float y, int ch ) {
 	int row, col;
 	float frow, fcol;
 	float size;
+	char ttfText[ 2 ];
 
 	ch &= 255;
 
@@ -352,7 +423,20 @@ static void Con_DrawSmallCharFloat( float x, float y, int ch ) {
 		return;
 	}
 
-	if ( y < -smallchar_height ) {
+	if ( y < -console_char_height ) {
+		return;
+	}
+
+	if ( con_ttfFontAvailable && ( ch >= 32 || ch == 10 || ch == 11 ) ) {
+		// The charset reserves these two bytes for insert/overwrite cursors.
+		if ( ch == 10 ) {
+			ch = '|';
+		} else if ( ch == 11 ) {
+			ch = '_';
+		}
+		ttfText[ 0 ] = static_cast<char>( ch );
+		ttfText[ 1 ] = '\0';
+		Con_DrawHostText( x, y, ttfText, qtrue, con_drawColor );
 		return;
 	}
 
@@ -363,9 +447,47 @@ static void Con_DrawSmallCharFloat( float x, float y, int ch ) {
 	fcol = col * 0.0625f;
 	size = 0.0625f;
 
-	re.DrawStretchPic( x, y, smallchar_width, smallchar_height,
+	re.DrawStretchPic( x, y, console_char_width, console_char_height,
 		fcol, frow, fcol + size, frow + size,
 		cls.charSetShader );
+}
+
+
+static bool Con_DrawConsoleLineText( float x, float y, const short *text,
+	int count, float alphaScale ) {
+	std::array<char, MAX_CONSOLE_WIDTH * 3 + 1> buffer;
+	vec4_t baseColor;
+	int bufferIndex = 0;
+	int currentColor = ColorIndex( COLOR_WHITE );
+	int lastVisible = 0;
+	int i;
+
+	if ( !con_ttfFontAvailable || !text || count <= 0 ) {
+		return false;
+	}
+
+	for ( i = 0; i < count && bufferIndex < static_cast<int>( buffer.size() ) - 1; i++ ) {
+		const int ch = text[ i ] & 0xff;
+		const int color = ( text[ i ] >> 8 ) & 7;
+
+		if ( ch != ' ' && color != currentColor &&
+			bufferIndex < static_cast<int>( buffer.size() ) - 3 ) {
+			buffer[ bufferIndex++ ] = '^';
+			buffer[ bufferIndex++ ] = static_cast<char>( '0' + color );
+			currentColor = color;
+		}
+		buffer[ bufferIndex++ ] = static_cast<char>( ch );
+		if ( ch != ' ' ) {
+			lastVisible = bufferIndex;
+		}
+	}
+
+	buffer[ lastVisible ] = '\0';
+	baseColor[ 0 ] = g_color_table[ ColorIndex( COLOR_WHITE ) ][ 0 ];
+	baseColor[ 1 ] = g_color_table[ ColorIndex( COLOR_WHITE ) ][ 1 ];
+	baseColor[ 2 ] = g_color_table[ ColorIndex( COLOR_WHITE ) ][ 2 ];
+	baseColor[ 3 ] = g_color_table[ ColorIndex( COLOR_WHITE ) ][ 3 ] * alphaScale;
+	return Con_DrawHostText( x, y, buffer.data(), qfalse, baseColor );
 }
 
 
@@ -378,86 +500,42 @@ static int Con_GetOldestLine( void ) {
 }
 
 
-static void Con_GetInputDrawInfo( field_t *edit, int *prestep, int *drawLen ) {
-	int len;
-	int start;
-	int count;
+static fnql::font::Utf8FieldWindow Con_GetInputDrawInfo( field_t *edit ) {
+	fnql::font::Utf8FieldWindow window = fnql::font::GetUtf8FieldWindow(
+		edit->buffer, edit->cursor, edit->widthInChars );
+	edit->cursor = window.cursorByte;
+	edit->scroll = window.startByte;
+	return window;
+}
 
-	count = edit->widthInChars - 1;
-	if ( count < 1 ) {
-		count = 1;
+
+static float Con_MeasureInputPrefix( const field_t *edit,
+	const fnql::font::Utf8FieldWindow& window, int byteOffset ) {
+	if ( byteOffset < window.startByte ) {
+		byteOffset = window.startByte;
+	} else if ( byteOffset > window.endByte ) {
+		byteOffset = window.endByte;
 	}
+	byteOffset = fnql::font::ClampUtf8Boundary( edit->buffer, byteOffset );
 
-	len = strlen( edit->buffer );
-	start = edit->scroll;
-
-	if ( len <= count ) {
-		start = 0;
-	} else {
-		if ( start + count > len ) {
-			start = len - count;
-			if ( start < 0 ) {
-				start = 0;
-			}
+	if ( con_ttfFontAvailable ) {
+		float width = Con_MeasureHostText( edit->buffer + window.startByte,
+			edit->buffer + byteOffset );
+		// The retail measure ABI reports visible glyph bounds rather than the
+		// trailing advance, so a terminal space needs its mono cell restored.
+		if ( byteOffset > window.startByte && edit->buffer[ byteOffset - 1 ] == ' ' ) {
+			width += console_char_width;
 		}
+		return width;
 	}
 
-	if ( start + count > len ) {
-		count = len - start;
-	}
-
-	if ( count < 0 ) {
-		count = 0;
-	}
-
-	edit->scroll = start;
-
-	if ( prestep ) {
-		*prestep = start;
-	}
-	if ( drawLen ) {
-		*drawLen = count;
-	}
+	return fnql::font::CountUtf8Characters( edit->buffer,
+		window.startByte, byteOffset ) * console_char_width;
 }
 
 
 static void Con_AdjustInputScroll( field_t *edit ) {
-	int len;
-	int drawLen;
-
-	len = strlen( edit->buffer );
-	drawLen = edit->widthInChars - 1;
-	if ( drawLen < 1 ) {
-		drawLen = 1;
-	}
-
-	if ( edit->cursor < 0 ) {
-		edit->cursor = 0;
-	} else if ( edit->cursor > len ) {
-		edit->cursor = len;
-	}
-
-	if ( edit->scroll < 0 ) {
-		edit->scroll = 0;
-	}
-
-	if ( edit->cursor < edit->scroll ) {
-		edit->scroll = edit->cursor;
-	} else if ( edit->cursor >= edit->scroll + drawLen ) {
-		edit->scroll = edit->cursor - drawLen + 1;
-	}
-
-	if ( edit->scroll > len ) {
-		edit->scroll = len;
-	}
-
-	if ( len > drawLen && edit->scroll > len - drawLen ) {
-		edit->scroll = len - drawLen;
-	}
-
-	if ( edit->scroll < 0 ) {
-		edit->scroll = 0;
-	}
+	Con_GetInputDrawInfo( edit );
 }
 
 
@@ -509,6 +587,8 @@ static void Con_DeleteInputRange( field_t *edit, int start, int end ) {
 	}
 
 	len = strlen( edit->buffer );
+	start = fnql::font::ClampUtf8Boundary( edit->buffer, start );
+	end = fnql::font::ClampUtf8Boundary( edit->buffer, end );
 	if ( end > len ) {
 		end = len;
 	}
@@ -582,6 +662,7 @@ static void Con_SetInputCursor( int cursor, qboolean keepSelection ) {
 	} else if ( cursor > len ) {
 		cursor = len;
 	}
+	cursor = fnql::font::ClampUtf8Boundary( g_consoleField.buffer, cursor );
 
 	if ( keepSelection ) {
 		if ( con.inputSelectionAnchor < 0 ) {
@@ -611,6 +692,8 @@ static void Con_SelectAllInput( void ) {
 
 static void Con_InsertInputChar( int ch ) {
 	int len;
+	const bool utf8Continuation = fnql::font::IsUtf8ContinuationByte(
+		static_cast<unsigned char>( ch ) );
 
 	if ( ch < ' ' ) {
 		return;
@@ -619,9 +702,19 @@ static void Con_InsertInputChar( int ch ) {
 	Con_DeleteInputSelection();
 	len = strlen( g_consoleField.buffer );
 
-	if ( key_overstrikeMode ) {
+	if ( key_overstrikeMode && !utf8Continuation ) {
 		if ( g_consoleField.cursor == MAX_EDIT_LINE - 2 ) {
 			return;
+		}
+		if ( g_consoleField.cursor < len ) {
+			const int overwriteEnd = fnql::font::NextUtf8Boundary(
+				g_consoleField.buffer, g_consoleField.cursor );
+			if ( overwriteEnd > g_consoleField.cursor + 1 ) {
+				std::copy( g_consoleField.buffer + overwriteEnd,
+					g_consoleField.buffer + len + 1,
+					g_consoleField.buffer + g_consoleField.cursor + 1 );
+				len -= overwriteEnd - ( g_consoleField.cursor + 1 );
+			}
 		}
 
 		g_consoleField.buffer[ g_consoleField.cursor ] = ch;
@@ -706,8 +799,9 @@ static void Con_PasteClipboardToInput( void ) {
 	Con_DeleteInputSelection();
 
 	for ( i = 0; text[ i ]; i++ ) {
-		if ( text[ i ] >= ' ' ) {
-			Con_InsertInputChar( text[ i ] );
+		const int ch = static_cast<unsigned char>( text[ i ] );
+		if ( ch >= ' ' ) {
+			Con_InsertInputChar( ch );
 		}
 	}
 }
@@ -1982,7 +2076,7 @@ static void Con_GetConsoleRect( float *x, float *y, float *w, float *h ) {
 static int Con_GetLogRowCount( void ) {
 	int rows;
 
-	rows = con.vislines / smallchar_height - Con_GetFooterRows() + 1;
+	rows = con.vislines / console_char_height - Con_GetFooterRows() + 1;
 	if ( rows < 1 ) {
 		rows = 1;
 	}
@@ -1999,8 +2093,8 @@ static void Con_GetLogAreaRect( float *x, float *y, float *w, float *h ) {
 
 	Con_GetConsoleRect( &consoleX, &consoleY, &consoleW, &consoleH );
 	rows = Con_GetLogRowCount();
-	logBottom = consoleY + consoleH - smallchar_height * Con_GetFooterRows();
-	logTop = logBottom - rows * smallchar_height;
+	logBottom = consoleY + consoleH - console_char_height * Con_GetFooterRows();
+	logTop = logBottom - rows * console_char_height;
 	if ( logTop < consoleY ) {
 		logTop = consoleY;
 	}
@@ -2025,21 +2119,21 @@ static bool Con_GetInputAreaRect( float *x, float *y, float *w, float *h ) {
 	int footerRows = Con_GetFooterRows();
 
 	Con_GetConsoleRect( &consoleX, &consoleY, &consoleW, &consoleH );
-	if ( consoleW <= 0.0f || consoleH <= smallchar_height * footerRows ) {
+	if ( consoleW <= 0.0f || consoleH <= console_char_height * footerRows ) {
 		return false;
 	}
 
 	if ( x ) {
-		*x = consoleX + 2 * smallchar_width;
+		*x = consoleX + 2 * console_char_width;
 	}
 	if ( y ) {
-		*y = consoleY + consoleH - smallchar_height * footerRows;
+		*y = consoleY + consoleH - console_char_height * footerRows;
 	}
 	if ( w ) {
-		*w = consoleW - 3 * smallchar_width;
+		*w = consoleW - 3 * console_char_width;
 	}
 	if ( h ) {
-		*h = smallchar_height;
+		*h = console_char_height;
 	}
 
 	return true;
@@ -2048,25 +2142,29 @@ static bool Con_GetInputAreaRect( float *x, float *y, float *w, float *h ) {
 
 static int Con_GetInputCursorFromMouse( void ) {
 	float inputX, inputY, inputW, inputH;
-	int prestep, drawLen;
+	fnql::font::Utf8FieldWindow window;
+	float mouseOffset;
 	int cursor;
-	int len;
 
 	if ( !Con_GetInputAreaRect( &inputX, &inputY, &inputW, &inputH ) ) {
 		return g_consoleField.cursor;
 	}
 
-	Con_GetInputDrawInfo( &g_consoleField, &prestep, &drawLen );
-	len = strlen( g_consoleField.buffer );
-
-	cursor = prestep + RoundToInt( ( con.mouseX - inputX ) / smallchar_width );
-	if ( con.mouseX <= inputX ) {
-		cursor = prestep;
+	window = Con_GetInputDrawInfo( &g_consoleField );
+	mouseOffset = con.mouseX - inputX;
+	cursor = window.startByte;
+	if ( mouseOffset <= 0.0f ) {
+		return cursor;
 	}
-	if ( cursor < 0 ) {
-		cursor = 0;
-	} else if ( cursor > len ) {
-		cursor = len;
+
+	while ( cursor < window.endByte ) {
+		const int next = fnql::font::NextUtf8Boundary( g_consoleField.buffer, cursor );
+		const float left = Con_MeasureInputPrefix( &g_consoleField, window, cursor );
+		const float right = Con_MeasureInputPrefix( &g_consoleField, window, next );
+		if ( mouseOffset < left + ( right - left ) * 0.5f ) {
+			break;
+		}
+		cursor = next;
 	}
 
 	return cursor;
@@ -2086,7 +2184,7 @@ static bool Con_GetLogPositionFromMouse( int *line, int *column ) {
 	}
 
 	rows = Con_GetLogRowCount();
-	rowIndex = static_cast<int>( ( con.mouseY - logY ) / smallchar_height );
+	rowIndex = static_cast<int>( ( con.mouseY - logY ) / console_char_height );
 	if ( rowIndex < 0 ) {
 		rowIndex = 0;
 	} else if ( rowIndex >= rows ) {
@@ -2098,7 +2196,7 @@ static bool Con_GetLogPositionFromMouse( int *line, int *column ) {
 	}
 
 	outLine = con.display - ( rows - 1 - rowIndex );
-	outColumn = static_cast<int>( ( con.mouseX - ( con.xadjust + smallchar_width ) ) / smallchar_width );
+	outColumn = static_cast<int>( ( con.mouseX - ( con.xadjust + console_char_width ) ) / console_char_width );
 
 	Con_ClampLogPosition( &outLine, &outColumn );
 
@@ -2372,7 +2470,7 @@ static bool Con_GetScrollbarGeometry( float hoverFrac, float *trackX, float *tra
 	}
 
 	Con_GetConsoleRect( &consoleX, &consoleY, &consoleW, &consoleH );
-	if ( consoleW <= 0.0f || consoleH <= smallchar_height * 4.0f ) {
+	if ( consoleW <= 0.0f || consoleH <= console_char_height * 4.0f ) {
 		return false;
 	}
 
@@ -2633,9 +2731,12 @@ static void Con_GetSelectionColor( vec4_t outColor ) {
 }
 
 
-static void Con_DrawInputSelection( float x, float y, int prestep, int drawLen, float alphaScale ) {
+static void Con_DrawInputSelection( const field_t *edit, float x, float y,
+	const fnql::font::Utf8FieldWindow& window, float alphaScale ) {
 	int start, end;
 	int visibleStart, visibleEnd;
+	float selectionX;
+	float selectionWidth;
 	vec4_t selectionColor;
 
 	if ( !Con_HasInputSelection() ) {
@@ -2644,21 +2745,26 @@ static void Con_DrawInputSelection( float x, float y, int prestep, int drawLen, 
 
 	Con_GetInputSelectionRange( &start, &end );
 	visibleStart = start;
-	if ( visibleStart < prestep ) {
-		visibleStart = prestep;
+	if ( visibleStart < window.startByte ) {
+		visibleStart = window.startByte;
 	}
 	visibleEnd = end;
-	if ( visibleEnd > prestep + drawLen ) {
-		visibleEnd = prestep + drawLen;
+	if ( visibleEnd > window.endByte ) {
+		visibleEnd = window.endByte;
 	}
 
 	if ( visibleEnd <= visibleStart ) {
 		return;
 	}
 
+	selectionX = Con_MeasureInputPrefix( edit, window, visibleStart );
+	selectionWidth = Con_MeasureInputPrefix( edit, window, visibleEnd ) - selectionX;
+	if ( selectionWidth <= 0.0f ) {
+		return;
+	}
+
 	Con_GetSelectionColor( selectionColor );
-	Con_DrawSolidRect( x + ( visibleStart - prestep ) * smallchar_width, y,
-		( visibleEnd - visibleStart ) * smallchar_width, smallchar_height,
+	Con_DrawSolidRect( x + selectionX, y, selectionWidth, console_char_height,
 		selectionColor, alphaScale );
 }
 
@@ -2685,37 +2791,37 @@ static void Con_DrawLogSelectionRow( int line, float y, float alphaScale ) {
 	}
 
 	Con_GetSelectionColor( selectionColor );
-	Con_DrawSolidRect( con.xadjust + ( segmentStart + 1 ) * smallchar_width, y,
-		( segmentEnd - segmentStart ) * smallchar_width, smallchar_height,
+	Con_DrawSolidRect( con.xadjust + ( segmentStart + 1 ) * console_char_width, y,
+		( segmentEnd - segmentStart ) * console_char_width, console_char_height,
 		selectionColor, alphaScale );
 }
 
 
-static void Con_DrawInputText( field_t *edit, float x, float y, float alphaScale ) {
-	int len;
-	int drawLen;
-	int prestep;
+static void Con_DrawInputText( field_t *edit, float x, float y, float alphaScale,
+	bool drawSelection ) {
+	fnql::font::Utf8FieldWindow window;
+	int drawBytes;
 	int cursorChar;
+	int cursorOffset;
 	int i;
 	int currentColorIndex;
+	float cursorX;
+	float prefixWidth;
+	bool hostTextDrawn;
 	std::array<char, MAX_STRING_CHARS> str;
 
-	Con_GetInputDrawInfo( edit, &prestep, &drawLen );
-	len = strlen( edit->buffer );
+	window = Con_GetInputDrawInfo( edit );
+	drawBytes = window.endByte - window.startByte;
 
-	if ( drawLen >= MAX_STRING_CHARS ) {
-		Com_Error( ERR_DROP, "drawLen >= MAX_STRING_CHARS" );
+	if ( drawBytes >= MAX_STRING_CHARS ) {
+		Com_Error( ERR_DROP, "drawBytes >= MAX_STRING_CHARS" );
 	}
 
-	std::copy_n( edit->buffer + prestep, drawLen, str.data() );
-	str[ drawLen ] = '\0';
-
-	if ( prestep > 0 && str[ 0 ] ) {
-		str[ 0 ] = '<';
-	}
+	std::copy_n( edit->buffer + window.startByte, drawBytes, str.data() );
+	str[ drawBytes ] = '\0';
 
 	currentColorIndex = ColorIndex( COLOR_WHITE );
-	for ( i = 0; i < prestep; i++ ) {
+	for ( i = 0; i < window.startByte; i++ ) {
 		if ( Q_IsColorString( edit->buffer + i ) ) {
 			currentColorIndex = ColorIndexFromChar( edit->buffer[ i + 1 ] );
 			i++;
@@ -2724,9 +2830,13 @@ static void Con_DrawInputText( field_t *edit, float x, float y, float alphaScale
 
 	Con_SetScaledColor( g_color_table[ currentColorIndex ], alphaScale );
 
-	Con_DrawInputSelection( x, y, prestep, drawLen, alphaScale );
+	if ( drawSelection ) {
+		Con_DrawInputSelection( edit, x, y, window, alphaScale );
+	}
+	Con_SetScaledColor( g_color_table[ currentColorIndex ], alphaScale );
+	hostTextDrawn = Con_DrawHostText( x, y, str.data(), qfalse, con_drawColor );
 
-	for ( i = 0; i < drawLen; i++ ) {
+	for ( i = 0; !hostTextDrawn && i < drawBytes; i++ ) {
 		if ( Q_IsColorString( str.data() + i ) ) {
 			int colorIndex = ColorIndexFromChar( str[ i + 1 ] );
 
@@ -2736,14 +2846,10 @@ static void Con_DrawInputText( field_t *edit, float x, float y, float alphaScale
 			}
 		}
 
-		Con_DrawSmallCharFloat( x + i * smallchar_width, y, str[ i ] );
+		Con_DrawSmallCharFloat( x + i * console_char_width, y, str[ i ] );
 	}
 
 	Con_SetScaledColor( g_color_table[ ColorIndex( COLOR_WHITE ) ], alphaScale );
-
-	if ( len > drawLen + prestep ) {
-		Con_DrawSmallCharFloat( x + ( edit->widthInChars - 1 ) * smallchar_width, y, '>' );
-	}
 
 	if ( cls.realtime & 256 ) {
 		re.SetColor( nullptr );
@@ -2756,33 +2862,53 @@ static void Con_DrawInputText( field_t *edit, float x, float y, float alphaScale
 		cursorChar = 10;
 	}
 
-	Con_DrawSmallCharFloat( x + ( edit->cursor - prestep ) * smallchar_width, y, cursorChar );
+	if ( hostTextDrawn ) {
+		cursorOffset = window.cursorByte - window.startByte;
+		if ( cursorOffset < 0 ) {
+			cursorOffset = 0;
+		} else if ( cursorOffset > drawBytes ) {
+			cursorOffset = drawBytes;
+		}
+		prefixWidth = Con_MeasureInputPrefix( edit, window,
+			window.startByte + cursorOffset );
+		cursorX = x + prefixWidth;
+		if ( !key_overstrikeMode ) {
+			cursorX -= console_char_width * 0.5f;
+		}
+		Con_DrawSmallCharFloat( cursorX, y, cursorChar );
+	} else {
+		Con_DrawSmallCharFloat( x + fnql::font::CountUtf8Characters( edit->buffer,
+			window.startByte, window.cursorByte ) * console_char_width, y, cursorChar );
+	}
 
 	re.SetColor( nullptr );
 }
 
 
 static void Con_DrawInputDropCursor( field_t *edit, float x, float y, float alphaScale ) {
-	int prestep, drawLen;
+	fnql::font::Utf8FieldWindow window;
 	int dropCursor;
+	float dropX;
 	vec4_t selectionColor;
 
 	if ( !con.textDragging || !con.textDragTargetInput ) {
 		return;
 	}
 
-	Con_GetInputDrawInfo( edit, &prestep, &drawLen );
+	window = Con_GetInputDrawInfo( edit );
 	dropCursor = con.textDragDropCursor;
-	if ( dropCursor < prestep ) {
-		dropCursor = prestep;
-	} else if ( dropCursor > prestep + drawLen ) {
-		dropCursor = prestep + drawLen;
+	if ( dropCursor < window.startByte ) {
+		dropCursor = window.startByte;
+	} else if ( dropCursor > window.endByte ) {
+		dropCursor = window.endByte;
 	}
+	dropCursor = fnql::font::ClampUtf8Boundary( edit->buffer, dropCursor );
+	dropX = Con_MeasureInputPrefix( edit, window, dropCursor );
 
 	Con_GetSelectionColor( selectionColor );
 	selectionColor[ 3 ] = 0.9f;
-	Con_DrawSolidRect( x + ( dropCursor - prestep ) * smallchar_width, y,
-		2.0f, smallchar_height, selectionColor, alphaScale );
+	Con_DrawSolidRect( x + dropX, y,
+		2.0f, console_char_height, selectionColor, alphaScale );
 }
 
 
@@ -2834,7 +2960,7 @@ static bool Con_GetCompletionPopupGeometry( float *popupX, float *popupY, float 
 	}
 
 	Con_GetConsoleRect( &consoleX, nullptr, &consoleW, nullptr );
-	maxChars = static_cast<int>( ( consoleW - 6.0f * smallchar_width ) / smallchar_width );
+	maxChars = static_cast<int>( ( consoleW - 6.0f * console_char_width ) / console_char_width );
 	if ( maxChars < 8 ) {
 		maxChars = 8;
 	}
@@ -2847,16 +2973,16 @@ static bool Con_GetCompletionPopupGeometry( float *popupX, float *popupY, float 
 			CON_SCROLLBAR_SIDE_PAD * 2.0f + 1.0f;
 	}
 
-	outPopupW = ( longest + 2 ) * smallchar_width + scrollbarReserve;
-	outPopupH = outVisibleCount * smallchar_height + 4.0f;
-	x = con.xadjust + 2 * smallchar_width;
-	y = con.vislines - ( smallchar_height * Con_GetFooterRows() );
+	outPopupW = ( longest + 2 ) * console_char_width + scrollbarReserve;
+	outPopupH = outVisibleCount * console_char_height + 4.0f;
+	x = con.xadjust + 2 * console_char_width;
+	y = con.vislines - ( console_char_height * Con_GetFooterRows() );
 	outPopupX = x;
-	if ( outPopupX + outPopupW > consoleX + consoleW - smallchar_width ) {
-		outPopupX = consoleX + consoleW - outPopupW - smallchar_width;
+	if ( outPopupX + outPopupW > consoleX + consoleW - console_char_width ) {
+		outPopupX = consoleX + consoleW - outPopupW - console_char_width;
 	}
-	if ( outPopupX < consoleX + smallchar_width ) {
-		outPopupX = consoleX + smallchar_width;
+	if ( outPopupX < consoleX + console_char_width ) {
+		outPopupX = consoleX + console_char_width;
 	}
 
 	outPopupY = y - outPopupH - 4.0f;
@@ -2905,7 +3031,7 @@ static bool Con_GetCompletionScrollbarGeometry( float hoverFrac, float *trackX, 
 	}
 
 	contentY = popupY + 2.0f;
-	contentH = visibleCount * smallchar_height;
+	contentH = visibleCount * console_char_height;
 	Con_GetScrollbarFrameGeometry( popupX + 1.0f, popupW - 2.0f, contentY, contentH, hoverFrac,
 		trackX, trackY, trackW, trackH, hitX, hitW );
 
@@ -2934,11 +3060,11 @@ static bool Con_GetCompletionSelectionFromMouse( int *selection ) {
 	}
 
 	if ( con.mouseX < popupX || con.mouseX > popupX + popupW ||
-		con.mouseY < popupY + 2.0f || con.mouseY >= popupY + 2.0f + visibleCount * smallchar_height ) {
+		con.mouseY < popupY + 2.0f || con.mouseY >= popupY + 2.0f + visibleCount * console_char_height ) {
 		return false;
 	}
 
-	rowIndex = static_cast<int>( ( con.mouseY - ( popupY + 2.0f ) ) / smallchar_height );
+	rowIndex = static_cast<int>( ( con.mouseY - ( popupY + 2.0f ) ) / console_char_height );
 	if ( rowIndex < 0 || rowIndex >= visibleCount ) {
 		return false;
 	}
@@ -3017,10 +3143,10 @@ static void Con_DrawCompletionPopup( float x, float y, float alphaScale, const v
 	}
 	hasScrollbar = Con_GetCompletionScrollbarGeometry( con.completionScrollbarHover,
 		&trackX, &trackY, &trackW, &trackH, &thumbY, &thumbH, nullptr, nullptr );
-	textStartX = popupX + smallchar_width;
-	textRightX = hasScrollbar ? ( trackX - CON_SCROLLBAR_SIDE_PAD ) : ( popupX + popupW - smallchar_width );
+	textStartX = popupX + console_char_width;
+	textRightX = hasScrollbar ? ( trackX - CON_SCROLLBAR_SIDE_PAD ) : ( popupX + popupW - console_char_width );
 	valueRightX = textRightX;
-	maxDrawChars = static_cast<int>( ( textRightX - textStartX ) / smallchar_width );
+	maxDrawChars = static_cast<int>( ( textRightX - textStartX ) / console_char_width );
 	if ( maxDrawChars < 1 ) {
 		maxDrawChars = 1;
 	}
@@ -3061,7 +3187,7 @@ static void Con_DrawCompletionPopup( float x, float y, float alphaScale, const v
 	for ( i = 0; i < visibleCount; i++ ) {
 		const char *match = con.completionMatches[ first + i ].data();
 		std::array<char, MAX_CVAR_VALUE_STRING> cvarValue;
-		float rowY = popupY + 2.0f + i * smallchar_height;
+		float rowY = popupY + 2.0f + i * console_char_height;
 		int nameDrawLen = strlen( match );
 		int availableChars = maxDrawChars;
 		int valueDrawLen = 0;
@@ -3092,8 +3218,8 @@ static void Con_DrawCompletionPopup( float x, float y, float alphaScale, const v
 						separatorChars = 0;
 					}
 				}
-				valueX = valueRightX - valueDrawLen * smallchar_width;
-				separatorX = valueX - separatorChars * smallchar_width;
+				valueX = valueRightX - valueDrawLen * console_char_width;
+				separatorX = valueX - separatorChars * console_char_width;
 			}
 		}
 
@@ -3102,32 +3228,38 @@ static void Con_DrawCompletionPopup( float x, float y, float alphaScale, const v
 		}
 
 		if ( first + i == con.completionSelection ) {
-			Con_DrawSolidRect( popupX + 1.0f, rowY, rowWidth, smallchar_height,
+			Con_DrawSolidRect( popupX + 1.0f, rowY, rowWidth, console_char_height,
 				selectionColor, alphaScale );
 		}
 
 		Con_SetScaledColor( textColor, alphaScale );
-		for ( j = 0; j < nameDrawLen; j++ ) {
-			Con_DrawSmallCharFloat( popupX + smallchar_width + j * smallchar_width, rowY, match[ j ] );
+		if ( !Con_DrawHostTextSpan( popupX + console_char_width, rowY, match,
+			nameDrawLen, qtrue, con_drawColor ) ) {
+			for ( j = 0; j < nameDrawLen; j++ ) {
+				Con_DrawSmallCharFloat( popupX + console_char_width + j * console_char_width, rowY, match[ j ] );
+			}
 		}
 
 		if ( valueDrawLen > 0 ) {
 			if ( cvarModified ) {
-				Con_DrawSolidRect( separatorX - 0.5f * smallchar_width, rowY + 1.0f,
-					( separatorChars + valueDrawLen + 1 ) * smallchar_width, smallchar_height - 2.0f,
+				Con_DrawSolidRect( separatorX - 0.5f * console_char_width, rowY + 1.0f,
+					( separatorChars + valueDrawLen + 1 ) * console_char_width, console_char_height - 2.0f,
 					modifiedValueBg, alphaScale );
 			}
 
 			Con_SetScaledColor( cvarModified ? modifiedValueColor : valueColor, alphaScale );
 
 			if ( separatorChars >= valueSeparatorChars ) {
-				Con_DrawSmallCharFloat( separatorX, rowY, ' ' );
-				Con_DrawSmallCharFloat( separatorX + smallchar_width, rowY, '=' );
-				Con_DrawSmallCharFloat( separatorX + 2.0f * smallchar_width, rowY, ' ' );
+				if ( !Con_DrawHostText( separatorX, rowY, " = ", qtrue, con_drawColor ) ) {
+					Con_DrawSmallCharFloat( separatorX + console_char_width, rowY, '=' );
+				}
 			}
 
-			for ( j = 0; j < valueDrawLen; j++ ) {
-				Con_DrawSmallCharFloat( valueX + j * smallchar_width, rowY, cvarValue[ j ] );
+			if ( !Con_DrawHostTextSpan( valueX, rowY, cvarValue.data(), valueDrawLen,
+				qtrue, con_drawColor ) ) {
+				for ( j = 0; j < valueDrawLen; j++ ) {
+					Con_DrawSmallCharFloat( valueX + j * console_char_width, rowY, cvarValue[ j ] );
+				}
 			}
 		}
 	}
@@ -3424,7 +3556,9 @@ qboolean Con_InputKey( int key ) {
 		if ( Con_HasInputSelection() ) {
 			Con_DeleteInputSelection();
 		} else if ( g_consoleField.cursor > 0 ) {
-			Con_DeleteInputRange( &g_consoleField, g_consoleField.cursor - 1, g_consoleField.cursor );
+			Con_DeleteInputRange( &g_consoleField,
+				fnql::font::PreviousUtf8Boundary( g_consoleField.buffer, g_consoleField.cursor ),
+				g_consoleField.cursor );
 		}
 		return qtrue;
 	case K_DEL:
@@ -3433,33 +3567,38 @@ qboolean Con_InputKey( int key ) {
 		} else {
 			len = strlen( g_consoleField.buffer );
 			if ( g_consoleField.cursor < len ) {
-				Con_DeleteInputRange( &g_consoleField, g_consoleField.cursor, g_consoleField.cursor + 1 );
+				Con_DeleteInputRange( &g_consoleField, g_consoleField.cursor,
+					fnql::font::NextUtf8Boundary( g_consoleField.buffer, g_consoleField.cursor ) );
 			}
 		}
 		return qtrue;
 	case K_LEFTARROW:
 		if ( keys[ K_SHIFT ].down ) {
-			cursor = keys[ K_CTRL ].down ? Con_SeekWordCursor( &g_consoleField, g_consoleField.cursor, -1 ) : g_consoleField.cursor - 1;
+			cursor = keys[ K_CTRL ].down ? Con_SeekWordCursor( &g_consoleField, g_consoleField.cursor, -1 ) :
+				fnql::font::PreviousUtf8Boundary( g_consoleField.buffer, g_consoleField.cursor );
 			Con_SetInputCursor( cursor, qtrue );
 		} else if ( Con_HasInputSelection() ) {
 			int start, end;
 			Con_GetInputSelectionRange( &start, &end );
 			Con_SetInputCursor( start, qfalse );
 		} else {
-			cursor = keys[ K_CTRL ].down ? Con_SeekWordCursor( &g_consoleField, g_consoleField.cursor, -1 ) : g_consoleField.cursor - 1;
+			cursor = keys[ K_CTRL ].down ? Con_SeekWordCursor( &g_consoleField, g_consoleField.cursor, -1 ) :
+				fnql::font::PreviousUtf8Boundary( g_consoleField.buffer, g_consoleField.cursor );
 			Con_SetInputCursor( cursor, qfalse );
 		}
 		return qtrue;
 	case K_RIGHTARROW:
 		if ( keys[ K_SHIFT ].down ) {
-			cursor = keys[ K_CTRL ].down ? Con_SeekWordCursor( &g_consoleField, g_consoleField.cursor, 1 ) : g_consoleField.cursor + 1;
+			cursor = keys[ K_CTRL ].down ? Con_SeekWordCursor( &g_consoleField, g_consoleField.cursor, 1 ) :
+				fnql::font::NextUtf8Boundary( g_consoleField.buffer, g_consoleField.cursor );
 			Con_SetInputCursor( cursor, qtrue );
 		} else if ( Con_HasInputSelection() ) {
 			int start, end;
 			Con_GetInputSelectionRange( &start, &end );
 			Con_SetInputCursor( end, qfalse );
 		} else {
-			cursor = keys[ K_CTRL ].down ? Con_SeekWordCursor( &g_consoleField, g_consoleField.cursor, 1 ) : g_consoleField.cursor + 1;
+			cursor = keys[ K_CTRL ].down ? Con_SeekWordCursor( &g_consoleField, g_consoleField.cursor, 1 ) :
+				fnql::font::NextUtf8Boundary( g_consoleField.buffer, g_consoleField.cursor );
 			Con_SetInputCursor( cursor, qfalse );
 		}
 		return qtrue;
@@ -3814,10 +3953,7 @@ static int Con_GetChatFieldPixelWidth( void ) {
 }
 
 static int Con_GetChatFieldWidthInChars( qboolean teamChat ) {
-	int width = 30;
-	const int promptChars = teamChat ? 10 : 5;
-	const int pixelWidth = Con_GetChatFieldPixelWidth();
-	const int maxWidth = ( pixelWidth - ( promptChars + 1 ) * BIGCHAR_WIDTH ) / BIGCHAR_WIDTH;
+	int width = 73;
 
 	if ( cgvm && cgvm->dllExports ) {
 		const int cgameWidth = VM_Call( cgvm, 0, CG_GET_CHAT_FIELD_WIDTH_IN_CHARS );
@@ -3829,9 +3965,6 @@ static int Con_GetChatFieldWidthInChars( qboolean teamChat ) {
 
 	if ( teamChat && width > 5 ) {
 		width -= 5;
-	}
-	if ( maxWidth > 0 && width > maxWidth ) {
-		width = maxWidth;
 	}
 	if ( width < 1 ) {
 		width = 1;
@@ -4030,6 +4163,7 @@ void Con_CheckResize( void )
 	int		vispage;
 	float	scale;
 	float	charScale;
+	float	legacyCharScale;
 	float	contentWidth;
 	float	contentHeight;
 	float	xadjust;
@@ -4058,16 +4192,31 @@ void Con_CheckResize( void )
 	showClockModified = con_showClock && con_showClock->modified;
 	showVersionModified = con_showVersion && con_showVersion->modified;
 
-	charScale = scale * cls.con_factor;
-	if ( uniformScale ) {
-		charScale *= cls.scale;
+	charScale = scale * RETAIL_CONSOLE_SCALE_UNIT * cls.con_factor;
+	if ( uniformScale && cls.glconfig.vidHeight > 0 ) {
+		charScale *= cls.glconfig.vidHeight / RETAIL_CONSOLE_REFERENCE_HEIGHT;
+	}
+	con_ttfCellWidth = RETAIL_CONSOLE_CHAR_WIDTH * charScale;
+	if ( con_ttfCellWidth <= 0.0f ) {
+		con_ttfCellWidth = RETAIL_CONSOLE_CHAR_WIDTH;
 	}
 
-	smallchar_width = RoundToInt( SMALLCHAR_WIDTH * charScale );
-	smallchar_height = RoundToInt( SMALLCHAR_HEIGHT * charScale );
-	bigchar_width = RoundToInt( BIGCHAR_WIDTH * charScale );
-	bigchar_height = RoundToInt( BIGCHAR_HEIGHT * charScale );
+	console_char_width = RoundToInt( RETAIL_CONSOLE_CHAR_WIDTH * charScale );
+	console_char_height = RoundToInt( RETAIL_CONSOLE_CHAR_HEIGHT * charScale );
+	// Retail con_scale is console-owned. Keep FnQ3's capture-resolution factor
+	// for legacy bitmap overlays without leaking console sizing into them.
+	legacyCharScale = cls.con_factor;
+	smallchar_width = RoundToInt( SMALLCHAR_WIDTH * legacyCharScale );
+	smallchar_height = RoundToInt( SMALLCHAR_HEIGHT * legacyCharScale );
+	bigchar_width = RoundToInt( BIGCHAR_WIDTH * legacyCharScale );
+	bigchar_height = RoundToInt( BIGCHAR_HEIGHT * legacyCharScale );
 
+	if ( console_char_width < 1 ) {
+		console_char_width = 1;
+	}
+	if ( console_char_height < 1 ) {
+		console_char_height = 1;
+	}
 	if ( smallchar_width < 1 ) {
 		smallchar_width = 1;
 	}
@@ -4084,7 +4233,7 @@ void Con_CheckResize( void )
 	if ( cls.glconfig.vidWidth == 0 ) // video hasn't been initialized yet
 	{
 		g_console_field_width = DEFAULT_CONSOLE_WIDTH;
-		width = RoundToInt( DEFAULT_CONSOLE_WIDTH * scale );
+		width = DEFAULT_CONSOLE_WIDTH;
 		if ( width < 1 ) {
 			width = 1;
 		}
@@ -4121,7 +4270,7 @@ void Con_CheckResize( void )
 			displayWidth = cls.glconfig.vidWidth;
 		}
 
-		width = static_cast<int>( contentWidth / smallchar_width ) - 2;
+		width = static_cast<int>( contentWidth / console_char_width ) - 2;
 		if ( width < 1 ) {
 			width = 1;
 		}
@@ -4130,7 +4279,7 @@ void Con_CheckResize( void )
 			width = MAX_CONSOLE_WIDTH;
 
 		footerRows = Con_GetFooterRows();
-		vispage = static_cast<int>( contentHeight / ( smallchar_height * 2 ) ) - footerRows + 1;
+		vispage = static_cast<int>( contentHeight / ( console_char_height * 2 ) ) - footerRows + 1;
 		if ( vispage < 1 ) {
 			vispage = 1;
 		}
@@ -4259,7 +4408,7 @@ void Con_Init( void )
 	Cvar_SetDescription( con_scale, "Console font size scale." );
 	con_scaleUniform = Cvar_Get( "con_scaleUniform", "1", CVAR_ARCHIVE_ND );
 	Cvar_CheckRange( con_scaleUniform, "0", "1", CV_INTEGER );
-	Cvar_SetDescription( con_scaleUniform, "Use centered 4:3 uniform scaling for console font metrics instead of native pixel sizing." );
+	Cvar_SetDescription( con_scaleUniform, "Use retail height-derived 768-reference scaling for console font metrics instead of native pixel sizing." );
 	con_screenExtents = Cvar_Get( "con_screenExtents", "0", CVAR_ARCHIVE_ND );
 	Cvar_CheckRange( con_screenExtents, "0", "1", CV_INTEGER );
 	Cvar_SetDescription( con_screenExtents,
@@ -4649,7 +4798,7 @@ static void Con_DrawInput( float alphaScale, const vec4_t lineColor ) {
 		return;
 	}
 
-	y = con.vislines - ( smallchar_height * Con_GetFooterRows() );
+	y = con.vislines - ( console_char_height * Con_GetFooterRows() );
 
 	color[ 0 ] = con.color[ 0 ];
 	color[ 1 ] = con.color[ 1 ];
@@ -4657,10 +4806,13 @@ static void Con_DrawInput( float alphaScale, const vec4_t lineColor ) {
 	color[ 3 ] = con.color[ 3 ];
 
 	Con_SetScaledColor( color, alphaScale );
-	Con_DrawSmallCharFloat( con.xadjust + 1 * smallchar_width, y, ']' );
-	Con_DrawInputText( &g_consoleField, con.xadjust + 2 * smallchar_width, y, alphaScale );
-	Con_DrawInputDropCursor( &g_consoleField, con.xadjust + 2 * smallchar_width, y, alphaScale );
-	Con_DrawCompletionPopup( con.xadjust + 2 * smallchar_width, y, alphaScale, lineColor );
+	if ( !Con_DrawHostText( con.xadjust + console_char_width, y, "]", qtrue, con_drawColor ) ) {
+		Con_DrawSmallCharFloat( con.xadjust + console_char_width, y, ']' );
+	}
+	Con_DrawInputText( &g_consoleField, con.xadjust + 2 * console_char_width, y,
+		alphaScale, true );
+	Con_DrawInputDropCursor( &g_consoleField, con.xadjust + 2 * console_char_width, y, alphaScale );
+	Con_DrawCompletionPopup( con.xadjust + 2 * console_char_width, y, alphaScale, lineColor );
 }
 
 
@@ -4677,12 +4829,12 @@ static void Con_DrawNotify( void )
 	short	*text;
 	int		i;
 	int		time;
-	int		skip;
 	int		currentColorIndex;
 	int		colorIndex;
 
 	currentColorIndex = ColorIndex( COLOR_WHITE );
-	re.SetColor( g_color_table[ currentColorIndex ] );
+	Con_SetScaledColor( g_color_table[ currentColorIndex ], 1.0f );
+	Con_UpdateTtfFontAvailability();
 
 	v = 0;
 	for (i= con.current-NUM_CON_TIMES+1 ; i<=con.current ; i++)
@@ -4701,19 +4853,22 @@ static void Con_DrawNotify( void )
 			continue;
 		}
 
-		for (x = 0 ; x < con.linewidth ; x++) {
-			if ( ( text[x] & 0xff ) == ' ' ) {
-				continue;
+		if ( !Con_DrawConsoleLineText( cl_conXOffset->integer + con.xadjust + console_char_width,
+			v, text, con.linewidth, 1.0f ) ) {
+			for (x = 0 ; x < con.linewidth ; x++) {
+				if ( ( text[x] & 0xff ) == ' ' ) {
+					continue;
+				}
+				colorIndex = ( text[x] >> 8 ) & 63;
+				if ( currentColorIndex != colorIndex ) {
+					currentColorIndex = colorIndex;
+					Con_SetScaledColor( g_color_table[ colorIndex ], 1.0f );
+				}
+				Con_DrawSmallCharFloat( cl_conXOffset->integer + con.xadjust + (x+1)*console_char_width, v, text[x] & 0xff );
 			}
-			colorIndex = ( text[x] >> 8 ) & 63;
-			if ( currentColorIndex != colorIndex ) {
-				currentColorIndex = colorIndex;
-				re.SetColor( g_color_table[ colorIndex ] );
-			}
-			SCR_DrawSmallChar( cl_conXOffset->integer + con.xadjust + (x+1)*smallchar_width, v, text[x] & 0xff );
 		}
 
-		v += smallchar_height;
+		v += console_char_height;
 	}
 
 	re.SetColor( nullptr );
@@ -4725,25 +4880,32 @@ static void Con_DrawNotify( void )
 	// draw the chat line
 	if ( Key_GetCatcher( ) & KEYCATCH_MESSAGE )
 	{
-		int chatFieldY;
-		int chatFieldPixelWidth;
+		const char *prompt = chat_team ? "say team:" : "say:";
+		const int promptCells = chat_team ? 11 : 6;
+		const int chatFieldY = Con_GetChatFieldY();
+		const int chatFieldPixelWidth = Con_GetChatFieldPixelWidth();
+		const int promptLength = static_cast<int>( strlen( prompt ) );
+		float promptX = 8.0f;
+		float promptY = static_cast<float>( chatFieldY );
+		int promptIndex;
 
-		chatFieldY = Con_GetChatFieldY();
-		chatFieldPixelWidth = Con_GetChatFieldPixelWidth();
+		// Retail QL gives chat a translucent strip in virtual coordinates, then
+		// draws its prompt and field with console font 2 in screen coordinates.
+		SCR_FillRect( 6.0f, chatFieldY - 3.0f,
+			chatFieldPixelWidth + 12.0f, 22.0f, con_chatBackgroundColor );
+		SCR_AdjustFrom640( &promptX, &promptY, nullptr, nullptr );
 
-		if (chat_team)
-		{
-			SCR_DrawBigString( SMALLCHAR_WIDTH, chatFieldY, "say_team:", 1.0f, qfalse );
-			skip = 10;
+		Con_SetScaledColor( con_chatPromptColor, 1.0f );
+		if ( !Con_DrawHostText( promptX, promptY, prompt, qtrue, con_drawColor ) ) {
+			for ( promptIndex = 0; promptIndex < promptLength; ++promptIndex ) {
+				Con_DrawSmallCharFloat( promptX + promptIndex * console_char_width,
+					promptY, prompt[ promptIndex ] );
+			}
 		}
-		else
-		{
-			SCR_DrawBigString( SMALLCHAR_WIDTH, chatFieldY, "say:", 1.0f, qfalse );
-			skip = 5;
-		}
 
-		Field_BigDraw( &chatField, skip * BIGCHAR_WIDTH, chatFieldY,
-			chatFieldPixelWidth - ( skip + 1 ) * BIGCHAR_WIDTH, qtrue, qtrue );
+		Con_SetScaledColor( g_color_table[ ColorIndex( COLOR_WHITE ) ], 1.0f );
+		Con_DrawInputText( &chatField, promptX + promptCells * console_char_width,
+			promptY, 1.0f, false );
 	}
 }
 
@@ -4797,6 +4959,7 @@ static void Con_DrawSolidConsole( float frac ) {
 	Con_GetBackgroundColor( backgroundColor );
 	Con_GetColorCvar( con_lineColor, g_color_table[ ColorIndex( COLOR_RED ) ], lineColor, qfalse );
 	Con_GetColorCvar( con_versionColor, lineColor, versionColor, qfalse );
+	Con_UpdateTtfFontAvailability();
 
 	if ( yf < 1.0 ) {
 		yf = 0;
@@ -4814,8 +4977,13 @@ static void Con_DrawSolidConsole( float frac ) {
 
 	if ( showVersion ) {
 		Con_SetScaledColor( versionColor, alphaScale );
-		SCR_DrawSmallString( xf + wf - ( ARRAY_LEN( Q3_VERSION ) - 1 ) * smallchar_width,
-			lines - smallchar_height, Q3_VERSION, ARRAY_LEN( Q3_VERSION ) - 1 );
+		if ( !Con_DrawHostText( xf + wf - ( ARRAY_LEN( Q3_VERSION ) - 1 ) * console_char_width,
+			lines - console_char_height, Q3_VERSION, qtrue, con_drawColor ) ) {
+			for ( i = 0; i < ARRAY_LEN( Q3_VERSION ) - 1; i++ ) {
+				Con_DrawSmallCharFloat( xf + wf - ( ARRAY_LEN( Q3_VERSION ) - 1 - i ) * console_char_width,
+					lines - console_char_height, Q3_VERSION[ i ] );
+			}
+		}
 	}
 
 	if ( Con_GetClockString( clockString.data(), static_cast<int>( clockString.size() ) ) ) {
@@ -4823,8 +4991,13 @@ static void Con_DrawSolidConsole( float frac ) {
 		const int clockRow = showVersion ? 2 : 1;
 
 		Con_SetScaledColor( versionColor, alphaScale );
-		SCR_DrawSmallString( xf + wf - clockLen * smallchar_width,
-			lines - smallchar_height * clockRow, clockString.data(), clockLen );
+		if ( !Con_DrawHostText( xf + wf - clockLen * console_char_width,
+			lines - console_char_height * clockRow, clockString.data(), qtrue, con_drawColor ) ) {
+			for ( i = 0; i < clockLen; i++ ) {
+				Con_DrawSmallCharFloat( xf + wf - ( clockLen - i ) * console_char_width,
+					lines - console_char_height * clockRow, clockString[ i ] );
+			}
+		}
 	}
 
 	// draw the text
@@ -4833,13 +5006,13 @@ static void Con_DrawSolidConsole( float frac ) {
 	Con_UpdateCompletionScrollbarHover();
 	rows = Con_GetLogRowCount();	// rows of text to draw
 
-	markerY = lines - ( smallchar_height * ( statusRows + 1 ) );
+	markerY = lines - ( console_char_height * ( statusRows + 1 ) );
 	drawY = markerY;
 	row = static_cast<int>( con.displayLine );
 	if ( static_cast<float>( row ) < con.displayLine ) {
 		row++;
 	}
-	drawY += ( row - con.displayLine ) * smallchar_height;
+	drawY += ( row - con.displayLine ) * console_char_height;
 
 	// draw from the bottom up
 	if ( con.display != con.current )
@@ -4847,8 +5020,8 @@ static void Con_DrawSolidConsole( float frac ) {
 		// draw arrows to show the buffer is backscrolled
 		Con_SetScaledColor( lineColor, alphaScale );
 		for ( x = 0 ; x < con.linewidth ; x += 4 )
-			Con_DrawSmallCharFloat( con.xadjust + (x+1)*smallchar_width, markerY, '^' );
-		drawY -= smallchar_height;
+			Con_DrawSmallCharFloat( con.xadjust + (x+1)*console_char_width, markerY, '^' );
+		drawY -= console_char_height;
 		row--;
 	}
 
@@ -4861,8 +5034,8 @@ static void Con_DrawSolidConsole( float frac ) {
 		i = strlen( download.progress );
 		for ( x = 0 ; x < i ; x++ ) 
 		{
-			Con_DrawSmallCharFloat( con.xadjust + ( x + 1 ) * smallchar_width,
-				lines - smallchar_height, download.progress[x] );
+			Con_DrawSmallCharFloat( con.xadjust + ( x + 1 ) * console_char_width,
+				lines - console_char_height, download.progress[x] );
 		}
 	}
 #endif
@@ -4870,7 +5043,7 @@ static void Con_DrawSolidConsole( float frac ) {
 	currentColorIndex = ColorIndex( COLOR_WHITE );
 	Con_SetScaledColor( g_color_table[ currentColorIndex ], alphaScale );
 
-	for ( i = 0 ; i <= rows ; i++, drawY -= smallchar_height, row-- )
+	for ( i = 0 ; i <= rows ; i++, drawY -= console_char_height, row-- )
 	{
 		if ( row < 0 )
 			break;
@@ -4883,18 +5056,21 @@ static void Con_DrawSolidConsole( float frac ) {
 		text = con.text.data() + (row % con.totallines) * con.linewidth;
 		Con_DrawLogSelectionRow( row, drawY, alphaScale );
 
-		for ( x = 0 ; x < con.linewidth ; x++ ) {
-			// skip rendering whitespace
-			if ( ( text[x] & 0xff ) == ' ' ) {
-				continue;
+		if ( !Con_DrawConsoleLineText( con.xadjust + console_char_width, drawY,
+			text, con.linewidth, alphaScale ) ) {
+			for ( x = 0 ; x < con.linewidth ; x++ ) {
+				// skip rendering whitespace
+				if ( ( text[x] & 0xff ) == ' ' ) {
+					continue;
+				}
+				// track color changes
+				colorIndex = ( text[ x ] >> 8 ) & 63;
+				if ( currentColorIndex != colorIndex ) {
+					currentColorIndex = colorIndex;
+					Con_SetScaledColor( g_color_table[ colorIndex ], alphaScale );
+				}
+				Con_DrawSmallCharFloat( con.xadjust + (x + 1) * console_char_width, drawY, text[x] & 0xff );
 			}
-			// track color changes
-			colorIndex = ( text[ x ] >> 8 ) & 63;
-			if ( currentColorIndex != colorIndex ) {
-				currentColorIndex = colorIndex;
-				Con_SetScaledColor( g_color_table[ colorIndex ], alphaScale );
-			}
-			Con_DrawSmallCharFloat( con.xadjust + (x + 1) * smallchar_width, drawY, text[x] & 0xff );
 		}
 	}
 

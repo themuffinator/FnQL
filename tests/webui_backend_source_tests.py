@@ -24,7 +24,7 @@ class WebUiBackendSourceTests(unittest.TestCase):
         self.assertIn("struct HostServices", header)
         self.assertIn("RequestResourceFn", header)
 
-    def test_legacy_facade_delegates_without_loading_awesomium(self) -> None:
+    def test_legacy_facade_delegates_to_the_platform_adapter(self) -> None:
         source = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(
             encoding="utf-8"
         )
@@ -35,10 +35,24 @@ class WebUiBackendSourceTests(unittest.TestCase):
         self.assertIn("host.CopySurface", source)
         self.assertIn("CL_WebUI_BackendRequestResource", source)
         self.assertIn("CL_WebUI_BackendReleaseResource", source)
-        self.assertIn('Cvar_Get( "cl_webuiEnable", "0", CVAR_ARCHIVE_ND )', source)
+        self.assertIn("InstallRetailAwesomiumBackend", source)
+        self.assertIn('"1",\n#else\n\t\t"0",', source)
         self.assertNotIn("LoadLibraryA(", source)
         self.assertNotIn("GetProcAddress(", source)
         self.assertNotIn("_Awe_", source)
+
+        adapter = (
+            ROOT / "code" / "client" / "awesomium_backend_win32.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn("class RetailAwesomiumBackend final", adapter)
+        self.assertIn("LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR", adapter)
+        self.assertIn("GetProcAddress( module_, name )", adapter)
+        self.assertIn("_Awe_WebCore_Initialize@4", adapter)
+        self.assertIn("newDataPakSource( webPakPath_.c_str() )", adapter)
+        self.assertIn("FNQL_WEBUI_VERBOSE_LOG", adapter)
+        self.assertIn("if ( module_ )", adapter)
+        self.assertIn("webPakPath_.clear();", adapter)
+        self.assertNotIn("#include <Awesomium/", adapter)
 
     def test_native_requests_are_origin_locked_and_losslessly_decoded(self) -> None:
         header = (ROOT / "code" / "client" / "webui_backend.hpp").read_text(
@@ -54,7 +68,7 @@ class WebUiBackendSourceTests(unittest.TestCase):
         self.assertIn("exceeds the UTF-8 bridge buffer", source)
         self.assertNotIn("codepoint <= 0 || codepoint > 255", source)
 
-    def test_native_ui_ownership_waits_for_a_real_presenter(self) -> None:
+    def test_native_ui_ownership_requires_the_live_surface_presenter(self) -> None:
         source = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(
             encoding="utf-8"
         )
@@ -64,18 +78,95 @@ class WebUiBackendSourceTests(unittest.TestCase):
         ]
 
         self.assertIn("host.Status().HasSurface()", drawable)
-        self.assertIn("Do not claim overlay", drawable)
-        self.assertIn("return qfalse;", drawable)
+        self.assertIn("!re.DrawWebUISurface", drawable)
+        self.assertIn("return qtrue;", drawable)
+
+        public_renderer = (
+            ROOT / "code" / "renderercommon" / "tr_public.h"
+        ).read_text(encoding="utf-8")
+        self.assertIn("DrawWebUISurface", public_renderer)
+
+        for renderer in ("renderer", "renderer2", "renderervk"):
+            with self.subTest(renderer=renderer):
+                backend = (
+                    ROOT / "code" / renderer / "tr_backend.c"
+                ).read_text(encoding="utf-8")
+                init = (ROOT / "code" / renderer / "tr_init.c").read_text(
+                    encoding="utf-8"
+                )
+                self.assertIn("void RE_DrawWebUISurface", backend)
+                self.assertIn(
+                    "re.DrawWebUISurface = RE_DrawWebUISurface;", init
+                )
+
+    def test_retail_datapak_starts_before_renderer_dimensions_exist(self) -> None:
+        source = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("#define CL_WEB_BOOTSTRAP_WIDTH 1280", source)
+        self.assertIn("#define CL_WEB_BOOTSTRAP_HEIGHT 720", source)
+        self.assertIn(
+            "Z_Malloc( CL_WEB_STARTUP_SCRIPT_LENGTH )", source
+        )
+        self.assertIn(
+            "CL_WebHost_BuildStartupBridgeScript(\n\t\t\tscript, CL_WEB_STARTUP_SCRIPT_LENGTH )",
+            source,
+        )
+        self.assertIn(
+            "? cls.glconfig.vidWidth : CL_WEB_BOOTSTRAP_WIDTH", source
+        )
+        self.assertIn(
+            "? cls.glconfig.vidHeight : CL_WEB_BOOTSTRAP_HEIGHT", source
+        )
+        bootstrap = source[
+            source.index("void CL_WebHost_BootstrapAwesomiumMenu") :
+            source.index("qboolean CL_WebHost_HasLiveView")
+        ]
+        self.assertIn("CL_WebHost_OpenRequestedURL", bootstrap)
+        self.assertNotIn("cls.glconfig.vidWidth <= 0", bootstrap)
+
+    def test_legacy_stop_refresh_cannot_abort_the_live_document(self) -> None:
+        source = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(
+            encoding="utf-8"
+        )
+        handler = source[
+            source.index("static void CL_Web_StopRefresh_f") :
+            source.index("static void CL_Web_DumpSurface_f")
+        ]
+
+        self.assertIn("ignored for the live WebUI document", handler)
+        self.assertNotIn("CL_Awesomium_Stop", handler)
+
+    def test_retail_adapter_is_built_without_bundling_runtime_files(self) -> None:
+        meson = (ROOT / "meson.build").read_text(encoding="utf-8")
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        project = (
+            ROOT / "code" / "win32" / "msvc2017" / "fnql.vcxproj"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("awesomium_backend_win32.cpp", meson)
+        self.assertIn("awesomium_backend_win32.o", makefile)
+        self.assertIn("awesomium_backend_win32.cpp", project)
+        for runtime in (
+            "awesomium.dll",
+            "awesomium_process.exe",
+            "avcodec-53.dll",
+            "avformat-53.dll",
+            "avutil-51.dll",
+        ):
+            with self.subTest(runtime=runtime):
+                self.assertNotIn(runtime, meson)
 
     def test_runtime_plan_separates_observations_and_blockers(self) -> None:
         plan = (ROOT / "docs" / "fnql" / "WEBUI_BACKEND.md").read_text(
             encoding="utf-8"
         )
 
-        self.assertIn("source observations, not claims from a live retail probe", plan)
+        self.assertIn("Verified retail runtime observations", plan)
         self.assertIn("Retail behavior remains authoritative", plan)
-        self.assertIn("Remaining runtime work", plan)
-        self.assertIn("renderer-neutral dynamic RGBA", plan)
+        self.assertIn("Runtime validation", plan)
+        self.assertIn("arbitrary-size RGBA", plan)
 
 
 if __name__ == "__main__":

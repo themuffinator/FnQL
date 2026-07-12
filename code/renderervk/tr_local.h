@@ -1915,6 +1915,8 @@ typedef struct {
 
 	image_t					*defaultImage;
 	image_t					*scratchImage[ MAX_VIDEO_HANDLES ];
+	image_t					*webUIImage;
+	qhandle_t				webUIShader;
 	image_t					*fogImage;
 	image_t					*dlightImage;	// inverse-quare highlight for projective adding
 	image_t					*flareImage;
@@ -2341,6 +2343,7 @@ void	GL_Cull( cullType_t cullType );
 
 void		RE_StretchRaw( int x, int y, int w, int h, int cols, int rows, const byte *data, int client, qboolean dirty );
 void		RE_UploadCinematic( int w, int h, int cols, int rows, const byte *data, int client, qboolean dirty );
+void		RE_DrawWebUISurface( int x, int y, int w, int h, int cols, int rows, const byte *data, qboolean dirty );
 
 void		RE_BeginFrame( stereoFrame_t stereoFrame );
 void		RE_BeginRegistration( glconfig_t *glconfig );

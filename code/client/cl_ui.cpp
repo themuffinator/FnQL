@@ -27,6 +27,7 @@ extern "C" {
 }
 
 #include "client_cpp.h"
+#include "ql_font_bridge.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1772,8 +1773,8 @@ static int QDECL QL_UI_trap_IsSubscribedApp( int appId ) {
 	return CL_IsSubscribedApp( appId ) ? 1 : 0;
 }
 
-static void QDECL QL_UI_trap_DrawScaledText( int x, int y, const char *text, int fontHandle, float scale, int maxX, float *outMaxX, int forceColor ) {
-	RE_DrawScaledText( x, y, text, fontHandle, scale, maxX, outMaxX, forceColor != qfalse ? qtrue : qfalse, ql_ui_currentColor );
+static void QDECL QL_UI_trap_DrawScaledText( int x, int y, const char *text, int fontHandle, float scale, int limit, float *maxX, int forceColor ) {
+	RE_DrawScaledText( x, y, text, fontHandle, scale, limit, maxX, forceColor != qfalse ? qtrue : qfalse, ql_ui_currentColor );
 }
 
 static unsigned long long QL_UI_PackFloatBits64( float lo, float hi ) {
@@ -1782,11 +1783,13 @@ static unsigned long long QL_UI_PackFloatBits64( float lo, float hi ) {
 	return result;
 }
 
-static unsigned long long QDECL QL_UI_trap_MeasureText( const char *text, const char *end, int fontHandle, float scale, int maxX, float *outLeft ) {
+static unsigned long long QDECL QL_UI_trap_MeasureText( const char *text, const char *end, int fontHandle, float scale, int limit, float *outLeft ) {
 	float width;
 	float height;
+	float left;
 
-	RE_MeasureScaledText( text, end, fontHandle, scale, maxX, &width, &height, outLeft );
+	RE_MeasureScaledText( text, end, fontHandle, scale, limit, &width, &height, &left );
+	fnql::font::WriteMeasureBounds( outLeft, left, width, height );
 	return QL_UI_PackFloatBits64( width, height );
 }
 
@@ -1950,9 +1953,12 @@ void CL_InitUI( void ) {
 	interpret = static_cast<vmInterpret_t>( Cvar_VariableIntegerValue( "vm_ui" ) );
 	if ( cl_connectedToPureServer )
 	{
-		// if sv_pure is set we only allow qvms to be loaded
-		if ( interpret != VMI_COMPILED && interpret != VMI_BYTECODE )
-			interpret = VMI_COMPILED;
+		// Retail QL has no UI QVM. A pure server may reload only the exact
+		// native image pinned before its filesystem policy took effect.
+		if ( interpret != VMI_COMPILED && interpret != VMI_BYTECODE ) {
+			interpret = VM_HasPinnedNativeModule( VM_UI )
+				? VMI_PINNED_NATIVE : VMI_COMPILED;
+		}
 	}
 
 	CL_InitUIImports();

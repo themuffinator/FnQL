@@ -24,11 +24,18 @@ extern "C" {
 }
 
 #include "client_cpp.h"
+#include "input_compat.hpp"
 
 #include <algorithm>
 #include <array>
 
 using fnql::ScopedZoneMemory;
+
+namespace {
+
+fnql::input::Utf16Decoder textInputDecoder;
+
+} // namespace
 
 /*
 
@@ -155,7 +162,9 @@ static void Field_VariableSizeDraw( field_t *edit, int x, int y, int width, int 
 		if ( size == smallchar_width ) {
 			SCR_DrawSmallChar( x + ( edit->cursor - prestep - i ) * size, y, cursorChar );
 		} else {
-			str[0] = cursorChar;
+			// Host TTF text has no glyphs for the charset's control-byte
+			// cursors. Use the retail field cursor shapes explicitly.
+			str[0] = key_overstrikeMode ? '_' : '|';
 			str[1] = '\0';
 			SCR_DrawBigString( x + ( edit->cursor - prestep - i ) * BIGCHAR_WIDTH, y, str.data(), 1.0, qfalse );
 		}
@@ -194,6 +203,74 @@ static void Field_Paste( field_t *edit ) {
 	pasteLen = strlen( cbd );
 	for ( i = 0 ; i < pasteLen ; i++ ) {
 		Field_CharEvent( edit, cbd[i] );
+	}
+}
+
+
+static bool Field_IsUtf8ContinuationByte( unsigned char ch ) {
+	return ( ch & 0xc0 ) == 0x80;
+}
+
+
+static void Field_DeletePreviousCharacter( field_t *edit ) {
+	int len = static_cast<int>( strlen( edit->buffer ) );
+
+	while ( edit->cursor > 0 ) {
+		const unsigned char deletedByte = static_cast<unsigned char>( edit->buffer[edit->cursor - 1] );
+		std::copy( edit->buffer + edit->cursor, edit->buffer + len + 1,
+			edit->buffer + edit->cursor - 1 );
+		--edit->cursor;
+		--len;
+		if ( edit->cursor < edit->scroll ) {
+			--edit->scroll;
+		}
+		if ( !Field_IsUtf8ContinuationByte( deletedByte ) ) {
+			break;
+		}
+	}
+}
+
+
+static void Field_DeleteCurrentCharacter( field_t *edit ) {
+	int len = static_cast<int>( strlen( edit->buffer ) );
+
+	while ( edit->cursor < len ) {
+		std::copy( edit->buffer + edit->cursor + 1, edit->buffer + len + 1,
+			edit->buffer + edit->cursor );
+		--len;
+		if ( edit->cursor >= len ||
+			!Field_IsUtf8ContinuationByte( static_cast<unsigned char>( edit->buffer[edit->cursor] ) ) ) {
+			break;
+		}
+	}
+}
+
+
+static void Field_AdvanceCursor( field_t *edit ) {
+	const int len = static_cast<int>( strlen( edit->buffer ) );
+
+	while ( edit->cursor < len ) {
+		++edit->cursor;
+		if ( edit->cursor >= edit->scroll + edit->widthInChars ) {
+			++edit->scroll;
+		}
+		if ( edit->cursor >= len ||
+			!Field_IsUtf8ContinuationByte( static_cast<unsigned char>( edit->buffer[edit->cursor] ) ) ) {
+			break;
+		}
+	}
+}
+
+
+static void Field_RetreatCursor( field_t *edit ) {
+	while ( edit->cursor > 0 ) {
+		--edit->cursor;
+		if ( edit->cursor < edit->scroll ) {
+			--edit->scroll;
+		}
+		if ( !Field_IsUtf8ContinuationByte( static_cast<unsigned char>( edit->buffer[edit->cursor] ) ) ) {
+			break;
+		}
 	}
 }
 
@@ -246,41 +323,44 @@ static void Field_KeyDownEvent( field_t *edit, int key ) {
 
 	switch ( key ) {
 		case K_DEL:
-			if ( edit->cursor < len ) {
-				std::copy( edit->buffer + edit->cursor + 1, edit->buffer + len + 1,
-					edit->buffer + edit->cursor );
-			}
+		case K_KP_DEL:
+			Field_DeleteCurrentCharacter( edit );
 			break;
 
 		case K_RIGHTARROW:
+		case K_KP_RIGHTARROW:
 			if ( edit->cursor < len ) {
 				if ( keys[ K_CTRL ].down ) {
 					Field_SeekWord( edit, 1 );
 				} else {
-					edit->cursor++;
+					Field_AdvanceCursor( edit );
 				}
 			}
 			break;
 
 		case K_LEFTARROW:
+		case K_KP_LEFTARROW:
 			if ( edit->cursor > 0 ) {
 				if ( keys[ K_CTRL ].down ) {
 					Field_SeekWord( edit, -1 );
 				} else {
-					edit->cursor--;
+					Field_RetreatCursor( edit );
 				}
 			}
 			break;
 
 		case K_HOME:
+		case K_KP_HOME:
 			edit->cursor = 0;
 			break;
 
 		case K_END:
+		case K_KP_END:
 			edit->cursor = len;
 			break;
 
 		case K_INS:
+		case K_KP_INS:
 			key_overstrikeMode = key_overstrikeMode ? qfalse : qtrue;
 			break;
 
@@ -318,15 +398,7 @@ static void Field_CharEvent( field_t *edit, int ch ) {
 	len = strlen( edit->buffer );
 
 	if ( ch == 'h' - 'a' + 1 )	{	// ctrl-h is backspace
-		if ( edit->cursor > 0 ) {
-			std::copy( edit->buffer + edit->cursor, edit->buffer + len + 1,
-				edit->buffer + edit->cursor - 1 );
-			edit->cursor--;
-			if ( edit->cursor < edit->scroll )
-			{
-				edit->scroll--;
-			}
-		}
+		Field_DeletePreviousCharacter( edit );
 		return;
 	}
 
@@ -349,10 +421,23 @@ static void Field_CharEvent( field_t *edit, int ch ) {
 		return;
 	}
 
-	if ( key_overstrikeMode ) {
+	if ( key_overstrikeMode && !Field_IsUtf8ContinuationByte(
+		static_cast<unsigned char>( ch ) ) ) {
 		// - 2 to leave room for the leading slash and trailing \0
 		if ( edit->cursor == MAX_EDIT_LINE - 2 )
 			return;
+		if ( edit->cursor < len ) {
+			int overwriteEnd = edit->cursor + 1;
+			while ( overwriteEnd < len && Field_IsUtf8ContinuationByte(
+				static_cast<unsigned char>( edit->buffer[overwriteEnd] ) ) ) {
+				++overwriteEnd;
+			}
+			if ( overwriteEnd > edit->cursor + 1 ) {
+				std::copy( edit->buffer + overwriteEnd, edit->buffer + len + 1,
+					edit->buffer + edit->cursor + 1 );
+				len -= overwriteEnd - ( edit->cursor + 1 );
+			}
+		}
 		edit->buffer[edit->cursor] = ch;
 		edit->cursor++;
 	} else {	// insert mode
@@ -879,31 +964,35 @@ Normal keyboard characters, already shifted / capslocked / etc
 */
 void CL_CharEvent( int key )
 {
-	// delete is not a printable character and is
-	// otherwise handled by Field_KeyDownEvent
-	if ( key == 127 )
+	if ( key < 0 ) {
 		return;
+	}
 
-	// distribute the key down event to the appropriate handler
-	if ( Key_GetCatcher( ) & KEYCATCH_CONSOLE )
-	{
-		Con_CharEvent( key );
+	const std::optional<std::uint32_t> codepoint =
+		textInputDecoder.Consume( static_cast<std::uint32_t>( key ) );
+	if ( !codepoint || *codepoint == 127u ) {
+		// Delete is handled by Field_KeyDownEvent. A pending UTF-16 high
+		// surrogate also deliberately produces no character yet.
+		return;
 	}
-	else if ( Key_GetCatcher( ) & KEYCATCH_BROWSER )
-	{
-		CL_WebView_OnKeyEvent( key | K_CHAR_FLAG, qtrue );
-	}
-	else if ( Key_GetCatcher( ) & KEYCATCH_UI )
-	{
-		VM_Call( uivm, 3, UI_KEY_EVENT, key | K_CHAR_FLAG, qtrue, cls.realtime );
-	}
-	else if ( Key_GetCatcher( ) & KEYCATCH_MESSAGE )
-	{
-		Field_CharEvent( &chatField, key );
-	}
-	else if ( cls.state == CA_DISCONNECTED )
-	{
-		Field_CharEvent( &g_consoleField, key );
+
+	const fnql::input::Utf8Codepoint encoded = fnql::input::EncodeUtf8( *codepoint );
+	for ( std::size_t i = 0; i < encoded.size; ++i ) {
+		const int utf8Byte = encoded.bytes[i];
+
+		// Retail modules and the legacy edit fields consume UTF-8 one byte at
+		// a time. ASCII/control input therefore remains byte-for-byte unchanged.
+		if ( Key_GetCatcher( ) & KEYCATCH_CONSOLE ) {
+			Con_CharEvent( utf8Byte );
+		} else if ( Key_GetCatcher( ) & KEYCATCH_BROWSER ) {
+			CL_WebView_OnKeyEvent( utf8Byte | K_CHAR_FLAG, qtrue );
+		} else if ( Key_GetCatcher( ) & KEYCATCH_UI ) {
+			VM_Call( uivm, 3, UI_KEY_EVENT, utf8Byte | K_CHAR_FLAG, qtrue, cls.realtime );
+		} else if ( Key_GetCatcher( ) & KEYCATCH_MESSAGE ) {
+			Field_CharEvent( &chatField, utf8Byte );
+		} else if ( cls.state == CA_DISCONNECTED ) {
+			Field_CharEvent( &g_consoleField, utf8Byte );
+		}
 	}
 }
 
@@ -917,6 +1006,7 @@ void Key_ClearStates( void )
 {
 	int		i;
 
+	textInputDecoder.Reset();
 	anykeydown = 0;
 
 	for ( i = 0 ; i < MAX_KEYS ; i++ )

@@ -1856,6 +1856,19 @@ static void RE_EndRegistration( void ) {
 }
 
 
+static qhandle_t RE_RegisterShaderFromRGBA( const char *name, byte *rgba,
+		int width, int height ) {
+	image_t *image;
+	if ( !name || !name[0] || !rgba || width <= 0 || height <= 0
+		|| width > 4096 || height > 4096 ) {
+		return 0;
+	}
+	image = R_CreateImage( name, rgba, width, height, IMGTYPE_COLORALPHA,
+		IMGFLAG_CLAMPTOEDGE | IMGFLAG_NO_COMPRESSION | IMGFLAG_NOSCALE,
+		GL_RGBA8 );
+	return image ? RE_RegisterShaderFromImage( name, LIGHTMAP_2D, image, qfalse ) : 0;
+}
+
 /*
 @@@@@@@@@@@@@@@@@@@@@
 GetRefAPI
@@ -1913,8 +1926,14 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 	re.DrawStretchPic = RE_StretchPic;
 	re.DrawStretchRaw = RE_StretchRaw;
 	re.UploadCinematic = RE_UploadCinematic;
+	re.DrawWebUISurface = RE_DrawWebUISurface;
+	re.RegisterShaderFromRGBA = RE_RegisterShaderFromRGBA;
 
 	re.RegisterFont = RE_RegisterFont;
+	re.DrawScaledText = RE_DrawScaledText;
+	re.MeasureScaledText = RE_MeasureScaledText;
+	re.GetScaledFontMetrics = RE_GetScaledFontMetrics;
+	re.GetFontAtlasDebugShader = RE_GetFontAtlasDebugShader;
 	re.RemapShader = R_RemapShader;
 	re.GetEntityToken = R_GetEntityToken;
 	re.inPVS = R_inPVS;

@@ -71,6 +71,15 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/q_shared.h"
 #include "../qcommon/qcommon.h"
 #include "../renderercommon/tr_public.h"
+#include "ql_font_text.h"
+#include <stdio.h>
+
+#if defined( _WIN32 )
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 #if defined(RENDERER_OPENGL2)
 #include "../renderer2/tr_common.h"
@@ -100,9 +109,800 @@ extern qhandle_t RE_RegisterShaderNoMip( const char *name );
 FT_Library ftLibrary = NULL;  
 #endif
 
-#define MAX_FONTS 6
+#define MAX_FONTS 16
+#define CLASSIC_FONT_GRID_SIZE 16
+#define CLASSIC_FONT_CELL_SIZE 16
 static int registeredFontCount = 0;
 static fontInfo_t registeredFont[MAX_FONTS];
+
+/*
+ * Quake Live's native modules use a renderer-owned UTF-8 text service in
+ * addition to the legacy fontInfo_t ABI.  Keep that service independent of
+ * the classic 256-glyph cache so retail TTF fallback remains available.
+ */
+#define QL_HOST_FACE_COUNT 5
+#define QL_HOST_ATLAS_INITIAL_WIDTH 512
+#define QL_HOST_ATLAS_INITIAL_HEIGHT 512
+#define QL_HOST_ATLAS_MAX_WIDTH 2048
+#define QL_HOST_ATLAS_MAX_HEIGHT 1024
+#define QL_HOST_ATLAS_PADDING 1
+#define QL_HOST_GLYPH_BUCKETS 1024
+
+typedef struct {
+	const char *path;
+	void *data;
+	int dataLength;
+	qboolean dataFromFileSystem;
+#ifdef BUILD_FREETYPE
+	FT_Face face;
+#endif
+} qlHostFace_t;
+
+typedef struct {
+	unsigned int codepoint;
+	short faceIndex;
+	short scaleTenths;
+	int next;
+	float left, right, top, bottom, advance;
+	float s1, t1, s2, t2;
+	int atlasX, atlasY, atlasWidth, atlasHeight;
+	qhandle_t shader;
+} qlHostGlyph_t;
+
+typedef struct {
+	image_t *image;
+	qhandle_t shader;
+	byte *alpha;
+	int width, height;
+	int x, y, rowHeight;
+	int generation;
+} qlHostAtlas_t;
+
+typedef struct {
+	qboolean ready;
+	qlHostFace_t faces[QL_HOST_FACE_COUNT];
+	qlHostAtlas_t atlas;
+	qlHostGlyph_t *glyphs;
+	int glyphCount;
+	int glyphCapacity;
+	int buckets[QL_HOST_GLYPH_BUCKETS];
+} qlHostFonts_t;
+
+#ifdef BUILD_FREETYPE
+static qlHostFonts_t qlHostFonts;
+#endif
+
+extern void RE_SetColor( const float *rgba );
+extern void RE_StretchPic( float x, float y, float w, float h,
+	float s1, float t1, float s2, float t2, qhandle_t hShader );
+
+#if defined( RENDERER_OPENGL2 )
+extern void R_UpdateSubImage( image_t *image, byte *pic, int x, int y,
+	int width, int height, unsigned int picFormat );
+#elif defined( RENDERER_VULKAN ) && defined( USE_VULKAN )
+extern void vk_upload_image_data( image_t *image, int x, int y, int width,
+	int height, int miplevels, byte *pixels, int size, qboolean update );
+#endif
+
+#ifdef BUILD_FREETYPE
+static qboolean QL_CreateOrResizeHostAtlas( int width, int height,
+	qboolean preserve );
+
+static unsigned int QL_HostGlyphHash( int faceIndex, unsigned int codepoint, int scaleTenths ) {
+	unsigned int hash = codepoint * 2654435761u;
+	hash ^= (unsigned int)faceIndex * 2246822519u;
+	hash ^= (unsigned int)scaleTenths * 3266489917u;
+	return hash & ( QL_HOST_GLYPH_BUCKETS - 1 );
+}
+
+static void QL_ResetHostFonts( void ) {
+	int i;
+
+	for ( i = 0; i < QL_HOST_FACE_COUNT; ++i ) {
+		if ( qlHostFonts.faces[i].face ) {
+			FT_Done_Face( qlHostFonts.faces[i].face );
+		}
+	}
+	for ( i = 0; i < QL_HOST_FACE_COUNT; ++i ) {
+		if ( qlHostFonts.faces[i].data ) {
+			if ( qlHostFonts.faces[i].dataFromFileSystem ) {
+				ri.FS_FreeFile( qlHostFonts.faces[i].data );
+			} else {
+				ri.Free( qlHostFonts.faces[i].data );
+			}
+		}
+	}
+	if ( qlHostFonts.glyphs ) {
+		ri.Free( qlHostFonts.glyphs );
+	}
+	if ( qlHostFonts.atlas.alpha ) {
+		ri.Free( qlHostFonts.atlas.alpha );
+	}
+	Com_Memset( &qlHostFonts, 0, sizeof( qlHostFonts ) );
+}
+
+static qboolean QL_LoadHostFace( int index, const char *path ) {
+	qlHostFace_t *hostFace = &qlHostFonts.faces[index];
+
+	hostFace->path = path;
+	hostFace->dataLength = ri.FS_ReadFile( path, &hostFace->data );
+	if ( hostFace->dataLength <= 0 || !hostFace->data ) {
+		ri.Printf( PRINT_WARNING, "QL fonts: unable to read %s\n", path );
+		hostFace->data = NULL;
+		return qfalse;
+	}
+	hostFace->dataFromFileSystem = qtrue;
+	if ( FT_New_Memory_Face( ftLibrary, hostFace->data, hostFace->dataLength, 0,
+		&hostFace->face ) != 0 ) {
+		ri.Printf( PRINT_WARNING, "QL fonts: invalid face %s\n", path );
+		ri.FS_FreeFile( hostFace->data );
+		hostFace->data = NULL;
+		return qfalse;
+	}
+	FT_Select_Charmap( hostFace->face, FT_ENCODING_UNICODE );
+	return qtrue;
+}
+
+#if defined( _WIN32 )
+static qboolean QL_LoadAbsoluteHostFace( int index, const char *path ) {
+	qlHostFace_t *hostFace = &qlHostFonts.faces[index];
+	FILE *file;
+	long length;
+	void *data;
+
+	file = fopen( path, "rb" );
+	if ( !file ) {
+		return qfalse;
+	}
+	if ( fseek( file, 0, SEEK_END ) != 0 || ( length = ftell( file ) ) <= 0 ||
+		length > 32 * 1024 * 1024 || fseek( file, 0, SEEK_SET ) != 0 ) {
+		fclose( file );
+		return qfalse;
+	}
+	data = ri.Malloc( (int)length );
+	if ( !data || fread( data, 1, (size_t)length, file ) != (size_t)length ) {
+		if ( data ) ri.Free( data );
+		fclose( file );
+		return qfalse;
+	}
+	fclose( file );
+	if ( FT_New_Memory_Face( ftLibrary, data, (FT_Long)length, 0, &hostFace->face ) != 0 ) {
+		ri.Free( data );
+		return qfalse;
+	}
+	hostFace->path = "Windows Unicode fallback";
+	hostFace->data = data;
+	hostFace->dataLength = (int)length;
+	hostFace->dataFromFileSystem = qfalse;
+	FT_Select_Charmap( hostFace->face, FT_ENCODING_UNICODE );
+	ri.Printf( PRINT_ALL, "QL fonts: using Windows fallback %s\n", path );
+	return qtrue;
+}
+
+static void QL_LoadWindowsFallbackFace( void ) {
+	char windowsDirectory[MAX_OSPATH];
+	char path[MAX_OSPATH];
+	static const char *names[] = { "ARIALUNI.TTF", "segoeui.ttf", "l_10646.ttf" };
+	int i;
+
+	if ( GetWindowsDirectoryA( windowsDirectory, sizeof( windowsDirectory ) ) == 0 ) {
+		return;
+	}
+	for ( i = 0; i < (int)ARRAY_LEN( names ); ++i ) {
+		Com_sprintf( path, sizeof( path ), "%s\\Fonts\\%s", windowsDirectory, names[i] );
+		if ( QL_LoadAbsoluteHostFace( 4, path ) ) {
+			return;
+		}
+	}
+}
+#endif
+
+static void QL_InitHostFonts( void ) {
+	int i;
+
+	Com_Memset( &qlHostFonts, 0, sizeof( qlHostFonts ) );
+	for ( i = 0; i < QL_HOST_GLYPH_BUCKETS; ++i ) {
+		qlHostFonts.buckets[i] = -1;
+	}
+	if ( !ftLibrary ) {
+		return;
+	}
+
+	QL_LoadHostFace( 0, "fonts/handelgothic.ttf" );
+	QL_LoadHostFace( 1, "fonts/notosans-regular.ttf" );
+	QL_LoadHostFace( 2, "fonts/droidsansmono.ttf" );
+	QL_LoadHostFace( 3, "fonts/droidsansfallbackfull.ttf" );
+#if defined( _WIN32 )
+	QL_LoadWindowsFallbackFace();
+#endif
+	for ( i = 0; i < QL_HOST_FACE_COUNT; ++i ) {
+		if ( qlHostFonts.faces[i].face ) {
+			qlHostFonts.ready = qtrue;
+			break;
+		}
+	}
+	if ( qlHostFonts.ready ) {
+		if ( !QL_CreateOrResizeHostAtlas( QL_HOST_ATLAS_INITIAL_WIDTH,
+			QL_HOST_ATLAS_INITIAL_HEIGHT, qfalse ) ) {
+			ri.Printf( PRINT_WARNING, "QL fonts: unable to create retained font atlas\n" );
+		}
+		ri.Printf( PRINT_ALL, "QL fonts: retail TTF host text enabled\n" );
+	}
+}
+
+static image_t *QL_CreateHostAtlasImage( const char *name, byte *pixels,
+	int width, int height ) {
+#if defined( RENDERER_OPENGL2 )
+	return R_CreateImage( name, pixels, width, height,
+		IMGTYPE_COLORALPHA, IMGFLAG_CLAMPTOEDGE, 0 );
+#else
+	return R_CreateImage( name, NULL, pixels, width, height, IMGFLAG_CLAMPTOEDGE );
+#endif
+}
+
+static void QL_UploadHostAtlas( image_t *image, byte *pixels, int x, int y,
+	int width, int height ) {
+#if defined( RENDERER_OPENGL2 )
+	R_UpdateSubImage( image, pixels, x, y, width, height, 0x1908 /* GL_RGBA */ );
+#elif defined( RENDERER_VULKAN ) && defined( USE_VULKAN )
+	vk_upload_image_data( image, x, y, width, height, 1, pixels,
+		width * height * 4, qtrue );
+#else
+	R_UploadSubImage( pixels, x, y, width, height, image );
+#endif
+}
+
+static byte *QL_BuildHostAtlasRgba( const byte *alpha, int width, int height ) {
+	byte *rgba;
+	int pixelCount;
+	int i;
+
+	if ( !alpha || width <= 0 || height <= 0 ) {
+		return NULL;
+	}
+	pixelCount = width * height;
+	rgba = ri.Malloc( pixelCount * 4 );
+	if ( !rgba ) {
+		return NULL;
+	}
+	for ( i = 0; i < pixelCount; ++i ) {
+		rgba[i * 4 + 0] = 255;
+		rgba[i * 4 + 1] = 255;
+		rgba[i * 4 + 2] = 255;
+		rgba[i * 4 + 3] = alpha[i];
+	}
+	return rgba;
+}
+
+static void QL_FlushHostAtlasCommands( void ) {
+	R_IssuePendingRenderCommands();
+}
+
+static void QL_RefreshHostGlyphAtlasBindings( void ) {
+	qlHostAtlas_t *atlas = &qlHostFonts.atlas;
+	int i;
+
+	if ( atlas->width <= 0 || atlas->height <= 0 ) {
+		return;
+	}
+	for ( i = 0; i < qlHostFonts.glyphCount; ++i ) {
+		qlHostGlyph_t *glyph = &qlHostFonts.glyphs[i];
+		glyph->s1 = (float)glyph->atlasX / atlas->width;
+		glyph->t1 = (float)glyph->atlasY / atlas->height;
+		glyph->s2 = (float)( glyph->atlasX + glyph->atlasWidth ) / atlas->width;
+		glyph->t2 = (float)( glyph->atlasY + glyph->atlasHeight ) / atlas->height;
+		glyph->shader = atlas->shader;
+	}
+}
+
+static qboolean QL_CreateOrResizeHostAtlas( int width, int height,
+	qboolean preserve ) {
+	qlHostAtlas_t *atlas = &qlHostFonts.atlas;
+	byte *alpha;
+	byte *rgba;
+	image_t *image;
+	qhandle_t shader;
+	char name[MAX_QPATH];
+	int copyWidth;
+	int copyHeight;
+	int row;
+
+	if ( width <= 0 || height <= 0 || width > QL_HOST_ATLAS_MAX_WIDTH ||
+		height > QL_HOST_ATLAS_MAX_HEIGHT ) {
+		return qfalse;
+	}
+	alpha = ri.Malloc( width * height );
+	if ( !alpha ) {
+		return qfalse;
+	}
+	Com_Memset( alpha, 0, width * height );
+	if ( preserve && atlas->alpha ) {
+		copyWidth = atlas->width < width ? atlas->width : width;
+		copyHeight = atlas->height < height ? atlas->height : height;
+		for ( row = 0; row < copyHeight; ++row ) {
+			Com_Memcpy( alpha + row * width, atlas->alpha + row * atlas->width,
+				copyWidth );
+		}
+	}
+	rgba = QL_BuildHostAtlasRgba( alpha, width, height );
+	if ( !rgba ) {
+		ri.Free( alpha );
+		return qfalse;
+	}
+	if ( atlas->generation == 0 ) {
+		Q_strncpyz( name, "*fontstash", sizeof( name ) );
+	} else {
+		Com_sprintf( name, sizeof( name ), "*fontstash_%d", atlas->generation );
+	}
+	image = QL_CreateHostAtlasImage( name, rgba, width, height );
+	ri.Free( rgba );
+	if ( !image ) {
+		ri.Free( alpha );
+		return qfalse;
+	}
+	shader = RE_RegisterShaderFromImage( name, LIGHTMAP_2D, image, qfalse );
+	if ( !shader ) {
+		ri.Free( alpha );
+		return qfalse;
+	}
+
+	if ( atlas->alpha ) {
+		ri.Free( atlas->alpha );
+	}
+	atlas->alpha = alpha;
+	atlas->image = image;
+	atlas->shader = shader;
+	atlas->width = width;
+	atlas->height = height;
+	if ( atlas->generation == 0 ) {
+		atlas->x = QL_HOST_ATLAS_PADDING;
+		atlas->y = QL_HOST_ATLAS_PADDING;
+		atlas->rowHeight = 0;
+	}
+	++atlas->generation;
+	QL_RefreshHostGlyphAtlasBindings();
+	ri.Printf( PRINT_DEVELOPER, "QL fonts: retained atlas %dx%d (generation %d)\n",
+		width, height, atlas->generation );
+	return qtrue;
+}
+
+static void QL_ClearHostGlyphCache( void ) {
+	int i;
+
+	qlHostFonts.glyphCount = 0;
+	for ( i = 0; i < QL_HOST_GLYPH_BUCKETS; ++i ) {
+		qlHostFonts.buckets[i] = -1;
+	}
+}
+
+static qboolean QL_ResetHostAtlas( void ) {
+	qlHostAtlas_t *atlas = &qlHostFonts.atlas;
+	byte *rgba;
+
+	if ( !atlas->alpha || !atlas->image ) {
+		return qfalse;
+	}
+	QL_FlushHostAtlasCommands();
+	Com_Memset( atlas->alpha, 0, atlas->width * atlas->height );
+	atlas->x = QL_HOST_ATLAS_PADDING;
+	atlas->y = QL_HOST_ATLAS_PADDING;
+	atlas->rowHeight = 0;
+	QL_ClearHostGlyphCache();
+	rgba = QL_BuildHostAtlasRgba( atlas->alpha, atlas->width, atlas->height );
+	if ( !rgba ) {
+		return qfalse;
+	}
+	QL_UploadHostAtlas( atlas->image, rgba, 0, 0, atlas->width, atlas->height );
+	ri.Free( rgba );
+	ri.Printf( PRINT_DEVELOPER, "QL fonts: max retained atlas size, cache flushed\n" );
+	return qtrue;
+}
+
+static qboolean QL_ReserveHostAtlas( int width, int height,
+	int *outX, int *outY ) {
+	qlHostAtlas_t *atlas = &qlHostFonts.atlas;
+	int grownWidth;
+	int grownHeight;
+
+	if ( width <= 0 || height <= 0 ||
+		width + QL_HOST_ATLAS_PADDING * 2 > QL_HOST_ATLAS_MAX_WIDTH ||
+		height + QL_HOST_ATLAS_PADDING * 2 > QL_HOST_ATLAS_MAX_HEIGHT ) {
+		return qfalse;
+	}
+	if ( !atlas->alpha && !QL_CreateOrResizeHostAtlas(
+		QL_HOST_ATLAS_INITIAL_WIDTH, QL_HOST_ATLAS_INITIAL_HEIGHT, qfalse ) ) {
+		return qfalse;
+	}
+	if ( atlas->x + width + QL_HOST_ATLAS_PADDING > atlas->width ) {
+		atlas->x = QL_HOST_ATLAS_PADDING;
+		atlas->y += atlas->rowHeight + QL_HOST_ATLAS_PADDING;
+		atlas->rowHeight = 0;
+	}
+	if ( atlas->y + height + QL_HOST_ATLAS_PADDING > atlas->height ) {
+		grownWidth = atlas->width * 2;
+		grownHeight = atlas->height * 2;
+		if ( grownWidth > QL_HOST_ATLAS_MAX_WIDTH ) grownWidth = QL_HOST_ATLAS_MAX_WIDTH;
+		if ( grownHeight > QL_HOST_ATLAS_MAX_HEIGHT ) grownHeight = QL_HOST_ATLAS_MAX_HEIGHT;
+		if ( grownWidth != atlas->width || grownHeight != atlas->height ) {
+			QL_FlushHostAtlasCommands();
+			if ( !QL_CreateOrResizeHostAtlas( grownWidth, grownHeight, qtrue ) ) {
+				return qfalse;
+			}
+		} else if ( !QL_ResetHostAtlas() ) {
+			return qfalse;
+		}
+	}
+	*outX = atlas->x;
+	*outY = atlas->y;
+	atlas->x += width + QL_HOST_ATLAS_PADDING;
+	if ( height > atlas->rowHeight ) {
+		atlas->rowHeight = height;
+	}
+	return qtrue;
+}
+
+static qboolean QL_GrowHostGlyphs( void ) {
+	qlHostGlyph_t *grown;
+	int capacity = qlHostFonts.glyphCapacity ? qlHostFonts.glyphCapacity * 2 : 256;
+
+	if ( capacity > 8192 ) {
+		capacity = 8192;
+	}
+	if ( capacity <= qlHostFonts.glyphCapacity ) {
+		return qfalse;
+	}
+	grown = ri.Malloc( capacity * sizeof( *grown ) );
+	if ( !grown ) {
+		return qfalse;
+	}
+	if ( qlHostFonts.glyphs ) {
+		Com_Memcpy( grown, qlHostFonts.glyphs,
+			qlHostFonts.glyphCount * sizeof( *grown ) );
+		ri.Free( qlHostFonts.glyphs );
+	}
+	qlHostFonts.glyphs = grown;
+	qlHostFonts.glyphCapacity = capacity;
+	return qtrue;
+}
+
+static qlHostGlyph_t *QL_FindHostGlyph( int faceIndex, unsigned int codepoint,
+	int scaleTenths ) {
+	unsigned int bucket = QL_HostGlyphHash( faceIndex, codepoint, scaleTenths );
+	int index;
+
+	for ( index = qlHostFonts.buckets[bucket]; index >= 0;
+		index = qlHostFonts.glyphs[index].next ) {
+		qlHostGlyph_t *glyph = &qlHostFonts.glyphs[index];
+		if ( glyph->faceIndex == faceIndex && glyph->codepoint == codepoint &&
+			glyph->scaleTenths == scaleTenths ) {
+			return glyph;
+		}
+	}
+	return NULL;
+}
+
+static qboolean QL_SetHostFaceSize( FT_Face face, int scaleTenths ) {
+	int charSize;
+
+	if ( !face ) {
+		return qfalse;
+	}
+	charSize = QL_FontFaceCharSize26Dot6( scaleTenths, face->units_per_EM,
+		face->ascender, face->descender );
+	return FT_Set_Char_Size( face, 0, (FT_F26Dot6)charSize, 72, 72 ) == 0;
+}
+
+static int QL_RoundHostMetric( FT_Pos value ) {
+	if ( value >= 0 ) {
+		return (int)( ( value + 32 ) >> 6 );
+	}
+	return -(int)( ( ( -value ) + 32 ) >> 6 );
+}
+
+static qlHostGlyph_t *QL_CacheHostGlyph( int faceIndex, unsigned int codepoint,
+	int scaleTenths ) {
+	qlHostFace_t *hostFace = &qlHostFonts.faces[faceIndex];
+	FT_GlyphSlot slot;
+	FT_Bitmap *bitmap;
+	qlHostGlyph_t *glyph;
+	byte *rgba = NULL;
+	unsigned int bucket;
+	int atlasX = 0, atlasY = 0;
+	int width, height, row, col;
+
+	if ( !hostFace->face || !FT_Get_Char_Index( hostFace->face, codepoint ) ) {
+		return NULL;
+	}
+	if ( !QL_SetHostFaceSize( hostFace->face, scaleTenths ) ||
+		FT_Load_Char( hostFace->face, codepoint, FT_LOAD_DEFAULT ) != 0 ||
+		FT_Render_Glyph( hostFace->face->glyph, FT_RENDER_MODE_NORMAL ) != 0 ) {
+		return NULL;
+	}
+	slot = hostFace->face->glyph;
+	bitmap = &slot->bitmap;
+	width = (int)bitmap->width;
+	height = (int)bitmap->rows;
+	if ( ( width > 0 && height > 0 ) &&
+		!QL_ReserveHostAtlas( width, height, &atlasX, &atlasY ) ) {
+		return NULL;
+	}
+	if ( qlHostFonts.glyphCount == qlHostFonts.glyphCapacity && !QL_GrowHostGlyphs() ) {
+		return NULL;
+	}
+
+	if ( width > 0 && height > 0 ) {
+		rgba = ri.Malloc( width * height * 4 );
+		if ( !rgba ) {
+			return NULL;
+		}
+		for ( row = 0; row < height; ++row ) {
+			const byte *source;
+			int pitch = bitmap->pitch < 0 ? -bitmap->pitch : bitmap->pitch;
+			if ( bitmap->pitch < 0 ) {
+				source = bitmap->buffer + ( height - 1 - row ) * pitch;
+			} else {
+				source = bitmap->buffer + row * pitch;
+			}
+			for ( col = 0; col < width; ++col ) {
+				byte alpha;
+				if ( bitmap->pixel_mode == FT_PIXEL_MODE_MONO ) {
+					alpha = ( source[col >> 3] & ( 0x80 >> ( col & 7 ) ) ) ? 255 : 0;
+				} else {
+					alpha = source[col];
+				}
+				rgba[( row * width + col ) * 4 + 0] = 255;
+				rgba[( row * width + col ) * 4 + 1] = 255;
+				rgba[( row * width + col ) * 4 + 2] = 255;
+				rgba[( row * width + col ) * 4 + 3] = alpha;
+			}
+		}
+		for ( row = 0; row < height; ++row ) {
+			for ( col = 0; col < width; ++col ) {
+				qlHostFonts.atlas.alpha[( atlasY + row ) * qlHostFonts.atlas.width +
+					atlasX + col] = rgba[( row * width + col ) * 4 + 3];
+			}
+		}
+		QL_UploadHostAtlas( qlHostFonts.atlas.image, rgba, atlasX, atlasY, width, height );
+		ri.Free( rgba );
+	}
+
+	glyph = &qlHostFonts.glyphs[qlHostFonts.glyphCount];
+	Com_Memset( glyph, 0, sizeof( *glyph ) );
+	glyph->codepoint = codepoint;
+	glyph->faceIndex = (short)faceIndex;
+	glyph->scaleTenths = (short)scaleTenths;
+	glyph->left = (float)slot->bitmap_left;
+	glyph->right = glyph->left + width;
+	glyph->top = (float)slot->bitmap_top;
+	glyph->bottom = glyph->top - height;
+	glyph->advance = (float)QL_RoundHostMetric( slot->metrics.horiAdvance );
+	if ( width > 0 && height > 0 ) {
+		glyph->atlasX = atlasX;
+		glyph->atlasY = atlasY;
+		glyph->atlasWidth = width;
+		glyph->atlasHeight = height;
+		glyph->s1 = (float)atlasX / qlHostFonts.atlas.width;
+		glyph->t1 = (float)atlasY / qlHostFonts.atlas.height;
+		glyph->s2 = (float)( atlasX + width ) / qlHostFonts.atlas.width;
+		glyph->t2 = (float)( atlasY + height ) / qlHostFonts.atlas.height;
+		glyph->shader = qlHostFonts.atlas.shader;
+	}
+	bucket = QL_HostGlyphHash( faceIndex, codepoint, scaleTenths );
+	glyph->next = qlHostFonts.buckets[bucket];
+	qlHostFonts.buckets[bucket] = qlHostFonts.glyphCount++;
+	return glyph;
+}
+
+static int QL_ResolveHostFaceIndex( int requestedFace ) {
+	int resolvedFace;
+
+	switch ( requestedFace ) {
+	case 1:
+	case 2:
+	case 3:
+		resolvedFace = requestedFace;
+		break;
+	case 4:
+		resolvedFace = qlHostFonts.faces[4].face ? 4 : 3;
+		break;
+	case 0:
+	default:
+		resolvedFace = 0;
+		break;
+	}
+	if ( qlHostFonts.faces[resolvedFace].face ) return resolvedFace;
+	if ( qlHostFonts.faces[0].face ) return 0;
+	if ( qlHostFonts.faces[1].face ) return 1;
+	if ( qlHostFonts.faces[3].face ) return 3;
+	if ( qlHostFonts.faces[4].face ) return 4;
+	return resolvedFace;
+}
+
+static void QL_AppendHostFaceIndex( int *chain, int *count, int faceIndex ) {
+	int i;
+
+	if ( !chain || !count || *count >= 4 || faceIndex < 0 ||
+		faceIndex >= QL_HOST_FACE_COUNT ) {
+		return;
+	}
+	for ( i = 0; i < *count; ++i ) {
+		if ( chain[i] == faceIndex ) return;
+	}
+	chain[(*count)++] = faceIndex;
+}
+
+static qlHostGlyph_t *QL_GetHostGlyph( int requestedFace, unsigned int codepoint,
+	int scaleTenths ) {
+	int chain[4];
+	int count = 0;
+	int i;
+
+	requestedFace = QL_ResolveHostFaceIndex( requestedFace );
+	QL_AppendHostFaceIndex( chain, &count, requestedFace );
+	QL_AppendHostFaceIndex( chain, &count, 1 );
+	QL_AppendHostFaceIndex( chain, &count, 3 );
+	QL_AppendHostFaceIndex( chain, &count,
+		qlHostFonts.faces[4].face ? 4 : 3 );
+	for ( i = 0; i < count; ++i ) {
+		qlHostGlyph_t *glyph = QL_FindHostGlyph( chain[i], codepoint, scaleTenths );
+		if ( glyph ) {
+			return glyph;
+		}
+		glyph = QL_CacheHostGlyph( chain[i], codepoint, scaleTenths );
+		if ( glyph ) {
+			return glyph;
+		}
+	}
+	return NULL;
+}
+#endif /* BUILD_FREETYPE */
+
+qboolean RE_GetScaledFontMetrics( int fontHandle, float scale, float *outAscent,
+	float *outDescent, float *outLineHeight ) {
+	if ( outAscent ) *outAscent = 0.0f;
+	if ( outDescent ) *outDescent = 0.0f;
+	if ( outLineHeight ) *outLineHeight = 0.0f;
+#ifdef BUILD_FREETYPE
+	if ( qlHostFonts.ready ) {
+		int index = QL_ResolveHostFaceIndex( fontHandle );
+		FT_Face face = qlHostFonts.faces[index].face;
+		int scaleTenths = QL_FontScaleTenths( scale );
+		int fontHeight;
+		int lineHeight;
+		fontHeight = face ? face->ascender - face->descender : 0;
+		lineHeight = face ? face->height : 0;
+		if ( face && fontHeight > 0 && QL_SetHostFaceSize( face, scaleTenths ) ) {
+			if ( lineHeight <= 0 ) lineHeight = fontHeight;
+			if ( outAscent ) *outAscent = QL_FontFaceMetric( scaleTenths, face->ascender, face->ascender, face->descender );
+			if ( outDescent ) *outDescent = QL_FontFaceMetric( scaleTenths, face->descender, face->ascender, face->descender );
+			if ( outLineHeight ) *outLineHeight = QL_FontFaceMetric( scaleTenths, lineHeight, face->ascender, face->descender );
+			return qtrue;
+		}
+	}
+#endif
+	return qfalse;
+}
+
+qhandle_t RE_GetFontAtlasDebugShader( int *outWidth, int *outHeight ) {
+	if ( outWidth ) *outWidth = 0;
+	if ( outHeight ) *outHeight = 0;
+#ifdef BUILD_FREETYPE
+	if ( qlHostFonts.atlas.shader ) {
+		if ( outWidth ) *outWidth = qlHostFonts.atlas.width;
+		if ( outHeight ) *outHeight = qlHostFonts.atlas.height;
+		return qlHostFonts.atlas.shader;
+	}
+#endif
+	return 0;
+}
+
+void RE_DrawScaledText( int x, int y, const char *text, int fontHandle,
+	float scale, int limit, float *maxX, qboolean forceColor, const float *baseColor ) {
+#ifdef BUILD_FREETYPE
+	const char *cursor;
+	const char *end;
+	vec4_t originalColor;
+	float penX = (float)x;
+	float clipX = maxX ? *maxX : 0.0f;
+	qboolean clipping = maxX && clipX > 0.0f;
+	int remaining = limit;
+	int scaleTenths = QL_FontScaleTenths( scale );
+
+	if ( !qlHostFonts.ready || !text ) return;
+	if ( baseColor ) Com_Memcpy( originalColor, baseColor, sizeof( originalColor ) );
+	else Vector4Set( originalColor, 1, 1, 1, 1 );
+	if ( maxX && !clipping ) *maxX = penX;
+	end = text + strlen( text );
+	RE_SetColor( originalColor );
+	for ( cursor = text; cursor < end && *cursor && ( limit <= 0 || remaining > 0 ); ) {
+		qlFontUtf8Result_t decoded;
+		qlHostGlyph_t *glyph;
+		int colorIndex;
+		int colorBytes = QL_FontColorEscape( cursor, end, &colorIndex );
+		float extent;
+		if ( colorBytes ) {
+			if ( !forceColor ) {
+				vec4_t color;
+				Com_Memcpy( color, g_color_table[colorIndex], sizeof( color ) );
+				color[3] = originalColor[3];
+				RE_SetColor( color );
+			}
+			cursor += colorBytes;
+			continue;
+		}
+		decoded = QL_FontDecodeUtf8( cursor, end );
+		if ( decoded.bytes <= 0 ) break;
+		glyph = QL_GetHostGlyph( fontHandle, decoded.codepoint, scaleTenths );
+		cursor += decoded.bytes;
+		if ( !glyph ) continue;
+		extent = penX + glyph->advance;
+		if ( penX + glyph->right > extent ) extent = penX + glyph->right;
+		if ( clipping && extent > clipX ) {
+			*maxX = penX;
+			break;
+		}
+		if ( glyph->shader && glyph->right > glyph->left && glyph->top > glyph->bottom ) {
+			RE_StretchPic( penX + glyph->left, (float)y - glyph->top,
+				glyph->right - glyph->left, glyph->top - glyph->bottom,
+				glyph->s1, glyph->t1, glyph->s2, glyph->t2, glyph->shader );
+		}
+		penX += glyph->advance;
+		if ( maxX && !clipping ) *maxX = extent;
+		if ( limit > 0 ) --remaining;
+	}
+	RE_SetColor( originalColor );
+#else
+	(void)x; (void)y; (void)text; (void)fontHandle; (void)scale; (void)limit;
+	(void)maxX; (void)forceColor; (void)baseColor;
+#endif
+}
+
+void RE_MeasureScaledText( const char *text, const char *end, int fontHandle,
+	float scale, int limit, float *outWidth, float *outHeight, float *outLeft ) {
+	if ( outWidth ) *outWidth = 0.0f;
+	if ( outHeight ) *outHeight = 0.0f;
+	if ( outLeft ) *outLeft = 0.0f;
+#ifdef BUILD_FREETYPE
+	if ( qlHostFonts.ready && text ) {
+		const char *cursor = text;
+		float penX = 0.0f, minLeft = 0.0f, maxRight = 0.0f;
+		float minTop = 0.0f, maxBottom = 0.0f, ascent = 0.0f;
+		qboolean haveBounds = qfalse;
+		int remaining = limit;
+		int scaleTenths = QL_FontScaleTenths( scale );
+		while ( *cursor && ( !end || cursor < end ) && ( limit <= 0 || remaining > 0 ) ) {
+			qlFontUtf8Result_t decoded;
+			qlHostGlyph_t *glyph;
+			int colorBytes = QL_FontColorEscape( cursor, end, NULL );
+			float left, right;
+			if ( colorBytes ) { cursor += colorBytes; continue; }
+			decoded = QL_FontDecodeUtf8( cursor, end );
+			if ( decoded.bytes <= 0 ) break;
+			glyph = QL_GetHostGlyph( fontHandle, decoded.codepoint, scaleTenths );
+			cursor += decoded.bytes;
+			if ( !glyph ) continue;
+			left = penX + glyph->left;
+			right = penX + glyph->right;
+			haveBounds = qtrue;
+			if ( left < minLeft ) minLeft = left;
+			if ( right > maxRight ) maxRight = right;
+			if ( -glyph->top < minTop ) minTop = -glyph->top;
+			if ( -glyph->bottom > maxBottom ) maxBottom = -glyph->bottom;
+			penX += glyph->advance;
+			if ( limit > 0 ) --remaining;
+		}
+		if ( outWidth && haveBounds ) *outWidth = maxRight - minLeft;
+		if ( outLeft && haveBounds ) *outLeft = minLeft;
+		if ( RE_GetScaledFontMetrics( fontHandle, scale, &ascent, NULL, NULL ) ) {
+			if ( outHeight ) *outHeight = ascent;
+		} else if ( outHeight && haveBounds ) {
+			*outHeight = maxBottom - minTop;
+		}
+	}
+#else
+	(void)text; (void)end; (void)fontHandle; (void)scale; (void)limit;
+#endif
+}
 
 #ifdef BUILD_FREETYPE
 void R_GetGlyphInfo(FT_GlyphSlot glyph, int *left, int *right, int *width, int *top, int *bottom, int *height, int *pitch) {
@@ -353,7 +1153,6 @@ aliases at the renderer boundary while leaving explicit third-party paths
 unchanged.
 =================
 */
-#ifdef BUILD_FREETYPE
 static const char *R_ResolveRetailFontPath( const char *fontName ) {
 	if ( !fontName || !fontName[0] || !Q_stricmp( fontName, "fonts/font" ) ||
 		!Q_stricmp( fontName, "fonts/bigfont" ) || !Q_stricmp( fontName, "normal" ) ) {
@@ -374,7 +1173,136 @@ static const char *R_ResolveRetailFontPath( const char *fontName ) {
 
 	return fontName;
 }
+
+static void R_BuildClassicFontStem( const char *fontName, char *stem, int stemSize ) {
+	char resolvedPath[MAX_QPATH];
+	char stripped[MAX_QPATH];
+	const char *baseName;
+	int inputIndex;
+	int outputIndex;
+
+	if ( !stem || stemSize <= 0 ) {
+		return;
+	}
+	stem[0] = '\0';
+	Q_strncpyz( resolvedPath, R_ResolveRetailFontPath( fontName ), sizeof( resolvedPath ) );
+	baseName = COM_SkipPath( resolvedPath );
+	COM_StripExtension( baseName, stripped, sizeof( stripped ) );
+	Q_strlwr( stripped );
+
+	for ( inputIndex = 0, outputIndex = 0;
+		stripped[inputIndex] && outputIndex < stemSize - 1; ++inputIndex ) {
+		const char ch = stripped[inputIndex];
+		stem[outputIndex++] = ( ( ch >= 'a' && ch <= 'z' ) ||
+			( ch >= '0' && ch <= '9' ) ) ? ch : '_';
+	}
+	stem[outputIndex] = '\0';
+}
+
+static void R_BuildClassicFontCacheName( const char *fontName, int pointSize,
+	char *name, int nameSize ) {
+	char stem[MAX_QPATH];
+
+	R_BuildClassicFontStem( fontName, stem, sizeof( stem ) );
+	if ( stem[0] ) {
+		Com_sprintf( name, nameSize, "fonts/fontImage_%s_%i.dat", stem, pointSize );
+	} else {
+		Com_sprintf( name, nameSize, "fonts/fontImage_%i.dat", pointSize );
+	}
+}
+
+static void R_BuildLegacyClassicFontCacheName( int pointSize, char *name,
+	int nameSize ) {
+	Com_sprintf( name, nameSize, "fonts/fontImage_%i.dat", pointSize );
+}
+
+#ifdef BUILD_FREETYPE
+static void R_BuildClassicFontPageName( const char *fontName, int pointSize,
+	int page, char *name, int nameSize ) {
+	char stem[MAX_QPATH];
+
+	R_BuildClassicFontStem( fontName, stem, sizeof( stem ) );
+	if ( stem[0] ) {
+		Com_sprintf( name, nameSize, "fonts/fontImage_%s_%i_%i.tga",
+			stem, page, pointSize );
+	} else {
+		Com_sprintf( name, nameSize, "fonts/fontImage_%i_%i.tga", page, pointSize );
+	}
+}
 #endif
+
+static int R_FindRegisteredClassicFont( const char *cacheName ) {
+	int i;
+
+	for ( i = 0; i < registeredFontCount; ++i ) {
+		if ( !Q_stricmp( cacheName, registeredFont[i].name ) ) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+static const char *R_FindClassicFontCache( const char *cacheName,
+	const char *legacyCacheName ) {
+	if ( ri.FS_ReadFile( cacheName, NULL ) == sizeof( fontInfo_t ) ) {
+		return cacheName;
+	}
+	if ( Q_stricmp( cacheName, legacyCacheName ) &&
+		ri.FS_ReadFile( legacyCacheName, NULL ) == sizeof( fontInfo_t ) ) {
+		return legacyCacheName;
+	}
+	return NULL;
+}
+
+static void R_BindClassicFontCacheShaders( fontInfo_t *font ) {
+	int i;
+
+	for ( i = GLYPH_START; i <= GLYPH_END; ++i ) {
+		font->glyphs[i].glyph = RE_RegisterShaderNoMip( font->glyphs[i].shaderName );
+	}
+}
+
+static qboolean R_RegisterClassicFontFallback( const char *cacheName,
+	float glyphScale, fontInfo_t *font ) {
+	const char *shaderName = "gfx/2d/bigchars";
+	qhandle_t shader = RE_RegisterShaderNoMip( shaderName );
+	const float texelCell = 1.0f / CLASSIC_FONT_GRID_SIZE;
+	int i;
+
+	if ( !shader ) {
+		shaderName = "white";
+		shader = RE_RegisterShaderNoMip( shaderName );
+	}
+	if ( !shader || !font || registeredFontCount >= MAX_FONTS ) {
+		return qfalse;
+	}
+
+	Com_Memset( font, 0, sizeof( *font ) );
+	for ( i = GLYPH_START; i <= GLYPH_END; ++i ) {
+		glyphInfo_t *glyph = &font->glyphs[i];
+		const int row = ( i >> 4 ) & ( CLASSIC_FONT_GRID_SIZE - 1 );
+		const int column = i & ( CLASSIC_FONT_GRID_SIZE - 1 );
+
+		glyph->height = CLASSIC_FONT_CELL_SIZE;
+		glyph->top = CLASSIC_FONT_CELL_SIZE;
+		glyph->bottom = 0;
+		glyph->pitch = CLASSIC_FONT_CELL_SIZE;
+		glyph->xSkip = CLASSIC_FONT_CELL_SIZE;
+		glyph->imageWidth = CLASSIC_FONT_CELL_SIZE;
+		glyph->imageHeight = CLASSIC_FONT_CELL_SIZE;
+		glyph->s = column * texelCell;
+		glyph->t = row * texelCell;
+		glyph->s2 = glyph->s + texelCell;
+		glyph->t2 = glyph->t + texelCell;
+		glyph->glyph = shader;
+		Q_strncpyz( glyph->shaderName, shaderName, sizeof( glyph->shaderName ) );
+	}
+	font->glyphScale = glyphScale;
+	Q_strncpyz( font->name, cacheName, sizeof( font->name ) );
+	Com_Memcpy( &registeredFont[registeredFontCount++], font, sizeof( *font ) );
+	ri.Printf( PRINT_WARNING, "RE_RegisterFont: using bitmap fallback for %s\n", cacheName );
+	return qtrue;
+}
 
 void RE_RegisterFont(const char *fontName, int pointSize, fontInfo_t *font) {
 #ifdef BUILD_FREETYPE
@@ -387,40 +1315,46 @@ void RE_RegisterFont(const char *fontName, int pointSize, fontInfo_t *font) {
 	qhandle_t h;
 	float max;
 	float dpi = 72;
-	float glyphScale;
 	const char *resolvedFontName;
+	int len;
+	char name[MAX_QPATH];
 #endif
-	void *faceData;
-	int i, len;
-	char name[1024];
+	void *faceData = NULL;
+	const char *loadName;
+	float glyphScale;
+	int registeredIndex;
+	int i;
+	char cacheName[MAX_QPATH];
+	char legacyCacheName[MAX_QPATH];
 
-	if (!fontName) {
-		ri.Printf(PRINT_ALL, "RE_RegisterFont: called with empty name\n");
+	if ( !font ) {
+		ri.Printf( PRINT_WARNING, "RE_RegisterFont: called with null output\n" );
 		return;
+	}
+	if ( !fontName || !fontName[0] ) {
+		fontName = "fonts/font";
 	}
 
 	if (pointSize <= 0) {
 		pointSize = 12;
 	}
+	glyphScale = 48.0f / pointSize;
 
-	//R_IssuePendingRenderCommands();
+	R_BuildClassicFontCacheName( fontName, pointSize, cacheName, sizeof( cacheName ) );
+	R_BuildLegacyClassicFontCacheName( pointSize, legacyCacheName, sizeof( legacyCacheName ) );
 
-	if (registeredFontCount >= MAX_FONTS) {
+	registeredIndex = R_FindRegisteredClassicFont( cacheName );
+	if ( registeredIndex >= 0 ) {
+		Com_Memcpy( font, &registeredFont[registeredIndex], sizeof( *font ) );
+		return;
+	}
+	if ( registeredFontCount >= MAX_FONTS ) {
 		ri.Printf(PRINT_WARNING, "RE_RegisterFont: Too many fonts registered already.\n");
 		return;
 	}
 
-	Com_sprintf(name, sizeof(name), "fonts/fontImage_%i.dat",pointSize);
-	for (i = 0; i < registeredFontCount; i++) {
-		if (Q_stricmp(name, registeredFont[i].name) == 0) {
-			Com_Memcpy(font, &registeredFont[i], sizeof(fontInfo_t));
-			return;
-		}
-	}
-
-	len = ri.FS_ReadFile(name, NULL);
-	if (len == sizeof(fontInfo_t)) {
-		ri.FS_ReadFile(name, &faceData);
+	loadName = R_FindClassicFontCache( cacheName, legacyCacheName );
+	if ( loadName && ri.FS_ReadFile( loadName, &faceData ) == sizeof( fontInfo_t ) && faceData ) {
 		fdOffset = 0;
 		fdFile = faceData;
 		for(i=0; i<GLYPHS_PER_FONT; i++) {
@@ -443,20 +1377,25 @@ void RE_RegisterFont(const char *fontName, int pointSize, fontInfo_t *font) {
 		Com_Memcpy(font->name, &fdFile[fdOffset], MAX_QPATH);
 
 //		Com_Memcpy(font, faceData, sizeof(fontInfo_t));
-		Q_strncpyz(font->name, name, sizeof(font->name));
-		for (i = GLYPH_START; i <= GLYPH_END; i++) {
-			font->glyphs[i].glyph = RE_RegisterShaderNoMip(font->glyphs[i].shaderName);
-		}
+		Q_strncpyz(font->name, cacheName, sizeof(font->name));
+		R_BindClassicFontCacheShaders( font );
 		Com_Memcpy(&registeredFont[registeredFontCount++], font, sizeof(fontInfo_t));
 		ri.FS_FreeFile(faceData);
 		return;
 	}
+	if ( faceData ) {
+		ri.FS_FreeFile( faceData );
+		faceData = NULL;
+	}
 
 #ifndef BUILD_FREETYPE
-	ri.Printf(PRINT_WARNING, "RE_RegisterFont: FreeType code not available\n");
+	if ( !R_RegisterClassicFontFallback( cacheName, glyphScale, font ) ) {
+		ri.Printf( PRINT_WARNING, "RE_RegisterFont: no FreeType or bitmap fallback for %s\n", fontName );
+	}
 #else
 	if (ftLibrary == NULL) {
 		ri.Printf(PRINT_WARNING, "RE_RegisterFont: FreeType not initialized.\n");
+		R_RegisterClassicFontFallback( cacheName, glyphScale, font );
 		return;
 	}
 
@@ -464,6 +1403,7 @@ void RE_RegisterFont(const char *fontName, int pointSize, fontInfo_t *font) {
 	len = ri.FS_ReadFile(resolvedFontName, &faceData);
 	if (len <= 0) {
 		ri.Printf(PRINT_WARNING, "RE_RegisterFont: Unable to read font file '%s'\n", resolvedFontName);
+		R_RegisterClassicFontFallback( cacheName, glyphScale, font );
 		return;
 	}
 
@@ -471,6 +1411,7 @@ void RE_RegisterFont(const char *fontName, int pointSize, fontInfo_t *font) {
 	if (FT_New_Memory_Face( ftLibrary, faceData, len, 0, &face )) {
 		ri.Printf(PRINT_WARNING, "RE_RegisterFont: FreeType, unable to allocate new face.\n");
 		ri.FS_FreeFile( faceData );
+		R_RegisterClassicFontFallback( cacheName, glyphScale, font );
 		return;
 	}
 
@@ -479,6 +1420,7 @@ void RE_RegisterFont(const char *fontName, int pointSize, fontInfo_t *font) {
 		ri.Printf(PRINT_WARNING, "RE_RegisterFont: FreeType, unable to set face char size.\n");
 		FT_Done_Face( face );
 		ri.FS_FreeFile( faceData );
+		R_RegisterClassicFontFallback( cacheName, glyphScale, font );
 		return;
 	}
 
@@ -492,6 +1434,7 @@ void RE_RegisterFont(const char *fontName, int pointSize, fontInfo_t *font) {
 		ri.Printf(PRINT_WARNING, "RE_RegisterFont: ri.Malloc failure during output image creation.\n");
 		FT_Done_Face( face );
 		ri.FS_FreeFile( faceData );
+		R_RegisterClassicFontFallback( cacheName, glyphScale, font );
 		return;
 	}
 	Com_Memset(out, 0, 256*256);
@@ -545,8 +1488,8 @@ void RE_RegisterFont(const char *fontName, int pointSize, fontInfo_t *font) {
 				imageBuff[left++] = ((float)out[k] * max);
 			}
 
-			Com_sprintf (name, sizeof(name), "fonts/fontImage_%i_%i.tga", imageNumber++, pointSize);
-			if (r_saveFontData->integer) { 
+			R_BuildClassicFontPageName( fontName, pointSize, imageNumber++, name, sizeof( name ) );
+			if ( r_saveFontData && r_saveFontData->integer ) {
 				WriteTGA(name, imageBuff, 256, 256);
 			}
 
@@ -577,18 +1520,12 @@ void RE_RegisterFont(const char *fontName, int pointSize, fontInfo_t *font) {
 		}
 	}
 
-	// change the scale to be relative to 1 based on 72 dpi ( so dpi of 144 means a scale of .5 )
-	glyphScale = 72.0f / dpi;
-
-	// we also need to adjust the scale based on point size relative to 48 points as the ui scaling is based on a 48 point font
-	glyphScale *= 48.0f / pointSize;
-
-	registeredFont[registeredFontCount].glyphScale = glyphScale;
 	font->glyphScale = glyphScale;
+	Q_strncpyz( font->name, cacheName, sizeof( font->name ) );
 	Com_Memcpy(&registeredFont[registeredFontCount++], font, sizeof(fontInfo_t));
 
-	if (r_saveFontData->integer) {
-		ri.FS_WriteFile(va("fonts/fontImage_%i.dat", pointSize), font, sizeof(fontInfo_t));
+	if ( r_saveFontData && r_saveFontData->integer ) {
+		ri.FS_WriteFile( cacheName, font, sizeof(fontInfo_t));
 	}
 
 	ri.Free(out);
@@ -605,6 +1542,7 @@ void R_InitFreeType(void) {
 	if (FT_Init_FreeType( &ftLibrary )) {
 		ri.Printf(PRINT_WARNING, "R_InitFreeType: Unable to initialize FreeType.\n");
 	}
+	QL_InitHostFonts();
 #endif
 	registeredFontCount = 0;
 }
@@ -612,6 +1550,7 @@ void R_InitFreeType(void) {
 
 void R_DoneFreeType(void) {
 #ifdef BUILD_FREETYPE
+	QL_ResetHostFonts();
 	if (ftLibrary) {
 		FT_Done_FreeType( ftLibrary );
 		ftLibrary = NULL;

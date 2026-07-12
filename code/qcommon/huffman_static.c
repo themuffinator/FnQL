@@ -175,7 +175,7 @@ void HuffmanPutBit( byte* fout, int32_t bitIndex, int bit )
 }
 
 
-int HuffmanPutSymbol( byte* fout, uint32_t offset, int symbol )
+static int HuffmanPutSymbol( byte* fout, uint32_t offset, int symbol )
 {
 	int32_t bits;
 	uint32_t i;
@@ -194,18 +194,70 @@ int HuffmanPutSymbol( byte* fout, uint32_t offset, int symbol )
 }
 
 
+int HuffmanSymbolBitCount( int symbol )
+{
+	if ( symbol < 0 || symbol > 255 )
+	{
+		return -1;
+	}
+
+	return HuffmanEncoderTable[ symbol ] & 15;
+}
+
+
+int HuffmanPutSymbolBounded( byte *output, uint32_t bitOffset,
+	uint32_t bitCapacity, int symbol )
+{
+	const int bitCount = HuffmanSymbolBitCount( symbol );
+
+	if ( !output || bitCount < 0 || bitOffset > bitCapacity ||
+		(uint32_t)bitCount > bitCapacity - bitOffset )
+	{
+		return -1;
+	}
+
+	return HuffmanPutSymbol( output, bitOffset, symbol );
+}
+
+
 int HuffmanGetBit( const byte* buffer, int bitIndex )
 {
 	return (buffer[(bitIndex >> 3)] >> (bitIndex & 7)) & 0x1;
 }
 
 
-int HuffmanGetSymbol( unsigned int* symbol, const byte* buffer, int bitIndex )
+int HuffmanGetSymbolBounded( unsigned int *symbol, const byte *input,
+	int bitOffset, int bitLimit )
 {
-	const uint16_t code = ((*(const uint32_t*)(buffer + (bitIndex >> 3))) >> ((uint32_t)bitIndex & 7)) & 0x7FF;
-	const uint16_t entry = HuffmanDecoderTable[ code ];
+	uint16_t code = 0;
+	uint16_t entry;
+	int availableBits;
+	int bitCount;
+	int i;
 
-	*symbol = (unsigned int)(entry & 0xFF);
+	if ( !symbol || !input || bitOffset < 0 || bitLimit < bitOffset )
+	{
+		return -1;
+	}
 
-	return (int)(entry >> 8);
+	availableBits = bitLimit - bitOffset;
+	if ( availableBits > 11 )
+	{
+		availableBits = 11;
+	}
+
+	for ( i = 0; i < availableBits; ++i )
+	{
+		code |= (uint16_t)( HuffmanGetBit( input, bitOffset + i ) << i );
+	}
+
+	entry = HuffmanDecoderTable[ code ];
+	bitCount = (int)( entry >> 8 );
+	if ( bitCount <= 0 || bitCount > availableBits )
+	{
+		return -1;
+	}
+
+	*symbol = (unsigned int)( entry & 0xFF );
+	return bitCount;
 }

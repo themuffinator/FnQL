@@ -671,6 +671,7 @@ void SV_SpawnServer( const char *mapname, qboolean killBots ) {
 	// to all clients
 	sv.state = SS_GAME;
 	Zmq_InitStatsPublisher();
+	SV_SteamGameServerStart( mapname );
 
 	// send a heartbeat now so the master will get up to date info
 	SV_Heartbeat_f();
@@ -757,6 +758,7 @@ void SV_Init( void )
 	Cvar_Get( "sv_rankingsProvider", "Unavailable", CVAR_ROM );
 	Cvar_Get( "sv_rankingsPolicy", "compatibility-unavailable", CVAR_ROM );
 	SV_RefreshPlatformServiceCvars();
+	SV_RegisterSteamEventSink();
 	SV_GameRefreshRankingsPolicyCvars();
 
 	// server vars
@@ -913,6 +915,8 @@ void SV_Shutdown( const char *finalmsg ) {
 
 	SV_RemoveOperatorCommands();
 	SV_MasterShutdown();
+	SV_FlushAllSteamStats();
+	SV_SteamGameServerStop();
 	SV_ShutdownGameProgs();
 	Zmq_ShutdownStatsPublisher();
 	SV_InitChallenger();

@@ -1183,6 +1183,49 @@ static const void	*RB_DrawSurfs( const void *data ) {
 	return (const void *)(cmd + 1);
 }
 
+void RE_DrawWebUISurface( int x, int y, int w, int h, int cols, int rows,
+	const byte *data, qboolean dirty ) {
+	image_t *image;
+	GLuint texture;
+
+	if ( !tr.registered || !data || cols <= 0 || rows <= 0 ) {
+		return;
+	}
+	R_IssuePendingRenderCommands();
+
+	if ( !tr.webUIImage ) {
+		tr.webUIImage = R_CreateImage(
+			"*webui", (byte *)data, cols, rows,
+			IMGTYPE_COLORALPHA,
+			IMGFLAG_CLAMPTOEDGE | IMGFLAG_NO_COMPRESSION | IMGFLAG_NOSCALE,
+			GL_RGBA8 );
+		if ( !tr.webUIImage ) {
+			return;
+		}
+		tr.webUIShader = RE_RegisterShaderFromImage(
+			"*webui", LIGHTMAP_2D, tr.webUIImage, qfalse );
+		dirty = qfalse;
+	}
+
+	image = tr.webUIImage;
+	texture = image->texnum;
+	if ( cols != image->width || rows != image->height ) {
+		image->width = image->uploadWidth = cols;
+		image->height = image->uploadHeight = rows;
+		qglTextureImage2DEXT( texture, GL_TEXTURE_2D, 0, GL_RGBA8,
+			cols, rows, 0, GL_RGBA, GL_UNSIGNED_BYTE, data );
+		qglTextureParameterfEXT( texture, GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR );
+		qglTextureParameterfEXT( texture, GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR );
+		qglTextureParameterfEXT( texture, GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE );
+		qglTextureParameterfEXT( texture, GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE );
+	} else if ( dirty ) {
+		qglTextureSubImage2DEXT( texture, GL_TEXTURE_2D, 0, 0, 0,
+			cols, rows, GL_RGBA, GL_UNSIGNED_BYTE, data );
+	}
+
+	RE_StretchPic( x, y, w, h, 0.0f, 0.0f, 1.0f, 1.0f, tr.webUIShader );
+}
+
 /*
 ==============================
 RB_DrawAdvertisementQueryQuad

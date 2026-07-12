@@ -52,6 +52,12 @@
     <ClCompile Include="..\..\client\cl_webui.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\client\awesomium_backend_win32.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+	<ClCompile Include="..\..\platform\fnql_steam.cpp">
+	  <Filter>Source Files</Filter>
+	</ClCompile>
     <ClCompile Include="..\..\qcommon\cm_load.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -97,10 +103,10 @@
     <ClCompile Include="..\..\qcommon\md5.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\qcommon\msg.c">
+    <ClCompile Include="..\..\qcommon\msg.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\qcommon\net_chan.c">
+    <ClCompile Include="..\..\qcommon\net_chan.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="..\..\qcommon\net_ip.c">
@@ -267,6 +273,12 @@
     <ClInclude Include="..\..\client\client.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+	<ClInclude Include="..\..\platform\fnql_steam.h">
+	  <Filter>Header Files</Filter>
+	</ClInclude>
+	<ClInclude Include="..\..\platform\fnql_steam_api.h">
+	  <Filter>Header Files</Filter>
+	</ClInclude>
     <ClInclude Include="..\..\qcommon\cm_local.h">
       <Filter>Header Files</Filter>
     </ClInclude>

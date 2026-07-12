@@ -33,6 +33,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "win_local.h"
 #include "glw_win.h"
 #include "win_raii.h"
+#include "../client/input_compat.hpp"
 
 #include <cstddef>
 
@@ -81,6 +82,7 @@ typedef struct {
 
 	int			oldbuttonstate;
 	int			oldpovstate;
+	int			oldmoveaxisstate[MAX_JOYSTICK_AXIS];
 
 	JOYINFOEX	ji;
 } joystickInfo_t;
@@ -105,8 +107,16 @@ cvar_t  *in_logitechbug;
 
 #ifdef USE_JOYSTICK
 cvar_t	*in_joystick;
+cvar_t	*in_joystickProfile;
+cvar_t	*in_joystickInverted;
 cvar_t	*in_joyBallScale;
 cvar_t	*in_debugJoystick;
+cvar_t	*in_joyHorizViewSensitivity;
+cvar_t	*in_joyVertViewSensitivity;
+cvar_t	*in_joyHorizViewDeadzone;
+cvar_t	*in_joyVertViewDeadzone;
+cvar_t	*in_joyHorizMoveDeadzone;
+cvar_t	*in_joyVertMoveDeadzone;
 cvar_t	*joy_threshold;
 #endif
 
@@ -1196,11 +1206,33 @@ void IN_Init( void ) {
 	// joystick variables
 	in_joystick = Cvar_Get( "in_joystick", "0", CVAR_ARCHIVE | CVAR_LATCH );
 	Cvar_SetDescription( in_joystick, "Whether or not joystick support is on." );
+	in_joystickProfile = Cvar_Get( "in_joystickProfile", "0", CVAR_ARCHIVE | CVAR_LATCH );
+	Cvar_CheckRange( in_joystickProfile, "0", "1", CV_INTEGER );
+	Cvar_SetDescription( in_joystickProfile,
+		"Legacy WinMM joystick profile: 0 preserves FnQ3 direction/trackball input; 1 enables Quake Live X/Y movement and R/U view input." );
+	in_joystickInverted = Cvar_Get( "in_joystick_inverted", "0", CVAR_ARCHIVE );
+	Cvar_SetDescription( in_joystickInverted, "Invert vertical view input in the Quake Live WinMM joystick profile." );
 	in_joyBallScale = Cvar_Get( "in_joyBallScale", "0.02", CVAR_ARCHIVE );
-	Cvar_SetDescription( in_joyBallScale, "Sets the scale of a joyball rotation to player model rotation." );
+	Cvar_SetDescription( in_joyBallScale, "Legacy trackball scale, or X/Y movement scale in the Quake Live WinMM joystick profile (retail default 1.0)." );
 	in_debugJoystick = Cvar_Get( "in_debugjoystick", "0", CVAR_TEMP );
 	joy_threshold = Cvar_Get( "joy_threshold", "0.15", CVAR_ARCHIVE );
 	Cvar_SetDescription( joy_threshold, "Threshold of joystick moving distance." );
+	in_joyHorizViewSensitivity = Cvar_Get( "in_joyHorizViewSensitivity", "20.0", CVAR_ARCHIVE );
+	in_joyVertViewSensitivity = Cvar_Get( "in_joyVertViewSensitivity", "15.0", CVAR_ARCHIVE );
+	in_joyHorizViewDeadzone = Cvar_Get( "in_joyHorizViewDeadzone", "0.15", CVAR_ARCHIVE );
+	in_joyVertViewDeadzone = Cvar_Get( "in_joyVertViewDeadzone", "0.15", CVAR_ARCHIVE );
+	in_joyHorizMoveDeadzone = Cvar_Get( "in_joyHorizMoveDeadzone", "0.50", CVAR_ARCHIVE );
+	in_joyVertMoveDeadzone = Cvar_Get( "in_joyVertMoveDeadzone", "0.15", CVAR_ARCHIVE );
+	Cvar_CheckRange( in_joyHorizViewDeadzone, "0", "1", CV_FLOAT );
+	Cvar_CheckRange( in_joyVertViewDeadzone, "0", "1", CV_FLOAT );
+	Cvar_CheckRange( in_joyHorizMoveDeadzone, "0", "1", CV_FLOAT );
+	Cvar_CheckRange( in_joyVertMoveDeadzone, "0", "1", CV_FLOAT );
+	Cvar_SetDescription( in_joyHorizViewSensitivity, "Horizontal view sensitivity for the Quake Live WinMM joystick profile." );
+	Cvar_SetDescription( in_joyVertViewSensitivity, "Vertical view sensitivity for the Quake Live WinMM joystick profile." );
+	Cvar_SetDescription( in_joyHorizViewDeadzone, "Horizontal view deadzone for the Quake Live WinMM joystick profile." );
+	Cvar_SetDescription( in_joyVertViewDeadzone, "Vertical view deadzone for the Quake Live WinMM joystick profile." );
+	Cvar_SetDescription( in_joyHorizMoveDeadzone, "Horizontal movement deadzone for the Quake Live WinMM joystick profile." );
+	Cvar_SetDescription( in_joyVertMoveDeadzone, "Vertical movement deadzone for the Quake Live WinMM joystick profile." );
 #endif
 
 	// mouse variables
@@ -1324,6 +1356,12 @@ void IN_StartupJoystick (void) {
 
 	// assume no joystick
 	joy.avail = qfalse; 
+	joy.oldbuttonstate = 0;
+	joy.oldpovstate = 0;
+	for ( int& axis : joy.oldmoveaxisstate ) {
+		axis = 0;
+	}
+	Cvar_Set( "ui_joyavail", "0" );
 
 	if (! in_joystick->integer ) {
 		Com_DPrintf ("Joystick is not active.\n");
@@ -1379,12 +1417,9 @@ void IN_StartupJoystick (void) {
 		Com_DPrintf( "no POV\n" );
 	}
 
-	// old button and POV states default to no buttons pressed
-	joy.oldbuttonstate = 0;
-	joy.oldpovstate = 0;
-
 	// mark the joystick as available
 	joy.avail = qtrue; 
+	Cvar_Set( "ui_joyavail", "1" );
 }
 
 /*
@@ -1393,21 +1428,7 @@ JoyToF
 ===========
 */
 float JoyToF( int value ) {
-	float	fValue;
-
-	// move centerpoint to zero
-	value -= 32768;
-
-	// convert range from -32768..32767 to -1..1 
-	fValue = (float)value / 32768.0;
-
-	if ( fValue < -1 ) {
-		fValue = -1;
-	}
-	if ( fValue > 1 ) {
-		fValue = 1;
-	}
-	return fValue;
+	return fnql::input::NormaliseJoystickAxis( value );
 }
 
 int JoyToI( int value ) {
@@ -1415,6 +1436,17 @@ int JoyToI( int value ) {
 	value -= 32768;
 
 	return value;
+}
+
+
+static void IN_QueueRetailJoystickAxis( int axis, int value ) {
+	if ( axis < 0 || axis >= MAX_JOYSTICK_AXIS ||
+		joy.oldmoveaxisstate[axis] == value ) {
+		return;
+	}
+
+	Sys_QueEvent( g_wv.sysMsgTime, SE_JOYSTICK_AXIS, axis, value, 0, NULL );
+	joy.oldmoveaxisstate[axis] = value;
 }
 
 int	joyDirectionKeys[16] = {
@@ -1439,6 +1471,7 @@ void IN_JoyMove( void ) {
 	int		i;
 	DWORD	buttonstate, povstate;
 	int		x, y;
+	const bool retailProfile = in_joystickProfile->integer != 0;
 
 	// verify joystick is available and that the user wants to use it
 	if ( !joy.avail ) {
@@ -1471,20 +1504,41 @@ void IN_JoyMove( void ) {
 	// loop through the joystick buttons
 	// key a joystick event or auxiliary event for higher number buttons for each state change
 	buttonstate = joy.ji.dwButtons;
-	for ( i=0 ; i < joy.jc.wNumButtons ; i++ ) {
-		if ( (buttonstate & (1<<i)) && !(joy.oldbuttonstate & (1<<i)) ) {
+	const int buttonCount = std::min<int>( joy.jc.wNumButtons, 32 );
+	for ( i = 0; i < buttonCount; ++i ) {
+		const DWORD mask = DWORD{ 1 } << i;
+		if ( (buttonstate & mask) && !(static_cast<DWORD>( joy.oldbuttonstate ) & mask) ) {
 			Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, K_JOY1 + i, qtrue, 0, NULL );
 		}
-		if ( !(buttonstate & (1<<i)) && (joy.oldbuttonstate & (1<<i)) ) {
+		if ( !(buttonstate & mask) && (static_cast<DWORD>( joy.oldbuttonstate ) & mask) ) {
 			Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, K_JOY1 + i, qfalse, 0, NULL );
 		}
 	}
-	joy.oldbuttonstate = buttonstate;
+	joy.oldbuttonstate = static_cast<int>( buttonstate );
 
 	povstate = 0;
 
-	// convert main joystick motion into 6 direction button bits
-	for (i = 0; i < joy.jc.wNumAxes && i < 4 ; i++) {
+	// The opt-in retail profile reserves X/Y for analog movement. The legacy
+	// profile keeps translating those axes into direction keys exactly as FnQ3
+	// did, preserving existing non-SDL configurations.
+	int firstDirectionAxis = 0;
+	if ( retailProfile ) {
+		const int side = joy.jc.wNumAxes > 0
+			? fnql::input::RetailJoystickMoveAxis(
+				JoyToF( joy.ji.dwXpos ), in_joyHorizMoveDeadzone->value,
+				in_joyBallScale->value )
+			: 0;
+		const int forward = joy.jc.wNumAxes > 1
+			? fnql::input::RetailJoystickMoveAxis(
+				JoyToF( joy.ji.dwYpos ), in_joyVertMoveDeadzone->value,
+				in_joyBallScale->value )
+			: 0;
+		IN_QueueRetailJoystickAxis( AXIS_SIDE, side );
+		IN_QueueRetailJoystickAxis( AXIS_FORWARD, forward );
+		firstDirectionAxis = 2;
+	}
+
+	for ( i = firstDirectionAxis; i < joy.jc.wNumAxes && i < 4; ++i ) {
 		// get the floating point zero-centered, potentially-inverted data for the current axis
 		fAxisValue = JoyToF( (&joy.ji.dwXpos)[i] );
 
@@ -1521,8 +1575,20 @@ void IN_JoyMove( void ) {
 	}
 	joy.oldpovstate = povstate;
 
-	// if there is a trackball like interface, simulate mouse moves
-	if ( joy.jc.wNumAxes >= 6 ) {
+	if ( retailProfile && joy.jc.wNumAxes >= 5 ) {
+		const float viewAcceleration = Cvar_VariableValue( "cl_viewAccel" );
+		x = fnql::input::RetailJoystickLookDelta(
+			JoyToF( joy.ji.dwRpos ), in_joyHorizViewDeadzone->value,
+			in_joyHorizViewSensitivity->value, viewAcceleration, false );
+		y = fnql::input::RetailJoystickLookDelta(
+			JoyToF( joy.ji.dwUpos ), in_joyVertViewDeadzone->value,
+			in_joyVertViewSensitivity->value, viewAcceleration,
+			in_joystickInverted->integer != 0 );
+		if ( x || y ) {
+			Sys_QueEvent( g_wv.sysMsgTime, SE_MOUSE, x, y, 0, NULL );
+		}
+	} else if ( !retailProfile && joy.jc.wNumAxes >= 6 ) {
+		// Preserve FnQ3's U/V trackball lane when the retail profile is off.
 		x = JoyToI( joy.ji.dwUpos ) * in_joyBallScale->value;
 		y = JoyToI( joy.ji.dwVpos ) * in_joyBallScale->value;
 		if ( x || y ) {

@@ -33,7 +33,8 @@ class CGameNativeBridgeSourceTests(unittest.TestCase):
 
         self.assertIn("static ql_import_f ql_cgame_imports[CGAME_NATIVE_IMPORT_COUNT];", cl_cgame)
         self.assertIn("static vm_t *CL_LoadCGameVM( vmInterpret_t interpret )", cl_cgame)
-        self.assertIn("VMI_NATIVE, ql_cgame_imports, CGAME_NATIVE_API_VERSION", cl_cgame)
+        self.assertIn("interpret == VMI_PINNED_NATIVE ? VMI_PINNED_NATIVE : VMI_NATIVE", cl_cgame)
+        self.assertIn("ql_cgame_imports, CGAME_NATIVE_API_VERSION", cl_cgame)
         self.assertIn("if ( vm->dllHandle || interpret != VMI_BYTECODE || !vm->compiled )", cl_cgame)
         self.assertIn("registrationVm = CL_LoadCGameVM( interpret );", cl_cgame)
         self.assertIn("VM_CallCGameRegisterCvars( registrationVm );", cl_cgame)
@@ -95,7 +96,7 @@ class CGameNativeBridgeSourceTests(unittest.TestCase):
         client_h = read_repo_file("code/client/client.h")
         cl_cgame = read_repo_file("code/client/cl_cgame.cpp")
         cl_input = read_repo_file("code/client/cl_input.cpp")
-        msg_c = read_repo_file("code/qcommon/msg.c")
+        msg_c = read_repo_file("code/qcommon/msg.cpp")
 
         self.assertIn("byte\t\t\tweaponPrimary;", q_shared)
         self.assertIn("byte\t\t\tfov;", q_shared)
@@ -131,7 +132,7 @@ class CGameNativeBridgeSourceTests(unittest.TestCase):
 
     def test_snapshot_structs_and_deltas_use_ql_native_layout(self) -> None:
         q_shared = read_repo_file("code/qcommon/q_shared.h")
-        msg_c = read_repo_file("code/qcommon/msg.c")
+        msg_c = read_repo_file("code/qcommon/msg.cpp")
 
         self.assertIn("int\t\t\tlocation;\t\t// retail team location index", q_shared)
         self.assertIn("int\t\t\tweaponPrimary;\t// mirrored usercmd byte for retail follow/demo HUD widgets", q_shared)
@@ -183,11 +184,11 @@ class CGameNativeBridgeSourceTests(unittest.TestCase):
         self.assertIn("void\tRE_MeasureScaledText(", client_h)
         self.assertIn("void RE_DrawScaledText( int x, int y, const char *text, int fontHandle", cl_scrn)
         self.assertIn("void RE_MeasureScaledText( const char *text, const char *end, int fontHandle", cl_scrn)
-        self.assertIn("SCR_IsHostTextColorEscape", cl_scrn)
-        self.assertIn("SCR_DrawHostScaledChar", cl_scrn)
-        self.assertIn("re.DrawStretchPic( x, y, width, height", cl_scrn)
-        self.assertIn("RE_DrawScaledText( x, y, text, fontHandle, scale, maxX, outMaxX", cl_cgame)
-        self.assertIn("RE_MeasureScaledText( text, end, fontHandle, scale, maxX, &width, &height, outLeft );", cl_cgame)
+        self.assertIn("re.GetScaledFontMetrics( fontHandle, scale", cl_scrn)
+        self.assertIn("re.DrawScaledText( x, y, text, fontHandle, scale, limit, outMaxX", cl_scrn)
+        self.assertIn("RE_DrawScaledText( x, y, text, fontHandle, scale, limit, maxX", cl_cgame)
+        self.assertIn("RE_MeasureScaledText( text, end, fontHandle, scale, limit, &width, &height, &left );", cl_cgame)
+        self.assertIn("fnql::font::WriteMeasureBounds( outLeft, left, width, height );", cl_cgame)
         self.assertNotIn("QL_CG_MeasureFallbackText", cl_cgame)
 
     def test_console_chat_field_uses_native_cgame_geometry_exports(self) -> None:

@@ -4346,3 +4346,29 @@ void  zcfree (voidp opaque, voidp ptr)
     Z_Free(ptr);
     if (opaque) return; /* make compiler happy */
 }
+
+int QZ_Uncompress(unsigned char *dest, unsigned long *destLen,
+                  const unsigned char *source, unsigned long sourceLen)
+{
+    z_stream stream;
+    int result;
+
+    if (dest == Z_NULL || destLen == Z_NULL || source == Z_NULL ||
+        sourceLen > (unsigned long)(uInt)-1 || *destLen > (unsigned long)(uInt)-1)
+        return Z_STREAM_ERROR;
+
+    memset(&stream, 0, sizeof(stream));
+    stream.next_in = (Byte *)source;
+    stream.avail_in = (uInt)sourceLen;
+    stream.next_out = dest;
+    stream.avail_out = (uInt)*destLen;
+
+    result = inflateInit2(&stream, DEF_WBITS);
+    if (result != Z_OK)
+        return result;
+
+    result = inflate(&stream, Z_FINISH);
+    *destLen = stream.total_out;
+    (void)inflateEnd(&stream);
+    return result == Z_STREAM_END ? Z_OK : result;
+}

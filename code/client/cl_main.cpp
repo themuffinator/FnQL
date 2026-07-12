@@ -27,6 +27,9 @@ extern "C" {
 
 #include "client_cpp.h"
 #include "demo_stream.hpp"
+#include "../qcommon/protocol_contract.hpp"
+#include "../qcommon/netchan_safety.hpp"
+#include "../platform/fnql_steam.h"
 
 #include <algorithm>
 #include <array>
@@ -51,6 +54,96 @@ namespace {
 constexpr const char *LEGACY_DEMOEXT = "dm3";
 constexpr int kMaxServersPerPacket = 256;
 constexpr std::size_t kServerAddressHashBuckets = 1024;
+
+struct SteamChallengeTicket {
+	std::array<byte, MAX_PACKETLEN> bytes{};
+	std::uint32_t size = 0;
+	std::uint32_t handle = 0;
+	std::uint64_t steamId = 0;
+	bool sentFnqlExtension = false;
+};
+
+SteamChallengeTicket steamChallengeTicket;
+
+static void CL_ClearSteamChallengeTicket() {
+	if ( steamChallengeTicket.handle != 0 ) {
+		FNQL_Steam_CancelAuthTicket( steamChallengeTicket.handle );
+	}
+	volatile byte *ticket = steamChallengeTicket.bytes.data();
+	for ( std::size_t i = 0; i < steamChallengeTicket.bytes.size(); ++i ) {
+		ticket[i] = 0;
+	}
+	steamChallengeTicket = {};
+}
+
+static bool CL_AcquireSteamChallengeTicket( std::uint32_t capacity ) {
+	if ( steamChallengeTicket.handle != 0 && steamChallengeTicket.size != 0 &&
+		steamChallengeTicket.steamId != 0 ) {
+		return steamChallengeTicket.size <= capacity;
+	}
+	if ( !FNQL_Steam_Available( FNQL_STEAM_CAP_AUTH | FNQL_STEAM_CAP_IDENTITY ) ) {
+		return false;
+	}
+	fnqlSteamStatus_t status{};
+	status.size = sizeof( status );
+	if ( !FNQL_Steam_GetStatus( &status ) || status.local_steam_id == 0 ) {
+		return false;
+	}
+	std::uint32_t ticketSize = 0;
+	std::uint32_t ticketHandle = 0;
+	if ( FNQL_Steam_GetAuthTicket( steamChallengeTicket.bytes.data(), capacity,
+		&ticketSize, &ticketHandle ) != FNQL_STEAM_RESULT_OK ||
+		ticketSize == 0 || ticketSize > capacity || ticketHandle == 0 ) {
+		CL_ClearSteamChallengeTicket();
+		return false;
+	}
+	steamChallengeTicket.size = ticketSize;
+	steamChallengeTicket.handle = ticketHandle;
+	steamChallengeTicket.steamId = status.local_steam_id;
+	return true;
+}
+
+static void CL_WriteLittle32( byte *target, std::uint32_t value ) {
+	target[0] = static_cast<byte>( value );
+	target[1] = static_cast<byte>( value >> 8u );
+	target[2] = static_cast<byte>( value >> 16u );
+	target[3] = static_cast<byte>( value >> 24u );
+}
+
+static bool CL_SendFnqlSteamChallenge() {
+	static constexpr char command[] = "getchallenge ";
+	static constexpr char marker[] = "FnQLAuth";
+	constexpr std::size_t headerBytes = 4u + sizeof( command ) - 1u +
+		sizeof( marker ) - 1u + 4u + 8u;
+	static_assert( headerBytes < MAX_PACKETLEN );
+	const std::uint32_t ticketCapacity = static_cast<std::uint32_t>(
+		MAX_PACKETLEN - headerBytes );
+	if ( !CL_AcquireSteamChallengeTicket( ticketCapacity ) ) {
+		return false;
+	}
+	std::array<byte, MAX_PACKETLEN> packet{};
+	packet[0] = packet[1] = packet[2] = packet[3] = 0xff;
+	std::size_t offset = 4;
+	std::memcpy( packet.data() + offset, command, sizeof( command ) - 1u );
+	offset += sizeof( command ) - 1u;
+	std::memcpy( packet.data() + offset, marker, sizeof( marker ) - 1u );
+	offset += sizeof( marker ) - 1u;
+	CL_WriteLittle32( packet.data() + offset,
+		static_cast<std::uint32_t>( clc.challenge ) );
+	offset += 4u;
+	CL_WriteLittle32( packet.data() + offset,
+		static_cast<std::uint32_t>( steamChallengeTicket.steamId ) );
+	CL_WriteLittle32( packet.data() + offset + 4u,
+		static_cast<std::uint32_t>( steamChallengeTicket.steamId >> 32u ) );
+	offset += 8u;
+	std::memcpy( packet.data() + offset, steamChallengeTicket.bytes.data(),
+		steamChallengeTicket.size );
+	offset += steamChallengeTicket.size;
+	NET_SendPacket( NS_CLIENT, static_cast<int>( offset ), packet.data(),
+		&clc.serverAddress );
+	steamChallengeTicket.sentFnqlExtension = true;
+	return true;
+}
 
 static int OpenPureFileRead( const char *qpath, ScopedFileHandle &file )
 {
@@ -364,7 +457,7 @@ not have future usercmd_t executed before it is executed
 */
 void CL_AddReliableCommand( const char *cmd, qboolean isDisconnectCmd ) {
 	int		index;
-	int		unacknowledged = clc.reliableSequence - clc.reliableAcknowledge;
+	std::uint32_t unacknowledged = 0;
 
 	if ( clc.serverAddress.type == NA_BAD )
 		return;
@@ -373,7 +466,9 @@ void CL_AddReliableCommand( const char *cmd, qboolean isDisconnectCmd ) {
 	// we must drop the connection
 	// also leave one slot open for the disconnect command in this case.
 
-	if ((isDisconnectCmd && unacknowledged > MAX_RELIABLE_COMMANDS) ||
+	if ( !fnql::net::PendingCounterCount( clc.reliableSequence,
+		clc.reliableAcknowledge, unacknowledged ) ||
+		(isDisconnectCmd && unacknowledged > MAX_RELIABLE_COMMANDS) ||
 		(!isDisconnectCmd && unacknowledged >= MAX_RELIABLE_COMMANDS))
 	{
 		if( com_errorEntered )
@@ -382,7 +477,7 @@ void CL_AddReliableCommand( const char *cmd, qboolean isDisconnectCmd ) {
 			Com_Error(ERR_DROP, "Client command overflow");
 	}
 
-	clc.reliableSequence++;
+	clc.reliableSequence = fnql::net::NextCounter( clc.reliableSequence );
 	index = clc.reliableSequence & ( MAX_RELIABLE_COMMANDS - 1 );
 	Q_strncpyz( clc.reliableCommands[ index ], cmd, sizeof( clc.reliableCommands[ index ] ) );
 }
@@ -440,15 +535,15 @@ void CL_StopRecord_f( void ) {
 		FileWrite( clc.recordfile, &len, 4 );
 		CloseFile( clc.recordfile );
 
-		// select proper extension
-		if ( clc.dm68compat || clc.demoplaying ) {
+		// Select the extension from the actual wire contract. Explicit legacy
+		// demo playback retains the source protocol recorded in the file.
+		if ( clc.dm68compat ) {
 			protocol = OLD_PROTOCOL_VERSION;
+		} else if ( clc.demoplaying && clc.demoLegacyProtocol ) {
+			protocol = clc.demoLegacyProtocol;
 		} else {
-			protocol = NEW_PROTOCOL_VERSION;
-		}
-
-		if ( com_protocol->integer != DEFAULT_PROTOCOL_VERSION ) {
-			protocol = com_protocol->integer;
+			protocol = fnql::protocol::ForWireProfile(
+				clc.netchan.wireProfile ).demoProtocol;
 		}
 
 		Com_sprintf( tempName.data(), static_cast<int>( tempName.size() ), "%s.tmp", clc.recordName );
@@ -1730,6 +1825,7 @@ qboolean CL_Disconnect( qboolean showMainMenu ) {
 	static bool cl_disconnecting = false;
 	bool cl_restarted = false;
 	const qboolean publishGameEnd = ( cls.state >= CA_CONNECTED || clc.demoplaying || clc.demorecording ) ? qtrue : qfalse;
+	CL_ClearSteamChallengeTicket();
 
 	if ( !com_cl_running || !com_cl_running->integer ) {
 		return ToQboolean( cl_restarted );
@@ -2860,7 +2956,7 @@ Resend a connect message if the last one has timed out
 =================
 */
 static void CL_CheckForResend( void ) {
-	int		port, len;
+	int		port, len, connectProtocol;
 	std::array<char, MAX_INFO_STRING * 2> info; // larger buffer to detect overflows
 	std::array<char, MAX_INFO_STRING> data;
 	bool		notOverflowed;
@@ -2891,7 +2987,9 @@ static void CL_CheckForResend( void ) {
 			CL_RequestAuthorization();
 #endif
 		// The challenge request shall be followed by a client challenge so no malicious server can hijack this connection.
-		NET_OutOfBandPrint( NS_CLIENT, &clc.serverAddress, "getchallenge %d %s", clc.challenge, GAMENAME_FOR_MASTER );
+		if ( !CL_SendFnqlSteamChallenge() ) {
+			NET_OutOfBandPrint( NS_CLIENT, &clc.serverAddress, "getchallenge %d %s", clc.challenge, GAMENAME_FOR_MASTER );
+		}
 		break;
 
 	case CA_CHALLENGING:
@@ -2914,14 +3012,11 @@ static void CL_CheckForResend( void ) {
 			notOverflowed = true;
 		}
 
-		if ( com_protocol->integer != DEFAULT_PROTOCOL_VERSION ) {
-			notOverflowed = notOverflowed &&
-				Info_SetValueForKey_s( info.data(), MAX_USERINFO_LENGTH, "protocol", com_protocol->string );
-		} else {
-			notOverflowed = notOverflowed &&
-				Info_SetValueForKey_s( info.data(), MAX_USERINFO_LENGTH, "protocol",
-					clc.compat ? XSTRING( OLD_PROTOCOL_VERSION ) : XSTRING( NEW_PROTOCOL_VERSION ) );
-		}
+		connectProtocol = clc.compat ? OLD_PROTOCOL_VERSION :
+			( clc.handshakeProtocol > 0 ? clc.handshakeProtocol : com_protocol->integer );
+		notOverflowed = notOverflowed &&
+			Info_SetValueForKey_s( info.data(), MAX_USERINFO_LENGTH, "protocol",
+				va( "%i", connectProtocol ) );
 
 		notOverflowed = notOverflowed &&
 			Info_SetValueForKey_s( info.data(), MAX_USERINFO_LENGTH, "qport", va( "%i", port ) );
@@ -3227,6 +3322,7 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 
 	// challenge from the server we are connecting to
 	if ( !Q_stricmp(c, "challengeResponse" ) ) {
+		int serverProtocol = 0;
 
 		if ( cls.state != CA_CONNECTING ) {
 			Com_DPrintf( "Unwanted challenge response received. Ignored.\n" );
@@ -3241,20 +3337,34 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 		s = Cmd_Argv( 3 ); // analyze server protocol version
 		if ( *s != '\0' ) {
 			int sv_proto = std::atoi( s );
+			serverProtocol = sv_proto;
 			if ( sv_proto > OLD_PROTOCOL_VERSION ) {
-				if ( sv_proto == NEW_PROTOCOL_VERSION || sv_proto == com_protocol->integer ) {
+				if ( sv_proto == NEW_PROTOCOL_VERSION ||
+					sv_proto == QL_RETAIL_PROTOCOL_VERSION ||
+					sv_proto == com_protocol->integer ) {
 					clc.compat = qfalse;
 				} else {
 					int cl_proto = com_protocol->integer;
 					if ( cl_proto == DEFAULT_PROTOCOL_VERSION ) {
-						// we support new protocol features by default
-						cl_proto = NEW_PROTOCOL_VERSION;
+						cl_proto = QL_RETAIL_PROTOCOL_VERSION;
 					}
 					Com_Printf( S_COLOR_YELLOW "Warning: Server reports protocol version %d, "
 						"we have %d. Trying legacy protocol %d.\n",
 						sv_proto, cl_proto, OLD_PROTOCOL_VERSION );
 				}
 			}
+		}
+
+		if ( steamChallengeTicket.sentFnqlExtension &&
+			Q_stricmp( Cmd_Argv( 4 ), fnql::protocol::FnqlHandshakeMarker.data() ) ) {
+			Com_Printf( "Authenticated challenge response is not from an FnQL host. Connection refused.\n" );
+			return false;
+		}
+
+		if ( serverProtocol == QL_RETAIL_PROTOCOL_VERSION &&
+			Q_stricmp( Cmd_Argv( 4 ), fnql::protocol::FnqlHandshakeMarker.data() ) ) {
+			Com_Printf( "Protocol 91 server is not an FnQL host. Connection refused.\n" );
+			return false;
 		}
 
 		if ( clc.compat )
@@ -3282,6 +3392,7 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 
 		// start sending connect instead of challenge request packets
 		clc.challenge = std::atoi( Cmd_Argv(1) );
+		clc.handshakeProtocol = serverProtocol > 0 ? serverProtocol : OLD_PROTOCOL_VERSION;
 		cls.state = CA_CHALLENGING;
 		clc.connectPacketCount = 0;
 		clc.connectTime = -99999;
@@ -3311,10 +3422,14 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 		}
 
 		negotiatedProtocol = clc.compat ? OLD_PROTOCOL_VERSION :
-			( com_protocol->integer == DEFAULT_PROTOCOL_VERSION ?
-				NEW_PROTOCOL_VERSION : com_protocol->integer );
+			( clc.handshakeProtocol > OLD_PROTOCOL_VERSION ? clc.handshakeProtocol :
+				com_protocol->integer );
 
-		if ( !clc.compat ) {
+		const fnql::protocol::Contract *contract =
+			fnql::protocol::Find( negotiatedProtocol, clc.compat != qfalse );
+
+		if ( !clc.compat &&
+			( !contract || contract->family != fnql::protocol::Family::QuakeLive ) ) {
 			// first argument: challenge response
 			c = Cmd_Argv( 1 );
 			if ( *c != '\0' ) {
@@ -3349,6 +3464,20 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 				// downgrading the retail Quake Live wire contract.
 				clc.compat = qtrue;
 			}
+		} else if ( !clc.compat && Cmd_Argc() > 1 ) {
+			// FnQL peers may echo the challenge and selected protocol even on
+			// the QL wire. Validate it when present, while accepting the bare
+			// connectResponse required by retail clients.
+			challenge = std::atoi( Cmd_Argv( 1 ) );
+			if ( challenge != clc.challenge ) {
+				Com_Printf( "ConnectResponse with bad challenge received. Ignored.\n" );
+				return false;
+			}
+			if ( Cmd_Argc() > 2 &&
+				std::atoi( Cmd_Argv( 2 ) ) != QL_RETAIL_PROTOCOL_VERSION ) {
+				Com_Printf( "ConnectResponse selected an invalid QL protocol. Ignored.\n" );
+				return false;
+			}
 		}
 
 		Netchan_Setup( NS_CLIENT, &clc.netchan, from,
@@ -3356,6 +3485,7 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 			Netchan_SelectWireProfile( negotiatedProtocol, clc.compat ) );
 
 		cls.state = CA_CONNECTED;
+		CL_ClearSteamChallengeTicket();
 		clc.lastPacketSentTime = cls.realtime - 9999; // send first packet immediately
 		return true;
 	}
@@ -3700,6 +3830,7 @@ void CL_Frame( int msec, int realMsec ) {
 	cls.gameFrametime = gameMsec;
 	cls.realtime += realMsec;
 	cls.gametime += gameMsec;
+	CL_SteamP2PFrame();
 
 	if ( cl_timegraph->integer ) {
 		SCR_DebugGraph( realMsec * 0.25f );
@@ -3796,6 +3927,7 @@ static void CL_ShutdownRef( refShutdownCode_t code ) {
 	if ( re.Shutdown ) {
 		re.Shutdown( code );
 	}
+	CL_ClearAvatarImageHandles();
 
 #ifdef USE_RENDERER_DLOPEN
 	if ( rendererLib ) {
@@ -3831,6 +3963,7 @@ static void CL_InitRenderer( void ) {
 
 	// load character sets
 	cls.charSetShader = re.RegisterShader( "gfx/2d/bigchars" );
+	cls.recordShader = re.RegisterShaderNoMip( "icons/record" );
 	cls.whiteShader = re.RegisterShader( "white" );
 	// pak00 contains two historical shaders named "console"; the earlier Q3
 	// definition references textures not shipped by retail QL. Use FnQL's
@@ -3839,9 +3972,6 @@ static void CL_InitRenderer( void ) {
 	cls.cursorShader = re.RegisterShaderNoMip( "menu/art/3_cursor2" );
 
 	Con_CheckResize();
-
-	g_console_field_width = ((cls.glconfig.vidWidth / smallchar_width)) - 2;
-	g_consoleField.widthInChars = g_console_field_width;
 
 	// for 640x480 virtualized screen
 	cls.biasY = 0;
@@ -4566,7 +4696,7 @@ void CL_Init( void ) {
 	cl_freezeDemo = Cvar_Get( "cl_freezeDemo", "0", CVAR_TEMP );
 	Cvar_SetDescription( cl_freezeDemo, "Hold demo simulation time while preserving client input and UI frame timing." );
 	cl_drawRecording = Cvar_Get("cl_drawRecording", "1", CVAR_ARCHIVE);
-	Cvar_SetDescription( cl_drawRecording, "Hide (0) or shorten (1) \"RECORDING\" HUD message when recording demo." );
+	Cvar_SetDescription( cl_drawRecording, "Demo recording indicator: hidden (0), detailed (1), or compact REC icon (2)." );
 	cl_menuAspect = Cvar_Get( "cl_menuAspect", "0", CVAR_ARCHIVE );
 	Cvar_CheckRange( cl_menuAspect, "0", "1", CV_INTEGER );
 	Cvar_SetDescription( cl_menuAspect,

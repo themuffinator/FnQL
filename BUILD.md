@@ -9,6 +9,12 @@ FnQL is currently an early Quake Live migration baseline. A successful build is
 not yet proof of full retail Quake Live compatibility; runtime work should be
 validated against a legitimate Steam installation.
 
+Steam service integration is optional and is never required to build FnQL.
+Developers with the separate `../FnQL-Steam` repository can pass `-WithSteam`
+to `.vscode/build-release.ps1` to build its strict dynamic-library target and
+stage only the resulting provider beside FnQL. See
+[`docs/fnql/STEAM_PROVIDER.md`](docs/fnql/STEAM_PROVIDER.md).
+
 On Windows, use the **Win32/x86 client for retail Quake Live runtime tests**.
 Retail `bin.pk3` ships `qagamex86.dll`, `cgamex86.dll`, and `uix86.dll`; the x64
 build remains useful for engine-only validation but cannot load those x86

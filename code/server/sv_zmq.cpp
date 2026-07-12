@@ -16,6 +16,7 @@ version.
 // opts in, and failure leaves the normal server path untouched.
 
 #include "server.h"
+#include "json_document.hpp"
 #include "zmq_endpoint.hpp"
 
 #include <algorithm>
@@ -24,6 +25,7 @@ version.
 #include <cctype>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -45,6 +47,7 @@ constexpr int MAX_RCON_PEERS = 64;
 constexpr int MAX_RCON_COMMANDS_PER_FRAME = 16;
 constexpr std::size_t MAX_ZMQ_IDENTITY = 255;
 constexpr std::size_t MAX_ZMQ_PUBLICATION = 32768;
+constexpr std::size_t MAX_ZMQ_RCON_REPLY = 65536;
 constexpr const char *ZAP_ENDPOINT = "inproc://zeromq.zap.01";
 
 #if defined(_WIN32)
@@ -113,6 +116,9 @@ struct Runtime {
 	std::string statsPassword;
 	std::string rconEndpoint;
 	std::string statsEndpoint;
+	std::string commandOutput;
+	bool commandOutputTruncated = false;
+	bool selfTestCommandRegistered = false;
 };
 
 Runtime runtime;
@@ -628,6 +634,26 @@ bool ValidCommand( const std::string &command ) {
 	return true;
 }
 
+void CollectRconCommandOutput( const char *message ) {
+	if ( !message || !message[0] || runtime.commandOutputTruncated ) {
+		return;
+	}
+	const std::size_t bytes = strlen( message );
+	if ( bytes > MAX_ZMQ_RCON_REPLY - runtime.commandOutput.size() ) {
+		static constexpr std::string_view marker = "\n[FnQL ZMQ RCON output truncated]\n";
+		const std::size_t room = MAX_ZMQ_RCON_REPLY - runtime.commandOutput.size();
+		if ( room > marker.size() ) {
+			runtime.commandOutput.append( message, room - marker.size() );
+			runtime.commandOutput.append( marker );
+		} else if ( room > 0 ) {
+			runtime.commandOutput.append( marker.data(), room );
+		}
+		runtime.commandOutputTruncated = true;
+		return;
+	}
+	runtime.commandOutput.append( message, bytes );
+}
+
 std::string EscapeJsonString( const char *text ) {
 	std::string result;
 	if ( !text ) {
@@ -652,17 +678,49 @@ std::string EscapeJsonString( const char *text ) {
 }
 
 void Publish( const char *type, const char *json ) {
-	if ( !type || !*type || !EnsureStatsSocket() ) {
+	if ( !type || !*type ) {
+		return;
+	}
+	std::string_view jsonDocument;
+	if ( json && *json ) {
+		std::size_t jsonBytes = 0;
+		while ( jsonBytes <= fnql::server::json::MaximumDocumentBytes &&
+			json[jsonBytes] != '\0' ) {
+			++jsonBytes;
+		}
+		if ( jsonBytes > fnql::server::json::MaximumDocumentBytes ) {
+			Com_Printf( "ZMQ: dropped unterminated or oversized %s JSON publication\n", type );
+			return;
+		}
+		jsonDocument = { json, jsonBytes };
+		if ( !fnql::server::json::DocumentIsValid( jsonDocument ) ) {
+			Com_Printf( "ZMQ: dropped malformed %s JSON publication\n", type );
+			return;
+		}
+	}
+	if ( !EnsureStatsSocket() ) {
 		return;
 	}
 	std::string message = "{\"TYPE\":\"" + EscapeJsonString( type ) + "\",\"DATA\":";
-	message += ( json && *json ) ? json : "null";
+	if ( jsonDocument.empty() ) {
+		message += "null";
+	} else {
+		message.append( jsonDocument.data(), jsonDocument.size() );
+	}
 	message += '}';
 	if ( message.size() > MAX_ZMQ_PUBLICATION ) {
 		Com_Printf( "ZMQ: dropped oversized %s publication (%zu bytes)\n", type, message.size() );
 		return;
 	}
 	runtime.api.send( runtime.statsSocket, message.data(), message.size(), ZMQ_DONTWAIT );
+}
+
+void Zmq_SelfTest_f() {
+	if ( !com_developer || !com_developer->integer ) {
+		return;
+	}
+	Publish( "FNQL_ZMQ_SELFTEST", "{\"ok\":true,\"protocol\":91}" );
+	Com_Printf( "ZMQ self-test publication queued\n" );
 }
 
 void RecreateAuthenticatedSockets() {
@@ -696,8 +754,8 @@ void Zmq_RegisterCvarsAndInitRcon( void ) {
 	zmqStatus = Cvar_Get( "zmq_status", "disabled", CVAR_ROM );
 	zmqRconEndpointStatus = Cvar_Get( "zmq_rcon_endpoint", "", CVAR_ROM );
 	zmqStatsEndpointStatus = Cvar_Get( "zmq_stats_endpoint", "", CVAR_ROM );
-	Cvar_SetDescription( Cvar_Get( "zmq_stats_payload_policy", "opaque-retail-json-disabled", CVAR_ROM ),
-		"Opaque retail Json::Value payloads are not dereferenced until FnQL owns a proven serializer ABI." );
+	Cvar_SetDescription( Cvar_Get( "zmq_stats_payload_policy", "validated-provider-json", CVAR_ROM ),
+		"Retail Json::Value payloads are accepted only through the bounded provider serializer ABI, then strictly validated before publication." );
 
 	Cvar_CheckRange( zmqRconEnable, "0", "1", CV_INTEGER );
 	Cvar_CheckRange( zmqStatsEnable, "0", "1", CV_INTEGER );
@@ -712,6 +770,10 @@ void Zmq_RegisterCvarsAndInitRcon( void ) {
 	Cvar_SetDescription( zmqRconPassword, "Transient ZMQ RCON PLAIN password. Required for any explicitly allowed non-loopback bind." );
 	Cvar_SetDescription( zmqStatsPassword, "Transient ZMQ stats PLAIN password. Required for any explicitly allowed non-loopback bind." );
 	Cvar_SetDescription( zmqAllowInsecureRemote, "Allow password-authenticated ZMQ PLAIN sockets outside loopback despite the unencrypted transport. Default off; use only behind a trusted tunnel or network." );
+	if ( com_developer && com_developer->integer && !runtime.selfTestCommandRegistered ) {
+		Cmd_AddCommand( "zmq_selftest", Zmq_SelfTest_f );
+		runtime.selfTestCommandRegistered = true;
+	}
 
 	ReplaceSecret( runtime.rconPassword, zmqRconPassword->string );
 	ReplaceSecret( runtime.statsPassword, zmqStatsPassword->string );
@@ -760,6 +822,14 @@ void Zmq_SubmitMatchReport( const void *report ) {
 	Publish( "MATCH_REPORT", nullptr );
 }
 
+void Zmq_SubmitMatchReportJson( const char *json ) {
+	Publish( "MATCH_REPORT", json );
+}
+
+void Zmq_SubmitMatchSummaryJson( const char *json ) {
+	Publish( "MATCH_SUMMARY", json );
+}
+
 void Zmq_ReportPlayerEvent( unsigned int steamIdLow, unsigned int steamIdHigh,
 		const void *clientStats, const char *eventName, const void *payload ) {
 	(void)steamIdLow;
@@ -769,6 +839,10 @@ void Zmq_ReportPlayerEvent( unsigned int steamIdLow, unsigned int steamIdHigh,
 	Publish( eventName, nullptr );
 }
 
+void Zmq_ReportPlayerEventJson( const char *eventName, const char *json ) {
+	Publish( eventName, json );
+}
+
 void Zmq_BroadcastRconOutput( const char *message ) {
 	if ( !runtime.rconSocket || runtime.broadcasting || runtime.peers.empty() ||
 		std::this_thread::get_id() != runtime.ownerThread ) {
@@ -776,6 +850,12 @@ void Zmq_BroadcastRconOutput( const char *message ) {
 	}
 	runtime.broadcasting = true;
 	for ( auto peer = runtime.peers.begin(); peer != runtime.peers.end(); ) {
+		// REQ sockets may only receive exactly one reply after each request.
+		// Unsolicited console streaming is therefore limited to DEALER peers.
+		if ( peer->requestDelimiter ) {
+			++peer;
+			continue;
+		}
 		if ( SendToPeer( peer->identity, message, peer->requestDelimiter ) ) {
 			++peer;
 		} else {
@@ -843,7 +923,21 @@ void Zmq_PumpRcon( void ) {
 		}
 		peer->requestDelimiter = requestDelimiter;
 		Com_DPrintf( "ZMQ RCON command received from authenticated peer\n" );
+		std::array<char, MAX_STRING_CHARS> redirectBuffer{};
+		runtime.commandOutput.clear();
+		runtime.commandOutputTruncated = false;
+		Com_BeginRedirect( redirectBuffer.data(), static_cast<int>( redirectBuffer.size() ),
+			CollectRconCommandOutput );
 		Cmd_ExecuteString( command.c_str() );
+		Com_EndRedirect();
+		if ( runtime.commandOutput.empty() ) {
+			runtime.commandOutput = "\n";
+		}
+		if ( !SendToPeer( identity, runtime.commandOutput.c_str(), requestDelimiter ) ) {
+			runtime.peers.erase( FindPeer( identity ) );
+		}
+		ScrubString( runtime.commandOutput );
+		runtime.commandOutputTruncated = false;
 	}
 }
 
@@ -881,6 +975,11 @@ void Zmq_ShutdownRuntime( void ) {
 	}
 	ScrubString( runtime.rconPassword );
 	ScrubString( runtime.statsPassword );
+	ScrubString( runtime.commandOutput );
+	if ( runtime.selfTestCommandRegistered ) {
+		Cmd_RemoveCommand( "zmq_selftest" );
+		runtime.selfTestCommandRegistered = false;
+	}
 	runtime.rconEndpoint.clear();
 	runtime.statsEndpoint.clear();
 	SetEndpointStatus( zmqRconEndpointStatus, "zmq_rcon_endpoint", runtime.rconEndpoint );
