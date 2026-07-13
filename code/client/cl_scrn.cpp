@@ -335,7 +335,7 @@ void SCR_DrawStringExt( int x, int y, float size, const char *string, const floa
 		while ( cursor < end && *cursor ) {
 			const qlFontUtf8Result_t decoded = QL_FontDecodeUtf8( cursor, end );
 			std::array<char, 5> glyphText = {};
-			float extent = 0.0f;
+			float bounds[5] = {};
 			int bytes;
 
 			if ( decoded.bytes <= 0 ) {
@@ -345,13 +345,10 @@ void SCR_DrawStringExt( int x, int y, float size, const char *string, const floa
 				? decoded.bytes : static_cast<int>( glyphText.size() ) - 1;
 			std::copy_n( cursor, bytes, glyphText.data() );
 			RE_DrawScaledText( RoundToInt( penX ), screenY, glyphText.data(),
-				hostFontMono, hostScale, 1, &extent, qtrue, setColor );
-			if ( extent <= penX ) {
-				float measuredWidth = 0.0f;
-				RE_MeasureScaledText( glyphText.data(), nullptr, hostFontMono,
-					hostScale, 1, &measuredWidth, nullptr, nullptr );
-				extent = penX + measuredWidth;
-			}
+				hostFontMono, hostScale, 1, nullptr, qtrue, setColor );
+			RE_MeasureScaledText( glyphText.data(), nullptr, hostFontMono,
+				hostScale, 1, bounds );
+			float extent = penX + bounds[2] - bounds[0];
 			if ( extent <= penX ) {
 				extent = penX + hostScale * 0.6f;
 			}
@@ -481,8 +478,8 @@ static void SCR_DrawHostScaledChar( float x, float y, float width, float height,
 RE_DrawScaledText
 
 Quake Live native UI/cgame pass screen-space coordinates and a host text scale.
-The renderer owns the retail TTF faces and retained glyph atlas.  The charset
-lane remains available for renderer builds without FreeType.
+The renderer owns the retail FontStash/STB faces and retained glyph atlas. The
+charset lane remains available when the host text service is unavailable.
 =================
 */
 void RE_DrawScaledText( int x, int y, const char *text, int fontHandle, float scale, int limit, float *outMaxX, qboolean forceColor, const float *baseColor ) {
@@ -498,16 +495,16 @@ void RE_DrawScaledText( int x, int y, const char *text, int fontHandle, float sc
 
 	if ( re.DrawScaledText && re.GetScaledFontMetrics &&
 		re.GetScaledFontMetrics( fontHandle, scale, nullptr, nullptr, nullptr ) ) {
+		if ( baseColor ) {
+			re.SetColor( baseColor );
+		}
 		re.DrawScaledText( x, y, text, fontHandle, scale, limit, outMaxX,
-			forceColor, baseColor );
+			forceColor );
 		return;
 	}
 
 	clipX = outMaxX ? *outMaxX : 0.0f;
-	hasClipX = outMaxX && clipX > 0.0f ? qtrue : qfalse;
-	if ( outMaxX && !hasClipX ) {
-		*outMaxX = static_cast<float>( x );
-	}
+	hasClipX = outMaxX ? qtrue : qfalse;
 	if ( !text || !text[0] ) {
 		return;
 	}
@@ -532,7 +529,7 @@ void RE_DrawScaledText( int x, int y, const char *text, int fontHandle, float sc
 	for ( cursor = text; cursor < end && *cursor; ) {
 		qlFontUtf8Result_t decoded;
 		float glyphMaxX;
-		if ( limit > 0 && remaining <= 0 ) {
+		if ( remaining == 0 ) {
 			break;
 		}
 
@@ -560,13 +557,10 @@ void RE_DrawScaledText( int x, int y, const char *text, int fontHandle, float sc
 			break;
 		}
 
-		SCR_DrawHostScaledChar( penX, static_cast<float>( y ), advance, height,
+		SCR_DrawHostScaledChar( penX, static_cast<float>( y ) - height, advance, height,
 			decoded.codepoint <= 255 ? static_cast<int>( decoded.codepoint ) : '?' );
 		penX = glyphMaxX;
 		cursor += decoded.bytes;
-		if ( outMaxX && !hasClipX ) {
-			*outMaxX = glyphMaxX;
-		}
 		if ( limit > 0 ) {
 			--remaining;
 		}
@@ -579,7 +573,7 @@ void RE_DrawScaledText( int x, int y, const char *text, int fontHandle, float sc
 RE_MeasureScaledText
 =================
 */
-void RE_MeasureScaledText( const char *text, const char *end, int fontHandle, float scale, int limit, float *outWidth, float *outHeight, float *outLeft ) {
+void RE_MeasureScaledText( const char *text, const char *end, int fontHandle, float scale, int limit, float *bounds ) {
 	const char *cursor;
 	const char *textEnd;
 	float width;
@@ -590,19 +584,12 @@ void RE_MeasureScaledText( const char *text, const char *end, int fontHandle, fl
 
 	if ( re.MeasureScaledText && re.GetScaledFontMetrics &&
 		re.GetScaledFontMetrics( fontHandle, scale, nullptr, nullptr, nullptr ) ) {
-		re.MeasureScaledText( text, end, fontHandle, scale, limit,
-			outWidth, outHeight, outLeft );
+		re.MeasureScaledText( text, end, fontHandle, scale, limit, bounds );
 		return;
 	}
 
-	if ( outWidth ) {
-		*outWidth = 0.0f;
-	}
-	if ( outHeight ) {
-		*outHeight = 0.0f;
-	}
-	if ( outLeft ) {
-		*outLeft = 0.0f;
+	if ( bounds ) {
+		std::fill_n( bounds, 5, 0.0f );
 	}
 	if ( !text ) {
 		return;
@@ -622,7 +609,7 @@ void RE_MeasureScaledText( const char *text, const char *end, int fontHandle, fl
 	for ( cursor = text; cursor < textEnd && *cursor; ) {
 		qlFontUtf8Result_t decoded;
 		float glyphMaxX;
-		if ( limit > 0 && remaining <= 0 ) {
+		if ( remaining == 0 ) {
 			break;
 		}
 
@@ -644,11 +631,12 @@ void RE_MeasureScaledText( const char *text, const char *end, int fontHandle, fl
 		}
 	}
 
-	if ( outWidth ) {
-		*outWidth = width;
-	}
-	if ( outHeight && drewGlyph ) {
-		*outHeight = height;
+	if ( bounds ) {
+		bounds[0] = 0.0f;
+		bounds[1] = drewGlyph ? -height : 0.0f;
+		bounds[2] = width;
+		bounds[3] = 0.0f;
+		bounds[4] = height;
 	}
 }
 

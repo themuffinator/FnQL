@@ -1784,12 +1784,14 @@ static unsigned long long QL_UI_PackFloatBits64( float lo, float hi ) {
 }
 
 static unsigned long long QDECL QL_UI_trap_MeasureText( const char *text, const char *end, int fontHandle, float scale, int limit, float *outLeft ) {
+	float bounds[5] = {};
 	float width;
 	float height;
-	float left;
 
-	RE_MeasureScaledText( text, end, fontHandle, scale, limit, &width, &height, &left );
-	fnql::font::WriteMeasureBounds( outLeft, left, width, height );
+	RE_MeasureScaledText( text, end, fontHandle, scale, limit, bounds );
+	fnql::font::CopyMeasureBounds( outLeft, bounds );
+	width = bounds[2] - bounds[0];
+	height = bounds[4];
 	return QL_UI_PackFloatBits64( width, height );
 }
 

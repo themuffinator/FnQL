@@ -45,14 +45,16 @@ int main() {
 	assert( QL_FontFaceMetric( 240, 1900, 1900, -500 ) > 18.99f );
 	assert( QL_FontFaceMetric( 240, -500, 1900, -500 ) < -4.99f );
 	{
+		const float measured[5] = { -1.25f, -7.0f, 9.25f, 2.0f, 7.75f };
 		float bounds[5] = {};
-		fnql::font::WriteMeasureBounds( bounds, -1.25f, 10.5f, 7.75f );
+		fnql::font::CopyMeasureBounds( bounds, measured );
 		assert( bounds[0] == -1.25f );
-		assert( bounds[1] == 0.0f );
+		assert( bounds[1] == -7.0f );
 		assert( bounds[2] == 9.25f );
-		assert( bounds[3] == 0.0f );
+		assert( bounds[3] == 2.0f );
 		assert( bounds[4] == 7.75f );
-		fnql::font::WriteMeasureBounds( nullptr, 0.0f, 0.0f, 0.0f );
+		fnql::font::CopyMeasureBounds( nullptr, measured );
+		fnql::font::CopyMeasureBounds( bounds, nullptr );
 	}
 	{
 		const char text[] = "ab\xE2\x82\xAC" "cd";

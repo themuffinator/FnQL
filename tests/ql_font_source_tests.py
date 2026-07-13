@@ -11,7 +11,7 @@ def read(path: str) -> str:
 
 class QLFontSourceTests(unittest.TestCase):
     def test_retail_faces_and_fallback_order_are_explicit(self) -> None:
-        source = read("code/renderercommon/tr_font.c")
+        source = read("code/renderercommon/tr_font_stash.c")
         for path in (
             "fonts/handelgothic.ttf",
             "fonts/notosans-regular.ttf",
@@ -19,15 +19,25 @@ class QLFontSourceTests(unittest.TestCase):
             "fonts/droidsansfallbackfull.ttf",
         ):
             self.assertIn(path, source)
-        self.assertIn("requestedFace = QL_ResolveHostFaceIndex( requestedFace );", source)
-        self.assertIn("QL_AppendHostFaceIndex( chain, &count, requestedFace );", source)
-        self.assertIn("QL_AppendHostFaceIndex( chain, &count, 1 );", source)
-        self.assertIn("QL_AppendHostFaceIndex( chain, &count, 3 );", source)
-        self.assertIn("qlHostFonts.faces[4].face ? 4 : 3", source)
+        self.assertIn('QL_LoadHostFace( 0, "normal"', source)
+        self.assertIn('QL_LoadHostFace( 1, "sans"', source)
+        self.assertIn('QL_LoadHostFace( 2, "mono"', source)
+        self.assertIn('QL_LoadHostFace( 3, "sans-fallback"', source)
+        self.assertIn("qlHostFonts.fallbackIds[0] = qlHostFonts.faceIds[1];", source)
+        self.assertIn("qlHostFonts.fallbackIds[1] = qlHostFonts.faceIds[3];", source)
+        self.assertIn("qlHostFonts.fallbackIds[2] = qlHostFonts.faceIds[4];", source)
+
+    def test_retail_fontstash_revision_and_scratch_size_are_pinned(self) -> None:
+        wrap = read("subprojects/fontstash.wrap")
+        source = read("code/renderercommon/tr_font_stash.c")
+        self.assertIn("revision = 7e837c205fde6ac416685131653e1f3c722bb027", wrap)
+        self.assertIn("#define FONS_SCRATCH_BUF_SIZE ( 128 * 1024 )", source)
+        self.assertIn("#define FONTSTASH_IMPLEMENTATION", source)
+        self.assertIn("#include <fontstash.h>", source)
 
     def test_host_text_service_is_exported_by_every_renderer(self) -> None:
         public = read("code/renderercommon/tr_public.h")
-        self.assertIn("REF_API_VERSION\t\t11", public)
+        self.assertIn("REF_API_VERSION\t\t12", public)
         self.assertIn("(*DrawScaledText)", public)
         self.assertIn("(*MeasureScaledText)", public)
         self.assertIn("(*GetScaledFontMetrics)", public)
@@ -52,24 +62,29 @@ class QLFontSourceTests(unittest.TestCase):
 
     def test_native_measure_imports_write_the_retail_five_float_bounds_packet(self) -> None:
         bridge = read("code/client/ql_font_bridge.hpp")
-        self.assertIn("bounds[ 0 ] = left", bridge)
-        self.assertIn("bounds[ 2 ] = left + width", bridge)
-        self.assertIn("bounds[ 4 ] = ascent", bridge)
+        renderer = read("code/renderercommon/tr_font_stash.c")
+        self.assertIn("std::memcpy( destination, source, sizeof( float ) * 5 )", bridge)
+        self.assertIn("bounds[0] = minX;", renderer)
+        self.assertIn("bounds[1] = minY;", renderer)
+        self.assertIn("bounds[2] = maxX;", renderer)
+        self.assertIn("bounds[3] = maxY;", renderer)
+        self.assertIn("fonsVertMetrics( qlHostFonts.stash, bounds + 4, NULL, NULL )", renderer)
         for path in ("code/client/cl_ui.cpp", "code/client/cl_cgame.cpp"):
             source = read(path)
-            self.assertIn("fnql::font::WriteMeasureBounds( outLeft, left, width, height )", source)
-            self.assertNotIn("&width, &height, outLeft", source)
+            self.assertIn("fnql::font::CopyMeasureBounds( outLeft, bounds )", source)
+            self.assertIn("width = bounds[2] - bounds[0]", source)
+            self.assertIn("height = bounds[4]", source)
 
     def test_retained_atlas_and_system_fallback_are_bounded(self) -> None:
-        source = read("code/renderercommon/tr_font.c")
+        source = read("code/renderercommon/tr_font_stash.c")
         self.assertIn("#define QL_HOST_ATLAS_INITIAL_WIDTH 512", source)
         self.assertIn("#define QL_HOST_ATLAS_INITIAL_HEIGHT 512", source)
         self.assertIn("#define QL_HOST_ATLAS_MAX_WIDTH 2048", source)
         self.assertIn("#define QL_HOST_ATLAS_MAX_HEIGHT 1024", source)
-        self.assertIn("QL_CreateOrResizeHostAtlas", source)
-        self.assertIn("QL_ResetHostAtlas", source)
-        self.assertIn("QL_RefreshHostGlyphAtlasBindings", source)
-        self.assertIn("QL_FlushHostAtlasCommands", source)
+        self.assertIn("IMGFLAG_NOLIGHTSCALE | IMGFLAG_NOSCALE", source)
+        self.assertIn("0x8058 /* GL_RGBA8 */", source)
+        self.assertIn("fonsExpandAtlas( host->stash, grownWidth, grownHeight )", source)
+        self.assertIn("fonsResetAtlas( host->stash, width, height )", source)
         self.assertIn('Q_strncpyz( name, "*fontstash"', source)
         self.assertIn("length > 32 * 1024 * 1024", source)
         self.assertIn("#if defined( _WIN32 )", source)
@@ -104,6 +119,8 @@ class QLFontSourceTests(unittest.TestCase):
         self.assertIn("legacyCharScale = cls.con_factor", source)
         self.assertNotIn("legacyCharScale = scale * cls.con_factor", source)
         self.assertIn("re.DrawScaledText", source)
+        self.assertIn("Con_GetTtfScale(), -1, nullptr", source)
+        self.assertIn("Con_GetTtfScale(), -1, bounds", source)
         self.assertIn("ch >= 32 || ch == 10 || ch == 11", source)
         self.assertIn("cls.charSetShader", source)
         self.assertNotIn("SCR_DrawSmallChar( cl_conXOffset", source)
@@ -155,13 +172,21 @@ class QLFontSourceTests(unittest.TestCase):
         self.assertNotIn("str[ 0 ] = '<'", console)
 
     def test_host_sizes_use_retail_ascender_descender_semantics(self) -> None:
-        source = read("code/renderercommon/tr_font.c")
-        helper = read("code/renderercommon/ql_font_text.h")
-        self.assertIn("QL_FontFaceCharSize26Dot6", source)
-        self.assertIn("QL_FontFaceMetric", source)
-        self.assertIn("face->ascender - face->descender", source)
-        self.assertIn("slot->metrics.horiAdvance", source)
-        self.assertIn("Host text sizes describe the ascender-to-descender span", helper)
+        source = read("code/renderercommon/tr_font_stash.c")
+        self.assertIn("isize = (short)( state->size * 10.0f );", source)
+        self.assertIn("fons__tt_getPixelHeightScale", source)
+        self.assertIn("fons__getVertAlign", source)
+        self.assertIn("fons__getQuad", source)
+        self.assertIn("fonsVertMetrics", source)
+
+    def test_retail_limits_clipping_and_color_controls_are_preserved(self) -> None:
+        source = read("code/renderercommon/tr_font_stash.c")
+        self.assertIn("while ( cursor < end && remaining != 0 )", source)
+        self.assertIn("if ( remaining > 0 ) --remaining;", source)
+        self.assertIn("if ( maxX && *maxX < x )", source)
+        self.assertIn("*maxX = oldX;", source)
+        self.assertIn("QL_FontColorEscape( cursor, end, &colorIndex )", source)
+        self.assertIn("if ( !forceColor )", source)
 
     def test_classic_font_registration_keeps_face_identity_and_safe_fallbacks(self) -> None:
         source = read("code/renderercommon/tr_font.c")

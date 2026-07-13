@@ -377,9 +377,10 @@ static bool Con_DrawHostText( float x, float y, const char *text,
 		return false;
 	}
 
+	re.SetColor( color );
 	re.DrawScaledText( RoundToInt( x ), RoundToInt( y + console_char_height ),
-		text, CONSOLE_HOST_FONT_MONO, Con_GetTtfScale(), 0, nullptr,
-		forceColor, color );
+		text, CONSOLE_HOST_FONT_MONO, Con_GetTtfScale(), -1, nullptr,
+		forceColor );
 	return true;
 }
 
@@ -401,13 +402,13 @@ static bool Con_DrawHostTextSpan( float x, float y, const char *text, int length
 
 
 static float Con_MeasureHostText( const char *text, const char *end ) {
-	float width = 0.0f;
+	float bounds[5] = {};
 
 	if ( con_ttfFontAvailable && re.MeasureScaledText && text ) {
 		re.MeasureScaledText( text, end, CONSOLE_HOST_FONT_MONO,
-			Con_GetTtfScale(), 0, &width, nullptr, nullptr );
+			Con_GetTtfScale(), -1, bounds );
 	}
-	return width;
+	return bounds[2] - bounds[0];
 }
 
 

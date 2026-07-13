@@ -93,6 +93,8 @@ extern cvar_t *r_saveFontData;
 
 extern void R_IssuePendingRenderCommands( void );
 extern qhandle_t RE_RegisterShaderNoMip( const char *name );
+extern void R_InitHostFonts( void );
+extern void R_DoneHostFonts( void );
 
 #ifdef BUILD_FREETYPE
 #include <ft2build.h>
@@ -115,6 +117,7 @@ FT_Library ftLibrary = NULL;
 static int registeredFontCount = 0;
 static fontInfo_t registeredFont[MAX_FONTS];
 
+#if 0 /* Replaced by the retail FontStash/STB host lane in tr_font_stash.c. */
 /*
  * Quake Live's native modules use a renderer-owned UTF-8 text service in
  * addition to the legacy fontInfo_t ABI.  Keep that service independent of
@@ -903,6 +906,7 @@ void RE_MeasureScaledText( const char *text, const char *end, int fontHandle,
 	(void)text; (void)end; (void)fontHandle; (void)scale; (void)limit;
 #endif
 }
+#endif /* retired FreeType host approximation */
 
 #ifdef BUILD_FREETYPE
 void R_GetGlyphInfo(FT_GlyphSlot glyph, int *left, int *right, int *width, int *top, int *bottom, int *height, int *pitch) {
@@ -1542,15 +1546,15 @@ void R_InitFreeType(void) {
 	if (FT_Init_FreeType( &ftLibrary )) {
 		ri.Printf(PRINT_WARNING, "R_InitFreeType: Unable to initialize FreeType.\n");
 	}
-	QL_InitHostFonts();
 #endif
+	R_InitHostFonts();
 	registeredFontCount = 0;
 }
 
 
 void R_DoneFreeType(void) {
+	R_DoneHostFonts();
 #ifdef BUILD_FREETYPE
-	QL_ResetHostFonts();
 	if (ftLibrary) {
 		FT_Done_FreeType( ftLibrary );
 		ftLibrary = NULL;

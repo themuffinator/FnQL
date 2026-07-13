@@ -8,7 +8,7 @@ For HUD, menu, and cinematic presentation controls, see the [Aspect Correction g
 
 If you just want the short version: you can choose whether the console stays full-width or centered, whether it scrolls instantly or smoothly, how it looks, and how much modern input help you want while typing.
 
-Console-owned text uses Quake Live's bundled `fonts/droidsansmono.ttf` through the renderer's FreeType path. This covers scrollback, input, completion results, notify lines, live chat, and the clock/version labels. FnQL uses retail QL's 12×24 base cell and half-size default geometry, exposed as the normalized `con_scale 1`; at the observed 768-pixel retail reference height this is a 6×12 cell. Font sizes use ascender-to-descender semantics, integer mono advances, and a bottom-of-cell baseline. If FreeType is unavailable or no retail TTF can be mounted, FnQL falls back to the legacy bitmap charset so the console remains usable.
+Console-owned text uses Quake Live's bundled `fonts/droidsansmono.ttf` through the renderer's retail-compatible FontStash/STB path. This covers scrollback, input, completion results, notify lines, live chat, and the clock/version labels. FnQL uses retail QL's 12×24 base cell and half-size default geometry, exposed as the normalized `con_scale 1`; at the observed 768-pixel retail reference height this is a 6×12 cell. Font sizes, baselines, glyph bounds, mono advances, kerning, and ascender/descender handling come from the same historical rasterizer family as retail. If the host TTF lane is unavailable or no retail TTF can be mounted, FnQL falls back to the legacy bitmap charset so the console remains usable.
 
 - `con_screenExtents 0`: Use the full screen width for the console display.
 - `con_screenExtents 1`: Keep the entire console display in centered 4:3 space.
@@ -46,7 +46,7 @@ Console-owned text uses Quake Live's bundled `fonts/droidsansmono.ttf` through t
 - `con_scaleUniform` changes the console from native-pixel font sizing to retail QL's observed height-derived 768-reference scaling without forcing the console itself to use centered extents.
 - Character width and height are derived from retail QL's 12×24 reference cell and the active console scaling mode instead of being treated as fixed screen pixels.
 - `con_scale` affects console-owned TTF text only; client bitmap overlays retain their own retail/FnQ3 sizing contract.
-- TTF baselines stay at the bottom of each cell, as in retail. The renderer converts the requested ascender-to-descender span to each face's em size, so ascenders and descenders fit the intended row without ad-hoc vertical offsets.
+- TTF baselines stay at the bottom of each cell, as in retail. The renderer applies retail FontStash's tenths truncation, STB pixel-height scaling, integer quad placement, and visual glyph bounds without ad-hoc vertical offsets.
 - Console line width, prompt width, visible page size, scroll paging, and input field width are recomputed from the current character metrics and the active console extents.
 - With `con_screenExtents 0`, uniform font scaling still uses the full console width.
 - With `con_screenExtents 1`, the entire console display, including its background and text block, is centered in 4:3 space.

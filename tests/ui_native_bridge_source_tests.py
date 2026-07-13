@@ -242,8 +242,10 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
         self.assertIn("void\tRE_MeasureScaledText(", client_h)
         self.assertIn("RE_DrawScaledText( x, y, text, fontHandle, scale, limit, maxX", cl_ui)
         self.assertIn("ql_ui_currentColor", cl_ui)
-        self.assertIn("RE_MeasureScaledText( text, end, fontHandle, scale, limit, &width, &height, &left );", cl_ui)
-        self.assertIn("fnql::font::WriteMeasureBounds( outLeft, left, width, height );", cl_ui)
+        self.assertIn("RE_MeasureScaledText( text, end, fontHandle, scale, limit, bounds );", cl_ui)
+        self.assertIn("fnql::font::CopyMeasureBounds( outLeft, bounds );", cl_ui)
+        self.assertIn("width = bounds[2] - bounds[0];", cl_ui)
+        self.assertIn("height = bounds[4];", cl_ui)
         self.assertIn("QL_UI_PackFloatBits64( width, height )", cl_ui)
         self.assertNotIn("QL_UI_MeasureFallbackText", cl_ui)
 

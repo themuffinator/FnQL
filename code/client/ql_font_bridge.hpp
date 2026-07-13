@@ -18,19 +18,12 @@ version.
 
 namespace fnql::font {
 
-// Retail native UI/cgame pass storage for five floats through the argument
-// historically named outLeft. The packed return still carries width/height.
-inline void WriteMeasureBounds( float *bounds, float left, float width,
-	float ascent ) noexcept {
-	if ( !bounds ) {
+inline void CopyMeasureBounds( float *destination, const float *source ) noexcept {
+	if ( !destination || !source ) {
 		return;
 	}
 
-	bounds[ 0 ] = left;
-	bounds[ 1 ] = 0.0f;
-	bounds[ 2 ] = left + width;
-	bounds[ 3 ] = 0.0f;
-	bounds[ 4 ] = ascent;
+	std::memcpy( destination, source, sizeof( float ) * 5 );
 }
 
 inline bool IsUtf8ContinuationByte( unsigned char byte ) noexcept {

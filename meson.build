@@ -302,6 +302,7 @@ botlib_src = [
 
 renderer_common_src = [
   'code/renderercommon/tr_font.c',
+  'code/renderercommon/tr_font_stash.c',
   'code/renderercommon/tr_image_bmp.c',
   'code/renderercommon/tr_image_jpg.c',
   'code/renderercommon/tr_image_pcx.c',
@@ -464,6 +465,19 @@ copy_runtime_files = []
 thread_dep = dependency('threads')
 client_deps += thread_dep
 server_deps += thread_dep
+
+fontstash_dep = dependency('fontstash',
+  required: get_option('build-client'),
+  fallback: 'fontstash',
+)
+if fontstash_dep.found()
+  # Retail Quake Live's retained host-text lane uses the 2014 FontStash/STB
+  # implementation. Keep it separate from the classic FreeType fontInfo_t lane.
+  common_c_args += ['-DBUILD_FONTSTASH']
+  renderer_deps += fontstash_dep
+  # Static-renderer builds extract renderer objects into the client target.
+  client_deps += fontstash_dep
+endif
 
 freetype_dep = dependency('freetype2',
   required: get_option('build-client'),

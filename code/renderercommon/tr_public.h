@@ -25,7 +25,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "tr_types.h"
 #include "vulkan/vulkan.h"
 
-#define	REF_API_VERSION		11
+#define	REF_API_VERSION		12
 
 //
 // these are the functions exported by the refresh module
@@ -108,9 +108,9 @@ typedef struct {
 #endif
 	void	(*RegisterFont)(const char *fontName, int pointSize, fontInfo_t *font);
 	void	(*DrawScaledText)( int x, int y, const char *text, int fontHandle, float scale,
-		int limit, float *maxX, qboolean forceColor, const float *baseColor );
+		int limit, float *maxX, qboolean forceColor );
 	void	(*MeasureScaledText)( const char *text, const char *end, int fontHandle, float scale,
-		int limit, float *outWidth, float *outHeight, float *outLeft );
+		int limit, float *bounds );
 	qboolean (*GetScaledFontMetrics)( int fontHandle, float scale, float *outAscent,
 		float *outDescent, float *outLineHeight );
 	qhandle_t (*GetFontAtlasDebugShader)( int *outWidth, int *outHeight );

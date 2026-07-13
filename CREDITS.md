@@ -31,6 +31,9 @@ from other projects:
   the published Quake Live beta encrypted `.pk3` XOR table reference.
 - [DarkMatter-Q2](https://github.com/Paril/DarkMatter-Q2) for cross-checking
   Quake II `.pak` and `.wal` compatibility support.
+- Mikko Mononen's [FontStash](https://github.com/memononen/fontstash) and Sean
+  Barrett's `stb_truetype` for the pinned historical rasterizer used by the
+  retail-compatible host text path.
 
 ## Project thanks
 

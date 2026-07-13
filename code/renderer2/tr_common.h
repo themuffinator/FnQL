@@ -128,8 +128,8 @@ qhandle_t RE_RegisterShaderFromImage(const char *name, int lightmapIndex, image_
 void R_InitFreeType( void );
 void R_DoneFreeType( void );
 void RE_RegisterFont(const char *fontName, int pointSize, fontInfo_t *font);
-void RE_DrawScaledText( int x, int y, const char *text, int fontHandle, float scale, int limit, float *maxX, qboolean forceColor, const float *baseColor );
-void RE_MeasureScaledText( const char *text, const char *end, int fontHandle, float scale, int limit, float *outWidth, float *outHeight, float *outLeft );
+void RE_DrawScaledText( int x, int y, const char *text, int fontHandle, float scale, int limit, float *maxX, qboolean forceColor );
+void RE_MeasureScaledText( const char *text, const char *end, int fontHandle, float scale, int limit, float *bounds );
 qboolean RE_GetScaledFontMetrics( int fontHandle, float scale, float *outAscent, float *outDescent, float *outLineHeight );
 qhandle_t RE_GetFontAtlasDebugShader( int *outWidth, int *outHeight );
 

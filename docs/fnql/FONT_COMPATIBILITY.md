@@ -15,39 +15,42 @@ Observed in the legitimate Steam `baseq3/pak00.pk3` fixture on 2026-07-11:
 - `fonts/droidsansmono.ttf` (117,072 bytes)
 - `fonts/droidsansfallbackfull.ttf` (4,033,420 bytes)
 
-Static QLSRP comparison shows that retail host text treats font handles 0, 1,
-and 2 as the normal, sans, and mono face slots; decodes UTF-8; consumes only
-`^0` through `^7` as color controls; rounds requested sizes to tenths; and
-probes sans, bundled Unicode, and Windows Unicode fallbacks after the requested
-face. The retail import's integer text argument is a glyph-count limit. Its
-float pointer is the in/out clip boundary or measured extent; it is not the
-integer X limit used by FnQL's former placeholder.
+Static retail executable comparison shows that host text uses the historical
+FontStash/STB rasterizer, treats font handles 0, 1, and 2 as the normal, sans,
+and mono face slots, decodes UTF-8, consumes only `^0` through `^7` as color
+controls, truncates requested sizes to tenths, and probes sans, bundled Unicode,
+and Windows Unicode fallbacks after the requested face. The retail import's
+integer text argument is a glyph-count limit: `-1` is unlimited, `0` draws no
+glyphs, and positive values count decoded glyphs. A non-null float pointer is
+always an in/out clip boundary. Measurement returns the exact five-float visual
+bounds packet: left, top, right, bottom, and ascent.
 
 ## FnQL implementation
 
-The renderer owns the FreeType faces and a lazy retained atlas. Its CPU-side
-storage is the retail one-byte alpha plane: it begins at 512x512, preserves
-pixels and glyph coordinates while growing to 1024x1024 and then 2048x1024,
-and flushes the cache only when that cap is full. Renderer commands are drained
-before a resize or flush. Each backend receives an RGBA upload at its existing
-texture boundary, avoiding a new backend-specific image format while retaining
-the retail atlas lifecycle and alpha values. Glyphs are keyed by face, Unicode
-scalar, and the retail tenth-point size. Malformed UTF-8 consumes one byte so
-parsing always progresses. Missing faces, glyphs, atlas capacity, and optional
-Windows fonts fail locally and retain a no-FreeType charset fallback instead
-of aborting renderer startup.
+The renderer owns the pinned 2014 FontStash implementation and its bundled
+`stb_truetype`, independently adapted to FnQL's renderer interfaces. It uses
+retail's 128 KiB STB scratch buffer and lazy one-byte alpha atlas, beginning at
+512x512, doubling both axes through 1024x1024 and 2048x1024, then resetting at
+the cap. Each backend receives an unscaled RGBA subimage at its existing texture
+boundary, retaining the retail alpha values while preserving FnQL's classic
+OpenGL, OpenGL2, GLx, and Vulkan paths. FontStash owns the retail skyline
+packing, glyph padding, integer quad placement, kerning, and face metrics.
+Malformed UTF-8 is replaced while parsing always progresses. Missing faces,
+glyphs, atlas capacity, and optional Windows fonts fail locally and retain a
+charset fallback instead of aborting renderer startup. The inherited
+`fontInfo_t` registration ABI remains on FreeType as a separate classic lane.
 
 The engine console selects retail host font handle 2
 (`fonts/droidsansmono.ttf`) for scrollback, input, completion, notify, live
 chat, clock, and version text. It retains retail QL's 12x24 base cell and
 half-size default geometry, exposed as normalized `con_scale 1` (a 6x12 cell
-at the observed 768-pixel retail reference height), bottom-of-cell baseline, integer mono advances, and text-run color
+at the observed 768-pixel retail reference height), bottom-of-cell baseline, FontStash mono advances, and text-run color
 handling. Editable console and chat windows count Unicode characters while
 retaining the retail byte-offset `field_t` ABI; cursor placement, mouse hit
 testing, selections, and drag/drop use measured TTF prefixes and never split a
-UTF-8 sequence. Host font sizes represent the ascender-to-descender span and are
-converted to FreeType em sizes per face; rounded `FT_Size` metrics are not fed
-back into console row geometry. FnQL's selection, mouse hit testing, wrapping,
+UTF-8 sequence. Host sizes use retail's STB pixel-height scale, tenths
+truncation, baseline, and real glyph bounds; renderer metrics are not fed back
+into console row geometry. FnQL's selection, mouse hit testing, wrapping,
 completion popup, smooth scroll, fade, clock, configurable extents, and larger
 archived scales remain layered on that retail contract. The bitmap charset
 remains an availability fallback only. Console cell metrics are private to the
@@ -67,16 +70,15 @@ bundled fallback without assuming a system font layout.
 ## Regression gates
 
 - `fnql_ql_font_text` validates bounded UTF-8 decoding, retail color controls,
-  and size quantization.
+  and the exact five-float bounds bridge.
 - `fnql_ql_font_source` validates face order, renderer exports, ABI semantics,
   retained atlas growth/reset/debug configuration, bounded fallback behavior,
   and the console's mono-TTF preference.
 - Native validation builds the client plus classic OpenGL, OpenGL2, GLX, and
   Vulkan renderer modules.
 - The retail smoke probe must always use `+set r_fullscreen 0`; successful
-  initialization logs `QL fonts: retail TTF host text enabled` after mounting
-  the four Steam fonts from `pak00.pk3`; a rendered host-text path then logs
-  creation of the 512x512 retained atlas at developer verbosity. The retail
+  initialization logs `QL fonts: retail FontStash/STB host text enabled` after
+  mounting the four Steam fonts from `pak00.pk3`. The retail
   `r_debugFontAtlas 1` diagnostic is available through the same client draw
   boundary for classic OpenGL, OpenGL2, GLX, and Vulkan.
 

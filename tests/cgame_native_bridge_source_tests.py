@@ -187,8 +187,10 @@ class CGameNativeBridgeSourceTests(unittest.TestCase):
         self.assertIn("re.GetScaledFontMetrics( fontHandle, scale", cl_scrn)
         self.assertIn("re.DrawScaledText( x, y, text, fontHandle, scale, limit, outMaxX", cl_scrn)
         self.assertIn("RE_DrawScaledText( x, y, text, fontHandle, scale, limit, maxX", cl_cgame)
-        self.assertIn("RE_MeasureScaledText( text, end, fontHandle, scale, limit, &width, &height, &left );", cl_cgame)
-        self.assertIn("fnql::font::WriteMeasureBounds( outLeft, left, width, height );", cl_cgame)
+        self.assertIn("RE_MeasureScaledText( text, end, fontHandle, scale, limit, bounds );", cl_cgame)
+        self.assertIn("fnql::font::CopyMeasureBounds( outLeft, bounds );", cl_cgame)
+        self.assertIn("width = bounds[2] - bounds[0];", cl_cgame)
+        self.assertIn("height = bounds[4];", cl_cgame)
         self.assertNotIn("QL_CG_MeasureFallbackText", cl_cgame)
 
     def test_console_chat_field_uses_native_cgame_geometry_exports(self) -> None:

@@ -616,7 +616,7 @@ void	SCR_DrawSmallStringExt( int x, int y, const char *string, const float *setC
 void	SCR_DrawSmallChar( int x, int y, int ch );
 void	SCR_DrawSmallString( int x, int y, const char *s, int len );
 void	RE_DrawScaledText( int x, int y, const char *text, int fontHandle, float scale, int limit, float *maxX, qboolean forceColor, const float *baseColor );
-void	RE_MeasureScaledText( const char *text, const char *end, int fontHandle, float scale, int limit, float *outWidth, float *outHeight, float *outLeft );
+void	RE_MeasureScaledText( const char *text, const char *end, int fontHandle, float scale, int limit, float *bounds );
 
 //
 // cl_cin.cpp

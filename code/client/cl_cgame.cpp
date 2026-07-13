@@ -1764,12 +1764,14 @@ static void QDECL QL_CG_trap_DrawScaledText( int x, int y, const char *text, int
 
 static uint64_t QDECL QL_CG_trap_MeasureText( const char *text, const char *end, int fontHandle,
 		float scale, int limit, float *outLeft ) {
+	float bounds[5] = {};
 	float width;
 	float height;
-	float left;
 
-	RE_MeasureScaledText( text, end, fontHandle, scale, limit, &width, &height, &left );
-	fnql::font::WriteMeasureBounds( outLeft, left, width, height );
+	RE_MeasureScaledText( text, end, fontHandle, scale, limit, bounds );
+	fnql::font::CopyMeasureBounds( outLeft, bounds );
+	width = bounds[2] - bounds[0];
+	height = bounds[4];
 
 	return QL_CG_PackFloatBits64( width, height );
 }

@@ -1,0 +1,7 @@
+[wrap-git]
+url = https://github.com/memononen/fontstash.git
+revision = 7e837c205fde6ac416685131653e1f3c722bb027
+patch_directory = fontstash
+
+[provide]
+dependency_names = fontstash
