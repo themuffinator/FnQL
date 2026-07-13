@@ -22,6 +22,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // cl_webui.cpp -- Quake Live WebUI/Awesomium host wiring
 
 #include "client.h"
+#include "../server/server.h"
 #include "awesomium_backend_win32.hpp"
 #include "webui_backend.hpp"
 #include "../platform/fnql_steam.h"
@@ -33,6 +34,8 @@ extern "C" {
 
 #include <cstdint>
 #include <array>
+#include <limits>
+#include <string>
 
 #if defined( _WIN32 )
 #ifndef WIN32_LEAN_AND_MEAN
@@ -71,7 +74,6 @@ BackendHost &ClientBackendHost() noexcept {
 #define CL_WEB_CATALOG_FILE_LIST_LENGTH 32768
 #define CL_WEB_CATALOG_SYNC_CHUNK_CHARS 8192
 #define CL_WEB_STARTUP_SCRIPT_LENGTH 65536
-#define CL_WEB_MAX_CATALOG_ITEMS 512
 #define CL_WEB_SERVER_LOCAL_REFRESH_WAIT_MSEC 1000
 #define CL_WEB_SERVER_REMOTE_REFRESH_WAIT_MSEC 5000
 #define CL_WEB_SERVER_REFRESH_TIMEOUT_MSEC 15000
@@ -169,6 +171,10 @@ typedef struct {
 static clWebUiState_t cl_webui;
 static clAdvertisementBridgeState_t cl_advertisementBridge;
 
+void CL_WebHost_InvalidateFactoryCatalog( void ) {
+	cl_webui.factoryCatalogSynced = qfalse;
+}
+
 static void CL_WebHost_UpdateOverlayOwnership( void );
 static void CL_WebHost_EnsureStartupBridge( void );
 static void CL_WebHost_UpdateBrowserNativeState( void );
@@ -188,7 +194,7 @@ static qboolean CL_Steam_ResultAccepted( fnqlSteamResult_t result );
 static qboolean CL_Steam_ParseIdentity( const char *text, uint64_t *identity );
 static void CL_WebHost_BuildConfigJson( char *buffer, size_t bufferSize );
 static void CL_WebHost_BuildMapListJson( char *buffer, size_t bufferSize );
-static void CL_WebHost_BuildFactoryListJson( char *buffer, size_t bufferSize );
+static char *CL_WebHost_AllocateFactoryListJson( void );
 static void CL_WebHost_BuildDemoListJson( char *buffer, size_t bufferSize );
 static void CL_WebHost_BuildFriendListJson( char *buffer, size_t bufferSize );
 static void CL_WebHost_ReadClipboardText( char *buffer, size_t bufferSize );
@@ -790,7 +796,7 @@ static qboolean CL_WebUI_EnsureBackendStarted( void ) {
 
 	configJson = static_cast<char *>( Z_Malloc( CL_WEB_CONFIG_JSON_LENGTH ) );
 	mapJson = static_cast<char *>( Z_Malloc( CL_WEB_CATALOG_JSON_LENGTH ) );
-	factoryJson = static_cast<char *>( Z_Malloc( CL_WEB_CATALOG_JSON_LENGTH ) );
+	factoryJson = CL_WebHost_AllocateFactoryListJson();
 	if ( !configJson || !mapJson || !factoryJson ) {
 		if ( configJson ) {
 			Z_Free( configJson );
@@ -808,10 +814,8 @@ static qboolean CL_WebUI_EnsureBackendStarted( void ) {
 
 	configJson[0] = '\0';
 	mapJson[0] = '\0';
-	factoryJson[0] = '\0';
 	CL_WebHost_BuildConfigJson( configJson, CL_WEB_CONFIG_JSON_LENGTH );
 	CL_WebHost_BuildMapListJson( mapJson, CL_WEB_CATALOG_JSON_LENGTH );
-	CL_WebHost_BuildFactoryListJson( factoryJson, CL_WEB_CATALOG_JSON_LENGTH );
 	started = CL_Awesomium_Startup(
 		runtimePath,
 		basePath,
@@ -862,14 +866,8 @@ static void CL_WebHost_ClearTooltip( void ) {
 	}
 }
 
-static void CL_WebUI_ClearBrowserState( void ) {
-	CL_WebHost_ClearTooltip();
-	CL_WebHost_ClearCursorOverride();
-	cl_webui.browserVisible = qfalse;
-	cl_webui.browserActive = qfalse;
+static void CL_WebHost_InvalidateDocumentSnapshots( void ) {
 	cl_webui.startupBridgeInjected = qfalse;
-	cl_webui.keyCaptureArmed = qfalse;
-	cl_webui.cursorPositionValid = qfalse;
 	cl_webui.nextBridgeRetryFrame = 0;
 	cl_webui.nextNativeRequestPollFrame = 0;
 	cl_webui.nextConfigSnapshotFrame = 0;
@@ -877,6 +875,16 @@ static void CL_WebUI_ClearBrowserState( void ) {
 	cl_webui.demoSnapshotSynced = qfalse;
 	cl_webui.mapCatalogSynced = qfalse;
 	cl_webui.factoryCatalogSynced = qfalse;
+}
+
+static void CL_WebUI_ClearBrowserState( void ) {
+	CL_WebHost_ClearTooltip();
+	CL_WebHost_ClearCursorOverride();
+	cl_webui.browserVisible = qfalse;
+	cl_webui.browserActive = qfalse;
+	cl_webui.keyCaptureArmed = qfalse;
+	cl_webui.cursorPositionValid = qfalse;
+	CL_WebHost_InvalidateDocumentSnapshots();
 	cl_webui.pendingHash[0] = '\0';
 	cl_webui.currentUrl[0] = '\0';
 	Key_SetCatcher( Key_GetCatcher() & ~KEYCATCH_BROWSER );
@@ -1199,13 +1207,7 @@ static qboolean CL_WebHost_OpenRequestedURL( const char *requestedUrl, const cha
 
 	cl_webui.browserVisible = qtrue;
 	cl_webui.browserActive = qtrue;
-	cl_webui.startupBridgeInjected = qfalse;
-	cl_webui.nextBridgeRetryFrame = 0;
-	cl_webui.configSnapshotSynced = qfalse;
-	cl_webui.demoSnapshotSynced = qfalse;
-	cl_webui.mapCatalogSynced = qfalse;
-	cl_webui.factoryCatalogSynced = qfalse;
-	cl_webui.nextConfigSnapshotFrame = 0;
+	CL_WebHost_InvalidateDocumentSnapshots();
 
 	if ( !CL_WebUI_ServiceAvailable() ) {
 		CL_WebUI_ReportUnavailable( owner ? owner : "qz.OpenURL" );
@@ -1254,8 +1256,7 @@ static void CL_Web_BrowserActive_f( void ) {
 
 	cl_webui.browserVisible = qtrue;
 	cl_webui.browserActive = qtrue;
-	cl_webui.startupBridgeInjected = qfalse;
-	cl_webui.nextBridgeRetryFrame = 0;
+	CL_WebHost_InvalidateDocumentSnapshots();
 
 	if ( !CL_WebUI_ServiceAvailable() ) {
 		CL_WebUI_ReportUnavailable( "web_browserActive" );
@@ -1302,6 +1303,7 @@ static void CL_Web_Reload_f( void ) {
 		Com_DPrintf( "web_reload ignored: Awesomium/WebUI runtime backend is unavailable.\n" );
 		return;
 	}
+	CL_WebHost_InvalidateDocumentSnapshots();
 	CL_Awesomium_Reload( qtrue );
 	if ( CL_Awesomium_LastError()[0] ) {
 		Com_DPrintf( "web_reload failed: %s\n", CL_Awesomium_LastError() );
@@ -1971,7 +1973,32 @@ void CL_WebHost_HideBrowser( void ) {
 	CL_RefreshOnlineServicesBridgeState();
 }
 
-static void CL_WebHost_BuildStartupBridgeScript( char *buffer, size_t bufferSize ) {
+static std::string CL_WebHost_JsonParseExpression( const char *json ) {
+	const unsigned char *cursor = reinterpret_cast<const unsigned char *>(
+		json && json[0] ? json : "{}" );
+	std::string expression = "JSON.parse('";
+	for ( ; *cursor; ++cursor ) {
+		if ( cursor[0] == 0xe2u && cursor[1] == 0x80u &&
+			( cursor[2] == 0xa8u || cursor[2] == 0xa9u ) ) {
+			expression += cursor[2] == 0xa8u ? "\\u2028" : "\\u2029";
+			cursor += 2;
+			continue;
+		}
+		switch ( *cursor ) {
+		case '\\': expression += "\\\\"; break;
+		case '\'': expression += "\\'"; break;
+		case '\n': expression += "\\n"; break;
+		case '\r': expression += "\\r"; break;
+		case '\t': expression += "\\t"; break;
+		default: expression.push_back( static_cast<char>( *cursor ) ); break;
+		}
+	}
+	expression += "')";
+	return expression;
+}
+
+static void CL_WebHost_BuildStartupBridgeScript( char *buffer, size_t bufferSize,
+		const char *factoryJson ) {
 	if ( !buffer || bufferSize == 0 ) {
 		return;
 	}
@@ -1993,9 +2020,11 @@ static void CL_WebHost_BuildStartupBridgeScript( char *buffer, size_t bufferSize
 		"var queue=function(kind,payload){try{nativeQueue.push(String(kind||'')+'\\n'+String(payload||''));return true;}catch(e){return false;}};"
 		"var queueSocial=function(kind,payload){return queue('social.'+String(kind||''),String(payload||''));};"
 		"var hasOwn=function(o,k){return Object.prototype.hasOwnProperty.call(o,k);};"
+		"var putOwn=function(o,k,v){Object.defineProperty(o,k,{value:v,writable:true,enumerable:true,configurable:true});return v;};"
 		"var objectHasEntries=function(o){for(var k in o){if(hasOwn(o,k)){return true;}}return false;};"
-		"var catalogObject=function(v){var out={};if(!v){return out;}if(typeof v.length==='undefined'){return v;}for(var i=0;i<v.length;i++){var item=v[i]||{};var id=String(item.sysname||item.id||item.title||i);if(!id){continue;}if(!item.id){item.id=id;}if(!item.sysname){item.sysname=id;}out[id]=item;}return out;};"
-		"var addCatalogObjects=function(target,v){var o=catalogObject(v);for(var k in o){if(hasOwn(o,k)){target[k]=o[k];}}return true;};"
+		"var catalogObject=function(v){var out={};if(!v){return out;}if(Object.prototype.toString.call(v)!=='[object Array]'){return v;}for(var i=0;i<v.length;i++){var item=v[i]||{};var id=String(item.sysname||item.id||item.title||i);if(!id){continue;}if(!item.id){item.id=id;}if(!item.sysname){item.sysname=id;}putOwn(out,id,item);}return out;};"
+		"var addCatalogObjects=function(target,v){var o=catalogObject(v);for(var k in o){if(hasOwn(o,k)){putOwn(target,k,o[k]);}}return true;};"
+		"var addFactoryObjects=function(target,v){var i,k,item;if(Object.prototype.toString.call(v)==='[object Array]'){for(i=0;i<v.length;i++){item=v[i];if(item&&typeof item.id!=='undefined'){putOwn(target,String(item.id),item);}}return true;}for(k in v){if(hasOwn(v,k)){putOwn(target,k,v[k]);}}return true;};"
 		"var setNativeCvar=function(n,v){var k=canon(n);if(k){config.cvars[k]=String(v||'');}return true;};"
 		"var setFileExists=function(p,v){fileExistsCache[String(p||'')]=!!v;return true;};"
 		"var setCursorPosition=function(x,y){cursorPosition={x:x|0,y:y|0};return true;};"
@@ -2004,9 +2033,9 @@ static void CL_WebHost_BuildStartupBridgeScript( char *buffer, size_t bufferSize
 		"var setFriendList=function(v){friendList=v||[];friendPrimed=true;config.friends=friendList;return true;};"
 		"var setUGCList=function(v){ugcList=v||[];ugcPrimed=true;config.ugc=ugcList;return true;};"
 		"var setMapList=function(v){var o=catalogObject(v);if(!objectHasEntries(o)){return false;}maps=o;mapPrimed=true;config.maps=maps;return true;};"
-		"var setFactoryList=function(v){var o=catalogObject(v);if(!objectHasEntries(o)){return false;}factories=o;factoryPrimed=true;config.factories=factories;return true;};"
+		"var setFactoryList=function(v){var o=catalogObject(v),k;for(k in factories){if(hasOwn(factories,k)){delete factories[k];}}for(k in o){if(hasOwn(o,k)){putOwn(factories,k,o[k]);}}factoryPrimed=true;config.factories=factories;return true;};"
 		"var beginNativeMaps=function(){pendingNativeMaps={};return true;};var addNativeMaps=function(v){return addCatalogObjects(pendingNativeMaps,v);};var commitNativeMaps=function(){return setMapList(pendingNativeMaps);};"
-		"var beginNativeFactories=function(){pendingNativeFactories={};return true;};var addNativeFactories=function(v){return addCatalogObjects(pendingNativeFactories,v);};var commitNativeFactories=function(){return setFactoryList(pendingNativeFactories);};"
+		"var beginNativeFactories=function(){pendingNativeFactories={};return true;};var addNativeFactories=function(v){return addFactoryObjects(pendingNativeFactories,v);};var commitNativeFactories=function(){return setFactoryList(pendingNativeFactories);};"
 		"var setNativeState=function(s){if(s){nativeState.pakPresent=!!s.pakPresent;nativeState.gameRunning=!!s.gameRunning;}return true;};"
 		"var setNativeConfig=function(c){if(!c){return false;}if(typeof c.appId!=='undefined'){config.appId=c.appId;qz.appId=c.appId;}if(typeof c.steamId!=='undefined'){config.steamId=String(c.steamId||'');qz.steamId=config.steamId;}if(typeof c.playerName!=='undefined'){config.playerName=String(c.playerName||'');qz.playerName=config.playerName;}if(typeof c.playerAvatar!=='undefined'){config.playerAvatar=String(c.playerAvatar||'');qz.playerAvatar=config.playerAvatar;}if(typeof c.playerAvatarUrl!=='undefined'){config.playerAvatarUrl=String(c.playerAvatarUrl||'');qz.playerAvatarUrl=config.playerAvatarUrl;}if(typeof c.playerProfileUrl!=='undefined'){config.playerProfileUrl=String(c.playerProfileUrl||'');qz.playerProfileUrl=config.playerProfileUrl;}if(c.playerProfile){config.playerProfile=c.playerProfile;qz.playerProfile=c.playerProfile;}if(typeof c.onlineServicesMode!=='undefined'){config.onlineServicesMode=String(c.onlineServicesMode||'');}if(typeof c.onlineServicesPolicy!=='undefined'){config.onlineServicesPolicy=String(c.onlineServicesPolicy||'');}if(typeof c.matchmakingProvider!=='undefined'){config.matchmakingProvider=String(c.matchmakingProvider||'');}if(typeof c.matchmakingPolicy!=='undefined'){config.matchmakingPolicy=String(c.matchmakingPolicy||'');}if(typeof c.workshopProvider!=='undefined'){config.workshopProvider=String(c.workshopProvider||'');}if(typeof c.workshopPolicy!=='undefined'){config.workshopPolicy=String(c.workshopPolicy||'');}if(typeof c.version!=='undefined'){config.version=String(c.version||'');}if(typeof c.browserVisible!=='undefined'){config.browserVisible=!!c.browserVisible;}if(typeof c.browserActive!=='undefined'){config.browserActive=!!c.browserActive;}if(typeof c.url!=='undefined'){config.url=String(c.url||'');}if(c.cvars){for(var k in c.cvars){if(hasOwn(c.cvars,k)){setNativeCvar(k,c.cvars[k]);}}}if(c.binds&&typeof c.binds.length!=='undefined'){config.binds=c.binds;}return true;};"
 		"var qz={appId:" STEAMPATH_APPID ",steamId:'0',playerName:'',playerAvatar:'',playerAvatarUrl:'',playerProfileUrl:'',playerProfile:config.playerProfile,"
@@ -2041,6 +2070,33 @@ static void CL_WebHost_BuildStartupBridgeScript( char *buffer, size_t bufferSize
 		"})();",
 		(int)bufferSize
 	);
+
+	// Seed the bridge before retail document scripts call GetFactoryList. Parse
+	// JSON as data so special keys such as __proto__ remain ordinary own keys.
+	static const char prefix[] = "(function(){if(window.__qlr_set_native_factories){window.__qlr_set_native_factories(";
+	static const char suffix[] = ");}})();";
+	const std::string expression = CL_WebHost_JsonParseExpression( factoryJson );
+	const size_t required = strlen( buffer ) + strlen( prefix ) +
+		expression.size() + strlen( suffix ) + 1;
+	if ( required <= bufferSize ) {
+		Q_strcat( buffer, (int)bufferSize, prefix );
+		Q_strcat( buffer, (int)bufferSize, expression.c_str() );
+		Q_strcat( buffer, (int)bufferSize, suffix );
+	}
+}
+
+static char *CL_WebHost_AllocateStartupBridgeScript( const char *factoryJson ) {
+	const std::string expression = CL_WebHost_JsonParseExpression( factoryJson );
+	const size_t required = static_cast<size_t>( CL_WEB_STARTUP_SCRIPT_LENGTH ) +
+		expression.size() + 256u;
+	if ( required > static_cast<size_t>( ( std::numeric_limits<int>::max )() ) ) {
+		return NULL;
+	}
+	char *script = static_cast<char *>( Z_Malloc( static_cast<int>( required ) ) );
+	if ( script ) {
+		CL_WebHost_BuildStartupBridgeScript( script, required, factoryJson );
+	}
+	return script;
 }
 
 static void CL_WebHost_BuildStartupBridgeRetryScript( char *buffer, size_t bufferSize ) {
@@ -2064,14 +2120,17 @@ static qboolean CL_WebHost_InjectStartupBridge( qboolean retryOnly ) {
 		CL_WebHost_BuildStartupBridgeRetryScript(
 			retryScript, sizeof( retryScript ) );
 	} else {
-		script = static_cast<char *>( Z_Malloc( CL_WEB_STARTUP_SCRIPT_LENGTH ) );
+		char *factoryJson = CL_WebHost_AllocateFactoryListJson();
+		script = factoryJson
+			? CL_WebHost_AllocateStartupBridgeScript( factoryJson ) : NULL;
+		if ( factoryJson ) {
+			Z_Free( factoryJson );
+		}
 		if ( !script ) {
 			CL_WebUI_SetLastError( "WebUI bridge reinjection allocation failed.",
 				static_cast<int>( fnql::webui::BackendError::ResourceUnavailable ) );
 			return qfalse;
 		}
-		CL_WebHost_BuildStartupBridgeScript(
-			script, CL_WEB_STARTUP_SCRIPT_LENGTH );
 	}
 
 	executed = CL_Awesomium_ExecuteJavascript( script, "" );
@@ -2094,7 +2153,7 @@ static qboolean CL_WebHost_InjectStartupBridge( qboolean retryOnly ) {
 }
 
 static void CL_WebHost_EnsureStartupBridge( void ) {
-	if ( !CL_WebHost_HasLiveView() ) {
+	if ( !CL_WebHost_HasLiveView() || CL_Awesomium_IsLoading() ) {
 		return;
 	}
 
@@ -2269,32 +2328,39 @@ static void CL_WebHost_PublishDynamicJsonEvent( const char *eventName,
 	Z_Free( script );
 }
 
-static void CL_WebHost_UpdateBrowserCatalogCache( const char *setterName, const char *catalogJson ) {
-	const char *json;
+static qboolean CL_WebHost_UpdateBrowserCatalogCache( const char *setterName, const char *catalogJson ) {
 	char *script;
 	int scriptSize;
+	int result;
 
 	if ( !setterName || !setterName[0] || !CL_WebHost_HasLiveView() || !CL_WebHost_HasBoundWindowObject() ) {
-		return;
+		return qfalse;
 	}
 
-	json = ( catalogJson && catalogJson[0] ) ? catalogJson : "[]";
-	scriptSize = (int)strlen( setterName ) * 2 + (int)strlen( json ) + 128;
+	const std::string expression = CL_WebHost_JsonParseExpression(
+		( catalogJson && catalogJson[0] ) ? catalogJson : "[]" );
+	const size_t required = strlen( setterName ) * 2u + expression.size() + 128u;
+	if ( required > static_cast<size_t>( ( std::numeric_limits<int>::max )() ) ) {
+		return qfalse;
+	}
+	scriptSize = static_cast<int>( required );
 	script = (char *)Z_Malloc( scriptSize );
 	if ( !script ) {
-		return;
+		return qfalse;
 	}
 
 	Com_sprintf(
 		script,
 		scriptSize,
-		"(function(){if(window.%s){window.%s(%s);}})();",
+		"(function(){return(window.%s&&window.%s(%s))?1:0;})()",
 		setterName,
 		setterName,
-		json
+		expression.c_str()
 	);
-	CL_Awesomium_ExecuteJavascript( script, "" );
+	result = 0;
+	const qboolean executed = CL_Awesomium_ExecuteJavascriptInteger( script, "", &result );
 	Z_Free( script );
+	return ( executed && result != 0 ) ? qtrue : qfalse;
 }
 
 static qboolean CL_WebHost_ExecuteCatalogBatch( const char *addName, const char *entries, size_t entryLength ) {
@@ -2310,7 +2376,15 @@ static qboolean CL_WebHost_ExecuteCatalogBatch( const char *addName, const char 
 		return qfalse;
 	}
 
-	scriptSize = (int)strlen( addName ) * 2 + (int)entryLength + 160;
+	std::string payload = "[";
+	payload.append( entries, entryLength );
+	payload.push_back( ']' );
+	const std::string expression = CL_WebHost_JsonParseExpression( payload.c_str() );
+	const size_t required = strlen( addName ) * 2u + expression.size() + 160u;
+	if ( required > static_cast<size_t>( ( std::numeric_limits<int>::max )() ) ) {
+		return qfalse;
+	}
+	scriptSize = static_cast<int>( required );
 	script = (char *)Z_Malloc( scriptSize );
 	if ( !script ) {
 		return qfalse;
@@ -2319,11 +2393,10 @@ static qboolean CL_WebHost_ExecuteCatalogBatch( const char *addName, const char 
 	Com_sprintf(
 		script,
 		scriptSize,
-		"(function(){return(window.%s&&window.%s([%.*s]))?1:0;})()",
+		"(function(){return(window.%s&&window.%s(%s))?1:0;})()",
 		addName,
 		addName,
-		(int)entryLength,
-		entries
+		expression.c_str()
 	);
 	executed = ( CL_Awesomium_ExecuteJavascriptInteger( script, "", &result ) && result != 0 ) ? qtrue : qfalse;
 	Z_Free( script );
@@ -2444,12 +2517,91 @@ static void CL_WebHost_UpdateBrowserMapList( const char *mapListJson ) {
 	CL_WebHost_UpdateBrowserCatalogCache( "__qlr_set_native_maps", mapListJson );
 }
 
-static void CL_WebHost_UpdateBrowserFactoryList( const char *factoryListJson ) {
-	if ( CL_WebHost_UpdateBrowserCatalogCacheBatched( "__qlr_begin_native_factories", "__qlr_add_native_factories", "__qlr_commit_native_factories", factoryListJson ) ) {
-		return;
+static qboolean CL_WebHost_UpdateBrowserFactoryList( const char *factoryListJson ) {
+	const char *json = factoryListJson && factoryListJson[0]
+		? factoryListJson : "{}";
+	const size_t jsonLength = strlen( json );
+	if ( jsonLength < 2 || json[0] != '{' || json[jsonLength - 1] != '}' ||
+		!CL_WebHost_HasLiveView() || !CL_WebHost_HasBoundWindowObject() ) {
+		return qfalse;
 	}
 
-	CL_WebHost_UpdateBrowserCatalogCache( "__qlr_set_native_factories", factoryListJson );
+	int result = 0;
+	if ( !CL_Awesomium_ExecuteJavascriptInteger(
+			"(function(){return(window.__qlr_begin_native_factories&&window.__qlr_begin_native_factories())?1:0;})()",
+			"", &result ) || result == 0 ) {
+		return qfalse;
+	}
+
+	std::string batch;
+	const char *const objectEnd = json + jsonLength - 1;
+	const char *valueStart = NULL;
+	int depth = 0;
+	qboolean inString = qfalse;
+	qboolean escaped = qfalse;
+	auto flush = [&]() -> qboolean {
+		if ( batch.empty() ) {
+			return qtrue;
+		}
+		const qboolean ok = CL_WebHost_ExecuteCatalogBatch(
+			"__qlr_add_native_factories", batch.data(), batch.size() );
+		batch.clear();
+		return ok;
+	};
+	auto appendValue = [&]( const char *start, const char *end ) -> qboolean {
+		while ( start < end && ( *start == ' ' || *start == '\t' ||
+			*start == '\r' || *start == '\n' ) ) ++start;
+		while ( end > start && ( end[-1] == ' ' || end[-1] == '\t' ||
+			end[-1] == '\r' || end[-1] == '\n' ) ) --end;
+		if ( start == end ) {
+			return qfalse;
+		}
+		const size_t length = static_cast<size_t>( end - start );
+		if ( !batch.empty() && batch.size() + 1u + length >
+				CL_WEB_CATALOG_SYNC_CHUNK_CHARS && !flush() ) {
+			return qfalse;
+		}
+		if ( !batch.empty() ) batch.push_back( ',' );
+		batch.append( start, length );
+		return qtrue;
+	};
+
+	for ( const char *cursor = json + 1; cursor <= objectEnd; ++cursor ) {
+		if ( cursor == objectEnd ) {
+			if ( valueStart && !appendValue( valueStart, cursor ) ) return qfalse;
+			break;
+		}
+		const char ch = *cursor;
+		if ( inString ) {
+			if ( escaped ) escaped = qfalse;
+			else if ( ch == '\\' ) escaped = qtrue;
+			else if ( ch == '"' ) inString = qfalse;
+			continue;
+		}
+		if ( ch == '"' ) {
+			inString = qtrue;
+			continue;
+		}
+		if ( ch == ':' && depth == 0 && !valueStart ) {
+			valueStart = cursor + 1;
+			continue;
+		}
+		if ( ch == '{' || ch == '[' ) ++depth;
+		else if ( ch == '}' || ch == ']' ) {
+			if ( depth == 0 ) return qfalse;
+			--depth;
+		} else if ( ch == ',' && depth == 0 ) {
+			if ( !valueStart || !appendValue( valueStart, cursor ) ) return qfalse;
+			valueStart = NULL;
+		}
+	}
+	if ( inString || depth != 0 || !flush() ) {
+		return qfalse;
+	}
+	result = 0;
+	return ( CL_Awesomium_ExecuteJavascriptInteger(
+		"(function(){return(window.__qlr_commit_native_factories&&window.__qlr_commit_native_factories())?1:0;})()",
+		"", &result ) && result != 0 ) ? qtrue : qfalse;
 }
 
 static qboolean CL_WebHost_IsGameRunning( void ) {
@@ -2653,285 +2805,20 @@ static void CL_WebHost_BuildMapListJson( char *buffer, size_t bufferSize ) {
 	Q_strcat( buffer, (int)bufferSize, "]" );
 }
 
-static qboolean CL_WebHost_CatalogIdSeen( char seenIds[][MAX_QPATH], int seenCount, const char *id ) {
-	if ( !seenIds || !id || !id[0] ) {
-		return qfalse;
-	}
-
-	for ( int i = 0; i < seenCount; ++i ) {
-		if ( !Q_stricmp( seenIds[i], id ) ) {
-			return qtrue;
-		}
-	}
-
-	return qfalse;
-}
-
-static const char *CL_WebHost_FindRangeText( const char *start, const char *end, const char *needle ) {
-	size_t needleLength;
-
-	if ( !start || !end || !needle || !needle[0] || start >= end ) {
+static char *CL_WebHost_AllocateFactoryListJson( void ) {
+	const int bufferSize = SV_FactoryWebCatalogJsonSize();
+	if ( bufferSize < 3 ) {
 		return NULL;
 	}
-
-	needleLength = strlen( needle );
-	for ( const char *cursor = start; cursor + needleLength <= end; ++cursor ) {
-		if ( !Q_strncmp( cursor, needle, (int)needleLength ) ) {
-			return cursor;
-		}
-	}
-
-	return NULL;
-}
-
-static qboolean CL_WebHost_CopyFactoryJsonString( const char *objectStart, const char *objectEnd, const char *key, char *buffer, size_t bufferSize ) {
-	char keyPattern[MAX_QPATH];
-	const char *cursor;
-	char *out;
-	char *limit;
-	qboolean escaped;
-
-	if ( !objectStart || !objectEnd || objectStart >= objectEnd || !key || !buffer || bufferSize == 0 ) {
-		return qfalse;
-	}
-
-	buffer[0] = '\0';
-	Com_sprintf( keyPattern, sizeof( keyPattern ), "\"%s\"", key );
-	cursor = CL_WebHost_FindRangeText( objectStart, objectEnd, keyPattern );
-	if ( !cursor ) {
-		return qfalse;
-	}
-
-	cursor += strlen( keyPattern );
-	while ( cursor < objectEnd && ( *cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n' ) ) {
-		cursor++;
-	}
-	if ( cursor >= objectEnd || *cursor != ':' ) {
-		return qfalse;
-	}
-	cursor++;
-	while ( cursor < objectEnd && ( *cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n' ) ) {
-		cursor++;
-	}
-	if ( cursor >= objectEnd || *cursor != '"' ) {
-		return qfalse;
-	}
-	cursor++;
-
-	out = buffer;
-	limit = buffer + bufferSize - 1;
-	escaped = qfalse;
-	while ( cursor < objectEnd && out < limit ) {
-		char ch = *cursor++;
-
-		if ( escaped ) {
-			*out++ = ch;
-			escaped = qfalse;
-			continue;
-		}
-		if ( ch == '\\' ) {
-			escaped = qtrue;
-			continue;
-		}
-		if ( ch == '"' ) {
-			break;
-		}
-		if ( (unsigned char)ch >= 0x20 ) {
-			*out++ = ch;
-		}
-	}
-	*out = '\0';
-	return buffer[0] ? qtrue : qfalse;
-}
-
-static const char *CL_WebHost_FindFactoryObjectEnd( const char *objectStart, const char *dataEnd ) {
-	const char *cursor;
-	int depth;
-	qboolean inString;
-	qboolean escaped;
-
-	if ( !objectStart || !dataEnd || objectStart >= dataEnd || *objectStart != '{' ) {
+	char *buffer = static_cast<char *>( Z_Malloc( bufferSize ) );
+	if ( !buffer ) {
 		return NULL;
 	}
-
-	depth = 0;
-	inString = qfalse;
-	escaped = qfalse;
-	for ( cursor = objectStart; cursor < dataEnd; ++cursor ) {
-		char ch = *cursor;
-
-		if ( inString ) {
-			if ( escaped ) {
-				escaped = qfalse;
-			} else if ( ch == '\\' ) {
-				escaped = qtrue;
-			} else if ( ch == '"' ) {
-				inString = qfalse;
-			}
-			continue;
-		}
-
-		if ( ch == '"' ) {
-			inString = qtrue;
-		} else if ( ch == '{' ) {
-			depth++;
-		} else if ( ch == '}' ) {
-			depth--;
-			if ( depth == 0 ) {
-				return cursor + 1;
-			}
-		}
+	if ( !SV_FactoryBuildWebCatalogJson( buffer, bufferSize ) ) {
+		Z_Free( buffer );
+		return NULL;
 	}
-
-	return NULL;
-}
-
-static qboolean CL_WebHost_AppendFactoryDefinition( char *buffer, size_t bufferSize, qboolean *first, char seenIds[][MAX_QPATH], int *seenCount, const char *id, const char *title, const char *basegt ) {
-	char escapedId[MAX_QPATH * 2];
-	char escapedTitle[MAX_QPATH * 2];
-	char escapedBasegt[MAX_QPATH * 2];
-
-	if ( !buffer || bufferSize == 0 || !first || !seenIds || !seenCount || !id || !id[0] ) {
-		return qfalse;
-	}
-	if ( *seenCount >= CL_WEB_MAX_CATALOG_ITEMS || CL_WebHost_CatalogIdSeen( seenIds, *seenCount, id ) ) {
-		return qtrue;
-	}
-
-	CL_WebUI_JsonEscape( id, escapedId, sizeof( escapedId ) );
-	CL_WebUI_JsonEscape( ( title && title[0] ) ? title : id, escapedTitle, sizeof( escapedTitle ) );
-	CL_WebUI_JsonEscape( ( basegt && basegt[0] ) ? basegt : "ffa", escapedBasegt, sizeof( escapedBasegt ) );
-	if ( !CL_WebHost_AppendCatalogObjectPrefix( buffer, bufferSize, first ) ||
-		!CL_WebUI_AppendJsonFormattedIfFits(
-			buffer,
-			bufferSize,
-			"{\"id\":\"%s\",\"sysname\":\"%s\",\"title\":\"%s\",\"basegt\":\"%s\",\"settings\":{}}",
-			escapedId,
-			escapedId,
-			escapedTitle,
-			escapedBasegt ) ) {
-		return qfalse;
-	}
-
-	Q_strncpyz( seenIds[*seenCount], id, MAX_QPATH );
-	( *seenCount )++;
-	return qtrue;
-}
-
-static void CL_WebHost_AppendFactoryDefinitionsFromBuffer( const char *filename, const char *data, int dataLength, char *buffer, size_t bufferSize, qboolean *first, char seenIds[][MAX_QPATH], int *seenCount ) {
-	const char *cursor;
-	const char *dataEnd;
-	int startCount;
-
-	if ( !data || dataLength <= 0 || !buffer || !first || !seenIds || !seenCount ) {
-		return;
-	}
-
-	startCount = *seenCount;
-	cursor = data;
-	dataEnd = data + dataLength;
-	while ( cursor < dataEnd && *seenCount < CL_WEB_MAX_CATALOG_ITEMS ) {
-		const char *objectStart;
-		const char *objectEnd;
-		char id[MAX_QPATH];
-		char title[MAX_QPATH];
-		char basegt[MAX_QPATH];
-
-		objectStart = CL_WebHost_FindRangeText( cursor, dataEnd, "{" );
-		if ( !objectStart ) {
-			break;
-		}
-		objectEnd = CL_WebHost_FindFactoryObjectEnd( objectStart, dataEnd );
-		if ( !objectEnd ) {
-			break;
-		}
-
-		if ( CL_WebHost_CopyFactoryJsonString( objectStart, objectEnd, "id", id, sizeof( id ) ) ||
-			CL_WebHost_CopyFactoryJsonString( objectStart, objectEnd, "sysname", id, sizeof( id ) ) ) {
-			CL_WebHost_CopyFactoryJsonString( objectStart, objectEnd, "title", title, sizeof( title ) );
-			CL_WebHost_CopyFactoryJsonString( objectStart, objectEnd, "basegt", basegt, sizeof( basegt ) );
-			if ( !CL_WebHost_AppendFactoryDefinition( buffer, bufferSize, first, seenIds, seenCount, id, title, basegt ) ) {
-				return;
-			}
-		}
-
-		cursor = objectEnd;
-	}
-
-	if ( *seenCount == startCount && filename && filename[0] ) {
-		char fallbackId[MAX_QPATH];
-		const char *slash;
-		char *extension;
-
-		slash = strrchr( filename, '/' );
-		Q_strncpyz( fallbackId, slash ? slash + 1 : filename, sizeof( fallbackId ) );
-		extension = strrchr( fallbackId, '.' );
-		if ( extension ) {
-			*extension = '\0';
-		}
-		CL_WebHost_AppendFactoryDefinition( buffer, bufferSize, first, seenIds, seenCount, fallbackId, fallbackId, "ffa" );
-	}
-}
-
-static void CL_WebHost_AppendFactoryDefinitionsFromFile( const char *filename, char *buffer, size_t bufferSize, qboolean *first, char seenIds[][MAX_QPATH], int *seenCount ) {
-	void *fileBuffer;
-	int length;
-
-	if ( !filename || !filename[0] ) {
-		return;
-	}
-
-	fileBuffer = NULL;
-	length = FS_ReadFile( filename, &fileBuffer );
-	if ( length <= 0 || !fileBuffer ) {
-		return;
-	}
-
-	CL_WebHost_AppendFactoryDefinitionsFromBuffer( filename, (const char *)fileBuffer, length, buffer, bufferSize, first, seenIds, seenCount );
-	FS_FreeFile( fileBuffer );
-}
-
-static void CL_WebHost_BuildFactoryListJson( char *buffer, size_t bufferSize ) {
-	char fileList[CL_WEB_CATALOG_FILE_LIST_LENGTH];
-	char seenIds[CL_WEB_MAX_CATALOG_ITEMS][MAX_QPATH];
-	char *cursor;
-	int fileCount;
-	int seenCount;
-	qboolean first;
-
-	if ( !buffer || bufferSize == 0 ) {
-		return;
-	}
-
-	Com_Memset( seenIds, 0, sizeof( seenIds ) );
-	buffer[0] = '\0';
-	Q_strcat( buffer, (int)bufferSize, "[" );
-	first = qtrue;
-	seenCount = 0;
-
-	CL_WebHost_AppendFactoryDefinitionsFromFile( "scripts/factories.txt", buffer, bufferSize, &first, seenIds, &seenCount );
-
-	fileCount = FS_GetFileList( "scripts", ".factories", fileList, sizeof( fileList ) );
-	cursor = fileList;
-	for ( int i = 0; i < fileCount && cursor[0] && seenCount < CL_WEB_MAX_CATALOG_ITEMS; ++i ) {
-		char path[MAX_QPATH];
-
-		Com_sprintf( path, sizeof( path ), "scripts/%s", cursor );
-		CL_WebHost_AppendFactoryDefinitionsFromFile( path, buffer, bufferSize, &first, seenIds, &seenCount );
-		cursor += strlen( cursor ) + 1;
-	}
-
-	fileCount = FS_GetFileList( "scripts", ".factory", fileList, sizeof( fileList ) );
-	cursor = fileList;
-	for ( int i = 0; i < fileCount && cursor[0] && seenCount < CL_WEB_MAX_CATALOG_ITEMS; ++i ) {
-		char path[MAX_QPATH];
-
-		Com_sprintf( path, sizeof( path ), "scripts/%s", cursor );
-		CL_WebHost_AppendFactoryDefinitionsFromFile( path, buffer, bufferSize, &first, seenIds, &seenCount );
-		cursor += strlen( cursor ) + 1;
-	}
-
-	Q_strcat( buffer, (int)bufferSize, "]" );
+	return buffer;
 }
 
 static unsigned long long CL_WebHost_SteamIdFromWords( unsigned int identityLow, unsigned int identityHigh ) {
@@ -3300,12 +3187,24 @@ static void CL_WebHost_SyncNativeSnapshots( qboolean force ) {
 		CL_WebHost_UpdateBrowserClipboardCache( clipboardText );
 	}
 
-	if ( !force && cl_webui.configSnapshotSynced && cl_webui.frameSequence < cl_webui.nextConfigSnapshotFrame ) {
+	if ( !force && CL_Awesomium_IsLoading() ) {
+		cl_webui.nextConfigSnapshotFrame = cl_webui.frameSequence + CL_WEB_NATIVE_REQUEST_LOADING_POLL_FRAMES;
 		return;
 	}
 
-	if ( !force && CL_Awesomium_IsLoading() ) {
-		cl_webui.nextConfigSnapshotFrame = cl_webui.frameSequence + CL_WEB_NATIVE_REQUEST_LOADING_POLL_FRAMES;
+	// Catalog invalidation is event-driven and must not wait behind the slower
+	// periodic config snapshot throttle.
+	if ( force || !cl_webui.factoryCatalogSynced ) {
+		char *factoryJson = CL_WebHost_AllocateFactoryListJson();
+		if ( factoryJson ) {
+			cl_webui.factoryCatalogSynced =
+				CL_WebHost_UpdateBrowserFactoryList( factoryJson );
+			Z_Free( factoryJson );
+		}
+	}
+
+	if ( !force && cl_webui.configSnapshotSynced &&
+		cl_webui.frameSequence < cl_webui.nextConfigSnapshotFrame ) {
 		return;
 	}
 
@@ -3328,14 +3227,6 @@ static void CL_WebHost_SyncNativeSnapshots( qboolean force ) {
 		CL_WebHost_BuildMapListJson( mapJson, sizeof( mapJson ) );
 		CL_WebHost_UpdateBrowserMapList( mapJson );
 		cl_webui.mapCatalogSynced = qtrue;
-	}
-
-	if ( force || !cl_webui.factoryCatalogSynced ) {
-		char factoryJson[CL_WEB_CATALOG_JSON_LENGTH];
-
-		CL_WebHost_BuildFactoryListJson( factoryJson, sizeof( factoryJson ) );
-		CL_WebHost_UpdateBrowserFactoryList( factoryJson );
-		cl_webui.factoryCatalogSynced = qtrue;
 	}
 
 	{
@@ -3693,18 +3584,21 @@ static void CL_WebHost_StartServerRefresh( int requestMode, int source ) {
 }
 
 static void CL_WebHost_PublishServerBrowserRefreshEnd( void ) {
+	qboolean releaseSteamRequest;
+
 	if ( !cl_webui.serverRefreshActive ) {
 		return;
 	}
-	if ( cl_webui.serverRefreshSteam ) {
-		if ( cls.realtime >= cl_webui.serverRefreshTimeoutTime ) {
-			FNQL_Steam_CancelServers();
-			CL_WebHost_PublishServerBrowserRefreshEnd();
-		}
-		return;
-	}
 
+	// The provider may synchronously deliver a completion while its request is
+	// being released. Make the terminal state visible first so completion is
+	// one-shot and cannot re-enter this owner.
+	releaseSteamRequest = cl_webui.serverRefreshSteam;
 	cl_webui.serverRefreshActive = qfalse;
+	cl_webui.serverRefreshSteam = qfalse;
+	if ( releaseSteamRequest ) {
+		FNQL_Steam_CancelServers();
+	}
 	CL_WebView_PublishEvent( "servers.refresh.end", NULL );
 }
 
@@ -3713,6 +3607,12 @@ static void CL_WebHost_ServerBrowserFrame( void ) {
 	int count;
 
 	if ( !cl_webui.serverRefreshActive ) {
+		return;
+	}
+	if ( cl_webui.serverRefreshSteam ) {
+		if ( cls.realtime >= cl_webui.serverRefreshTimeoutTime ) {
+			CL_WebHost_PublishServerBrowserRefreshEnd();
+		}
 		return;
 	}
 
@@ -4255,11 +4155,16 @@ qboolean CL_Steam_RequestServers( int requestMode ) {
 
 	CL_WebHost_StartServerRefresh( requestMode, source );
 	CL_WebView_PublishEvent( "servers.refresh.start", NULL );
-	if ( FNQL_Steam_Available( FNQL_STEAM_CAP_SERVER_BROWSER )
-		&& CL_Steam_ResultAccepted( FNQL_Steam_RequestServers(
-			(uint32_t)requestMode, (uint32_t)atoi( STEAMPATH_APPID ) ) ) ) {
+	if ( FNQL_Steam_Available( FNQL_STEAM_CAP_SERVER_BROWSER ) ) {
+		// The provider is allowed to synchronously notify the event sink. Claim
+		// ownership before entering it so an immediate completion cannot be
+		// mistaken for the legacy source-browser fallback.
 		cl_webui.serverRefreshSteam = qtrue;
-		return qtrue;
+		if ( CL_Steam_ResultAccepted( FNQL_Steam_RequestServers(
+			(uint32_t)requestMode, (uint32_t)atoi( STEAMPATH_APPID ) ) ) ) {
+			return qtrue;
+		}
+		cl_webui.serverRefreshSteam = qfalse;
 	}
 	CL_WebHost_PublishServerBrowserCompatibility( requestMode, source );
 	if ( source == AS_LOCAL ) {
@@ -5805,11 +5710,12 @@ static void CL_WebHost_ProcessNativeJavascriptRequest( const char *request ) {
 	}
 
 	if ( !Q_stricmp( kind, "factories" ) ) {
-		char factoryJson[CL_WEB_CATALOG_JSON_LENGTH];
-
-		CL_WebHost_BuildFactoryListJson( factoryJson, sizeof( factoryJson ) );
-		CL_WebHost_UpdateBrowserFactoryList( factoryJson );
-		cl_webui.factoryCatalogSynced = qtrue;
+		char *factoryJson = CL_WebHost_AllocateFactoryListJson();
+		if ( factoryJson ) {
+			cl_webui.factoryCatalogSynced =
+				CL_WebHost_UpdateBrowserFactoryList( factoryJson );
+			Z_Free( factoryJson );
+		}
 		return;
 	}
 
@@ -6179,7 +6085,30 @@ static int CL_WebHost_MapMouseButton( int key ) {
 	}
 }
 
+static int CL_WebHost_MapCursorCoordinate( int coordinate, int sourceDimension,
+	int targetDimension ) {
+	if ( sourceDimension <= 0 || targetDimension <= 0 ) {
+		return coordinate;
+	}
+
+	if ( coordinate < 0 ) {
+		coordinate = 0;
+	} else if ( coordinate >= sourceDimension ) {
+		coordinate = sourceDimension - 1;
+	}
+
+	return (int)( ( (double)coordinate / (double)sourceDimension )
+		* (double)targetDimension + 0.5 );
+}
+
 void CL_WebView_OnMouseMove( int x, int y ) {
+	const fnql::webui::BackendStatus status =
+		fnql::webui::ClientBackendHost().Status();
+
+	x = CL_WebHost_MapCursorCoordinate( x, cls.glconfig.vidWidth,
+		status.surface.width );
+	y = CL_WebHost_MapCursorCoordinate( y, cls.glconfig.vidHeight,
+		status.surface.height );
 	CL_WebHost_SetCursorPosition( x, y );
 
 	if ( CL_WebHost_BrowserAcceptsInput() ) {
@@ -6338,14 +6267,15 @@ qboolean CL_Awesomium_Startup( const char *runtimePath, const char *basePath, co
 	parameters.initialMapJson = initialMapJson ? initialMapJson : "";
 	parameters.initialFactoryJson = initialFactoryJson ? initialFactoryJson : "";
 
-	startupScript = static_cast<char *>( Z_Malloc( CL_WEB_STARTUP_SCRIPT_LENGTH ) );
+	// Awesomium forwards this WebConfig script to its helper at process launch.
+	// Keep it bounded; the potentially large retail factory catalog is delivered
+	// after the document is live through the normal snapshot synchronization.
+	startupScript = CL_WebHost_AllocateStartupBridgeScript( NULL );
 	if ( !startupScript ) {
 		return CL_WebUI_RecordBackendResult( fnql::webui::BackendResult::Failure(
 			fnql::webui::BackendError::ResourceUnavailable,
 			"WebUI startup script allocation failed" ) );
 	}
-	CL_WebHost_BuildStartupBridgeScript(
-		startupScript, CL_WEB_STARTUP_SCRIPT_LENGTH );
 	parameters.startupScript = startupScript;
 	started = CL_WebUI_RecordBackendResult(
 		fnql::webui::ClientBackendHost().Start( parameters ) );

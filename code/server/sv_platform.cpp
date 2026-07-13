@@ -47,7 +47,6 @@ void PublishSteamGameServerIdentity( void ) {
 	}
 	SV_SetConfigstring( QL_STEAM_SERVER_ID_CONFIGSTRING,
 		va( "%llu", static_cast<unsigned long long>( steamId ) ) );
-	SV_SetConfigstring( QL_STEAM_REFERENCED_CONFIGSTRING, "" );
 	Com_DPrintf( "Steam GameServer identity published in configstring %d: %llu\n",
 		QL_STEAM_SERVER_ID_CONFIGSTRING,
 		static_cast<unsigned long long>( steamId ) );
@@ -98,6 +97,7 @@ void SteamProviderEvent( const fnqlSteamEvent_t *event, void * ) {
 	if ( event->type == FNQL_STEAM_EVENT_GAME_SERVER_CONNECTED
 		&& event->result == FNQL_STEAM_RESULT_OK ) {
 		PublishSteamGameServerIdentity();
+		SV_PublishWorkshopReferences();
 		PublishSteamGameServerInfo();
 	}
 	SV_HandleSteamProviderEvent( event->type, event->result, event->subject_id );
@@ -166,6 +166,19 @@ void SetReadOnlyStatus( const char *name, const char *value, const char *descrip
 }
 
 } // namespace
+
+void SV_PublishWorkshopReferences( void ) {
+	if ( !com_sv_running || !com_sv_running->integer || sv.state == SS_DEAD ) {
+		return;
+	}
+
+	const char *references = FS_ReferencedWorkshopItems();
+	if ( !references ) {
+		references = "";
+	}
+	Cvar_Set( "sv_referencedSteamworks", references );
+	SV_SetConfigstring( QL_STEAM_REFERENCED_CONFIGSTRING, references );
+}
 
 void SV_RegisterSteamEventSink( void ) {
 	if ( !FNQL_Steam_AddEventSink( SteamProviderEvent, nullptr ) ) {

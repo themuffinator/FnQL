@@ -19,9 +19,9 @@ class SteamProviderSourceTests(unittest.TestCase):
         self.assertNotIn("std::", source)
         self.assertNotIn("Steamworks", source)
 
-    def test_loader_is_default_off_and_uses_contained_library_paths(self) -> None:
+    def test_loader_is_default_on_and_uses_contained_library_paths(self) -> None:
         source = (ROOT / "code/platform/fnql_steam.cpp").read_text(encoding="utf-8")
-        self.assertIn('Cvar_Get("com_steamIntegration", "0", CVAR_ARCHIVE | CVAR_INIT)', source)
+        self.assertIn('Cvar_Get("com_steamIntegration", "1", CVAR_ARCHIVE | CVAR_INIT)', source)
         self.assertIn("IsAbsolutePath", source)
         self.assertIn("IsBareFileName", source)
         self.assertIn("Sys_DefaultBasePath()", source)

@@ -554,6 +554,20 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 	case WM_MOUSEWHEEL:
 		// http://msdn.microsoft.com/library/default.asp?url=/library/en-us/winui/winui/windowsuserinterface/userinput/mouseinput/aboutmouseinput.asp
 		// Windows 98/Me, Windows NT 4.0 and later - uses WM_MOUSEWHEEL
+		if ( Key_GetCatcher() & KEYCATCH_BROWSER ) {
+			int wheelSteps = (short)HIWORD( wParam ) / WHEEL_DELTA;
+
+			while ( wheelSteps > 0 ) {
+				CL_WebView_OnMouseWheelEvent( 1 );
+				--wheelSteps;
+			}
+			while ( wheelSteps < 0 ) {
+				CL_WebView_OnMouseWheelEvent( -1 );
+				++wheelSteps;
+			}
+			return 0;
+		}
+
 		// only relevant for non-DI input and when console is toggled in window mode
 		//   if console is toggled in window mode (KEYCATCH_CONSOLE) then mouse is released and DI doesn't see any mouse wheel
 		if ( in_mouse->integer == -1 || ((!glw_state.cdsFullscreen || glw_state.monitorCount > 1) && (Key_GetCatcher() & KEYCATCH_CONSOLE)) )
@@ -873,6 +887,22 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 	case WM_MBUTTONDOWN:
 	case WM_MBUTTONUP:
 	case WM_MOUSEMOVE:
+		if ( Key_GetCatcher() & KEYCATCH_BROWSER ) {
+			const int x = (int)(short)LOWORD( lParam );
+			const int y = (int)(short)HIWORD( lParam );
+
+			CL_WebView_OnMouseMove( x, y );
+			switch ( uMsg ) {
+				case WM_LBUTTONDOWN: CL_WebView_OnMouseButtonEvent( K_MOUSE1, qtrue ); break;
+				case WM_LBUTTONUP: CL_WebView_OnMouseButtonEvent( K_MOUSE1, qfalse ); break;
+				case WM_RBUTTONDOWN: CL_WebView_OnMouseButtonEvent( K_MOUSE2, qtrue ); break;
+				case WM_RBUTTONUP: CL_WebView_OnMouseButtonEvent( K_MOUSE2, qfalse ); break;
+				case WM_MBUTTONDOWN: CL_WebView_OnMouseButtonEvent( K_MOUSE3, qtrue ); break;
+				case WM_MBUTTONUP: CL_WebView_OnMouseButtonEvent( K_MOUSE3, qfalse ); break;
+				default: break;
+			}
+			return 0;
+		}
 		if ( IN_MouseActive() ) {
 			int mstate = (wParam & (MK_LBUTTON|MK_RBUTTON)) + ((wParam & (MK_MBUTTON|MK_XBUTTON1|MK_XBUTTON2)) >> 2);
 			IN_Win32MouseEvent( LOWORD(lParam), HIWORD(lParam), mstate );

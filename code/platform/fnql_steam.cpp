@@ -57,6 +57,7 @@ struct SteamState {
 	const fnqlSteamProvider_t *provider{};
 	uint32_t roles{};
 	uint64_t capabilities{};
+	uint32_t nextCapabilityRefresh{};
 	bool initialized{};
 	bool commandRegistered{};
 	bool fallbackAnnounced{};
@@ -147,8 +148,10 @@ void FNQL_STEAM_CALL HostEvent(void *, const fnqlSteamEvent_t *event) {
 	}
 	if (event->type == FNQL_STEAM_EVENT_GAME_SERVER_CONNECTED) {
 		Cvar_Set("sv_steamServerState", "logged-on");
+		state.nextCapabilityRefresh = 0;
 	} else if (event->type == FNQL_STEAM_EVENT_GAME_SERVER_DISCONNECTED) {
 		Cvar_Set("sv_steamServerState", "disconnected");
+		state.nextCapabilityRefresh = 0;
 	}
 	if (state.eventSink) {
 		state.eventSink(event, state.eventContext);
@@ -253,8 +256,9 @@ bool HasProviderField(size_t offset, size_t fieldSize) {
 #define FNQL_HAS_PROVIDER_FIELD(field) \
 	HasProviderField(offsetof(fnqlSteamProvider_t, field), sizeof(state.provider->field))
 
-uint64_t ValidatedCapabilities(const fnqlSteamProvider_t *provider) {
-	uint64_t capabilities = provider->info.capabilities;
+uint64_t ValidatedCapabilities(const fnqlSteamProvider_t *provider,
+	uint64_t reportedCapabilities) {
+	uint64_t capabilities = reportedCapabilities;
 	if (!provider->is_subscribed_app || !provider->get_status) {
 		capabilities &= ~(FNQL_STEAM_CAP_CLIENT | FNQL_STEAM_CAP_IDENTITY);
 	}
@@ -373,6 +377,37 @@ uint64_t ValidatedCapabilities(const fnqlSteamProvider_t *provider) {
 	return capabilities;
 }
 
+void RefreshProviderCapabilities(const char *reason) {
+	if (!state.initialized || !state.provider) {
+		return;
+	}
+
+	uint64_t reportedCapabilities = state.provider->info.capabilities;
+	if (state.provider->get_status) {
+		fnqlSteamStatus_t status{};
+		status.size = sizeof(status);
+		if (state.provider->get_status(&status) != FNQL_STEAM_RESULT_OK) {
+			/* A transient status failure is not evidence that an already
+			 * validated runtime capability disappeared. */
+			return;
+		}
+		reportedCapabilities = status.capabilities;
+	}
+	const uint64_t capabilities = ValidatedCapabilities(
+		state.provider, reportedCapabilities);
+	if (capabilities == state.capabilities) {
+		return;
+	}
+
+	state.capabilities = capabilities;
+	SetStatusCvars("active", state.provider->info.name,
+		state.provider->info.version);
+	SV_RefreshPlatformServiceCvars();
+	Com_DPrintf("Steam provider capabilities changed after %s: 0x%016llx.\n",
+		reason ? reason : "a runtime transition",
+		static_cast<unsigned long long>(state.capabilities));
+}
+
 void SteamStatusCommand() {
 	fnqlSteamStatus_t status{};
 	status.size = sizeof(status);
@@ -402,7 +437,7 @@ fnqlSteamResult_t UnavailableResult() {
 extern "C" {
 
 void FNQL_Steam_Init(uint32_t roles) {
-	cvar_t *enabled = Cvar_Get("com_steamIntegration", "0", CVAR_ARCHIVE | CVAR_INIT);
+	cvar_t *enabled = Cvar_Get("com_steamIntegration", "1", CVAR_ARCHIVE | CVAR_INIT);
 	cvar_t *providerName = Cvar_Get("com_steamProvider", kDefaultProviderName,
 		CVAR_ARCHIVE | CVAR_INIT | CVAR_PROTECTED);
 	cvar_t *steamApiName = Cvar_Get("com_steamApi", "",
@@ -424,7 +459,7 @@ void FNQL_Steam_Init(uint32_t roles) {
 	state.capabilities = 0;
 
 	if (!enabled->integer) {
-		SetDetail("Steam integration is disabled; use +set com_steamIntegration 1 to opt in.");
+		SetDetail("Steam integration is disabled by +set com_steamIntegration 0.");
 		SetStatusCvars("disabled", "none", "none");
 		return;
 	}
@@ -526,7 +561,8 @@ void FNQL_Steam_Init(uint32_t roles) {
 		return;
 	}
 
-	state.capabilities = ValidatedCapabilities(state.provider);
+	state.capabilities = ValidatedCapabilities(state.provider,
+		state.provider->info.capabilities);
 	if (!state.capabilities) {
 		char providerDisplayName[FNQL_STEAM_NAME_CAPACITY];
 		char providerVersion[FNQL_STEAM_NAME_CAPACITY];
@@ -568,6 +604,7 @@ void FNQL_Steam_Shutdown(void) {
 	}
 	state.library = nullptr;
 	state.roles = 0;
+	state.nextCapabilityRefresh = 0;
 	state.providerPath[0] = '\0';
 	SetDetail("Steam provider is stopped.");
 	SetStatusCvars("stopped", "none", "none");
@@ -578,8 +615,20 @@ void FNQL_Steam_Shutdown(void) {
 }
 
 void FNQL_Steam_Pump(void) {
-	if (state.initialized && state.provider && state.provider->run_callbacks) {
+	if (!state.initialized || !state.provider) {
+		return;
+	}
+	if (state.provider->run_callbacks) {
 		state.provider->run_callbacks();
+	}
+	/* A GameServer-owned interface can become available on a callback-driven
+	 * transition. Refresh before common Workshop polling consumes this frame,
+	 * while keeping routine status probes bounded to once per second. */
+	const uint32_t now = static_cast<uint32_t>(Com_Milliseconds());
+	if (!state.nextCapabilityRefresh
+		|| static_cast<int32_t>(now - state.nextCapabilityRefresh) >= 0) {
+		RefreshProviderCapabilities("the callback pump");
+		state.nextCapabilityRefresh = now + 1000u;
 	}
 }
 
@@ -711,8 +760,44 @@ fnqlSteamResult_t FNQL_Steam_GetSubscribedItems(uint64_t *itemIds,
 }
 fnqlSteamResult_t FNQL_Steam_GetItemInstallInfo(uint64_t itemId, char *folder,
 	uint32_t folderCapacity, uint64_t *sizeOnDisk, uint32_t *timestamp) {
-	FNQL_STEAM_CALL_RESULT(FNQL_STEAM_CAP_UGC, get_item_install_info,
-		(itemId, folder, folderCapacity, sizeOnDisk, timestamp));
+	if (!folder || folderCapacity == 0) {
+		return FNQL_STEAM_RESULT_INVALID_ARGUMENT;
+	}
+	std::memset(folder, 0, folderCapacity);
+	if (sizeOnDisk) {
+		*sizeOnDisk = 0;
+	}
+	if (timestamp) {
+		*timestamp = 0;
+	}
+	if (!FNQL_Steam_Available(FNQL_STEAM_CAP_UGC)
+		|| !FNQL_HAS_PROVIDER_FIELD(get_item_install_info)
+		|| !state.provider->get_item_install_info) {
+		return UnavailableResult();
+	}
+	const fnqlSteamResult_t result = state.provider->get_item_install_info(
+		itemId, folder, folderCapacity, sizeOnDisk, timestamp);
+	if (result != FNQL_STEAM_RESULT_OK) {
+		folder[0] = '\0';
+		if (sizeOnDisk) {
+			*sizeOnDisk = 0;
+		}
+		if (timestamp) {
+			*timestamp = 0;
+		}
+		return result;
+	}
+	if (!std::memchr(folder, '\0', folderCapacity)) {
+		folder[0] = '\0';
+		if (sizeOnDisk) {
+			*sizeOnDisk = 0;
+		}
+		if (timestamp) {
+			*timestamp = 0;
+		}
+		return FNQL_STEAM_RESULT_FAILED;
+	}
+	return FNQL_STEAM_RESULT_OK;
 }
 fnqlSteamResult_t FNQL_Steam_GetItemDownloadInfo(uint64_t itemId,
 	uint64_t *downloaded, uint64_t *total) {
@@ -1213,11 +1298,21 @@ void FNQL_Steam_EndAuthSession(uint64_t steamId) {
 	}
 }
 fnqlSteamResult_t FNQL_Steam_StartGameServer(const fnqlSteamGameServerConfig_t *config) {
-	FNQL_STEAM_CALL_RESULT(FNQL_STEAM_CAP_GAME_SERVER, start_game_server, (config));
+	if (!FNQL_Steam_Available(FNQL_STEAM_CAP_GAME_SERVER)
+		|| !FNQL_HAS_PROVIDER_FIELD(start_game_server)
+		|| !state.provider->start_game_server) {
+		return UnavailableResult();
+	}
+	const fnqlSteamResult_t result = state.provider->start_game_server(config);
+	if (result == FNQL_STEAM_RESULT_OK || result == FNQL_STEAM_RESULT_PENDING) {
+		RefreshProviderCapabilities("GameServer startup");
+	}
+	return result;
 }
 void FNQL_Steam_StopGameServer(void) {
 	if (FNQL_Steam_Available(FNQL_STEAM_CAP_GAME_SERVER) && state.provider->stop_game_server) {
 		state.provider->stop_game_server();
+		RefreshProviderCapabilities("GameServer shutdown");
 	}
 }
 fnqlSteamResult_t FNQL_Steam_UpdateGameServer(const fnqlSteamGameServerConfig_t *config) {

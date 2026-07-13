@@ -396,6 +396,10 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\client\cl_workshop.cpp"
+				>
+			</File>
+			<File
 				RelativePath="..\..\client\cl_net_chan.cpp"
 				>
 			</File>
@@ -425,6 +429,10 @@
 			</File>
 			<File
 				RelativePath="..\..\platform\fnql_steam.cpp"
+				>
+			</File>
+			<File
+				RelativePath="..\..\platform\fnql_workshop.cpp"
 				>
 			</File>
 			<File
@@ -612,11 +620,23 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\server\factory_catalog.cpp"
+				>
+			</File>
+			<File
+				RelativePath="..\..\server\factory_rotation.cpp"
+				>
+			</File>
+			<File
 				RelativePath="..\..\server\sv_bot.cpp"
 				>
 			</File>
 			<File
 				RelativePath="..\..\server\sv_ccmds.cpp"
+				>
+			</File>
+			<File
+				RelativePath="..\..\server\sv_factory.cpp"
 				>
 			</File>
 			<File
@@ -802,6 +822,14 @@
 			</File>
 			<File
 				RelativePath="..\resource.h"
+				>
+			</File>
+			<File
+				RelativePath="..\..\server\factory_catalog.hpp"
+				>
+			</File>
+			<File
+				RelativePath="..\..\server\factory_rotation.hpp"
 				>
 			</File>
 			<File

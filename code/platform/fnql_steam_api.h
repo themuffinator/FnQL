@@ -79,6 +79,13 @@ typedef enum fnqlSteamCapability_e {
 	FNQL_STEAM_CAP_RICH_PRESENCE = 1ull << 3,
 	FNQL_STEAM_CAP_LOBBIES = 1ull << 4,
 	FNQL_STEAM_CAP_SERVER_BROWSER = 1ull << 5,
+	/* Subscription, install-state, and download operations through the UGC
+	 * interface owned by the active role.  A CLIENT role uses client-owned UGC.
+	 * For a GAME_SERVER-only startup this bit must remain clear until
+	 * start_game_server has acquired GameServer-owned UGC, and must be cleared
+	 * before stop_game_server returns; a provider must not initialize CLIENT
+	 * merely to satisfy an unattended server.  get_status.capabilities is the
+	 * runtime-authoritative mask for these ownership transitions. */
 	FNQL_STEAM_CAP_UGC = 1ull << 6,
 	FNQL_STEAM_CAP_STATS = 1ull << 7,
 	FNQL_STEAM_CAP_AUTH = 1ull << 8,
@@ -91,6 +98,9 @@ typedef enum fnqlSteamCapability_e {
 	/* Bounded Steam avatar acquisition through caller-owned RGBA buffers. */
 	FNQL_STEAM_CAP_AVATARS = 1ull << 12,
 	FNQL_STEAM_CAP_FRIENDS = 1ull << 13,
+	/* Asynchronous all-UGC call-result support is separate from the download
+	 * lane.  A GAME_SERVER-only provider must leave this clear unless it also
+	 * implements GameServer-owned call-result registration and pumping. */
 	FNQL_STEAM_CAP_UGC_QUERY = 1ull << 14,
 	/* Receives Steam purchase authorization decisions; transaction creation
 	 * remains an external service responsibility. */
@@ -137,6 +147,13 @@ typedef enum fnqlSteamEventType_e {
 	FNQL_STEAM_EVENT_LOBBY_ENTERED,
 	FNQL_STEAM_EVENT_LOBBY_LEFT,
 	FNQL_STEAM_EVENT_LOBBY_CHAT_MESSAGE,
+	/* The completed result snapshot is already readable through
+	 * get_ugc_query_results.  Before this synchronous event, the provider detaches
+	 * the pending call-result and clears its shared in-flight ownership so the
+	 * handler may re-enter request_ugc_query safely.  On non-I/O completion the
+	 * captured native query remains live during delivery and is released exactly
+	 * once afterward using that local handle, never re-entered shared state.  An
+	 * I/O failure instead releases the captured handle before emitting failure. */
 	FNQL_STEAM_EVENT_UGC_QUERY_COMPLETE,
 	FNQL_STEAM_EVENT_UGC_DOWNLOAD_COMPLETE,
 	FNQL_STEAM_EVENT_USER_STATS_RECEIVED,
@@ -188,6 +205,19 @@ typedef enum fnqlSteamFriendFlag_e {
 	FNQL_STEAM_FRIEND_HAS_GAME = 1u << 1,
 	FNQL_STEAM_FRIEND_PLAYING_QUAKE_LIVE = 1u << 2
 } fnqlSteamFriendFlag_t;
+
+/* Stable ISteamUGC EItemState bits used by retail Quake Live.  Keeping the
+ * complete public bit set here prevents individual engine consumers from
+ * growing incompatible magic constants. */
+typedef enum fnqlSteamUgcItemState_e {
+	FNQL_STEAM_UGC_ITEM_STATE_NONE = 0,
+	FNQL_STEAM_UGC_ITEM_STATE_SUBSCRIBED = 1u << 0,
+	FNQL_STEAM_UGC_ITEM_STATE_LEGACY = 1u << 1,
+	FNQL_STEAM_UGC_ITEM_STATE_INSTALLED = 1u << 2,
+	FNQL_STEAM_UGC_ITEM_STATE_NEEDS_UPDATE = 1u << 3,
+	FNQL_STEAM_UGC_ITEM_STATE_DOWNLOADING = 1u << 4,
+	FNQL_STEAM_UGC_ITEM_STATE_DOWNLOAD_PENDING = 1u << 5
+} fnqlSteamUgcItemState_t;
 
 typedef struct fnqlSteamServer_s {
 	uint32_t size;
@@ -253,6 +283,9 @@ typedef struct fnqlSteamStartup_s {
 typedef struct fnqlSteamProviderInfo_s {
 	uint32_t size;
 	uint32_t abi_version;
+	/* Sampled by the engine after startup; describe operations usable at that
+	 * point, not merely the provider's compiled maximum.  Later role-dependent
+	 * availability is reported by fnqlSteamStatus_t.capabilities. */
 	uint64_t capabilities;
 	char name[FNQL_STEAM_NAME_CAPACITY];
 	char version[FNQL_STEAM_NAME_CAPACITY];
@@ -261,6 +294,8 @@ typedef struct fnqlSteamProviderInfo_s {
 typedef struct fnqlSteamStatus_s {
 	uint32_t size;
 	uint32_t initialized_roles;
+	/* Current runtime availability.  FnQL resamples and function-table-validates
+	 * this mask after role start/stop and callback-driven transitions. */
 	uint64_t capabilities;
 	uint64_t local_steam_id;
 	fnqlSteamBool_t client_logged_on;
@@ -426,8 +461,19 @@ typedef struct fnqlSteamProvider_s {
 	fnqlSteamResult_t (FNQL_STEAM_CALL *get_friend)(uint64_t steam_id,
 		fnqlSteamFriend_t *friend_info);
 
-	/* Optional trailing asynchronous all-UGC query extension. The provider
-	 * copies completed rows before releasing Steam's query handle. */
+	/* Optional trailing asynchronous all-UGC query extension. An accepted
+	 * request returns PENDING.  A replacement first unregisters and releases the
+	 * old request without emitting its completion.  A terminal callback captures
+	 * the native query, detaches its call-result, and clears shared ownership
+	 * before branching solely on I/O failure.  Without I/O failure it copies the
+	 * bounded rows, emits FNQL_STEAM_EVENT_UGC_QUERY_COMPLETE synchronously while
+	 * the captured query remains live, then releases that exact local handle.
+	 * A NULL payload without I/O failure is a successful empty completion; a
+	 * non-OK native result without I/O failure still takes this ordering.  With
+	 * I/O failure it releases the captured handle first and then emits failed
+	 * completion.  The copied snapshot remains available for the engine's
+	 * count-then-fetch calls
+	 * until the next accepted request or shutdown. */
 	fnqlSteamResult_t (FNQL_STEAM_CALL *request_ugc_query)(uint32_t raw_filter);
 	fnqlSteamResult_t (FNQL_STEAM_CALL *get_ugc_query_results)(
 		fnqlSteamUgcItem_t *items, uint32_t capacity, uint32_t *count,

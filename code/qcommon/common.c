@@ -4030,7 +4030,18 @@ void Com_Init( char *commandLine ) {
 	SV_Init();
 	SV_RegisterGameCvars();
 	FNQL_Steam_Init( com_dedicated->integer
-		? FNQL_STEAM_ROLE_GAME_SERVER : FNQL_STEAM_ROLE_CLIENT );
+		? FNQL_STEAM_ROLE_GAME_SERVER
+		: ( FNQL_STEAM_ROLE_CLIENT | FNQL_STEAM_ROLE_GAME_SERVER ) );
+	/* Retail initializes the Steam GameServer owner during common startup, not
+	 * on the first map.  Besides matching publication lifetime, this lets a
+	 * dedicated provider expose SteamGameServerUGC before the Workshop snapshot
+	 * is captured and the filesystem is reloaded. */
+	SV_SteamGameServerStart( "" );
+	Com_WorkshopInit();
+	/* Workshop initialization can mount subscribed packages and restart the
+	 * filesystem. Rebuild the engine-owned retail content registries only after
+	 * those paths are visible. */
+	SV_FactoryRefreshMountedContent();
 	SV_RefreshPlatformServiceCvars();
 
 	com_dedicated->modified = qfalse;
@@ -4087,6 +4098,13 @@ void Com_Init( char *commandLine ) {
 	com_fullyInitialized = qtrue;
 
 	Com_Printf( "--- Common Initialization Complete ---\n" );
+
+	// Retail dedicated configuration selects its first map through this
+	// hook (normally `startRandomMap`) after common initialization and
+	// after any explicit late startup commands already in the buffer.
+	if ( com_dedicated->integer ) {
+		Cbuf_AddText( "vstr serverstartup\n" );
+	}
 
 	NET_Init();
 
@@ -4440,6 +4458,7 @@ void Com_Frame( qboolean noDelay ) {
 
 	Cbuf_Execute();
 	FNQL_Steam_Pump();
+	Com_WorkshopFrame();
 
 	// mess with msec if needed
 	gameMsec = Com_ModifyMsec( realMsec );
@@ -4482,7 +4501,10 @@ void Com_Frame( qboolean noDelay ) {
 			gw_minimized = qtrue;
 		}
 		FNQL_Steam_Reconfigure( com_dedicated->integer
-			? FNQL_STEAM_ROLE_GAME_SERVER : FNQL_STEAM_ROLE_CLIENT );
+			? FNQL_STEAM_ROLE_GAME_SERVER
+			: ( FNQL_STEAM_ROLE_CLIENT | FNQL_STEAM_ROLE_GAME_SERVER ) );
+		SV_SteamGameServerStart( "" );
+		Com_WorkshopProviderChanged();
 		SV_RefreshPlatformServiceCvars();
 	}
 
@@ -4572,6 +4594,7 @@ Com_Shutdown
 =================
 */
 static void Com_Shutdown( void ) {
+	Com_WorkshopShutdown();
 	FNQL_Steam_Shutdown();
 	Zmq_ShutdownRuntime();
 

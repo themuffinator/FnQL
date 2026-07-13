@@ -158,13 +158,27 @@ Restart the server on a different map
 static void SV_Map_f( void ) {
 	const char		*cmd;
 	const char		*map;
-	bool		killBots, cheat;
+	bool		killBots, cheat, singlePlayerCommand;
 	std::array<char, MAX_QPATH> expanded{};
 	std::array<char, MAX_QPATH> mapname{};
 	int			len;
 
+	cmd = Cmd_Argv(0);
+	singlePlayerCommand = Q_stricmpn( cmd, "sp", 2 ) == 0;
 	map = Cmd_Argv(1);
 	if ( !map || !*map ) {
+		if ( singlePlayerCommand ) {
+			Com_Printf( "%s <mapname>\n", cmd );
+		} else {
+			SV_FactoryPrintMapUsage( cmd );
+		}
+		return;
+	}
+	// Retail enforces the factory argument threshold before touching the BSP.
+	// An explicitly present empty argv[2] still passes this preflight and is
+	// subsequently treated as an invalid exact factory when no selection exists.
+	if ( !singlePlayerCommand && Cmd_Argc() < 3 && !SV_FactoryHasActive() ) {
+		SV_FactoryPrintMapUsage( cmd );
 		return;
 	}
 
@@ -182,9 +196,13 @@ static void SV_Map_f( void ) {
 
 	// force latched values to get set
 	Cvar_Get ("g_gametype", "0", CVAR_SERVERINFO | CVAR_USERINFO | CVAR_LATCH );
+	(void)Cvar_Get( "g_ammoPack", "0", CVAR_LATCH );
 
-	cmd = Cmd_Argv(0);
-	if( Q_stricmpn( cmd, "sp", 2 ) == 0 ) {
+	if ( singlePlayerCommand ) {
+		// The inherited single-player aliases do not select a retail factory.
+		// Drop any previous factory snapshots before applying their SP cvars so
+		// overrides cannot leak into this path or be reused by a later map call.
+		SV_FactoryDeactivate();
 		Cvar_SetIntegerValue( "g_gametype", GT_SINGLE_PLAYER );
 		Cvar_Set( "g_doWarmup", "0" );
 		// may not set sv_maxclients directly, always set latched
@@ -211,6 +229,15 @@ static void SV_Map_f( void ) {
 		}
 	}
 
+	// Retail QL's map command owns factory selection.  Keep the inherited
+	// single-player aliases intact, but require/reuse a factory for map and
+	// devmap before any level state is torn down.
+	if ( !singlePlayerCommand &&
+		!SV_FactoryPrepareMap( map, Cmd_Argv( 2 ), SV_QBool( Cmd_Argc() >= 3 ),
+			SV_QBool( cheat ) ) ) {
+		return;
+	}
+
 	// save the map name here cause on a map restart we reload the q3config.cfg
 	// and thus nuke the arguments of the map command
 	Q_strncpyz( mapname.data(), map, SV_ArraySize(mapname) );
@@ -227,6 +254,13 @@ static void SV_Map_f( void ) {
 	} else {
 		Cvar_Set( "sv_cheats", "0" );
 	}
+
+#ifndef DEDICATED
+	if ( !com_dedicated->integer && !singlePlayerCommand ) {
+		Cvar_Set( "ui_singlePlayerActive", "1" );
+		Cvar_Set( "ui_priv", "3" );
+	}
+#endif
 }
 
 
@@ -271,17 +305,22 @@ static void SV_MapRestart_f( void ) {
 		return;
 	}
 
-	// check for changes in variables that can't just be restarted
-	// check for maxclients change
-	if ( sv_maxclients->modified || sv_gametype->modified || sv_pure->modified ) {
-		std::array<char, MAX_QPATH> mapname{};
+	// Retail skips these transition checks once qagame marks g_restarted. On a
+	// normal restart, ammo-pack or gametype changes require a full spawn, while
+	// a max-client change resizes the retained client array before the fast path.
+	if ( Cvar_VariableValue( "g_restarted" ) == 0.0f ) {
+		if ( ( sv_ammoPack && sv_ammoPack->modified ) || sv_gametype->modified ) {
+			std::array<char, MAX_QPATH> mapname{};
 
-		Com_Printf( "variable change -- restarting.\n" );
-		// restart the map the slow way
-		Q_strncpyz( mapname.data(), Cvar_VariableString( "mapname" ), SV_ArraySize(mapname) );
-
-		SV_SpawnServer( mapname.data(), qfalse );
-		return;
+			Com_Printf( "variable change -- restarting.\n" );
+			Q_strncpyz( mapname.data(), Cvar_VariableString( "mapname" ),
+				SV_ArraySize(mapname) );
+			SV_SpawnServer( mapname.data(), qfalse );
+			return;
+		}
+		if ( sv_maxclients->modified ) {
+			SV_ChangeMaxClients();
+		}
 	}
 
 	// toggle the server bit so clients can detect that a
@@ -375,6 +414,8 @@ static void SV_MapRestart_f( void ) {
 			client.lastUsercmd.serverTime = sv.time - 1;
 		}
 	}
+
+	SV_MapPoolRefreshCvars();
 }
 
 
@@ -1517,6 +1558,65 @@ static void SV_CompleteMapName( const char *args, int argNum ) {
 	}
 }
 
+typedef qboolean ( *workshopAction_t )( uint64_t itemId );
+
+static qboolean SV_ParseWorkshopItemId( const char *text, uint64_t *itemId ) {
+	uint64_t value = 0;
+	const uint64_t maxValue = ~static_cast<uint64_t>( 0 );
+
+	if ( itemId ) {
+		*itemId = 0;
+	}
+	if ( !text || !text[0] || !itemId ) {
+		return qfalse;
+	}
+
+	for ( const char *cursor = text; *cursor; ++cursor ) {
+		if ( *cursor < '0' || *cursor > '9' ) {
+			return qfalse;
+		}
+		const uint64_t digit = static_cast<uint64_t>( *cursor - '0' );
+		if ( value > ( maxValue - digit ) / 10u ) {
+			return qfalse;
+		}
+		value = value * 10u + digit;
+	}
+
+	if ( !value ) {
+		return qfalse;
+	}
+	*itemId = value;
+	return qtrue;
+}
+
+static void SV_RunWorkshopCommand( const char *commandName,
+	const char *actionName, workshopAction_t action ) {
+	uint64_t itemId = 0;
+	if ( Cmd_Argc() != 2 || !SV_ParseWorkshopItemId( Cmd_Argv( 1 ), &itemId ) ) {
+		Com_Printf( "usage: %s <workshop item id>\n", commandName );
+		return;
+	}
+	if ( !action( itemId ) ) {
+		Com_Printf( S_COLOR_YELLOW "Unable to %s Workshop item %llu.\n",
+			actionName, static_cast<unsigned long long>( itemId ) );
+	}
+}
+
+static void SV_SteamDownloadUGC_f( void ) {
+	SV_RunWorkshopCommand( "steam_downloadugc", "download",
+		Com_WorkshopDownloadItem );
+}
+
+static void SV_SteamSubscribeUGC_f( void ) {
+	SV_RunWorkshopCommand( "steam_subscribeugc", "subscribe to",
+		Com_WorkshopSubscribeItem );
+}
+
+static void SV_SteamUnsubscribeUGC_f( void ) {
+	SV_RunWorkshopCommand( "steam_unsubscribeugc", "unsubscribe from",
+		Com_WorkshopUnsubscribeItem );
+}
+
 struct operatorCommand_t {
 	const char *name;
 	xcommand_t function;
@@ -1567,8 +1667,19 @@ void SV_AddOperatorCommands( void ) {
 		{ "filter", SV_AddFilter_f },
 		{ "filtercmd", SV_AddFilterCmd_f },
 	}};
+	static constexpr std::array<operatorCommand_t, 3> workshopCommands = {{
+		{ "steam_downloadugc", SV_SteamDownloadUGC_f },
+		{ "steam_subscribeugc", SV_SteamSubscribeUGC_f },
+		{ "steam_unsubscribeugc", SV_SteamUnsubscribeUGC_f },
+	}};
 	static constexpr std::array<operatorCommand_t, 1> mapCommands = {{
 		{ "map", SV_Map_f },
+	}};
+	static constexpr std::array<operatorCommand_t, 4> qlFactoryCommands = {{
+		{ "reload_arenas", SV_ArenaReload_f },
+		{ "reload_factories", SV_FactoryReload_f },
+		{ "reload_mappool", SV_MapPoolReload_f },
+		{ "startRandomMap", SV_StartRandomMap_f },
 	}};
 #ifndef PRE_RELEASE_DEMO
 	static constexpr std::array<operatorCommand_t, 3> extraMapCommands = {{
@@ -1596,6 +1707,7 @@ void SV_AddOperatorCommands( void ) {
 #endif
 
 	SV_AddCommandSet( commands );
+	SV_AddCommandSet( workshopCommands );
 #ifndef STANDALONE
 #ifdef USE_BANS
 	if(!Cvar_VariableIntegerValue("com_standalone"))
@@ -1606,6 +1718,7 @@ void SV_AddOperatorCommands( void ) {
 #endif
 	SV_AddCommandSet( mapCommands );
 	SV_SetMapCompletionForCommands( mapCommands );
+	SV_AddCommandSet( qlFactoryCommands );
 #ifndef PRE_RELEASE_DEMO
 	SV_AddCommandSet( extraMapCommands );
 	SV_SetMapCompletionForCommands( extraMapCommands );

@@ -722,6 +722,16 @@ cvar_t *Cvar_Set2( const char *var_name, const char *value, qboolean force ) {
 		}
 	}
 
+	/*
+	 * Retail configuration files persist a few startup-only cvars.  Once the
+	 * startup value has been accepted, replaying that same value is a no-op;
+	 * do that before checking the write-protection flags so a normal retail
+	 * config load does not produce a misleading diagnostic.  A different
+	 * value still takes the protected-cvar path below.
+	 */
+	if ( value && strcmp( value, var->string ) == 0 )
+		return var;
+
 	if ( var->flags & (CVAR_ROM | CVAR_INIT | CVAR_CHEAT | CVAR_DEVELOPER) && !force )
 	{
 		if ( var->flags & CVAR_ROM )
@@ -825,6 +835,57 @@ cvar_t *Cvar_Set2( const char *var_name, const char *value, qboolean force ) {
 #endif
 
 	return var;
+}
+
+
+/*
+============
+Cvar_SaveFactoryValue
+
+Retail Quake Live preserves the pre-factory value so a later factory switch
+can restore the operator's setting instead of the cvar's default.
+============
+*/
+qboolean Cvar_SaveFactoryValue( const char *var_name ) {
+	cvar_t	*var;
+
+	var = Cvar_FindVar( var_name );
+	if ( !var ) {
+		return qfalse;
+	}
+
+	if ( var->factoryString ) {
+		Z_Free( var->factoryString );
+	}
+	var->factoryString = CopyString( var->string );
+
+	return qtrue;
+}
+
+
+/*
+============
+Cvar_RestoreFactoryValue
+
+Restores a retail-observed factory snapshot immediately, including for cvars
+whose normal console writes are read-only or latched.
+============
+*/
+qboolean Cvar_RestoreFactoryValue( const char *var_name ) {
+	cvar_t	*var;
+	char	*factoryString;
+
+	var = Cvar_FindVar( var_name );
+	if ( !var || !var->factoryString ) {
+		return qfalse;
+	}
+
+	factoryString = var->factoryString;
+	Cvar_Set2( var_name, factoryString, qtrue );
+	Z_Free( factoryString );
+	var->factoryString = NULL;
+
+	return qtrue;
 }
 
 
@@ -1741,6 +1802,8 @@ static cvar_t *Cvar_Unset( cvar_t *cv )
 		Z_Free( cv->string );
 	if ( cv->latchedString )
 		Z_Free( cv->latchedString );
+	if ( cv->factoryString )
+		Z_Free( cv->factoryString );
 	if ( cv->resetString )
 		Z_Free( cv->resetString );
 	if ( cv->description )

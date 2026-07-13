@@ -1297,6 +1297,7 @@ Q3OBJ = \
   $(B)/client/cl_input.o \
   $(B)/client/cl_keys.o \
   $(B)/client/cl_main.o \
+	$(B)/client/cl_workshop.o \
   $(B)/client/cl_net_chan.o \
   $(B)/client/cl_parse.o \
   $(B)/client/cl_scrn.o \
@@ -1314,6 +1315,7 @@ Q3OBJ = \
   $(B)/client/cm_trace.o \
   \
 	$(B)/client/fnql_steam.o \
+	$(B)/client/fnql_workshop.o \
 	\
   $(B)/client/cmd.o \
   $(B)/client/common.o \
@@ -1340,6 +1342,8 @@ Q3OBJ = \
   $(B)/client/snd_codec.o \
   $(B)/client/snd_codec_wav.o \
   \
+  $(B)/client/factory_catalog.o \
+  $(B)/client/factory_rotation.o \
   $(B)/client/sv_bot.o \
   $(B)/client/sv_ccmds.o \
   $(B)/client/sv_client.o \
@@ -1349,6 +1353,7 @@ Q3OBJ = \
   $(B)/client/sv_main.o \
   $(B)/client/sv_net_chan.o \
   $(B)/client/sv_platform.o \
+  $(B)/client/sv_factory.o \
   $(B)/client/sv_snapshot.o \
   $(B)/client/sv_world.o \
   $(B)/client/sv_zmq.o \
@@ -1556,6 +1561,8 @@ $(B)/$(TARGET_RENDV): $(Q3RENDVOBJ)
 #############################################################################
 
 Q3DOBJ = \
+  $(B)/ded/factory_catalog.o \
+  $(B)/ded/factory_rotation.o \
   $(B)/ded/sv_bot.o \
   $(B)/ded/sv_client.o \
   $(B)/ded/sv_ccmds.o \
@@ -1565,6 +1572,7 @@ Q3DOBJ = \
   $(B)/ded/sv_main.o \
   $(B)/ded/sv_net_chan.o \
   $(B)/ded/sv_platform.o \
+  $(B)/ded/sv_factory.o \
   $(B)/ded/sv_snapshot.o \
   $(B)/ded/sv_world.o \
   $(B)/ded/sv_zmq.o \
@@ -1575,6 +1583,7 @@ Q3DOBJ = \
   $(B)/ded/cm_test.o \
   $(B)/ded/cm_trace.o \
 	$(B)/ded/fnql_steam.o \
+	$(B)/ded/fnql_workshop.o \
   $(B)/ded/cmd.o \
   $(B)/ded/common.o \
   $(B)/ded/cvar.o \

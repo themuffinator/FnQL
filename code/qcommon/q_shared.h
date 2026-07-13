@@ -1014,6 +1014,9 @@ struct cvar_s {
 	cvar_t		*hashPrev;
 	int			hashIndex;
 	cvarGroup_t	group;				// to track changes
+	// Appended so existing renderer-facing cvar_t field offsets remain ABI
+	// stable. Only the engine's Cvar_* implementation owns this snapshot.
+	char		*factoryString;		// value saved while a retail factory override is active
 };
 
 #define	MAX_CVAR_VALUE_STRING	256

@@ -1304,7 +1304,6 @@ void IN_Frame( void ) {
 
 	if ( Key_GetCatcher() & KEYCATCH_BROWSER ) {
 		IN_DeactivateMouse();
-		IN_MouseMove();
 		return;
 	}
 

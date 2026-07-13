@@ -324,6 +324,7 @@ extern	cvar_t	*sv_minRate;
 extern	cvar_t	*sv_maxRate;
 extern	cvar_t	*sv_dlRate;
 extern	cvar_t	*sv_gametype;
+extern	cvar_t	*sv_ammoPack;
 extern	cvar_t	*sv_pure;
 extern	cvar_t	*sv_floodProtect;
 extern	cvar_t	*sv_enableRankings;
@@ -404,6 +405,25 @@ void SV_SetUserinfo( int index, const char *val );
 void SV_GetUserinfo( int index, char *buffer, int bufferSize );
 
 void SV_SpawnServer( const char *mapname, qboolean killBots );
+void SV_ChangeMaxClients( void );
+
+// Retail Quake Live factory, arena, and map-pool compatibility.
+void SV_FactoryInit( void );
+void SV_FactoryShutdown( void );
+void SV_FactoryDeactivate( void );
+void SV_FactoryReload_f( void );
+void SV_ArenaReload_f( void );
+void SV_MapPoolReload_f( void );
+void SV_StartRandomMap_f( void );
+qboolean SV_FactoryExists( const char *factoryName );
+qboolean SV_FactoryHasActive( void );
+qboolean SV_FactoryPrepareMap( const char *mapName, const char *factoryName,
+	qboolean factoryArgumentPresent, qboolean developerMap );
+void SV_FactoryPrintMapUsage( const char *commandName );
+int SV_FactoryWebCatalogJsonSize( void );
+qboolean SV_FactoryBuildWebCatalogJson( char *buffer, int bufferSize );
+void SV_MapPoolRefreshCvars( void );
+void SV_FactoryRefreshMountedContent( void );
 
 
 
@@ -478,6 +498,7 @@ const char	*SV_GetServerStatsProviderLabel( void );
 const char	*SV_GetServerStatsPolicyLabel( void );
 void		SV_RefreshPlatformServiceCvars( void );
 void		SV_RegisterSteamEventSink( void );
+void		SV_PublishWorkshopReferences( void );
 void		SV_SteamGameServerStart( const char *mapName );
 void		SV_SteamGameServerStop( void );
 void		SV_SteamP2PFrame( void );

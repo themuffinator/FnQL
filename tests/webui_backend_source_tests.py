@@ -106,11 +106,18 @@ class WebUiBackendSourceTests(unittest.TestCase):
 
         self.assertIn("#define CL_WEB_BOOTSTRAP_WIDTH 1280", source)
         self.assertIn("#define CL_WEB_BOOTSTRAP_HEIGHT 720", source)
+        self.assertIn("static char *CL_WebHost_AllocateStartupBridgeScript", source)
         self.assertIn(
-            "Z_Malloc( CL_WEB_STARTUP_SCRIPT_LENGTH )", source
+            "const size_t required = static_cast<size_t>( CL_WEB_STARTUP_SCRIPT_LENGTH ) +",
+            source,
         )
         self.assertIn(
-            "CL_WebHost_BuildStartupBridgeScript(\n\t\t\tscript, CL_WEB_STARTUP_SCRIPT_LENGTH )",
+            "required > static_cast<size_t>( ( std::numeric_limits<int>::max )() )",
+            source,
+        )
+        self.assertIn("Z_Malloc( static_cast<int>( required ) )", source)
+        self.assertIn(
+            "CL_WebHost_BuildStartupBridgeScript( script, required, factoryJson );",
             source,
         )
         self.assertIn(

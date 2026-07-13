@@ -626,6 +626,10 @@ void 	Cvar_Set( const char *var_name, const char *value );
 cvar_t	*Cvar_Set2(const char *var_name, const char *value, qboolean force);
 // same as Cvar_Set, but allows more control over setting of cvar
 
+qboolean Cvar_SaveFactoryValue( const char *var_name );
+qboolean Cvar_RestoreFactoryValue( const char *var_name );
+// snapshot and restore values around retail-compatible factory overrides
+
 void	Cvar_SetSafe( const char *var_name, const char *value );
 // sometimes we set variables from an untrusted source: fail if flags & CVAR_PROTECTED
 
@@ -786,6 +790,19 @@ qboolean FS_FileExists( const char *file );
 qboolean FS_ProfileFileExists( const char *file );
 
 char   *FS_BuildOSPath( const char *base, const char *game, const char *qpath );
+
+/* Provider-neutral Steam Workshop install registry. */
+typedef enum fsWorkshopRegisterResult_e {
+	FS_WORKSHOP_REGISTER_REJECTED = -1,
+	FS_WORKSHOP_REGISTER_UNCHANGED = 0,
+	FS_WORKSHOP_REGISTER_CHANGED = 1
+} fsWorkshopRegisterResult_t;
+
+void FS_BeginWorkshopUpdate( void );
+fsWorkshopRegisterResult_t FS_RegisterWorkshopInstall( uint64_t itemId, const char *installFolder, qboolean subscribed );
+qboolean FS_EndWorkshopUpdate( void );
+void FS_CancelWorkshopUpdate( void );
+const char *FS_ReferencedWorkshopItems( void );
 
 qboolean FS_CompareZipChecksum( const char *zipfile );
 int		FS_GetZipChecksum( const char *zipfile );
@@ -1196,6 +1213,17 @@ void Com_Init( char *commandLine );
 void Com_FrameInit( void );
 void Com_Frame( qboolean noDelay );
 
+// Retail Workshop lifecycle and operator actions.  The implementation adapts
+// the optional Steam provider to the provider-neutral filesystem registry.
+void Com_WorkshopInit( void );
+void Com_WorkshopProviderChanged( void );
+void Com_WorkshopShutdown( void );
+void Com_WorkshopFrame( void );
+void Com_WorkshopClaimConnectionDownloads( void );
+qboolean Com_WorkshopDownloadItem( uint64_t itemId );
+qboolean Com_WorkshopSubscribeItem( uint64_t itemId );
+qboolean Com_WorkshopUnsubscribeItem( uint64_t itemId );
+
 /*
 ==============================================================
 
@@ -1278,8 +1306,10 @@ qboolean CL_GameSwitch( void );
 // server interface
 //
 void SV_Init( void );
+void SV_FactoryRefreshMountedContent( void );
 void SV_RefreshPlatformServiceCvars( void );
 void SV_RegisterGameCvars( void );
+void SV_SteamGameServerStart( const char *mapName );
 void SV_Shutdown( const char *finalmsg );
 void SV_Frame( int msec, int realMsec );
 void SV_TrackCvarChanges( void );

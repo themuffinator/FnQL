@@ -181,6 +181,7 @@ include_dirs = include_directories(
 
 qcommon_src = [
 	'code/platform/fnql_steam.cpp',
+	'code/platform/fnql_workshop.cpp',
 	'code/qcommon/cm_load.c',
   'code/qcommon/cm_patch.c',
   'code/qcommon/cm_polylib.c',
@@ -227,6 +228,8 @@ elif cpu_family == 'x86_64'
 endif
 
 server_src = [
+	'code/server/factory_catalog.cpp',
+	'code/server/factory_rotation.cpp',
   'code/server/sv_bot.cpp',
   'code/server/sv_ccmds.cpp',
   'code/server/sv_client.cpp',
@@ -236,6 +239,7 @@ server_src = [
   'code/server/sv_main.cpp',
   'code/server/sv_net_chan.cpp',
   'code/server/sv_platform.cpp',
+	'code/server/sv_factory.cpp',
   'code/server/sv_snapshot.cpp',
   'code/server/sv_world.cpp',
   'code/server/sv_zmq.cpp',
@@ -251,6 +255,7 @@ client_src = [
   'code/client/cl_jpeg.cpp',
   'code/client/cl_keys.cpp',
   'code/client/cl_main.cpp',
+  'code/client/cl_workshop.cpp',
   'code/client/cl_net_chan.cpp',
   'code/client/cl_parse.cpp',
   'code/client/cl_scrn.cpp',
@@ -1085,6 +1090,14 @@ retail_auth_challenge_tests = executable('fnql_retail_auth_challenge_tests',
 )
 test('fnql_retail_auth_challenge', retail_auth_challenge_tests)
 
+factory_rotation_tests = executable('fnql_factory_rotation_tests',
+  'tests/factory_rotation_tests.cpp',
+  'code/server/factory_rotation.cpp',
+  include_directories: include_directories('code/server'),
+  cpp_args: common_cpp_args,
+)
+test('fnql_factory_rotation', factory_rotation_tests)
+
 stats_session_tests = executable('fnql_stats_session_tests',
   'tests/stats_session_tests.cpp',
   include_directories: include_directories('code/server'),
@@ -1098,6 +1111,16 @@ json_document_tests = executable('fnql_json_document_tests',
   cpp_args: common_cpp_args,
 )
 test('fnql_json_document', json_document_tests)
+
+factory_catalog_tests = executable('fnql_factory_catalog_tests',
+  [
+    'tests/factory_catalog_tests.cpp',
+    'code/server/factory_catalog.cpp',
+  ],
+  include_directories: include_directories('code/server'),
+  cpp_args: common_cpp_args,
+)
+test('fnql_factory_catalog', factory_catalog_tests)
 
 stats_event_tests = executable('fnql_stats_event_tests',
   'tests/stats_event_tests.cpp',
@@ -1133,8 +1156,20 @@ test('fnql_ql_bsp_contract', ql_bsp_contract_tests)
 test('fnql_ql_services_source', python,
   args: files('tests/ql_services_source_tests.py'),
 )
+test('fnql_cvar_factory_snapshot_source', python,
+  args: files('tests/cvar_factory_snapshot_tests.py'),
+)
+test('fnql_factory_runtime_source', python,
+  args: files('tests/factory_runtime_source_tests.py'),
+)
+test('fnql_retail_factory_probe', python,
+  args: [files('tests/retail_factory_probe_tests.py'), '--meson'],
+)
 test('fnql_steam_provider_source', python,
   args: files('tests/steam_provider_source_tests.py'),
+)
+test('fnql_workshop_source', python,
+  args: files('tests/workshop_source_tests.py'),
 )
 
 webpak_format_tests = executable('fnql_webpak_format_tests',

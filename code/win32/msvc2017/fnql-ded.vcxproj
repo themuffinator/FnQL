@@ -298,6 +298,8 @@
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">true</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">true</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="..\..\server\factory_catalog.cpp" />
+    <ClCompile Include="..\..\server\factory_rotation.cpp" />
     <ClCompile Include="..\..\server\sv_bot.cpp" />
     <ClCompile Include="..\..\server\sv_ccmds.cpp" />
     <ClCompile Include="..\..\server\sv_client.cpp" />
@@ -307,7 +309,9 @@
     <ClCompile Include="..\..\server\sv_main.cpp" />
     <ClCompile Include="..\..\server\sv_net_chan.cpp" />
     <ClCompile Include="..\..\server\sv_platform.cpp" />
+    <ClCompile Include="..\..\server\sv_factory.cpp" />
 	<ClCompile Include="..\..\platform\fnql_steam.cpp" />
+	<ClCompile Include="..\..\platform\fnql_workshop.cpp" />
     <ClCompile Include="..\..\server\sv_snapshot.cpp" />
     <ClCompile Include="..\..\server\sv_world.cpp" />
     <ClCompile Include="..\..\server\sv_zmq.cpp" />
@@ -333,6 +337,8 @@
     <ClInclude Include="..\..\qcommon\surfaceflags.h" />
     <ClInclude Include="..\..\qcommon\unzip.h" />
     <ClInclude Include="..\..\qcommon\vm_local.h" />
+    <ClInclude Include="..\..\server\factory_catalog.hpp" />
+    <ClInclude Include="..\..\server\factory_rotation.hpp" />
     <ClInclude Include="..\..\server\server.h" />
 	<ClInclude Include="..\..\platform\fnql_steam.h" />
 	<ClInclude Include="..\..\platform\fnql_steam_api.h" />

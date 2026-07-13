@@ -136,6 +136,23 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn('( Key_GetCatcher() & ~KEYCATCH_RETAIL_MOUSEPASS ) == 0', input_source)
         self.assertIn('Cvar_Get( "cg_ignoreMouseInput", "0", CVAR_ROM )', input_source)
 
+    def test_browser_input_releases_the_gameplay_mouse_and_uses_surface_coordinates(self) -> None:
+        sdl_input = (ROOT / "code" / "sdl" / "sdl_input.cpp").read_text(encoding="utf-8")
+        webui = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
+        wndproc = (ROOT / "code" / "win32" / "win_wndproc.cpp").read_text(encoding="utf-8")
+
+        self.assertIn("static qboolean mouseBrowserMode", sdl_input)
+        self.assertIn("!browserActive && ( !in_nograb->integer || consoleActive )", sdl_input)
+        self.assertIn("if ( browserActive ) {\n\t\t\tIN_ShowCursor( qtrue );", sdl_input)
+        self.assertIn("mouseBrowserMode != browserActive", sdl_input)
+        self.assertIn("(int)e.motion.x, (int)e.motion.y", sdl_input)
+        self.assertIn("static int CL_WebHost_MapCursorCoordinate", webui)
+        self.assertIn("cls.glconfig.vidWidth", webui)
+        self.assertIn("status.surface.width", webui)
+        self.assertIn("CL_WebView_OnMouseMove( x, y );", wndproc)
+        self.assertIn("CL_WebView_OnMouseButtonEvent( K_MOUSE1, qtrue );", wndproc)
+        self.assertIn("CL_WebView_OnMouseWheelEvent( 1 );", wndproc)
+
     def test_demo_playback_keys_use_retail_mousepass_and_freeze_bridge(self) -> None:
         client_h = (ROOT / "code" / "client" / "client.h").read_text(encoding="utf-8")
         cvars = (ROOT / "code" / "qcommon" / "cvar.c").read_text(encoding="utf-8")
@@ -305,7 +322,9 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("addNativeMaps=function(v){return addCatalogObjects(pendingNativeMaps,v);}", source)
         self.assertIn("commitNativeMaps=function(){return setMapList(pendingNativeMaps);}", source)
         self.assertIn("beginNativeFactories=function(){pendingNativeFactories={};return true;}", source)
-        self.assertIn("addNativeFactories=function(v){return addCatalogObjects(pendingNativeFactories,v);}", source)
+        self.assertIn("addNativeFactories=function(v){return addFactoryObjects(pendingNativeFactories,v);}", source)
+        self.assertIn("Object.defineProperty(o,k,{value:v", source)
+        self.assertIn("Object.prototype.toString.call(v)==='[object Array]'", source)
         self.assertIn("commitNativeFactories=function(){return setFactoryList(pendingNativeFactories);}", source)
         self.assertIn("friendList=[]", source)
         self.assertIn("friendPrimed=false", source)
@@ -568,6 +587,15 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("CL_WebHost_StartServerRefresh( requestMode, source );", source)
         self.assertIn('CL_WebView_PublishEvent( "servers.refresh.start", NULL );', source)
         self.assertIn("CL_WebHost_PublishServerBrowserCompatibility( requestMode, source );", source)
+        steam_request = source[
+            source.index("qboolean CL_Steam_RequestServers( int requestMode )"):
+            source.index("qboolean CL_Steam_RequestServerDetails", source.index("qboolean CL_Steam_RequestServers( int requestMode )"))
+        ]
+        self.assertLess(
+            steam_request.index("cl_webui.serverRefreshSteam = qtrue;"),
+            steam_request.index("FNQL_Steam_RequestServers("),
+        )
+        self.assertIn("cl_webui.serverRefreshSteam = qfalse;", steam_request)
         self.assertIn('Cbuf_ExecuteText( EXEC_APPEND, "localservers\\n" );', source)
         self.assertIn("source == AS_FAVORITES", source)
         self.assertIn('Cbuf_ExecuteText( EXEC_APPEND, va( "globalservers 0 %d\\n"', source)
@@ -598,6 +626,43 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("publishBrowserDetails = CL_WebHost_OnServerStatusResponseInfo( from, s );", client_main)
         self.assertIn("CL_WebHost_OnServerStatusResponsePlayer( from, s );", client_main)
         self.assertIn("CL_WebHost_OnServerStatusResponseComplete( from );", client_main)
+
+    def test_steam_server_refresh_releases_after_marking_the_request_complete(self) -> None:
+        source = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
+        finish = source[
+            source.index(
+                "static void CL_WebHost_PublishServerBrowserRefreshEnd",
+                source.index("static void CL_WebHost_StartServerRefresh"),
+            ):
+            source.index(
+                "static void CL_WebHost_ServerBrowserFrame",
+                source.index("static void CL_WebHost_StartServerRefresh"),
+            )
+        ]
+        frame = source[
+            source.index(
+                "static void CL_WebHost_ServerBrowserFrame",
+                source.index("static void CL_WebHost_StartServerRefresh"),
+            ):
+            source.index("static unsigned int CL_WebHost_PackedIPv4FromAddress")
+        ]
+
+        self.assertIn("qboolean releaseSteamRequest;", finish)
+        self.assertIn("releaseSteamRequest = cl_webui.serverRefreshSteam;", finish)
+        self.assertIn("cl_webui.serverRefreshActive = qfalse;", finish)
+        self.assertIn("cl_webui.serverRefreshSteam = qfalse;", finish)
+        self.assertIn("if ( releaseSteamRequest ) {\n\t\tFNQL_Steam_CancelServers();", finish)
+        self.assertLess(
+            finish.index("cl_webui.serverRefreshActive = qfalse;"),
+            finish.index("FNQL_Steam_CancelServers();"),
+        )
+        # The sole occurrence is this function's definition. A second would
+        # be self-recursion in the terminal path, which previously exhausted
+        # the stack after a timed-out Steam request.
+        self.assertEqual(finish.count("CL_WebHost_PublishServerBrowserRefreshEnd("), 1)
+        self.assertIn("if ( cl_webui.serverRefreshSteam ) {", frame)
+        self.assertIn("CL_WebHost_PublishServerBrowserRefreshEnd();", frame)
+        self.assertIn("\t\treturn;\n\t}\n\n\twait = qfalse;", frame)
 
     def test_webui_social_bridge_requests_publish_unsupported_status_until_steamworks_import(self) -> None:
         source = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
@@ -688,34 +753,39 @@ class WebUiWiringTests(unittest.TestCase):
 
         self.assertIn("#define CL_WEB_CATALOG_JSON_LENGTH 65536", source)
         self.assertIn("#define CL_WEB_CATALOG_SYNC_CHUNK_CHARS 8192", source)
-        self.assertIn("#define CL_WEB_MAX_CATALOG_ITEMS 512", source)
         self.assertIn("qboolean\tmapCatalogSynced;", source)
         self.assertIn("qboolean\tfactoryCatalogSynced;", source)
         self.assertIn("static void CL_WebHost_UpdateBrowserMapList", source)
-        self.assertIn("static void CL_WebHost_UpdateBrowserFactoryList", source)
+        self.assertIn("static qboolean CL_WebHost_UpdateBrowserFactoryList", source)
         self.assertIn("static qboolean CL_WebHost_ExecuteCatalogBatch", source)
         self.assertIn("static qboolean CL_WebHost_QueueCatalogEntry", source)
         self.assertIn("static qboolean CL_WebHost_UpdateBrowserCatalogCacheBatched", source)
-        self.assertIn("(function(){return(window.%s&&window.%s([%.*s]))?1:0;})()", source)
+        self.assertIn('std::string payload = "[";', source)
+        self.assertIn("CL_WebHost_JsonParseExpression( payload.c_str() )", source)
         self.assertIn("CL_WebHost_UpdateBrowserCatalogCacheBatched( \"__qlr_begin_native_maps\", \"__qlr_add_native_maps\", \"__qlr_commit_native_maps\", mapListJson )", source)
-        self.assertIn("CL_WebHost_UpdateBrowserCatalogCacheBatched( \"__qlr_begin_native_factories\", \"__qlr_add_native_factories\", \"__qlr_commit_native_factories\", factoryListJson )", source)
+        self.assertNotIn("CL_WebHost_UpdateBrowserCatalogCacheBatched( \"__qlr_begin_native_factories\"", source)
         self.assertIn("static void CL_WebHost_BuildMapListJson", source)
         self.assertIn('FS_GetFileList( "maps", ".bsp"', source)
         self.assertIn('\\"gametypes\\":[0,0,0,0,0,0,0,0,0,0,0,0,0]', source)
-        self.assertIn("static void CL_WebHost_BuildFactoryListJson", source)
-        self.assertIn('CL_WebHost_AppendFactoryDefinitionsFromFile( "scripts/factories.txt"', source)
-        self.assertIn('FS_GetFileList( "scripts", ".factories"', source)
-        self.assertIn('FS_GetFileList( "scripts", ".factory"', source)
-        self.assertIn("FS_ReadFile( filename, &fileBuffer );", source)
-        self.assertIn("FS_FreeFile( fileBuffer );", source)
-        self.assertIn("CL_WebHost_CopyFactoryJsonString", source)
-        self.assertIn('\\"settings\\":{}', source)
+        self.assertIn("static char *CL_WebHost_AllocateFactoryListJson", source)
+        self.assertIn("SV_FactoryWebCatalogJsonSize()", source)
+        self.assertIn("SV_FactoryBuildWebCatalogJson( buffer, bufferSize )", source)
+        self.assertNotIn("CL_WebHost_AppendFactoryDefinitionsFromFile", source)
+        self.assertNotIn("CL_WebHost_CopyFactoryJsonString", source)
+        self.assertIn('Q_strncpyz( buffer, "{}", (int)bufferSize );', source)
+        self.assertIn("for(k in factories){if(hasOwn(factories,k)){delete factories[k];}}", source)
         self.assertIn("__qlr_set_native_maps", source)
         self.assertIn("__qlr_set_native_factories", source)
         self.assertIn('!Q_stricmp( kind, "maps" )', source)
         self.assertIn('!Q_stricmp( kind, "factories" )', source)
         self.assertIn("CL_WebHost_UpdateBrowserMapList( mapJson );", source)
+        self.assertIn("cl_webui.factoryCatalogSynced =", source)
         self.assertIn("CL_WebHost_UpdateBrowserFactoryList( factoryJson );", source)
+        self.assertIn("CL_WebHost_JsonParseExpression", source)
+        self.assertIn("JSON.parse('", source)
+        self.assertIn("CL_WebHost_InvalidateDocumentSnapshots();\n\tCL_Awesomium_Reload", source)
+        self.assertIn("!CL_WebHost_HasLiveView() || CL_Awesomium_IsLoading()", source)
+        self.assertIn("startupScript = CL_WebHost_AllocateStartupBridgeScript( NULL );", source)
 
     def test_webui_native_friend_list_uses_client_identity_snapshot(self) -> None:
         source = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
@@ -1162,15 +1232,24 @@ class WebUiWiringTests(unittest.TestCase):
         linux_input = (ROOT / "code" / "unix" / "linux_glimp.cpp").read_text(encoding="utf-8")
 
         self.assertIn("browserActive = ( Key_GetCatcher() & KEYCATCH_BROWSER )", sdl_input)
+        self.assertIn("!browserActive && ( !in_nograb->integer || consoleActive )", sdl_input)
         self.assertIn("relativeMouse = ( in_mouse->integer > 0 && grabMouse && !browserActive )", sdl_input)
-        self.assertIn("if( mouseActive || ( Key_GetCatcher() & KEYCATCH_BROWSER ) )", sdl_input)
+        self.assertIn("mouseBrowserMode != browserActive", sdl_input)
+        self.assertIn("IN_ShowCursor( qtrue );", sdl_input)
+        self.assertIn("(int)e.motion.x, (int)e.motion.y", sdl_input)
+        self.assertIn("!( Key_GetCatcher() & KEYCATCH_CONSOLE ) && !browserActive", sdl_input)
         self.assertIn("b = K_MOUSE6 + ( e.button.button - ( SDL_BUTTON_X2 + 1 ) );", sdl_input)
         self.assertIn("if ( Key_GetCatcher() & KEYCATCH_BROWSER )", win_input)
         self.assertIn("kDInputMouseButtonKeys[]", win_input)
         self.assertIn("K_MOUSE5, K_MOUSE6, K_MOUSE7, K_MOUSE8", win_input)
         self.assertIn("buttonIndex < ARRAY_LEN( kDInputMouseButtonKeys )", win_input)
         self.assertIn("btn_code = event.xbutton.button - 8 + K_MOUSE6;", linux_input)
-        self.assertIn("IN_DeactivateMouse();\n\t\tIN_MouseMove();", win_input)
+        browser_input = win_input[
+            win_input.index("if ( Key_GetCatcher() & KEYCATCH_BROWSER ) {"):
+            win_input.index("if ( !gw_active", win_input.index("if ( Key_GetCatcher() & KEYCATCH_BROWSER ) {"))
+        ]
+        self.assertIn("IN_DeactivateMouse();", browser_input)
+        self.assertNotIn("IN_MouseMove();", browser_input)
 
     def test_screen_compositor_gives_webui_a_draw_pass(self) -> None:
         screen = (ROOT / "code" / "client" / "cl_scrn.cpp").read_text(encoding="utf-8")

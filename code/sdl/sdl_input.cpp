@@ -52,6 +52,7 @@ static SDL_JoystickID stickInstance;
 
 static qboolean mouseAvailable = qfalse;
 static qboolean mouseActive = qfalse;
+static qboolean mouseBrowserMode = qfalse;
 
 static cvar_t *in_mouse;
 
@@ -428,21 +429,24 @@ static void IN_ActivateMouse( void )
 {
 	const qboolean consoleActive = ( Key_GetCatcher() & KEYCATCH_CONSOLE ) ? qtrue : qfalse;
 	const qboolean browserActive = ( Key_GetCatcher() & KEYCATCH_BROWSER ) ? qtrue : qfalse;
-	const qboolean grabMouse = ( !in_nograb->integer || consoleActive ) ? qtrue : qfalse;
+	const qboolean grabMouse = ( !browserActive && ( !in_nograb->integer || consoleActive ) ) ? qtrue : qfalse;
 	const qboolean relativeMouse = ( in_mouse->integer > 0 && grabMouse && !browserActive ) ? qtrue : qfalse;
 
 	if ( !mouseAvailable )
 		return;
 
-	if ( !mouseActive )
+	if ( !mouseActive || mouseBrowserMode != browserActive )
 	{
 		IN_GobbleMouseEvents();
 
 		SDL_SetWindowRelativeMouseMode( SDL_window, relativeMouse ? true : false );
 		SDL_SetWindowMouseGrab( SDL_window, grabMouse ? true : false );
 
-		if ( glw_state.isFullscreen && !browserActive )
+		if ( browserActive ) {
+			IN_ShowCursor( qtrue );
+		} else if ( glw_state.isFullscreen ) {
 			IN_ShowCursor( qfalse );
+		}
 
 		SDL_WarpMouseInWindow( SDL_window, glw_state.window_width / 2, glw_state.window_height / 2 );
 
@@ -450,6 +454,7 @@ static void IN_ActivateMouse( void )
 		Com_Printf( "%4i %s\n", Sys_Milliseconds(), __func__ );
 #endif
 	}
+	mouseBrowserMode = browserActive;
 
 	// in_nograb makes no sense in fullscreen mode
 	if ( !glw_state.isFullscreen )
@@ -508,6 +513,7 @@ static void IN_DeactivateMouse( void )
 
 		mouseActive = qfalse;
 	}
+	mouseBrowserMode = qfalse;
 
 	// Always show the cursor when the mouse is disabled,
 	// but not when fullscreen
@@ -1409,7 +1415,12 @@ void HandleEvents( void )
 				break;
 
 			case SDL_EVENT_MOUSE_MOTION:
-				if( mouseActive || ( Key_GetCatcher() & KEYCATCH_BROWSER ) )
+				if( Key_GetCatcher() & KEYCATCH_BROWSER )
+				{
+					Com_QueueEvent( in_eventTime, SE_MOUSE,
+						(int)e.motion.x, (int)e.motion.y, 0, NULL );
+				}
+				else if( mouseActive )
 				{
 					if( !e.motion.xrel && !e.motion.yrel )
 						break;
@@ -1520,11 +1531,14 @@ IN_Frame
 */
 void IN_Frame( void )
 {
+	const qboolean browserActive = ( Key_GetCatcher() & KEYCATCH_BROWSER ) ? qtrue : qfalse;
+
 #ifdef USE_JOYSTICK
 	IN_JoyMove();
 #endif
 
-	if ( !gw_active || !mouse_focus || ( in_nograb->integer && !( Key_GetCatcher() & KEYCATCH_CONSOLE ) ) ) {
+	if ( !gw_active || !mouse_focus || ( in_nograb->integer &&
+		!( Key_GetCatcher() & KEYCATCH_CONSOLE ) && !browserActive ) ) {
 		IN_DeactivateMouse();
 		return;
 	}

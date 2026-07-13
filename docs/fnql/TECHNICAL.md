@@ -66,6 +66,9 @@ and the preserved FnQ3/SDL3 input paths are recorded in
 [`INPUT_COMPATIBILITY.md`](./INPUT_COMPATIBILITY.md).
 Retail TTF face mapping, UTF-8 host-text semantics, fallback order, and atlas
 validation are recorded in [`FONT_COMPATIBILITY.md`](./FONT_COMPATIBILITY.md).
+Retail factory definition, CVar override, map/arena rotation, native-module,
+dedicated-startup, and WebUI contracts are recorded in
+[`FACTORY_COMPATIBILITY.md`](./FACTORY_COMPATIBILITY.md).
 
 ## Repository Layout
 

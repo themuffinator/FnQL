@@ -279,6 +279,7 @@
     <ClCompile Include="..\..\client\cl_jpeg.cpp" />
     <ClCompile Include="..\..\client\cl_keys.cpp" />
     <ClCompile Include="..\..\client\cl_main.cpp" />
+    <ClCompile Include="..\..\client\cl_workshop.cpp" />
     <ClCompile Include="..\..\client\cl_net_chan.cpp" />
     <ClCompile Include="..\..\client\cl_parse.cpp" />
     <ClCompile Include="..\..\client\cl_scrn.cpp" />
@@ -287,6 +288,7 @@
     <ClCompile Include="..\..\client\cl_webui.cpp" />
     <ClCompile Include="..\..\client\awesomium_backend_win32.cpp" />
 	<ClCompile Include="..\..\platform\fnql_steam.cpp" />
+	<ClCompile Include="..\..\platform\fnql_workshop.cpp" />
     <ClCompile Include="..\..\client\audio\legacy\snd_adpcm.cpp" />
     <ClCompile Include="..\..\client\audio\codecs\snd_codec.cpp" />
     <ClCompile Include="..\..\client\audio\codecs\snd_codec_ogg.cpp" />
@@ -330,6 +332,8 @@
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">true</ExcludedFromBuild>
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">true</ExcludedFromBuild>
     </ClCompile>
+    <ClCompile Include="..\..\server\factory_catalog.cpp" />
+    <ClCompile Include="..\..\server\factory_rotation.cpp" />
     <ClCompile Include="..\..\server\sv_bot.cpp" />
     <ClCompile Include="..\..\server\sv_ccmds.cpp" />
     <ClCompile Include="..\..\server\sv_client.cpp" />
@@ -339,6 +343,7 @@
     <ClCompile Include="..\..\server\sv_main.cpp" />
     <ClCompile Include="..\..\server\sv_net_chan.cpp" />
     <ClCompile Include="..\..\server\sv_platform.cpp" />
+    <ClCompile Include="..\..\server\sv_factory.cpp" />
     <ClCompile Include="..\..\server\sv_snapshot.cpp" />
     <ClCompile Include="..\..\server\sv_world.cpp" />
     <ClCompile Include="..\..\server\sv_zmq.cpp" />
@@ -407,6 +412,8 @@
     <ClInclude Include="..\..\renderer\qgl.h" />
     <ClInclude Include="..\..\renderercommon\tr_public.h" />
     <ClInclude Include="..\..\renderercommon\tr_types.h" />
+    <ClInclude Include="..\..\server\factory_catalog.hpp" />
+    <ClInclude Include="..\..\server\factory_rotation.hpp" />
     <ClInclude Include="..\..\server\server.h" />
     <ClInclude Include="..\..\ui\ui_public.h" />
     <ClInclude Include="..\resource.h" />

@@ -13,12 +13,15 @@ static_assert( QuakeLive.wireProfile == NETCHAN_WIRE_QL_RETAIL );
 static_assert( QuakeLive.Has( Capability::ReliableXor ) );
 static_assert( !QuakeLive.Has( Capability::SequenceChecksum ) );
 static_assert( QuakeLive.Has( Capability::PlatformAuthentication ) );
+static_assert( QuakeLive.Has( Capability::WorkshopContent ) );
 static_assert( QuakeLive.Has( Capability::RetailClientsMayJoin ) );
 static_assert( QuakeLive.limits.downloadWindow == 8 );
 static_assert( QuakeLive.limits.downloadBlockBytes == 2048 );
 
+static_assert( !LegacyQuake3.Has( Capability::WorkshopContent ) );
 static_assert( Ioquake3.Has( Capability::SequenceChecksum ) );
 static_assert( !Ioquake3.Has( Capability::ReliableXor ) );
+static_assert( !Ioquake3.Has( Capability::WorkshopContent ) );
 static_assert( ModernizedQ3Limits.downloadWindow == 48 );
 static_assert( ModernizedQ3Limits.downloadBlockBytes == 1024 );
 

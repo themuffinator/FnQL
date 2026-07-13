@@ -321,7 +321,7 @@ static void SV_Startup( void ) {
 SV_ChangeMaxClients
 ==================
 */
-static void SV_ChangeMaxClients( void ) {
+void SV_ChangeMaxClients( void ) {
 	client_t *oldClients;
 	int		maxclients;
 	int		count;
@@ -550,6 +550,9 @@ void SV_SpawnServer( const char *mapname, qboolean killBots ) {
 	SV_InitGameProgs();
 
 	// don't allow a map_restart if game is modified
+	if ( sv_ammoPack ) {
+		sv_ammoPack->modified = qfalse;
+	}
 	sv_gametype->modified = qfalse;
 
 	sv_pure->modified = qfalse;
@@ -659,6 +662,11 @@ void SV_SpawnServer( const char *mapname, qboolean killBots ) {
 		}
 	}
 
+	// Retail clients consume Workshop dependencies from this dedicated
+	// configstring.  Publish it after all map and module pak references have
+	// settled, independently of whether a Steam GameServer identity exists.
+	SV_PublishWorkshopReferences();
+
 	// save systeminfo and serverinfo strings
 	SV_SetConfigstring( CS_SYSTEMINFO, Cvar_InfoString_Big( CVAR_SYSTEMINFO, nullptr ) );
 	cvar_modifiedFlags &= ~CVAR_SYSTEMINFO;
@@ -681,6 +689,7 @@ void SV_SpawnServer( const char *mapname, qboolean killBots ) {
 	Com_Printf ("-----------------------------------\n");
 
 	Sys_SetStatus( "Running map %s", mapname );
+	SV_MapPoolRefreshCvars();
 
 	// suppress hitch warning
 	Com_FrameInit();
@@ -703,12 +712,18 @@ void SV_Init( void )
 
 	// serverinfo vars
 	Cvar_Get ("dmflags", "0", CVAR_SERVERINFO);
+	// Retail loads arena metadata, the factory registry, and its map pool
+	// before registering the gameplay-facing server cvars below.
+	SV_FactoryInit();
 	// The currently shipped retail qagame registers 50 here. Match the module
 	// boundary so startup does not retain a stale Quake III reset value.
 	Cvar_Get ("fraglimit", "50", CVAR_SERVERINFO);
 	Cvar_Get ("timelimit", "0", CVAR_SERVERINFO);
 	sv_gametype = Cvar_Get ("g_gametype", "0", CVAR_SERVERINFO | CVAR_LATCH );
 	Cvar_SetDescription( sv_gametype, "Set the gametype to mod." );
+	sv_ammoPack = Cvar_Get( "g_ammoPack", "1", CVAR_LATCH );
+	Cvar_SetDescription( sv_ammoPack,
+		"Select the retail Quake Live ammunition-pack ruleset." );
 	Cvar_Get ("sv_keywords", "", CVAR_SERVERINFO);
 	//Cvar_Get ("protocol", va("%i", PROTOCOL_VERSION), CVAR_SERVERINFO | CVAR_ROM);
 	sv_mapname = Cvar_Get ("mapname", "nomap", CVAR_SERVERINFO | CVAR_ROM);
@@ -755,6 +770,9 @@ void SV_Init( void )
 	Cvar_Get( "sv_referencedPaks", "", CVAR_SYSTEMINFO | CVAR_ROM );
 	sv_referencedPakNames = Cvar_Get( "sv_referencedPakNames", "", CVAR_SYSTEMINFO | CVAR_ROM );
 	Cvar_SetDescription( sv_referencedPakNames, "Variable holds a list of all the pack archives the server loaded data from." );
+	cvar_t *svReferencedSteamworks = Cvar_Get( "sv_referencedSteamworks", "", CVAR_ROM );
+	Cvar_SetDescription( svReferencedSteamworks,
+		"Space-separated Workshop item IDs required by the current server map." );
 	Cvar_Get( "sv_rankingsProvider", "Unavailable", CVAR_ROM );
 	Cvar_Get( "sv_rankingsPolicy", "compatibility-unavailable", CVAR_ROM );
 	SV_RefreshPlatformServiceCvars();
@@ -934,6 +952,9 @@ void SV_Shutdown( const char *finalmsg ) {
 
 		SV_ZFree( svs.clients );
 	}
+	// Retail restores factory-backed cvars after GAME_SHUTDOWN, level clearing,
+	// and client destruction, but before the server-static state is zeroed.
+	SV_FactoryShutdown();
 	svs = {};
 	sv.time = 0;
 
@@ -954,6 +975,7 @@ void SV_Shutdown( const char *finalmsg ) {
 	// clean some server cvars
 	Cvar_Set( "sv_referencedPaks", "" );
 	Cvar_Set( "sv_referencedPakNames", "" );
+	Cvar_Set( "sv_referencedSteamworks", "" );
 	Cvar_Set( "sv_mapChecksum", "" );
 	Cvar_Set( "sv_serverid", "0" );
 

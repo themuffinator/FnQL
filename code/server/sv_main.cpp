@@ -57,6 +57,7 @@ cvar_t	*sv_minRate;
 cvar_t	*sv_maxRate;
 cvar_t	*sv_dlRate;
 cvar_t	*sv_gametype;
+cvar_t	*sv_ammoPack;
 cvar_t	*sv_pure;
 cvar_t	*sv_floodProtect;
 cvar_t	*sv_enableRankings;

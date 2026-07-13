@@ -14,9 +14,9 @@ adapters, tests, and documentation.
   provider. A missing, disabled, mismatched, or failed provider cannot change
   `fs_basepath`, the active-user homepath, pak ordering, native-module lookup,
   or WebUI datapak mounting.
-- The provider is default-off. Opt in with
-  `+set com_steamIntegration 1`; this is an initialization cvar and must be set
-  on the command line.
+- Steam integration is enabled by default. Use
+  `+set com_steamIntegration 0` to explicitly select the provider-free
+  fallback; this is an initialization cvar and must be set on the command line.
 - FnQL loads the provider only from an absolute path or from a bare filename in
   the executable directory. The provider, in turn, loads the exact retail
   `steam_api` path supplied by FnQL. Neither layer uses the current directory or
@@ -25,8 +25,10 @@ adapters, tests, and documentation.
   capability is checked against its required function table before FnQL exposes
   it.
 - Failure is deterministic. The existing legacy server browser, local identity,
-  asset-only Workshop behavior, master publication, and unsupported WebUI event
-  paths remain available when a provider operation is absent.
+  master publication, ordinary pak validation, and unsupported WebUI event
+  paths remain available when a provider operation is absent. A failed or
+  temporarily unavailable Workshop refresh does not erase the last snapshot
+  that the engine registered successfully during the current process.
 - When Steam was explicitly enabled but its provider or API cannot load, FnQL
   prints one non-fatal explanation and continues in non-Steam mode. Retail asset
   mounting, local play, legacy server discovery, and non-Steam hosting remain
@@ -53,7 +55,8 @@ source is never copied into FnQL.
 
 Runtime controls and diagnostics:
 
-- `com_steamIntegration`: explicit `0`/`1` initialization policy.
+- `com_steamIntegration`: initialization policy, enabled by default; set `0`
+  explicitly to disable the provider.
 - `com_steamProvider`: protected provider filename or absolute path.
 - `com_steamApi`: protected absolute Steam API override for controlled tests;
   blank uses the API in the detected retail Quake Live install.
@@ -63,6 +66,188 @@ Runtime controls and diagnostics:
 - `sv_steamSecure`: opt-in authenticated-and-secure GameServer mode. The default
   remains the existing unauthenticated compatibility lane until ticket handling
   is proven end to end.
+
+## Workshop filesystem, server, and client wiring
+
+The compatibility contract in this section comes from static comparison with
+the QLSRP corpus and retail-observed Quake Live behavior. FnQL's implementation
+is an independent engine-side rewrite around the provider ABI; it does not
+import a Steamworks implementation or reconstruct game code. The observation
+and the implementation are kept separate below so an unperformed live probe is
+not presented as retail evidence.
+
+### Observed retail contract
+
+- Retail bounds both its subscribed-item snapshot and a server-required item
+  list at `0x100` (256) entries. Item identities are complete unsigned 64-bit
+  decimal values.
+- Workshop sources enter the filesystem before the normal install, base, and
+  profile roots. Since later sources are prepended to the Quake search path,
+  ordinary FnQL/retail roots keep priority over Workshop content. Later
+  Workshop items keep priority over earlier items, and later-sorted archives
+  within a source keep the usual pak priority.
+- Installed retail items use both item-root and item-local `baseq3` layouts. If
+  both exist, the item-local `baseq3` content has priority over the same item's
+  root content.
+- A server reports only Workshop items whose archives were actually referenced,
+  in filesystem search order, as exact de-duplicated decimal IDs with retail's
+  trailing-space spelling. Retail carries this list in configstring `0x2cb`.
+- A client handles required Workshop content before ordinary pak comparison,
+  requests missing items one at a time with high priority, restarts the
+  filesystem once after the Workshop pass, and then resumes the normal download
+  path. A server-required item need not be one of the user's subscriptions.
+- Retail UI import 96 reports live per-item downloaded and total byte counts.
+
+### FnQL filesystem ownership and ordering
+
+The provider supplies a bounded subscription snapshot and install metadata; it
+never supplies filesystem policy. FnQL transactionally validates and registers
+the snapshot, then the filesystem owns all mount order, path containment,
+reference tracking, and restart decisions. A successful empty snapshot clears
+the subscribed set. An unavailable or failed provider call leaves the previous
+successful set intact instead of treating a service outage as an unsubscribe.
+
+Core filesystem initialization remains independent of Steam. Immediately after
+provider initialization and the early GameServer bootstrap, the common Workshop
+adapter captures its first usable snapshot and reloads the filesystem if the
+registered set changed; every such startup then adds the registered Workshop
+sources before the normal roots. Failed snapshots and subscribed entries that
+are not installed remain pending instead of being mistaken for a completed
+empty set. Authoritative snapshots retain a slow periodic poll even when event
+delivery is available; callbacks only accelerate that check. Provider
+reconfiguration resets an owned manual transfer and schedules a fresh snapshot,
+the normal callback pump precedes per-frame Workshop polling, and shutdown
+removes the Workshop observer before unloading the provider.
+
+FnQL retains at most 256 subscribed installs and, independently, at most 256
+transient installs. Transient entries are downloaded because a server required
+them while they were not subscribed; they survive provider snapshot refreshes
+and filesystem restarts for the lifetime of the process. This prevents the
+post-download restart from losing the content before ordinary pak validation.
+Neither registry is serialized by FnQL.
+
+Every registered source is read-only and must have a nonzero item ID, a bounded
+and terminated absolute install folder below a filesystem root, no traversal
+component or control character, and no folder already owned by a different
+item. A rejected registration is distinct from an unchanged valid row, so a
+bad provider path cannot be reported as a cache hit. FnQL mounts the validated
+item root and its `baseq3` child when present. It does not scan arbitrary
+Workshop directories, change `fs_basepath` or `fs_homepath`, or use a Workshop
+folder as a write target. The normal Steam/base/profile sources are added
+afterwards and therefore retain higher priority.
+
+Retail probes the exact readable marker `fs_basepath/baseq3/pak00.pk3` before
+the `fs_skipWorkshop` and build-script gates. When that marker is absent, it
+keeps registered Workshop roots available for loose-file reads but skips their
+entire archive-enumeration branch. FnQL mirrors that order and behavior for the
+item root and item-local `baseq3` root. A `pak00.pk3` supplied by a Workshop
+item is tagged with its nonzero item ID and cannot satisfy the later retail-base
+identity check; Workshop content therefore cannot authorize its own archive
+mounting or masquerade as the legitimate Steam installation.
+
+`fs_skipWorkshop` is a default-zero `CVAR_INIT` control for intentionally
+suppressing registered Workshop mounts; set it on the command line when needed.
+`com_buildScript` also suppresses those mounts so documentation, packaging, and
+other deterministic build-script runs cannot absorb account-specific content.
+These gates affect filesystem mounting, not provider initialization or the
+subscription/download API itself.
+
+### Reference publication and required downloads
+
+Each mounted Workshop archive carries its item identity through the normal pak
+reference machinery. Once map and module references have settled, a server
+publishes the exact referenced list to read-only cvar
+`sv_referencedSteamworks` and configstring `0x2cb`. Publication occurs after
+server spawn and is repeated when the Steam GameServer connects, but it does
+not depend on that connection or on configstring `0x2ca` having a GameServer
+SteamID. A provider-free server can therefore publish correct Workshop
+dependencies for content that the filesystem has already registered and
+mounted.
+
+On a non-demo connection whose negotiated protocol contract advertises
+Workshop content, the client parses `0x2cb` as whitespace-separated, nonzero
+decimal IDs. Legacy Quake III and ioquake3 connections never interpret that
+configstring as Workshop metadata. The parser ignores exact duplicates and
+rejects malformed, overflowing, and excess entries without accepting partial
+numeric tokens. When the provider exposes the UGC capability,
+already-installed items are registered immediately and missing items enter a
+single high-priority download queue.
+Completion callbacks are wake-up hints; polled item state and install metadata
+remain authoritative, which covers providers that coalesce callbacks. A failed
+item advances the bounded queue. Provider loss or an unavailable UGC lane falls
+back to ordinary pak validation instead of treating the content as present.
+The connection-required queue explicitly takes ownership from an outstanding
+manual download before it changes the shared progress cvars. Subscription
+snapshot reloads are deferred while that queue owns connection bootstrap, so a
+late install callback cannot restart the filesystem mid-connection.
+
+The automatic queue exposes `cl_workshopDownloadActive` and the retail-style
+`cl_downloadItem`, `cl_downloadName`, `cl_downloadCount`, `cl_downloadSize`, and
+`cl_downloadTime` progress values. UI import 96 queries live provider progress
+first and retains those cvars as the deterministic fallback. After cached or
+new installs have been registered, FnQL performs one checksum-feed-preserving
+filesystem restart and resumes the pre-existing pak/download flow.
+
+The operator commands accept exactly one nonzero decimal item ID:
+
+- `steam_downloadugc <itemid>` requests one high-priority download, publishes
+  the same progress cvars, applies a bounded timeout, registers the completed
+  install, and reloads the filesystem when the registration changed.
+- `steam_subscribeugc <itemid>` subscribes through the provider, then refreshes
+  the subscribed snapshot only after Steam reports both subscribed and
+  installed, avoiding a stale transient registration while state settles.
+- `steam_unsubscribeugc <itemid>` unsubscribes and refreshes the future
+  snapshot. As in retail, an existing mount remains valid until a later
+  filesystem restart.
+
+Subscribe and unsubscribe requests for different item IDs retain independent,
+bounded settle state. These commands and automatic server-required downloads require
+`FNQL_STEAM_CAP_UGC`; their presence in the console is not evidence that a live
+provider supports them.
+
+### Provider and platform limits
+
+FnQL's ABI can host a UGC implementation on any supported platform, but it does
+not synthesize Steam subscription or download success. The provider must expose
+subscription enumeration, item state, install metadata, byte progress,
+download, subscribe, unsubscribe, and bounded callback/event delivery for AppID
+`282440`. FnQL starts the Steam GameServer before its initial Workshop snapshot
+and revalidates the provider's dynamic status after that start and callback
+pumping, which permits a provider to acquire and expose a GameServer-owned UGC
+interface at the correct time. The current sibling nevertheless obtains UGC
+only from the Steam *client* interface. Consequently it requires a running
+Steam client with an active user that owns Quake Live; a GameServer-only role
+does not by itself provide UGC. In
+particular, do not assume that a headless dedicated process can perform live
+Workshop enumeration or downloads merely because its Steam GameServer lane
+initialized. It can still mount and publish content registered through a
+supported provider context, but absent that context the engine fails honestly
+to ordinary filesystem and pak behavior.
+
+Observed evidence is narrower than the desired provider implementation: the
+legitimate retail Windows `steam_api.dll` exports both `SteamUGC` and
+`SteamGameServerUGC`, and the QLSRP ownership mapping selects the latter for a
+dedicated process after GameServer initialization. FnQL therefore treats
+GameServer-owned UGC as a provider responsibility, not as a reason to initialize
+the Steam client in an unattended server. Such a provider must acquire the
+GameServer interface only after GameServer startup, register install/download
+callbacks with GameServer ownership, pump them through the GameServer callback
+lane, publish the resulting UGC bit through dynamic provider status, and clear
+that bit before releasing the interface during GameServer shutdown. The
+provider-info mask describes what is usable immediately after startup; each
+successful status snapshot is runtime-authoritative and may add or remove UGC
+as role ownership changes. FnQL validates the complete UGC function table before
+exposing either mask. Client-owned UGC remains the listen/client path; a
+GameServer-only provider must not silently initialize the client lane. This is
+an implementation contract inferred from the two evidence sources; a live
+unattended retail download remains the promotion gate.
+
+The legitimate retail Windows redistributable is x86, so Win32 remains the
+validated retail provider lane. Linux, macOS, Windows x64, and unattended
+dedicated UGC require a platform-appropriate administrator-supplied Steam
+runtime/provider and their own live validation. No local subscription IDs,
+install folders, account data, or retail assets are recorded in this document
+or repository.
 
 ## Implemented service surface
 
@@ -157,25 +342,43 @@ calling thread.
 
 Lobby receive coverage includes create/enter/leave, member state, bounded chat
 retrieval, metadata changes, game-server creation, kicks, and friend join
-requests. Workshop install/download callbacks are filtered against AppID
-`282440` before they reach the engine and include bounded install metadata when
-Steam reports it. Callback shutdown unregisters every object before unloading
-the retail API, and restart tests guard against duplicate registration.
-Subscribed-item snapshots also expose Steam's item-state bitmask, installed
-folder, size, and update timestamp. The WebUI can therefore distinguish content
-that is subscribed, installed, stale, downloading, or pending without treating
-a subscription alone as permission to access its files.
+requests. The sibling filters Workshop install/download callbacks against AppID
+`282440` before they reach the engine. Its snapshots expose Steam's item-state
+bitmask plus bounded install metadata and progress, while FnQL retains sole
+ownership of path validation and mounting as described above. Callback shutdown
+unregisters every object before unloading the retail API, and restart tests
+guard against duplicate registration. The WebUI can therefore distinguish
+content that is subscribed, installed, stale, downloading, or pending without
+treating a subscription alone as permission to access its files.
 
 The retail `getallugc` bridge is a genuine asynchronous UGC query rather than a
 subscribed-item alias. FnQL passes the retail numeric filter through the open
 ABI, the provider creates and sends an all-UGC request scoped to AppID `282440`,
 and a call-result object owns the native query until completion. At most 50
 title/description/preview records are copied into provider-owned, size-tagged
-storage before the native query is released. The engine then builds bounded
-retail-shaped JSON and publishes `web.ugc.results` followed by
-`web.ugc.complete`. Replacement requests and shutdown unregister and release a
-pending query; providers without this appended capability retain the older
-subscribed-item snapshot as a deterministic fallback.
+storage. On a terminal callback the provider first captures the native query,
+detaches its call-result, and clears the old shared in-flight ownership. Host
+event delivery is synchronous and may start a replacement query re-entrantly,
+so everything after that point refers only to the captured local handle.
+
+Retail control flow then branches solely on the I/O-failure flag. A non-I/O
+completion publishes `FNQL_STEAM_EVENT_UGC_QUERY_COMPLETE` while the captured
+native query remains live, then releases that exact handle after event delivery
+returns. A null callback payload is terminal but is not a failure by itself: in
+the non-I/O lane it produces a zero-row successful completion. A non-OK raw
+native result without I/O failure retains the same event-then-release ordering.
+Only the I/O-failure lane releases the captured query first and then emits the
+failed completion. This split preserves retail ordering without allowing
+post-event cleanup to clear or release a re-entrantly installed replacement.
+
+The copied snapshot remains available for the engine's bounded count-then-fetch
+calls until replacement or shutdown. A replacement request and shutdown
+likewise unregister and release the old request before changing ownership; the
+canceled request emits no ambiguous completion. Providers without this appended
+capability retain the older subscribed-item snapshot as a deterministic
+fallback. The all-UGC query bit is not implied by GameServer download support
+and stays client-owned unless a provider implements GameServer-owned call-result
+registration and pumping too.
 
 Avatar transfer is also bounded and ownership-safe. The provider resolves
 small, medium, and large avatar handles, reports asynchronous

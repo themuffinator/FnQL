@@ -1659,8 +1659,8 @@ qboolean CL_GetClientSteamId( int clientNum, unsigned int *steamIdLow, unsigned 
 ====================
 CL_GetWorkshopDownloadInfo
 
-Mirrors the retained UI download-info bridge using the active QL-style
-download cvars until a full Steam workshop queue exists locally.
+Uses live provider progress when available, with the active QL-style download
+cvars retained as the provider-free fallback.
 ====================
 */
 qboolean CL_GetWorkshopDownloadInfo( unsigned int itemIdLow, unsigned int itemIdHigh, unsigned long long *outDownloaded, unsigned long long *outTotal ) {
@@ -1678,13 +1678,34 @@ qboolean CL_GetWorkshopDownloadInfo( unsigned int itemIdLow, unsigned int itemId
 	if ( outTotal ) {
 		*outTotal = 0ull;
 	}
+	requestedItemId = ( static_cast<unsigned long long>( itemIdHigh ) << 32 ) | itemIdLow;
+	if ( FNQL_Steam_Available( FNQL_STEAM_CAP_UGC ) ) {
+		itemId = requestedItemId;
+		if ( itemId == 0 ) {
+			Cvar_VariableStringBuffer( "cl_downloadItem", itemText, sizeof( itemText ) );
+			(void)CL_ParseUnsignedLongLongString( itemText, &itemId );
+		}
+		if ( itemId != 0 ) {
+			std::uint64_t liveDownloaded = 0;
+			std::uint64_t liveTotal = 0;
+			if ( FNQL_Steam_GetItemDownloadInfo( itemId,
+				&liveDownloaded, &liveTotal ) == FNQL_STEAM_RESULT_OK ) {
+				if ( outDownloaded ) {
+					*outDownloaded = static_cast<unsigned long long>( liveDownloaded );
+				}
+				if ( outTotal ) {
+					*outTotal = static_cast<unsigned long long>( liveTotal );
+				}
+				return qtrue;
+			}
+		}
+	}
 
 	Cvar_VariableStringBuffer( "cl_downloadItem", itemText, sizeof( itemText ) );
 	if ( !itemText[0] || !CL_ParseUnsignedLongLongString( itemText, &itemId ) ) {
 		return qfalse;
 	}
 
-	requestedItemId = ( static_cast<unsigned long long>( itemIdHigh ) << 32 ) | itemIdLow;
 	if ( requestedItemId && requestedItemId != itemId ) {
 		return qfalse;
 	}
@@ -1826,6 +1847,7 @@ qboolean CL_Disconnect( qboolean showMainMenu ) {
 	bool cl_restarted = false;
 	const qboolean publishGameEnd = ( cls.state >= CA_CONNECTED || clc.demoplaying || clc.demorecording ) ? qtrue : qfalse;
 	CL_ClearSteamChallengeTicket();
+	CL_Workshop_Reset();
 
 	if ( !com_cl_running || !com_cl_running->integer ) {
 		return ToQboolean( cl_restarted );
@@ -2889,7 +2911,7 @@ After receiving a valid game state, we valid the cgame and local zip files here
 and determine if we need to download them
 =================
 */
-void CL_InitDownloads( void ) {
+static void CL_InitLegacyDownloads( void ) {
 
 	if ( !(cl_allowDownload->integer & DLF_ENABLE) )
 	{
@@ -2945,6 +2967,23 @@ void CL_InitDownloads( void ) {
 #endif // USE_CURL
 
 	CL_DownloadsComplete();
+}
+
+void CL_ResumeDownloadsAfterWorkshop( void ) {
+	CL_InitLegacyDownloads();
+}
+
+void CL_InitDownloads( void ) {
+	constexpr int QL_STEAM_REFERENCED_CONFIGSTRING = 0x2cb;
+	const fnql::protocol::Contract &activeContract =
+		fnql::protocol::ForWireProfile( clc.netchan.wireProfile );
+	if ( !clc.demoplaying &&
+		activeContract.Has( fnql::protocol::Capability::WorkshopContent ) &&
+		CL_Workshop_BeginRequiredDownloads(
+			CL_GetConfigStringValue( QL_STEAM_REFERENCED_CONFIGSTRING ) ) ) {
+		return;
+	}
+	CL_InitLegacyDownloads();
 }
 
 
@@ -3831,6 +3870,7 @@ void CL_Frame( int msec, int realMsec ) {
 	cls.realtime += realMsec;
 	cls.gametime += gameMsec;
 	CL_SteamP2PFrame();
+	CL_Workshop_Frame();
 
 	if ( cl_timegraph->integer ) {
 		SCR_DebugGraph( realMsec * 0.25f );
@@ -4869,6 +4909,7 @@ void CL_Init( void ) {
 	Cvar_Get ("cg_stereoSeparation", "0.4", CVAR_ARCHIVE);
 
 	CL_WebHost_Init();
+	CL_Workshop_Init();
 
 	//
 	// register client commands
@@ -4953,6 +4994,7 @@ void CL_Shutdown( const char *finalmsg, qboolean quit ) {
 
 	noGameRestart = quit != qfalse;
 	CL_Disconnect( qfalse );
+	CL_Workshop_Shutdown();
 	CL_WebHost_Shutdown();
 	CL_WebPak_Shutdown();
 	CL_HudShutdown();

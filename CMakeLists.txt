@@ -57,6 +57,9 @@ IF(NOT USE_RENDERER_DLOPEN AND RENDERER_DEFAULT STREQUAL "glx")
 ENDIF()
 
 AUX_SOURCE_DIRECTORY(code/qcommon QCOMMON_SRCS)
+list(APPEND QCOMMON_SRCS
+	code/platform/fnql_steam.cpp
+	code/platform/fnql_workshop.cpp)
 # exclude platform-dependent QVM bytecode compilers
 list(FILTER QCOMMON_SRCS EXCLUDE REGEX ".*vm_(aarch64|armv7l|powerpc|x86)\\.c$")
 # add platform-dependent QVM bytecode compilers
@@ -107,6 +110,8 @@ ADD_LIBRARY(botlib OBJECT ${BOTLIB_SRCS})
 TARGET_COMPILE_DEFINITIONS(botlib PRIVATE BOTLIB)
 
 SET(SERVER_SRCS
+	code/server/factory_catalog.cpp
+	code/server/factory_rotation.cpp
 	code/server/sv_bot.cpp
 	code/server/sv_ccmds.cpp
 	code/server/sv_client.cpp
@@ -116,6 +121,7 @@ SET(SERVER_SRCS
 	code/server/sv_main.cpp
 	code/server/sv_net_chan.cpp
 	code/server/sv_platform.cpp
+	code/server/sv_factory.cpp
 	code/server/sv_snapshot.cpp
 	code/server/sv_world.cpp
 	code/server/sv_zmq.cpp
@@ -334,12 +340,35 @@ target_compile_features(fnql_zmq_endpoint_tests PRIVATE cxx_std_17)
 target_include_directories(fnql_zmq_endpoint_tests PRIVATE code/server)
 add_test(NAME fnql_zmq_endpoint COMMAND fnql_zmq_endpoint_tests)
 
+ADD_EXECUTABLE(fnql_factory_catalog_tests
+	tests/factory_catalog_tests.cpp
+	code/server/factory_catalog.cpp)
+target_compile_features(fnql_factory_catalog_tests PRIVATE cxx_std_17)
+target_include_directories(fnql_factory_catalog_tests PRIVATE code/server)
+add_test(NAME fnql_factory_catalog COMMAND fnql_factory_catalog_tests)
+
+ADD_EXECUTABLE(fnql_factory_rotation_tests
+	tests/factory_rotation_tests.cpp
+	code/server/factory_rotation.cpp)
+target_compile_features(fnql_factory_rotation_tests PRIVATE cxx_std_17)
+target_include_directories(fnql_factory_rotation_tests PRIVATE code/server)
+add_test(NAME fnql_factory_rotation COMMAND fnql_factory_rotation_tests)
+
 find_package(Python3 COMPONENTS Interpreter)
 IF(Python3_Interpreter_FOUND)
 	add_test(NAME fnql_ql_services_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/ql_services_source_tests.py")
 	add_test(NAME fnql_ql_demo_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/ql_demo_source_tests.py")
+	add_test(NAME fnql_workshop_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/workshop_source_tests.py")
+	add_test(NAME fnql_cvar_factory_snapshot_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/cvar_factory_snapshot_tests.py")
+	add_test(NAME fnql_factory_runtime_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/factory_runtime_source_tests.py")
+	add_test(NAME fnql_retail_factory_probe
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/retail_factory_probe_tests.py" --meson)
+	set_tests_properties(fnql_retail_factory_probe PROPERTIES SKIP_RETURN_CODE 77)
 ENDIF()
 
 # renderers
