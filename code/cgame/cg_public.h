@@ -232,7 +232,9 @@ typedef enum {
 	CG_QL_IMPORT_CVAR_SET = 7,
 	CG_QL_IMPORT_CVAR_SET_VALUE = 8,
 	CG_QL_IMPORT_CVAR_VARIABLESTRINGBUFFER = 9,
-	CG_QL_IMPORT_CVAR_RESET = 10,
+	// Retail cgamex86.dll calls import +0x28 with numeric cvars such as
+	// "cl_freezeDemo" and consumes the x87 floating-point return value.
+	CG_QL_IMPORT_CVAR_VARIABLEVALUE = 10,
 	CG_QL_IMPORT_ARGC = 11,
 	CG_QL_IMPORT_ARGV = 12,
 	CG_QL_IMPORT_ARGS = 13,
@@ -377,6 +379,9 @@ typedef enum {
 	CG_QL_IMPORT_COMPAT_TESTPRINTINT,
 	CG_QL_IMPORT_COMPAT_TESTPRINTFLOAT,
 	CG_QL_IMPORT_COMPAT_ACOS,
+	// Cvar reset is not present in the retail 128-slot slab. Keep it as a
+	// source-side compatibility extension without changing earlier tail slots.
+	CG_QL_IMPORT_COMPAT_CVAR_RESET,
 	CG_QL_IMPORT_TOTAL_COUNT
 } cgameNativeImport_t;
 

@@ -15,6 +15,8 @@ class SteamProviderSourceTests(unittest.TestCase):
         self.assertIn("uint32_t size;", source)
         self.assertIn("uint32_t abi_version;", source)
         self.assertIn("FNQL_STEAM_AUTH_TICKET_CAPACITY 2048u", source)
+        self.assertIn("FNQL_STEAM_SERVER_BROWSER_INTERNET = 0u", source)
+        self.assertIn("FNQL_STEAM_SERVER_BROWSER_FRIENDS = 5u", source)
         self.assertIn("extern \"C\"", source)
         self.assertNotIn("std::", source)
         self.assertNotIn("Steamworks", source)
@@ -135,7 +137,8 @@ class SteamProviderSourceTests(unittest.TestCase):
         ):
             self.assertIn(call, source)
         self.assertIn("CL_WebHost_SteamBridgeUnavailable", source)
-        self.assertIn('"servers.refresh.response"', source)
+        self.assertIn('"servers.details.%s.response"', source)
+        self.assertNotIn('"servers.refresh.response"', source)
         self.assertIn("sizeOnDisk", source)
         self.assertIn("timestamp", source)
         self.assertIn("FNQL_STEAM_EVENT_LOBBY_CHAT_MESSAGE", source)

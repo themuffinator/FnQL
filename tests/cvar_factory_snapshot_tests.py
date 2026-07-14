@@ -118,6 +118,17 @@ class CvarFactorySnapshotSourceTests(unittest.TestCase):
         )
         self.assertIn("return qtrue;", body)
 
+    def test_reset_of_an_unchanged_readonly_cvar_is_a_noop_before_protection(self) -> None:
+        body = function_body(
+            self.source,
+            "cvar_t *Cvar_Set2( const char *var_name, const char *value, qboolean force )",
+        )
+        no_op_reset = "if ( !value && strcmp( var->resetString, var->string ) == 0 )"
+        protected_write = "if ( var->flags & (CVAR_ROM | CVAR_INIT | CVAR_CHEAT | CVAR_DEVELOPER) && !force )"
+        self.assertIn(no_op_reset, body)
+        self.assertIn(protected_write, body)
+        self.assertLess(body.index(no_op_reset), body.index(protected_write))
+
     def test_allocation_and_unset_paths_zero_or_free_snapshot_storage(self) -> None:
         self.assertIn("static cvar_t\tcvar_indexes[MAX_CVARS];", self.source)
         init_body = function_body(self.source, "void Cvar_Init (void)")

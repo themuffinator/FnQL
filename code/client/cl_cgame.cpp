@@ -1320,9 +1320,14 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		Q_strncpyz( VMA(2), Key_KeynumToString( args[1] ), args[3] );
 		return 0;
 	case CG_KEY_GETBINDINGBUF:
+	{
+		const char *binding;
+
 		VM_CHECKBOUNDS( cgvm, args[2], args[3] );
-		Q_strncpyz( VMA(2), Key_GetBinding( args[1] ), args[3] );
+		binding = Key_GetBinding( args[1] );
+		Q_strncpyz( VMA(2), binding ? binding : "", args[3] );
 		return 0;
+	}
 	case CG_KEY_SETBINDING:
 		Key_SetBinding( args[1], VMA(2) );
 		return 0;
@@ -1655,6 +1660,10 @@ static void QDECL QL_CG_trap_Cvar_SetValue( const char *varName, float value ) {
 	Cvar_SetValueSafe( varName, value );
 }
 
+static float QDECL QL_CG_trap_Cvar_VariableValue( const char *varName ) {
+	return Cvar_VariableValue( varName );
+}
+
 static void QDECL QL_CG_trap_Cvar_Reset( const char *varName ) {
 	Cvar_Reset( varName );
 }
@@ -1792,7 +1801,90 @@ static qhandle_t QDECL QL_CG_trap_GetAvatarImageHandle( unsigned int identityLow
 	return CL_GetAvatarImageHandle( identityLow, identityHigh );
 }
 
-static void CL_InitCGameImports( void ) {
+/*
+====================
+CL_IsExpectedRetailCGameNullImport
+
+The retail cgame import slab has three intentionally empty rows.  Keep those
+slots empty and require a callable target for every other retail row before
+passing the table to a native module.  The compatibility tail after slot 127
+is engine-owned and is not part of this retail-table validation.
+====================
+*/
+static bool CL_IsExpectedRetailCGameNullImport( int slot ) {
+	switch ( slot ) {
+	case CG_QL_IMPORT_NULL_100:
+	case CG_QL_IMPORT_NULL_118:
+	case CG_QL_IMPORT_NULL_119:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/*
+====================
+CL_IsExpectedRetailCGameReservedFallbackImport
+
+These rows are present in the recovered retail import slab but remain
+unclassified.  The current retail HLIL corpus has no direct calls through
+them, so keep their explicit no-op fallback rather than accidentally exposing
+an unrelated host service at one of their ABI positions.
+====================
+*/
+static bool CL_IsExpectedRetailCGameReservedFallbackImport( int slot ) {
+	switch ( slot ) {
+	case CG_QL_IMPORT_ADVERTISEMENTBRIDGE_RESERVED_59:
+	case CG_QL_IMPORT_ADVERTISEMENTBRIDGE_RESERVED_63:
+	case CG_QL_IMPORT_ADVERTISEMENTBRIDGE_RESERVED_65:
+	case CG_QL_IMPORT_RETAIL_RESERVED_66:
+	case CG_QL_IMPORT_RETAIL_RESERVED_67:
+	case CG_QL_IMPORT_RETAIL_RESERVED_68:
+	case CG_QL_IMPORT_ADVERTISEMENTBRIDGE_RESERVED_69:
+	case CG_QL_IMPORT_RETAIL_RESERVED_80:
+	case CG_QL_IMPORT_RETAIL_RESERVED_112:
+	case CG_QL_IMPORT_RETAIL_RESERVED_113:
+	case CG_QL_IMPORT_RETAIL_RESERVED_117:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/*
+====================
+CL_ValidateRetailCGameImportTable
+
+Retail cgame's dllEntry retains the raw host-table pointer and calls it by
+slot.  Fail the module load deterministically if a host edit leaves a retail
+slot null or populates one of retail's deliberate null rows.
+====================
+*/
+static bool CL_ValidateRetailCGameImportTable( void ) {
+	static_assert( CG_QL_IMPORT_COUNT == 128,
+		"retail cgame import slab length changed; revalidate native module ABI" );
+
+	for ( int slot = 0; slot < CG_QL_IMPORT_COUNT; ++slot ) {
+		const bool isNull = ql_cgame_imports[slot] == nullptr;
+		const bool expectedNull = CL_IsExpectedRetailCGameNullImport( slot );
+
+		if ( isNull != expectedNull ) {
+			Com_Printf( "CL_InitCGameImports: retail cgame import slot %i is %s; expected %s\\n",
+				slot, isNull ? "null" : "callable", expectedNull ? "null" : "callable" );
+			return false;
+		}
+
+		if ( !isNull && CL_IsExpectedRetailCGameReservedFallbackImport( slot ) &&
+			ql_cgame_imports[slot] != (ql_import_f)QL_CG_trap_RetailReservedImport ) {
+			Com_Printf( "CL_InitCGameImports: retail cgame reserved import slot %i has no fallback\\n", slot );
+			return false;
+		}
+	}
+
+	return true;
+}
+
+static bool CL_InitCGameImports( void ) {
 	Com_Memset( ql_cgame_imports, 0, sizeof( ql_cgame_imports ) );
 
 	ql_cgame_currentColor[0] = 1.0f;
@@ -1810,7 +1902,7 @@ static void CL_InitCGameImports( void ) {
 	ql_cgame_imports[CG_QL_IMPORT_CVAR_SET] = (ql_import_f)QL_CG_trap_Cvar_Set;
 	ql_cgame_imports[CG_QL_IMPORT_CVAR_SET_VALUE] = (ql_import_f)QL_CG_trap_Cvar_SetValue;
 	ql_cgame_imports[CG_QL_IMPORT_CVAR_VARIABLESTRINGBUFFER] = (ql_import_f)QL_CG_trap_Cvar_VariableStringBuffer;
-	ql_cgame_imports[CG_QL_IMPORT_CVAR_RESET] = (ql_import_f)QL_CG_trap_Cvar_Reset;
+	ql_cgame_imports[CG_QL_IMPORT_CVAR_VARIABLEVALUE] = (ql_import_f)QL_CG_trap_Cvar_VariableValue;
 	ql_cgame_imports[CG_QL_IMPORT_ARGC] = (ql_import_f)QL_CG_trap_Argc;
 	ql_cgame_imports[CG_QL_IMPORT_ARGV] = (ql_import_f)QL_CG_trap_Argv;
 	ql_cgame_imports[CG_QL_IMPORT_ARGS] = (ql_import_f)QL_CG_trap_Args;
@@ -1949,6 +2041,9 @@ static void CL_InitCGameImports( void ) {
 	ql_cgame_imports[CG_QL_IMPORT_COMPAT_TESTPRINTINT] = (ql_import_f)QL_CG_trap_TestPrintInt;
 	ql_cgame_imports[CG_QL_IMPORT_COMPAT_TESTPRINTFLOAT] = (ql_import_f)QL_CG_trap_TestPrintFloat;
 	ql_cgame_imports[CG_QL_IMPORT_COMPAT_ACOS] = (ql_import_f)QL_CG_trap_ACos;
+	ql_cgame_imports[CG_QL_IMPORT_COMPAT_CVAR_RESET] = (ql_import_f)QL_CG_trap_Cvar_Reset;
+
+	return CL_ValidateRetailCGameImportTable();
 }
 
 /*
@@ -1980,7 +2075,10 @@ that path is allowed, while preserving explicit bytecode/compiled fallback.
 static vm_t *CL_LoadCGameVM( vmInterpret_t interpret ) {
 	vm_t	*vm;
 
-	CL_InitCGameImports();
+	if ( !CL_InitCGameImports() ) {
+		Com_Printf( S_COLOR_RED "Native cgame import table validation failed.\\n" );
+		return nullptr;
+	}
 
 	if ( interpret != VMI_COMPILED &&
 		( !cl_connectedToPureServer || interpret == VMI_PINNED_NATIVE ) ) {

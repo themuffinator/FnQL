@@ -127,6 +127,37 @@ Promotion gate: source/table tests, synthetic DLL fixtures for success and each
 rejection class, legitimate retail-module load probes, and unchanged legacy VM
 tests.
 
+The opt-in cgame module probe starts a local `campgrounds ffa` session with a
+temporary homepath and `+set r_fullscreen 0`. It requires a user-built Win32
+FnQL executable and the user's legitimate retail installation; it verifies the
+startup registration load and active cgame load both report API 8, then waits
+for `CL_InitCGame` without an import-table or syscall failure. It neither
+copies retail files nor contacts retail servers.
+
+```powershell
+$env:FNQL_CGAME_RUNTIME_EXE = "<path-to-x86-fnql.exe>"
+python tests/retail_cgame_module_probe_tests.py
+```
+
+Set `FNQL_RETAIL_QL_PATH` when the Steam installation is outside the standard
+Windows location.
+
+The companion synthetic cgame probe builds a temporary x86 test DLL, places it
+only in a temporary homepath, and loads it through the same native module path.
+It proves cvar registration/range/update plus the host-table float return at
+retail slot 10, temporary-homepath filesystem I/O plus BotLib parser handles, local mute-state, memory/key-query pointer buffers, and native-pointer `GETGLCONFIG`/`GETGAMESTATE` imports,
+`SETUSERCMDVALUE`/`GETUSERCMD` state, a live `GETSNAPSHOT` copy, and
+engine-driven `CG_DRAW_ACTIVE_FRAME`/`CG_CONSOLE_COMMAND` calls; it does not replace or modify any
+retail file.
+
+```powershell
+$env:FNQL_CGAME_RUNTIME_EXE = "<path-to-x86-fnql.exe>"
+python tests/native_cgame_abi_probe_runtime_tests.py
+```
+
+It discovers Visual Studio 2022 automatically when installed in a standard
+location. Set `FNQL_VSDEVCMD` to a `VsDevCmd.bat` path when needed.
+
 ### 3. Protocol 91 and demo 91
 
 - Model the Quake Live retail wire contract as a protocol profile rather than

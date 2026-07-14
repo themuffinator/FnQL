@@ -72,6 +72,20 @@ typedef enum fnqlSteamRole_e {
 	FNQL_STEAM_ROLE_GAME_SERVER = 1u << 1
 } fnqlSteamRole_t;
 
+/*
+ * ISteamMatchmakingServers request kinds.  These are deliberately distinct
+ * from the retail WebUI's filter values: the WebUI uses 2 for Friends, while
+ * Steam's request selector uses 5.  Keep the provider ABI explicit so an
+ * engine caller cannot silently turn a Friends refresh into Internet.
+ */
+typedef enum fnqlSteamServerBrowserRequestMode_e {
+	FNQL_STEAM_SERVER_BROWSER_INTERNET = 0u,
+	FNQL_STEAM_SERVER_BROWSER_LAN = 1u,
+	FNQL_STEAM_SERVER_BROWSER_FAVORITES = 3u,
+	FNQL_STEAM_SERVER_BROWSER_HISTORY = 4u,
+	FNQL_STEAM_SERVER_BROWSER_FRIENDS = 5u
+} fnqlSteamServerBrowserRequestMode_t;
+
 typedef enum fnqlSteamCapability_e {
 	FNQL_STEAM_CAP_CLIENT = 1ull << 0,
 	FNQL_STEAM_CAP_IDENTITY = 1ull << 1,

@@ -8,6 +8,140 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+# Retail uix86.dll's recovered structured import slab. Keep this independent
+# from legacy uiImport_t syscall numbering: a native UI receives this pointer
+# table through dllEntry(), whereas a QVM receives syscall numbers.
+RETAIL_UI_NATIVE_IMPORT_BINDINGS = tuple(
+    line.split(":", 1)
+    for line in """
+UI_QL_IMPORT_PRINT:QL_UI_trap_Print
+UI_QL_IMPORT_ERROR:QL_UI_trap_Error
+UI_QL_IMPORT_MILLISECONDS:QL_UI_trap_Milliseconds
+UI_QL_IMPORT_REAL_TIME:QL_UI_trap_RealTime
+UI_QL_IMPORT_CVAR_REGISTER:QL_UI_trap_Cvar_Register
+UI_QL_IMPORT_CVAR_CREATE:QL_UI_trap_Cvar_Create
+UI_QL_IMPORT_CVAR_UPDATE:QL_UI_trap_Cvar_Update
+UI_QL_IMPORT_CVAR_SET:QL_UI_trap_Cvar_Set
+UI_QL_IMPORT_CVAR_SET_VALUE:QL_UI_trap_Cvar_SetValue
+UI_QL_IMPORT_CVAR_VARIABLE_STRING_BUFFER:QL_UI_trap_Cvar_VariableStringBuffer
+UI_QL_IMPORT_CVAR_VARIABLE_VALUE:QL_UI_trap_Cvar_VariableValue
+UI_QL_IMPORT_ARGC:QL_UI_trap_Argc
+UI_QL_IMPORT_ARGV:QL_UI_trap_Argv
+UI_QL_IMPORT_CMD_ARGS_BUFFER:QL_UI_trap_Cmd_ArgsBuffer_QL
+UI_QL_IMPORT_FS_FOPENFILE:QL_UI_trap_FS_FOpenFile
+UI_QL_IMPORT_FS_READ:QL_UI_trap_FS_Read
+UI_QL_IMPORT_FS_WRITE:QL_UI_trap_FS_Write
+UI_QL_IMPORT_FS_FCLOSEFILE:QL_UI_trap_FS_FCloseFile
+UI_QL_IMPORT_FS_SEEK:QL_UI_trap_FS_Seek
+UI_QL_IMPORT_FS_GETFILELIST:QL_UI_trap_FS_GetFileList
+UI_QL_IMPORT_CMD_EXECUTETEXT:QL_UI_trap_Cmd_ExecuteText_QL
+UI_QL_IMPORT_R_REGISTERMODEL:QL_UI_trap_R_RegisterModel
+UI_QL_IMPORT_R_REGISTERSKIN:QL_UI_trap_R_RegisterSkin
+UI_QL_IMPORT_R_REGISTERSHADERNOMIP:QL_UI_trap_R_RegisterShaderNoMip
+UI_QL_IMPORT_R_CLEARSCENE:QL_UI_trap_R_ClearScene
+UI_QL_IMPORT_R_ADDREFENTITYTOSCENE:QL_UI_trap_R_AddRefEntityToScene
+UI_QL_IMPORT_R_ADDPOLYTOSCENE:QL_UI_trap_R_AddPolyToScene
+UI_QL_IMPORT_R_ADDLIGHTTOSCENE:QL_UI_trap_R_AddLightToScene
+UI_QL_IMPORT_R_RENDERSCENE:QL_UI_trap_R_RenderScene
+UI_QL_IMPORT_R_SETCOLOR:QL_UI_trap_R_SetColor_QL
+UI_QL_IMPORT_R_DRAWSTRETCHPIC:QL_UI_trap_R_DrawStretchPic
+UI_QL_IMPORT_R_MODELBOUNDS:QL_UI_trap_R_ModelBounds
+UI_QL_IMPORT_UPDATESCREEN:QL_UI_trap_UpdateScreen
+UI_QL_IMPORT_CM_LERPTAG:QL_UI_trap_CM_LerpTag
+UI_QL_IMPORT_S_STARTLOCALSOUND:QL_UI_trap_S_StartLocalSound
+UI_QL_IMPORT_S_REGISTERSOUND:QL_UI_trap_S_RegisterSound_QL
+UI_QL_IMPORT_KEY_KEYNUMTOSTRINGBUF:QL_UI_trap_Key_KeynumToStringBuf
+UI_QL_IMPORT_KEY_GETBINDINGBUF:QL_UI_trap_Key_GetBindingBuf
+UI_QL_IMPORT_KEY_SETBINDING:QL_UI_trap_Key_SetBinding
+UI_QL_IMPORT_KEY_ISDOWN:QL_UI_trap_Key_IsDown
+UI_QL_IMPORT_KEY_GETOVERSTRIKEMODE:QL_UI_trap_Key_GetOverstrikeMode
+UI_QL_IMPORT_KEY_SETOVERSTRIKEMODE:QL_UI_trap_Key_SetOverstrikeMode
+UI_QL_IMPORT_KEY_CLEARSTATES:QL_UI_trap_Key_ClearStates
+UI_QL_IMPORT_KEY_GETCATCHER:QL_UI_trap_Key_GetCatcher
+UI_QL_IMPORT_KEY_SETCATCHER:QL_UI_trap_Key_SetCatcher
+UI_QL_IMPORT_GETCLIPBOARDDATA:QL_UI_trap_GetClipboardData
+UI_QL_IMPORT_GETCLIENTSTATE:QL_UI_trap_GetClientState
+UI_QL_IMPORT_GETGLCONFIG:QL_UI_trap_GetGlconfig
+UI_QL_IMPORT_GETCONFIGSTRING:QL_UI_trap_GetConfigString
+UI_QL_IMPORT_LAN_GETSERVERCOUNT:QL_UI_trap_LAN_GetServerCount
+UI_QL_IMPORT_LAN_GETSERVERADDRESSSTRING:QL_UI_trap_LAN_GetServerAddressString
+UI_QL_IMPORT_LAN_GETSERVERINFO:QL_UI_trap_LAN_GetServerInfo
+UI_QL_IMPORT_LAN_GETSERVERPING:QL_UI_trap_LAN_GetServerPing
+UI_QL_IMPORT_LAN_GETPINGQUEUECOUNT:QL_UI_trap_LAN_GetPingQueueCount
+UI_QL_IMPORT_LAN_CLEARPING:QL_UI_trap_LAN_ClearPing
+UI_QL_IMPORT_LAN_GETPING:QL_UI_trap_LAN_GetPing
+UI_QL_IMPORT_LAN_GETPINGINFO:QL_UI_trap_LAN_GetPingInfo
+UI_QL_IMPORT_LAN_LOADCACHEDSERVERS:QL_UI_trap_LAN_LoadCachedServers
+UI_QL_IMPORT_LAN_SAVECACHEDSERVERS:QL_UI_trap_LAN_SaveCachedServers
+UI_QL_IMPORT_LAN_MARKSERVERVISIBLE:QL_UI_trap_LAN_MarkServerVisible
+UI_QL_IMPORT_LAN_SERVERISVISIBLE:QL_UI_trap_LAN_ServerIsVisible
+UI_QL_IMPORT_LAN_UPDATEVISIBLEPINGS:QL_UI_trap_LAN_UpdateVisiblePings
+UI_QL_IMPORT_LAN_ADDSERVER:QL_UI_trap_LAN_AddServer
+UI_QL_IMPORT_LAN_REMOVESERVER:QL_UI_trap_LAN_RemoveServer
+UI_QL_IMPORT_LAN_RESETPINGS:QL_UI_trap_LAN_ResetPings
+UI_QL_IMPORT_LAN_SERVERSTATUS:QL_UI_trap_LAN_ServerStatus
+UI_QL_IMPORT_LAN_COMPARESERVERS:QL_UI_trap_LAN_CompareServers
+UI_QL_IMPORT_MEMORY_REMAINING:QL_UI_trap_MemoryRemaining
+UI_QL_IMPORT_GET_CDKEY:QL_UI_trap_GetCDKey
+UI_QL_IMPORT_SET_CDKEY:QL_UI_trap_SetCDKey_QL
+UI_QL_IMPORT_R_REGISTERFONT:QL_UI_trap_R_RegisterFont
+UI_QL_IMPORT_S_STOPBACKGROUNDTRACK:QL_UI_trap_S_StopBackgroundTrack
+UI_QL_IMPORT_S_STARTBACKGROUNDTRACK:QL_UI_trap_S_StartBackgroundTrack
+UI_QL_IMPORT_CIN_PLAYCINEMATIC:QL_UI_trap_CIN_PlayCinematic
+UI_QL_IMPORT_CIN_STOPCINEMATIC:QL_UI_trap_CIN_StopCinematic
+UI_QL_IMPORT_CIN_DRAWCINEMATIC:QL_UI_trap_CIN_DrawCinematic
+UI_QL_IMPORT_CIN_RUNCINEMATIC:QL_UI_trap_CIN_RunCinematic
+UI_QL_IMPORT_CIN_SETEXTENTS:QL_UI_trap_CIN_SetExtents
+UI_QL_IMPORT_R_REMAP_SHADER:QL_UI_trap_R_RemapShader
+UI_QL_IMPORT_VERIFY_CDKEY:QL_UI_trap_VerifyCDKey
+UI_QL_IMPORT_SETUP_ADVERT_CELL_SHADER:QL_UI_trap_SetupAdvertCellShader
+UI_QL_IMPORT_REFRESH_ADVERT_CELL_SHADER:QL_UI_trap_RefreshAdvertCellShader
+UI_QL_IMPORT_INIT_ADVERTISEMENT_BRIDGE:QL_UI_trap_InitAdvertisementBridge
+UI_QL_IMPORT_UNUSED_83:QL_UI_trap_UpdateAdvert
+UI_QL_IMPORT_ACTIVATE_ADVERT:QL_UI_trap_ActivateAdvert
+UI_QL_IMPORT_UNUSED_85:QL_UI_trap_Unused85
+UI_QL_IMPORT_SET_CURSOR_POS:QL_UI_trap_SetCursorPos
+UI_QL_IMPORT_GET_CURSOR_POS:QL_UI_trap_GetCursorPos
+UI_QL_IMPORT_PC_ADD_GLOBAL_DEFINE:QL_UI_trap_PC_AddGlobalDefine
+UI_QL_IMPORT_PC_LOAD_SOURCE:QL_UI_trap_PC_LoadSource
+UI_QL_IMPORT_PC_FREE_SOURCE:QL_UI_trap_PC_FreeSource
+UI_QL_IMPORT_PC_READ_TOKEN:QL_UI_trap_PC_ReadToken
+UI_QL_IMPORT_PC_SOURCE_FILE_AND_LINE:QL_UI_trap_PC_SourceFileAndLine
+UI_QL_IMPORT_IS_SUBSCRIBED_APP:QL_UI_trap_IsSubscribedApp
+UI_QL_IMPORT_DRAW_SCALED_TEXT:QL_UI_trap_DrawScaledText
+UI_QL_IMPORT_MEASURE_TEXT:QL_UI_trap_MeasureText
+UI_QL_IMPORT_GET_ITEM_DOWNLOAD_INFO:QL_UI_trap_GetItemDownloadInfo
+""".strip().splitlines()
+)
+
+# These entries preserve the current source UI when it is loaded through the
+# native bridge, but deliberately do not claim recovered retail slots.
+UI_NATIVE_SOURCE_EXTENSION_BINDINGS = {
+    "UI_QL_IMPORT_CVAR_RESET": (97, "QL_UI_trap_Cvar_Reset"),
+    "UI_QL_IMPORT_CVAR_INFOSTRINGBUFFER": (98, "QL_UI_trap_Cvar_InfoStringBuffer"),
+    "UI_QL_IMPORT_CM_LOADMODEL": (108, "QL_UI_trap_CM_LoadModel"),
+    "UI_QL_IMPORT_SET_PBCLSTATUS": (109, "QL_UI_trap_SetPbClStatus"),
+    "UI_QL_IMPORT_LAUNCHER_READSCREENSHOT": (110, "QL_UI_trap_Launcher_ReadScreenshot"),
+}
+
+RETAIL_UI_NATIVE_EXPORT_ORDER = (
+    "UI_NATIVE_EXPORT_INIT",
+    "UI_NATIVE_EXPORT_SHUTDOWN",
+    "UI_NATIVE_EXPORT_KEY_EVENT",
+    "UI_NATIVE_EXPORT_MOUSE_EVENT",
+    "UI_NATIVE_EXPORT_REFRESH",
+    "UI_NATIVE_EXPORT_IS_FULLSCREEN",
+    "UI_NATIVE_EXPORT_SET_ACTIVE_MENU",
+    "UI_NATIVE_EXPORT_CONSOLE_COMMAND",
+    "UI_NATIVE_EXPORT_DRAW_CONNECT_SCREEN",
+    "UI_NATIVE_EXPORT_HAS_UNIQUE_CD_KEY",
+    "UI_NATIVE_EXPORT_REFRESH_DISPLAY_CONTEXT",
+    "UI_NATIVE_EXPORT_MENUS_ANY_VISIBLE",
+    "UI_NATIVE_EXPORT_FOR_EACH_ARENA_NAME",
+    "UI_NATIVE_EXPORT_DRAW_ADVERTISEMENT_WAIT_SCREEN",
+)
+
+
 def read_repo_file(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
@@ -93,6 +227,66 @@ def ui_native_import_names(ui_public_h: str) -> list[str]:
     for match in re.finditer(r"\b(UI_QL_IMPORT_[A-Z0-9_]+)\b(?:\s*=|,)", body_match.group("body")):
         names.append(match.group(1))
     return names
+
+
+def ui_native_import_values(ui_public_h: str) -> dict[str, int]:
+    body = re.sub(
+        r"/\*.*?\*/", "", enum_body(ui_public_h, "uiQlImport_t"), flags=re.DOTALL
+    )
+    body = re.sub(r"//.*", "", body)
+
+    values: dict[str, int] = {}
+    next_value = 0
+    for entry in body.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        match = re.match(r"(UI_QL_IMPORT_[A-Z0-9_]+)(?:\s*=\s*(.*))?$", entry)
+        if match is None:
+            continue
+        name, expr = match.groups()
+        try:
+            value = next_value if expr is None else enum_value(expr, values)
+        except ValueError:
+            continue
+        values[name] = value
+        next_value = value + 1
+    return values
+
+
+def ui_native_import_bindings(cl_ui: str) -> dict[str, str]:
+    return dict(
+        re.findall(
+            r"ql_ui_imports\[(UI_QL_IMPORT_[A-Z0-9_]+)\]\s*=\s*"
+            r"\(ql_import_f\)(QL_UI_trap_[A-Za-z0-9_]+);",
+            cl_ui,
+        )
+    )
+
+
+def ui_native_export_values(ui_public_h: str) -> dict[str, int]:
+    body = re.sub(
+        r"/\*.*?\*/", "", enum_body(ui_public_h, "uiNativeExport_t"), flags=re.DOTALL
+    )
+    body = re.sub(r"//.*", "", body)
+
+    values: dict[str, int] = {}
+    next_value = 0
+    for entry in body.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        match = re.match(r"(UI_NATIVE_EXPORT_[A-Z0-9_]+)(?:\s*=\s*(.*))?$", entry)
+        if match is None:
+            continue
+        name, expr = match.groups()
+        try:
+            value = next_value if expr is None else enum_value(expr, values)
+        except ValueError:
+            continue
+        values[name] = value
+        next_value = value + 1
+    return values
 
 
 def ui_native_export_names(ui_public_h: str) -> list[str]:
@@ -378,19 +572,65 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
         self.assertEqual(102, len(import_names))
         self.assertFalse(import_names - assigned_names)
 
+    def test_ui_native_import_abi_matches_retail_slots_and_host_adapters(self) -> None:
+        ui_public = read_repo_file("code/ui/ui_public.h")
+        cl_ui = read_repo_file("code/client/cl_ui.cpp")
+
+        values = ui_native_import_values(ui_public)
+        bindings = ui_native_import_bindings(cl_ui)
+        expected_bindings = dict(RETAIL_UI_NATIVE_IMPORT_BINDINGS)
+        expected_bindings.update(
+            {
+                name: adapter
+                for name, (_, adapter) in UI_NATIVE_SOURCE_EXTENSION_BINDINGS.items()
+            }
+        )
+
+        self.assertEqual(97, len(RETAIL_UI_NATIVE_IMPORT_BINDINGS))
+        self.assertEqual(
+            list(range(97)),
+            [values[name] for name, _ in RETAIL_UI_NATIVE_IMPORT_BINDINGS],
+        )
+        self.assertEqual(
+            {
+                name: slot
+                for name, (slot, _) in UI_NATIVE_SOURCE_EXTENSION_BINDINGS.items()
+            },
+            {
+                name: values[name]
+                for name in UI_NATIVE_SOURCE_EXTENSION_BINDINGS
+            },
+        )
+        self.assertEqual(expected_bindings, bindings)
+
     def test_ui_native_export_table_is_dispatched(self) -> None:
         ui_public = read_repo_file("code/ui/ui_public.h")
         vm_c = read_repo_file("code/qcommon/vm.c")
 
         export_names = set(ui_native_export_names(ui_public))
+        export_values = ui_native_export_values(ui_public)
         expected_call_names = {ui_call_for_native_export(name) for name in export_names}
         handled_call_names = set(re.findall(r"case\s+(UI_[A-Z0-9_]+)\s*:", vm_c))
 
+        self.assertEqual(list(RETAIL_UI_NATIVE_EXPORT_ORDER), ui_native_export_names(ui_public))
+        self.assertEqual(
+            list(range(len(RETAIL_UI_NATIVE_EXPORT_ORDER))),
+            [export_values[name] for name in RETAIL_UI_NATIVE_EXPORT_ORDER],
+        )
         self.assertEqual(14, len(export_names))
         self.assertFalse(expected_call_names - handled_call_names)
         self.assertIn("if ( vm->dllApiVersion > UI_API_VERSION )", vm_c)
         self.assertIn("uiExportIndex = callnum - 1;", vm_c)
         self.assertIn("dllExports[uiExportIndex]", vm_c)
+
+    def test_structured_native_ui_requires_the_retail_api_and_all_exports(self) -> None:
+        vm_c = read_repo_file("code/qcommon/vm.c")
+
+        self.assertIn("return UI_QL_API_VERSION;", vm_c)
+        self.assertIn("return UI_NATIVE_EXPORT_COUNT;", vm_c)
+        self.assertIn("if ( vm->dllApiVersion != expectedApiVersion )", vm_c)
+        self.assertIn("if ( !dllExports[i] )", vm_c)
+        self.assertIn("Rejected DLL '%s': missing native export slot %d", vm_c)
 
     def test_cgame_register_cvars_bridge_is_wired(self) -> None:
         qcommon_h = read_repo_file("code/qcommon/qcommon.h")

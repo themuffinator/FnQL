@@ -7,6 +7,174 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# The x86 retail cgame's structured 128-slot import ABI.  Keep this explicit
+# rather than inferring it from FnQL's current initializer so a swapped adapter
+# is caught just as reliably as a missing one.
+RETAIL_CGAME_NATIVE_IMPORT_BINDINGS = tuple(
+    line.split(":", 2)
+    for line in """
+0:CG_QL_IMPORT_PRINT:QL_CG_trap_Print
+1:CG_QL_IMPORT_ERROR:QL_CG_trap_Error
+2:CG_QL_IMPORT_MILLISECONDS:QL_CG_trap_Milliseconds
+3:CG_QL_IMPORT_REAL_TIME:QL_CG_trap_RealTime
+4:CG_QL_IMPORT_CVAR_REGISTER:QL_CG_trap_Cvar_Register
+5:CG_QL_IMPORT_CVAR_REGISTER_RANGE:QL_CG_trap_Cvar_RegisterRange
+6:CG_QL_IMPORT_CVAR_UPDATE:QL_CG_trap_Cvar_Update
+7:CG_QL_IMPORT_CVAR_SET:QL_CG_trap_Cvar_Set
+8:CG_QL_IMPORT_CVAR_SET_VALUE:QL_CG_trap_Cvar_SetValue
+9:CG_QL_IMPORT_CVAR_VARIABLESTRINGBUFFER:QL_CG_trap_Cvar_VariableStringBuffer
+10:CG_QL_IMPORT_CVAR_VARIABLEVALUE:QL_CG_trap_Cvar_VariableValue
+11:CG_QL_IMPORT_ARGC:QL_CG_trap_Argc
+12:CG_QL_IMPORT_ARGV:QL_CG_trap_Argv
+13:CG_QL_IMPORT_ARGS:QL_CG_trap_Args
+14:CG_QL_IMPORT_FS_FOPENFILE:QL_CG_trap_FS_FOpenFile
+15:CG_QL_IMPORT_FS_READ:QL_CG_trap_FS_Read
+16:CG_QL_IMPORT_FS_WRITE:QL_CG_trap_FS_Write
+17:CG_QL_IMPORT_FS_FCLOSEFILE:QL_CG_trap_FS_FCloseFile
+18:CG_QL_IMPORT_FS_SEEK:QL_CG_trap_FS_Seek
+19:CG_QL_IMPORT_FS_GETFILELIST:QL_CG_trap_FS_GetFileList
+20:CG_QL_IMPORT_SENDCONSOLECOMMAND:QL_CG_trap_SendConsoleCommand
+21:CG_QL_IMPORT_ADDCOMMAND:QL_CG_trap_AddCommand
+22:CG_QL_IMPORT_REMOVECOMMAND:QL_CG_trap_RemoveCommand
+23:CG_QL_IMPORT_SENDCLIENTCOMMAND:QL_CG_trap_SendClientCommand
+24:CG_QL_IMPORT_UPDATESCREEN:QL_CG_trap_UpdateScreen
+25:CG_QL_IMPORT_CM_LOADMAP:QL_CG_trap_CM_LoadMap
+26:CG_QL_IMPORT_CM_NUMINLINEMODELS:QL_CG_trap_CM_NumInlineModels
+27:CG_QL_IMPORT_CM_INLINEMODEL:QL_CG_trap_CM_InlineModel
+28:CG_QL_IMPORT_CM_TEMPBOXMODEL:QL_CG_trap_CM_TempBoxModel
+29:CG_QL_IMPORT_CM_TEMPCAPSULEMODEL:QL_CG_trap_CM_TempCapsuleModel
+30:CG_QL_IMPORT_CM_POINTCONTENTS:QL_CG_trap_CM_PointContents
+31:CG_QL_IMPORT_CM_TRANSFORMEDPOINTCONTENTS:QL_CG_trap_CM_TransformedPointContents
+32:CG_QL_IMPORT_CM_BOXTRACE:QL_CG_trap_CM_BoxTrace
+33:CG_QL_IMPORT_CM_CAPSULETRACE:QL_CG_trap_CM_CapsuleTrace
+34:CG_QL_IMPORT_CM_TRANSFORMEDBOXTRACE:QL_CG_trap_CM_TransformedBoxTrace
+35:CG_QL_IMPORT_CM_TRANSFORMEDCAPSULETRACE:QL_CG_trap_CM_TransformedCapsuleTrace
+36:CG_QL_IMPORT_CM_MARKFRAGMENTS:QL_CG_trap_CM_MarkFragments
+37:CG_QL_IMPORT_S_STARTSOUND:QL_CG_trap_S_StartSound
+38:CG_QL_IMPORT_S_STARTSOUND_VOLUME:QL_CG_trap_S_StartSoundVolume
+39:CG_QL_IMPORT_S_STARTLOCALSOUND:QL_CG_trap_S_StartLocalSound
+40:CG_QL_IMPORT_S_STARTLOCALSOUND_VOLUME:QL_CG_trap_S_StartLocalSoundVolume
+41:CG_QL_IMPORT_S_CLEARLOOPINGSOUNDS_FRAME:QL_CG_trap_S_ClearLoopingSoundsFrame
+42:CG_QL_IMPORT_S_CLEARLOOPINGSOUNDS_KILLALL:QL_CG_trap_S_ClearLoopingSoundsKillAll
+43:CG_QL_IMPORT_S_ADDLOOPINGSOUND:QL_CG_trap_S_AddLoopingSound
+44:CG_QL_IMPORT_S_UPDATEENTITYPOSITION:QL_CG_trap_S_UpdateEntityPosition
+45:CG_QL_IMPORT_S_RESPATIALIZE:QL_CG_trap_S_Respatialize
+46:CG_QL_IMPORT_S_REGISTERSOUND:QL_CG_trap_S_RegisterSound
+47:CG_QL_IMPORT_S_STARTBACKGROUNDTRACK:QL_CG_trap_S_StartBackgroundTrack
+48:CG_QL_IMPORT_S_STOPBACKGROUNDTRACK:QL_CG_trap_S_StopBackgroundTrack
+49:CG_QL_IMPORT_R_LOADWORLDMAP:QL_CG_trap_R_LoadWorldMap
+50:CG_QL_IMPORT_R_REGISTERMODEL:QL_CG_trap_R_RegisterModel
+51:CG_QL_IMPORT_R_REGISTERSKIN:QL_CG_trap_R_RegisterSkin
+52:CG_QL_IMPORT_R_REGISTERSHADER:QL_CG_trap_R_RegisterShader
+53:CG_QL_IMPORT_R_REGISTERSHADERNOMIP:QL_CG_trap_R_RegisterShaderNoMip
+54:CG_QL_IMPORT_ADVERTISEMENTBRIDGE_RESERVED_21C0:QL_CG_trap_AdvertisementBridge_Reserved21C0
+55:CG_QL_IMPORT_SETUP_ADVERT_CELL_SHADER:QL_CG_trap_SetupAdvertCellShader
+56:CG_QL_IMPORT_REFRESH_ADVERT_CELL_SHADER:QL_CG_trap_RefreshAdvertCellShader
+57:CG_QL_IMPORT_SET_ACTIVE_ADVERT:QL_CG_trap_SetActiveAdvert
+58:CG_QL_IMPORT_UPDATE_ADVERT:QL_CG_trap_UpdateAdvert
+59:CG_QL_IMPORT_ADVERTISEMENTBRIDGE_RESERVED_59:QL_CG_trap_RetailReservedImport
+60:CG_QL_IMPORT_ADVERTISEMENTBRIDGE_SET_MAP_PATH:QL_CG_trap_AdvertisementBridge_SetMapPath
+61:CG_QL_IMPORT_ADVERTISEMENTBRIDGE_INITCGAME:QL_CG_trap_AdvertisementBridge_InitCGame
+62:CG_QL_IMPORT_ADVERTISEMENTBRIDGE_SHUTDOWNCGAME:QL_CG_trap_AdvertisementBridge_ShutdownCGame
+63:CG_QL_IMPORT_ADVERTISEMENTBRIDGE_RESERVED_63:QL_CG_trap_RetailReservedImport
+64:CG_QL_IMPORT_ADVERTISEMENTBRIDGE_SETFRAMETIME:QL_CG_trap_AdvertisementBridge_SetFrameTime
+65:CG_QL_IMPORT_ADVERTISEMENTBRIDGE_RESERVED_65:QL_CG_trap_RetailReservedImport
+66:CG_QL_IMPORT_RETAIL_RESERVED_66:QL_CG_trap_RetailReservedImport
+67:CG_QL_IMPORT_RETAIL_RESERVED_67:QL_CG_trap_RetailReservedImport
+68:CG_QL_IMPORT_RETAIL_RESERVED_68:QL_CG_trap_RetailReservedImport
+69:CG_QL_IMPORT_ADVERTISEMENTBRIDGE_RESERVED_69:QL_CG_trap_RetailReservedImport
+70:CG_QL_IMPORT_R_CLEARSCENE:QL_CG_trap_R_ClearScene
+71:CG_QL_IMPORT_R_ADDREFENTITYTOSCENE:QL_CG_trap_R_AddRefEntityToScene
+72:CG_QL_IMPORT_R_ADDPOLYTOSCENE:QL_CG_trap_R_AddPolyToScene
+73:CG_QL_IMPORT_R_ADDPOLYSTOSCENE:QL_CG_trap_R_AddPolysToScene
+74:CG_QL_IMPORT_R_ADDLIGHTTOSCENE:QL_CG_trap_R_AddLightToScene
+75:CG_QL_IMPORT_R_LIGHTFORPOINT:QL_CG_trap_R_LightForPoint
+76:CG_QL_IMPORT_R_RENDERSCENE:QL_CG_trap_R_RenderScene
+77:CG_QL_IMPORT_ADVERTISEMENTBRIDGE_UPDATE_LOADING_VIEW_PARAMETERS:QL_CG_trap_AdvertisementBridge_UpdateLoadingViewParameters
+78:CG_QL_IMPORT_R_SETCOLOR:QL_CG_trap_R_SetColor_QL
+79:CG_QL_IMPORT_R_DRAWSTRETCHPIC:QL_CG_trap_R_DrawStretchPic
+80:CG_QL_IMPORT_RETAIL_RESERVED_80:QL_CG_trap_RetailReservedImport
+81:CG_QL_IMPORT_R_MODELBOUNDS:QL_CG_trap_R_ModelBounds
+82:CG_QL_IMPORT_R_LERPTAG:QL_CG_trap_R_LerpTag
+83:CG_QL_IMPORT_R_REMAP_SHADER:QL_CG_trap_R_RemapShader
+84:CG_QL_IMPORT_GETGLCONFIG:QL_CG_trap_GetGlconfig
+85:CG_QL_IMPORT_GETGAMESTATE:QL_CG_trap_GetGameState
+86:CG_QL_IMPORT_GETCURRENTSNAPSHOTNUMBER:QL_CG_trap_GetCurrentSnapshotNumber
+87:CG_QL_IMPORT_GETSNAPSHOT:QL_CG_trap_GetSnapshot
+88:CG_QL_IMPORT_GETSERVERCOMMAND:QL_CG_trap_GetServerCommand
+89:CG_QL_IMPORT_GETCURRENTCMDNUMBER:QL_CG_trap_GetCurrentCmdNumber
+90:CG_QL_IMPORT_GETUSERCMD:QL_CG_trap_GetUserCmd
+91:CG_QL_IMPORT_SETUSERCMDVALUE:QL_CG_trap_SetUserCmdValue
+92:CG_QL_IMPORT_MEMORY_REMAINING:QL_CG_trap_MemoryRemaining
+93:CG_QL_IMPORT_R_REGISTERFONT:QL_CG_trap_R_RegisterFont
+94:CG_QL_IMPORT_KEY_ISDOWN:QL_CG_trap_Key_IsDown
+95:CG_QL_IMPORT_KEY_GETCATCHER:QL_CG_trap_Key_GetCatcher
+96:CG_QL_IMPORT_KEY_SETCATCHER:QL_CG_trap_Key_SetCatcher
+97:CG_QL_IMPORT_KEY_GETKEY:QL_CG_trap_Key_GetKey
+98:CG_QL_IMPORT_KEY_KEYNUMTOSTRINGBUF:QL_CG_trap_Key_KeynumToStringBuf
+99:CG_QL_IMPORT_KEY_GETBINDINGBUF:QL_CG_trap_Key_GetBindingBuf
+100:CG_QL_IMPORT_NULL_100:<null>
+101:CG_QL_IMPORT_CIN_PLAYCINEMATIC:QL_CG_trap_CIN_PlayCinematic
+102:CG_QL_IMPORT_CIN_STOPCINEMATIC:QL_CG_trap_CIN_StopCinematic
+103:CG_QL_IMPORT_CIN_RUNCINEMATIC:QL_CG_trap_CIN_RunCinematic
+104:CG_QL_IMPORT_CIN_DRAWCINEMATIC:QL_CG_trap_CIN_DrawCinematic
+105:CG_QL_IMPORT_CIN_SETEXTENTS:QL_CG_trap_CIN_SetExtents
+106:CG_QL_IMPORT_GET_ENTITY_TOKEN:QL_CG_trap_GetEntityToken
+107:CG_QL_IMPORT_PC_ADD_GLOBAL_DEFINE:QL_CG_trap_PC_AddGlobalDefine
+108:CG_QL_IMPORT_PC_LOAD_SOURCE:QL_CG_trap_PC_LoadSource
+109:CG_QL_IMPORT_PC_FREE_SOURCE:QL_CG_trap_PC_FreeSource
+110:CG_QL_IMPORT_PC_READ_TOKEN:QL_CG_trap_PC_ReadToken
+111:CG_QL_IMPORT_PC_SOURCE_FILE_AND_LINE:QL_CG_trap_PC_SourceFileAndLine
+112:CG_QL_IMPORT_RETAIL_RESERVED_112:QL_CG_trap_RetailReservedImport
+113:CG_QL_IMPORT_RETAIL_RESERVED_113:QL_CG_trap_RetailReservedImport
+114:CG_QL_IMPORT_ADVERTISEMENTBRIDGE_UPDATE_VIEW_PARAMETERS:QL_CG_trap_AdvertisementBridge_UpdateViewParameters
+115:CG_QL_IMPORT_ADVERTISEMENTBRIDGE_CLEAR_DELAY:QL_CG_trap_AdvertisementBridge_ClearDelay
+116:CG_QL_IMPORT_PUBLISH_TAGGED_INFO_STRING:QL_CG_trap_PublishTaggedInfoString
+117:CG_QL_IMPORT_RETAIL_RESERVED_117:QL_CG_trap_RetailReservedImport
+118:CG_QL_IMPORT_NULL_118:<null>
+119:CG_QL_IMPORT_NULL_119:<null>
+120:CG_QL_IMPORT_R_MIRROR_POINT:QL_CG_trap_R_MirrorPoint
+121:CG_QL_IMPORT_R_MIRROR_VECTOR:QL_CG_trap_R_MirrorVector
+122:CG_QL_IMPORT_IS_SUBSCRIBED_APP:QL_CG_trap_IsSubscribedApp
+123:CG_QL_IMPORT_DRAW_SCALED_TEXT:QL_CG_trap_DrawScaledText
+124:CG_QL_IMPORT_MEASURE_TEXT:QL_CG_trap_MeasureText
+125:CG_QL_IMPORT_IS_CLIENT_MUTED:QL_CG_trap_IsClientMuted
+126:CG_QL_IMPORT_TOGGLE_CLIENT_MUTE:QL_CG_trap_ToggleClientMute
+127:CG_QL_IMPORT_GET_AVATAR_IMAGE_HANDLE:QL_CG_trap_GetAvatarImageHandle
+""".strip().splitlines()
+)
+
+# The retail DLL's dllEntry export table is distinct from the legacy VM call
+# numbers.  Keep the relationship explicit, including the registration-only
+# entry point and the confirmed null slot, so dispatch changes cannot silently
+# target the adjacent retail function.
+RETAIL_CGAME_NATIVE_EXPORT_BINDINGS = tuple(
+    line.split(":", 2)
+    for line in """
+0:CG_INIT:CG_NATIVE_EXPORT_INIT
+1:<register-cvars>:CG_NATIVE_EXPORT_REGISTER_CVARS
+2:CG_SHUTDOWN:CG_NATIVE_EXPORT_SHUTDOWN
+3:CG_CONSOLE_COMMAND:CG_NATIVE_EXPORT_CONSOLE_COMMAND
+4:CG_DRAW_ACTIVE_FRAME:CG_NATIVE_EXPORT_DRAW_ACTIVE_FRAME
+5:CG_CROSSHAIR_PLAYER:CG_NATIVE_EXPORT_CROSSHAIR_PLAYER
+6:CG_LAST_ATTACKER:CG_NATIVE_EXPORT_LAST_ATTACKER
+7:CG_KEY_EVENT:CG_NATIVE_EXPORT_KEY_EVENT
+8:CG_MOUSE_EVENT:CG_NATIVE_EXPORT_MOUSE_EVENT
+9:CG_EVENT_HANDLING:CG_NATIVE_EXPORT_EVENT_HANDLING
+10:CG_SHOW_1ST_TRACKED_PLAYER:CG_NATIVE_EXPORT_SHOW_1ST_TRACKED_PLAYER
+11:CG_SHOW_2ND_TRACKED_PLAYER:CG_NATIVE_EXPORT_SHOW_2ND_TRACKED_PLAYER
+12:CG_CHAT_DOWN:CG_NATIVE_EXPORT_CHAT_DOWN
+13:CG_CHAT_UP:CG_NATIVE_EXPORT_CHAT_UP
+14:CG_GET_PHYSICS_TIME:CG_NATIVE_EXPORT_GET_PHYSICS_TIME
+15:CG_COPY_CLIENT_IDENTITY:CG_NATIVE_EXPORT_COPY_CLIENT_IDENTITY
+16:<null>:CG_NATIVE_EXPORT_RESERVED_NULL
+17:CG_GET_CHAT_FIELD_Y:CG_NATIVE_EXPORT_GET_CHAT_FIELD_Y
+18:CG_GET_CHAT_FIELD_PIXEL_WIDTH:CG_NATIVE_EXPORT_GET_CHAT_FIELD_PIXEL_WIDTH
+19:CG_GET_CHAT_FIELD_WIDTH_IN_CHARS:CG_NATIVE_EXPORT_GET_CHAT_FIELD_WIDTH_IN_CHARS
+20:CG_SET_CLIENT_SPEAKING_STATE:CG_NATIVE_EXPORT_SET_CLIENT_SPEAKING_STATE
+""".strip().splitlines()
+)
+
 
 def read_repo_file(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
@@ -21,6 +189,7 @@ class CGameNativeBridgeSourceTests(unittest.TestCase):
         self.assertIn("CG_QL_IMPORT_R_RENDERSCENE = 76", cg_public)
         self.assertIn("CG_QL_IMPORT_R_SETCOLOR = 78", cg_public)
         self.assertIn("CG_QL_IMPORT_DRAW_SCALED_TEXT = 123", cg_public)
+        self.assertIn("CG_QL_IMPORT_CVAR_VARIABLEVALUE = 10", cg_public)
         self.assertIn("CG_NATIVE_EXPORT_REGISTER_CVARS", cg_public)
         self.assertIn("CG_NATIVE_EXPORT_COPY_CLIENT_IDENTITY", cg_public)
         self.assertIn("CG_NATIVE_EXPORT_SET_CLIENT_SPEAKING_STATE", cg_public)
@@ -57,6 +226,150 @@ class CGameNativeBridgeSourceTests(unittest.TestCase):
         }
 
         self.assertEqual(import_names - assigned_names, expected_null_names)
+
+    def test_retail_cgame_import_slots_have_exact_host_adapters(self) -> None:
+        cg_public = read_repo_file("code/cgame/cg_public.h")
+        cl_cgame = read_repo_file("code/client/cl_cgame.cpp")
+
+        self.assertEqual(len(RETAIL_CGAME_NATIVE_IMPORT_BINDINGS), 128)
+        observed_slots: set[int] = set()
+        observed_names: set[str] = set()
+        for slot_text, import_name, adapter_name in RETAIL_CGAME_NATIVE_IMPORT_BINDINGS:
+            slot = int(slot_text)
+            self.assertNotIn(slot, observed_slots)
+            self.assertNotIn(import_name, observed_names)
+            observed_slots.add(slot)
+            observed_names.add(import_name)
+            self.assertIn(f"{import_name} = {slot}", cg_public)
+
+            assignment = f"ql_cgame_imports[{import_name}] = (ql_import_f){adapter_name};"
+            if adapter_name == "<null>":
+                self.assertNotIn(f"ql_cgame_imports[{import_name}] =", cl_cgame)
+            else:
+                self.assertIn(assignment, cl_cgame)
+
+        self.assertEqual(observed_slots, set(range(128)))
+
+    def test_retail_cvar_numeric_lookup_uses_slot_ten(self) -> None:
+        cg_public = read_repo_file("code/cgame/cg_public.h")
+        cl_cgame = read_repo_file("code/client/cl_cgame.cpp")
+
+        self.assertIn("CG_QL_IMPORT_CVAR_VARIABLEVALUE = 10", cg_public)
+        self.assertIn("CG_QL_IMPORT_COMPAT_CVAR_RESET", cg_public)
+        self.assertIn(
+            "static float QDECL QL_CG_trap_Cvar_VariableValue( const char *varName )",
+            cl_cgame,
+        )
+        self.assertIn("return Cvar_VariableValue( varName );", cl_cgame)
+        self.assertIn(
+            "ql_cgame_imports[CG_QL_IMPORT_CVAR_VARIABLEVALUE] = (ql_import_f)QL_CG_trap_Cvar_VariableValue;",
+            cl_cgame,
+        )
+        self.assertIn(
+            "ql_cgame_imports[CG_QL_IMPORT_COMPAT_CVAR_RESET] = (ql_import_f)QL_CG_trap_Cvar_Reset;",
+            cl_cgame,
+        )
+        self.assertNotIn("CG_QL_IMPORT_CVAR_RESET", cg_public)
+
+    def test_native_cgame_unbound_key_buffer_is_empty_not_fatal(self) -> None:
+        cl_cgame = read_repo_file("code/client/cl_cgame.cpp")
+
+        key_binding_case = cl_cgame[cl_cgame.index("case CG_KEY_GETBINDINGBUF:"):]
+        self.assertIn("const char *binding;", key_binding_case)
+        self.assertIn("binding = Key_GetBinding( args[1] );", key_binding_case)
+        self.assertIn('Q_strncpyz( VMA(2), binding ? binding : "", args[3] );', key_binding_case)
+
+    def test_retail_cgame_export_slots_have_exact_legacy_dispatch(self) -> None:
+        cg_public = read_repo_file("code/cgame/cg_public.h")
+        vm_c = read_repo_file("code/qcommon/vm.c")
+
+        export_enum = re.search(
+            r"typedef enum \{(?P<body>.*?)\} cgameNativeExport_t;",
+            cg_public,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(export_enum)
+        export_names = re.findall(
+            r"\b(CG_NATIVE_EXPORT_[A-Z0-9_]+)\b(?:\s*=|,)",
+            export_enum.group("body"),
+        )
+
+        self.assertEqual(len(RETAIL_CGAME_NATIVE_EXPORT_BINDINGS), 21)
+        observed_slots: set[int] = set()
+        expected_export_names: list[str] = []
+        for slot_text, call_name, export_name in RETAIL_CGAME_NATIVE_EXPORT_BINDINGS:
+            slot = int(slot_text)
+            self.assertNotIn(slot, observed_slots)
+            observed_slots.add(slot)
+            expected_export_names.append(export_name)
+
+            if call_name == "<register-cvars>":
+                self.assertIn(
+                    f"exportFunc = dllExports[{export_name}];",
+                    vm_c[vm_c.index("qboolean VM_CallCGameRegisterCvars"):],
+                )
+            elif call_name == "<null>":
+                self.assertIn(
+                    f"slot == {export_name}",
+                    vm_c[vm_c.index("static qboolean VM_NativeExportSlotIsRequired"):],
+                )
+            else:
+                self.assertIn(
+                    f"case {call_name}:\n\t\t\texportFunc = dllExports[{export_name}];",
+                    vm_c,
+                )
+
+        self.assertEqual(observed_slots, set(range(21)))
+        self.assertEqual(export_names, expected_export_names)
+
+    def test_retail_cgame_import_slab_is_validated_before_native_load(self) -> None:
+        cl_cgame = read_repo_file("code/client/cl_cgame.cpp")
+
+        self.assertIn("static bool CL_IsExpectedRetailCGameNullImport( int slot )", cl_cgame)
+        self.assertIn("static bool CL_ValidateRetailCGameImportTable( void )", cl_cgame)
+        self.assertIn("static_assert( CG_QL_IMPORT_COUNT == 128", cl_cgame)
+        for null_slot in (
+            "CG_QL_IMPORT_NULL_100",
+            "CG_QL_IMPORT_NULL_118",
+            "CG_QL_IMPORT_NULL_119",
+        ):
+            self.assertIn(f"case {null_slot}:", cl_cgame)
+        self.assertIn("return CL_ValidateRetailCGameImportTable();", cl_cgame)
+        self.assertIn("if ( !CL_InitCGameImports() )", cl_cgame)
+        self.assertIn("Native cgame import table validation failed.", cl_cgame)
+
+    def test_unclassified_retail_slots_remain_explicit_fallbacks(self) -> None:
+        cl_cgame = read_repo_file("code/client/cl_cgame.cpp")
+
+        fallback_slots = (
+            "CG_QL_IMPORT_ADVERTISEMENTBRIDGE_RESERVED_59",
+            "CG_QL_IMPORT_ADVERTISEMENTBRIDGE_RESERVED_63",
+            "CG_QL_IMPORT_ADVERTISEMENTBRIDGE_RESERVED_65",
+            "CG_QL_IMPORT_RETAIL_RESERVED_66",
+            "CG_QL_IMPORT_RETAIL_RESERVED_67",
+            "CG_QL_IMPORT_RETAIL_RESERVED_68",
+            "CG_QL_IMPORT_ADVERTISEMENTBRIDGE_RESERVED_69",
+            "CG_QL_IMPORT_RETAIL_RESERVED_80",
+            "CG_QL_IMPORT_RETAIL_RESERVED_112",
+            "CG_QL_IMPORT_RETAIL_RESERVED_113",
+            "CG_QL_IMPORT_RETAIL_RESERVED_117",
+        )
+
+        self.assertIn(
+            "static bool CL_IsExpectedRetailCGameReservedFallbackImport( int slot )",
+            cl_cgame,
+        )
+        for slot in fallback_slots:
+            self.assertIn(f"case {slot}:", cl_cgame)
+            self.assertIn(
+                f"ql_cgame_imports[{slot}] = (ql_import_f)QL_CG_trap_RetailReservedImport;",
+                cl_cgame,
+            )
+        self.assertIn(
+            "ql_cgame_imports[slot] != (ql_import_f)QL_CG_trap_RetailReservedImport",
+            cl_cgame,
+        )
+        self.assertIn("retail cgame reserved import slot %i has no fallback", cl_cgame)
 
     def test_vm_defaults_and_native_pointer_paths_support_retail_cgame(self) -> None:
         qcommon_h = read_repo_file("code/qcommon/qcommon.h")

@@ -24,6 +24,13 @@ user's legitimate Steam installation; they are not inferred from QLSRP:
   view and exposes a non-power-of-two 1280×720 software surface.
 - The engine-owned pre-document bridge makes `qz_instance` available during
   page bootstrap. The live page subsequently issued native bridge requests.
+- The retail Match Browser subscribes to `servers.details.*.response` for
+  each server row; `servers.refresh.start` and `servers.refresh.end` only
+  bracket the refresh. Its row identity is `<network-order IPv4>_<port>` and
+  includes `numPlayers`, `maxPlayers`, `botPlayers`, `password`, `vac`,
+  `steam_id`, `tags`, `gametype`, and `gamedir`. The browser's Friends filter
+  is request value `2`, while the Steam matchmaking request selector uses
+  value `5` for Friends.
 - Engine renderer screenshots showed the complete retail menu surface under
   OpenGL, OpenGL2, GLx, and Vulkan,
   including Play, Statistics, Steam Workshop, Steam Community, Settings,

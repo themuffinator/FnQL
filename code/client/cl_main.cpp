@@ -5172,6 +5172,7 @@ static void CL_ServerInfoPacket( const netadr_t *from, msg_t *msg ) {
 
 			Info_SetValueForKey( ping.info, "nettype", va( "%d", type ) );
 			CL_SetServerInfoByAddress( from, infoString, ping.time );
+			CL_WebHost_OnServerInfoResponse( from, infoString, ping.time );
 
 			return;
 		}

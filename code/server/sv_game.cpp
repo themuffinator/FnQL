@@ -1236,6 +1236,15 @@ static void QDECL QL_G_trap_SendConsoleCommandText( const char *text ) {
 QL_IMPORT4( QL_G_trap_Cvar_Register, G_CVAR_REGISTER, vmCvar_t *, const char *, const char *, int )
 QL_IMPORT1( QL_G_trap_Cvar_Update, G_CVAR_UPDATE, vmCvar_t * )
 QL_IMPORT2( QL_G_trap_Cvar_Set, G_CVAR_SET, const char *, const char * )
+
+// Retail qagame's direct import slot 11 returns the host cvar as a float.
+// Keep this distinct from the legacy G_CVAR_VARIABLE_INTEGER_VALUE syscall:
+// using its integer return through a native float ABI silently corrupts
+// fractional values on 32-bit Windows.
+static float QDECL QL_G_trap_Cvar_VariableValue( const char *varName ) {
+	return Cvar_VariableValue( varName );
+}
+
 QL_IMPORT1( QL_G_trap_Cvar_VariableIntegerValue, G_CVAR_VARIABLE_INTEGER_VALUE, const char * )
 QL_IMPORT3( QL_G_trap_Cvar_VariableStringBuffer, G_CVAR_VARIABLE_STRING_BUFFER, const char *, char *, int )
 QL_IMPORT0( QL_G_trap_Argc, G_ARGC )
@@ -1932,7 +1941,7 @@ static void SV_InitGameImports( void ) {
 	QL_BIND( G_QL_IMPORT_FS_FOPEN_FILE, QL_G_trap_FS_FOpenFile );
 	QL_BIND( G_QL_IMPORT_FS_FCLOSE_FILE, QL_G_trap_FS_FCloseFile );
 	QL_BIND( G_QL_IMPORT_ERROR, QL_G_trap_Error );
-	QL_BIND( G_QL_IMPORT_CVAR_VARIABLE_INTEGER_VALUE, QL_G_trap_Cvar_VariableIntegerValue );
+	QL_BIND( G_QL_IMPORT_CVAR_VARIABLE_VALUE, QL_G_trap_Cvar_VariableValue );
 	QL_BIND( G_QL_IMPORT_CVAR_UPDATE, QL_G_trap_Cvar_Update );
 	QL_BIND( G_QL_IMPORT_CVAR_VARIABLE_STRING_BUFFER, QL_G_trap_Cvar_VariableStringBuffer );
 	QL_BIND( G_QL_IMPORT_CVAR_SET_VALUE, QL_G_trap_Cvar_SetValue );

@@ -153,6 +153,12 @@ typedef enum {
 
 recovered retail uix86.dll native import table
 
+Retail observation (2026-07-14): the locally installed Steam UI module was
+an x86 PE32 DLL (machine 0x014c) with only dllEntry exported and no vmMain.
+The import ordering below is therefore a separate structured ABI, not the
+legacy source/QVM syscall ordering above. The matching source-contract test
+pins every recovered retail slot to its host adapter.
+
 Keep this distinct from uiImport_t above. The source/QVM UI continues to use
 the legacy syscall ABI, while the client-side native host bridge uses these
 recovered slot numbers for retail DLL compatibility.

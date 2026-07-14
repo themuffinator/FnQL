@@ -3357,10 +3357,10 @@ static void CL_WebHost_FormatNumericAddress( unsigned int ip, int port, char *bu
 		buffer,
 		(int)bufferSize,
 		"%u.%u.%u.%u:%d",
-		ip & 0xffu,
-		( ip >> 8 ) & 0xffu,
-		( ip >> 16 ) & 0xffu,
 		( ip >> 24 ) & 0xffu,
+		( ip >> 16 ) & 0xffu,
+		( ip >> 8 ) & 0xffu,
+		ip & 0xffu,
 		port
 	);
 }
@@ -3441,10 +3441,10 @@ static qboolean CL_WebHost_SetFavoriteServer( const char *payload ) {
 	}
 
 	if ( adr.type == NA_IP && FNQL_Steam_Available( FNQL_STEAM_CAP_FAVORITES ) ) {
-		const uint32_t packedIp = static_cast<uint32_t>( adr.ipv._4[0] )
-			| ( static_cast<uint32_t>( adr.ipv._4[1] ) << 8u )
-			| ( static_cast<uint32_t>( adr.ipv._4[2] ) << 16u )
-			| ( static_cast<uint32_t>( adr.ipv._4[3] ) << 24u );
+		const uint32_t packedIp = ( static_cast<uint32_t>( adr.ipv._4[0] ) << 24u )
+			| ( static_cast<uint32_t>( adr.ipv._4[1] ) << 16u )
+			| ( static_cast<uint32_t>( adr.ipv._4[2] ) << 8u )
+			| static_cast<uint32_t>( adr.ipv._4[3] );
 		const uint16_t port = static_cast<uint16_t>( BigShort( adr.port ) );
 		const fnqlSteamResult_t result = FNQL_Steam_SetFavoriteServer(
 			static_cast<uint32_t>( atoi( STEAMPATH_APPID ) ), packedIp, port,
@@ -3570,7 +3570,8 @@ static void CL_WebHost_ResetServerPings( int source ) {
 	}
 }
 
-static void CL_WebHost_StartServerRefresh( int requestMode, int source ) {
+static void CL_WebHost_StartServerRefresh( int requestMode, int source,
+	qboolean resetLegacyServers ) {
 	cl_webui.serverRefreshInitialized = qtrue;
 	cl_webui.serverRefreshActive = qtrue;
 	cl_webui.serverRefreshSteam = qfalse;
@@ -3579,8 +3580,42 @@ static void CL_WebHost_StartServerRefresh( int requestMode, int source ) {
 	cl_webui.serverRefreshTime = cls.realtime + ( source == AS_LOCAL ? CL_WEB_SERVER_LOCAL_REFRESH_WAIT_MSEC : CL_WEB_SERVER_REMOTE_REFRESH_WAIT_MSEC );
 	cl_webui.serverRefreshTimeoutTime = cls.realtime + CL_WEB_SERVER_REFRESH_TIMEOUT_MSEC;
 
-	CL_WebHost_MarkServerVisible( source, -1, qtrue );
-	CL_WebHost_ResetServerPings( source );
+	/*
+	 * A native Steam list is independent of the legacy source-browser
+	 * caches.  Do not touch those caches until the native request actually
+	 * declines and we select the fallback; otherwise a WebUI refresh would
+	 * perturb the data shown by the legacy UI and subsequent fallback query.
+	 */
+	if ( resetLegacyServers ) {
+		CL_WebHost_MarkServerVisible( source, -1, qtrue );
+		CL_WebHost_ResetServerPings( source );
+	}
+}
+
+static void CL_WebHost_PublishUnresponsiveServerRows( int source ) {
+	serverInfo_t *servers;
+	int count = 0;
+	int capacity = 0;
+
+	servers = CL_WebHost_GetServerList( source, &count, &capacity );
+	if ( !servers || count <= 0 ) {
+		return;
+	}
+	if ( count > capacity ) {
+		count = capacity;
+	}
+	for ( int index = 0; index < count; ++index ) {
+		char eventName[CL_WEB_EVENT_NAME_LENGTH];
+		char payload[64];
+		if ( !servers[index].visible || !servers[index].adr.port
+			|| servers[index].ping != 0 ) {
+			continue;
+		}
+		Com_sprintf( eventName, sizeof( eventName ),
+			"servers.details.%d.failed", index );
+		Com_sprintf( payload, sizeof( payload ), "{\"id\":%d}", index );
+		CL_WebView_PublishEvent( eventName, payload );
+	}
 }
 
 static void CL_WebHost_PublishServerBrowserRefreshEnd( void ) {
@@ -3594,6 +3629,9 @@ static void CL_WebHost_PublishServerBrowserRefreshEnd( void ) {
 	// being released. Make the terminal state visible first so completion is
 	// one-shot and cannot re-enter this owner.
 	releaseSteamRequest = cl_webui.serverRefreshSteam;
+	if ( !releaseSteamRequest ) {
+		CL_WebHost_PublishUnresponsiveServerRows( cl_webui.serverRefreshSource );
+	}
 	cl_webui.serverRefreshActive = qfalse;
 	cl_webui.serverRefreshSteam = qfalse;
 	if ( releaseSteamRequest ) {
@@ -3649,10 +3687,10 @@ static unsigned int CL_WebHost_PackedIPv4FromAddress( const netadr_t *address ) 
 		return 0u;
 	}
 
-	return (unsigned int)address->ipv._4[0] |
-		( (unsigned int)address->ipv._4[1] << 8 ) |
-		( (unsigned int)address->ipv._4[2] << 16 ) |
-		( (unsigned int)address->ipv._4[3] << 24 );
+	return ( (unsigned int)address->ipv._4[0] << 24 ) |
+		( (unsigned int)address->ipv._4[1] << 16 ) |
+		( (unsigned int)address->ipv._4[2] << 8 ) |
+		(unsigned int)address->ipv._4[3];
 }
 
 static unsigned short CL_WebHost_PortFromAddress( const netadr_t *address ) {
@@ -3898,43 +3936,77 @@ static void CL_WebHost_PublishSteamServerDetailPlayer( const fnqlSteamEvent_t *e
 	CL_WebView_PublishEvent( eventName, payload );
 }
 
-static void CL_WebHost_PublishSteamServerDetailResponse( const fnqlSteamServer_t *server ) {
+/*
+ * Retail web.pak subscribes to servers.details.<packed-ip>_<port>.response
+ * for both list rows and an explicit server-detail ping.  Keep all provider
+ * rows on that single observable schema; servers.refresh.* only brackets a
+ * refresh and never carries server data.
+ */
+static void CL_WebHost_PublishSteamServerResponse( const fnqlSteamServer_t *server,
+	unsigned int browserIp, unsigned short browserPort, const char *detailId ) {
 	char eventName[CL_WEB_EVENT_NAME_LENGTH];
 	char payload[CL_WEB_EVENT_PAYLOAD_LENGTH];
 	char name[sizeof( server->server_name ) * 2];
 	char map[sizeof( server->map ) * 2];
 	char tags[sizeof( server->game_tags ) * 2];
+	char gameDirectory[sizeof( server->game_directory ) * 2];
+	char gametype[sizeof( server->game_description ) * 2];
+	const int numPlayers = server && server->players > 0 ? server->players : 0;
+	const int maxPlayers = server && server->max_players > 0 ? server->max_players : 0;
+	const int botPlayers = server && server->bot_players > 0 ? server->bot_players : 0;
+	const int ping = server && server->ping > 0 ? server->ping : 0;
 
-	if ( !server || !cl_webui.serverDetailActive ||
-		server->ip != cl_webui.serverDetailIp ) return;
+	if ( !server || server->size < sizeof( *server ) || !detailId || !detailId[0] ) {
+		return;
+	}
 	CL_WebUI_JsonEscape( server->server_name, name, sizeof( name ) );
 	CL_WebUI_JsonEscape( server->map, map, sizeof( map ) );
 	CL_WebUI_JsonEscape( server->game_tags, tags, sizeof( tags ) );
-	Com_sprintf( eventName, sizeof( eventName ), "servers.details.%s.response", cl_webui.serverDetailId );
+	CL_WebUI_JsonEscape( server->game_directory, gameDirectory, sizeof( gameDirectory ) );
+	CL_WebUI_JsonEscape( server->game_description, gametype, sizeof( gametype ) );
+	Com_sprintf( eventName, sizeof( eventName ), "servers.details.%s.response", detailId );
 	Com_sprintf( payload, sizeof( payload ),
-		"{\"name\":\"%s\",\"numPlayers\":%d,\"maxPlayers\":%d,\"ping\":%d,\"map\":\"%s\",\"botPlayers\":%d,\"password\":%u,\"vac\":%u,\"ip\":%u,\"port\":%u,\"id\":\"%s\",\"steam_id\":\"%llu\",\"tags\":\"%s\",\"gametype\":0,\"lastPlayed\":%u}",
-		name, server->players, server->max_players, server->ping, map,
-		server->bot_players, server->password_protected, server->secure,
-		cl_webui.serverDetailIp, (unsigned int)cl_webui.serverDetailPort,
-		cl_webui.serverDetailId, (unsigned long long)server->steam_id, tags,
+		"{\"name\":\"%s\",\"numPlayers\":%d,\"maxPlayers\":%d,\"ping\":%d,\"map\":\"%s\",\"botPlayers\":%d,\"password\":%s,\"vac\":%s,\"ip\":%u,\"port\":%u,\"id\":\"%s\",\"steam_id\":\"%llu\",\"tags\":\"%s\",\"gametype\":\"%s\",\"gamedir\":\"%s\",\"lastPlayed\":%u}",
+		name, numPlayers, maxPlayers, ping, map, botPlayers,
+		server->password_protected ? "true" : "false",
+		server->secure ? "true" : "false", browserIp,
+		(unsigned int)browserPort, detailId,
+		(unsigned long long)server->steam_id, tags, gametype, gameDirectory,
 		server->last_played );
 	CL_WebView_PublishEvent( eventName, payload );
 }
 
-static void CL_WebHost_PublishServerDetailResponse( const netadr_t *address, const char *infoString ) {
+static void CL_WebHost_PublishSteamServerDetailResponse( const fnqlSteamServer_t *server ) {
+	if ( !server || !cl_webui.serverDetailActive
+		|| server->ip != cl_webui.serverDetailIp
+		|| ( server->connection_port != cl_webui.serverDetailPort
+			&& server->query_port != cl_webui.serverDetailPort ) ) {
+		return;
+	}
+
+	CL_WebHost_PublishSteamServerResponse( server, cl_webui.serverDetailIp,
+		cl_webui.serverDetailPort, cl_webui.serverDetailId );
+}
+
+static void CL_WebHost_PublishServerBrowserResponse( const netadr_t *address,
+	unsigned int browserIp, unsigned short browserPort, const char *infoString,
+	int responsePing ) {
 	serverInfo_t *server;
 	char eventName[CL_WEB_EVENT_NAME_LENGTH];
 	char payload[CL_WEB_EVENT_PAYLOAD_LENGTH];
 	char hostName[MAX_NAME_LENGTH];
 	char mapName[MAX_NAME_LENGTH];
 	char tags[MAX_INFO_STRING];
+	char gameDirectory[MAX_NAME_LENGTH];
 	char steamId[64];
 	char gametypeValue[16];
 	char passwordValue[16];
 	char hostNameEscaped[MAX_NAME_LENGTH * 2];
 	char mapNameEscaped[MAX_NAME_LENGTH * 2];
 	char tagsEscaped[MAX_INFO_STRING * 2];
+	char gameDirectoryEscaped[MAX_NAME_LENGTH * 2];
 	char steamIdEscaped[128];
+	char responseId[32];
 	int numPlayers;
 	int maxPlayers;
 	int botPlayers;
@@ -3943,7 +4015,7 @@ static void CL_WebHost_PublishServerDetailResponse( const netadr_t *address, con
 	int gametype;
 	int ping;
 
-	if ( !CL_WebHost_DetailMatchesAddress( address ) ) {
+	if ( !address || !browserIp || !browserPort ) {
 		return;
 	}
 
@@ -3951,6 +4023,7 @@ static void CL_WebHost_PublishServerDetailResponse( const netadr_t *address, con
 	hostName[0] = '\0';
 	mapName[0] = '\0';
 	tags[0] = '\0';
+	Q_strncpyz( gameDirectory, BASEGAME, sizeof( gameDirectory ) );
 	steamId[0] = '\0';
 	gametypeValue[0] = '\0';
 	passwordValue[0] = '\0';
@@ -3960,7 +4033,7 @@ static void CL_WebHost_PublishServerDetailResponse( const netadr_t *address, con
 	password = 0;
 	vac = 0;
 	gametype = 0;
-	ping = 0;
+	ping = responsePing > 0 ? responsePing : 0;
 
 	if ( infoString ) {
 		Q_strncpyz( hostName, Info_ValueForKey( infoString, "hostname" ), sizeof( hostName ) );
@@ -3972,6 +4045,10 @@ static void CL_WebHost_PublishServerDetailResponse( const netadr_t *address, con
 		}
 		if ( !tags[0] ) {
 			Q_strncpyz( tags, Info_ValueForKey( infoString, "game" ), sizeof( tags ) );
+		}
+		const char *infoGameDirectory = Info_ValueForKey( infoString, "game" );
+		if ( infoGameDirectory && infoGameDirectory[0] ) {
+			Q_strncpyz( gameDirectory, infoGameDirectory, sizeof( gameDirectory ) );
 		}
 		numPlayers = atoi( Info_ValueForKey( infoString, "clients" ) );
 		maxPlayers = atoi( Info_ValueForKey( infoString, "sv_maxclients" ) );
@@ -3994,6 +4071,9 @@ static void CL_WebHost_PublishServerDetailResponse( const netadr_t *address, con
 		if ( !tags[0] ) {
 			Q_strncpyz( tags, server->game, sizeof( tags ) );
 		}
+		if ( !gameDirectory[0] ) {
+			Q_strncpyz( gameDirectory, server->game, sizeof( gameDirectory ) );
+		}
 		if ( !numPlayers ) {
 			numPlayers = server->clients;
 		}
@@ -4003,7 +4083,7 @@ static void CL_WebHost_PublishServerDetailResponse( const netadr_t *address, con
 		if ( !gametypeValue[0] ) {
 			Com_sprintf( gametypeValue, sizeof( gametypeValue ), "%d", server->gameType );
 		}
-		if ( server->ping > 0 ) {
+		if ( ping <= 0 && server->ping > 0 ) {
 			ping = server->ping;
 		}
 	}
@@ -4021,27 +4101,47 @@ static void CL_WebHost_PublishServerDetailResponse( const netadr_t *address, con
 	CL_WebUI_JsonEscape( hostName, hostNameEscaped, sizeof( hostNameEscaped ) );
 	CL_WebUI_JsonEscape( mapName, mapNameEscaped, sizeof( mapNameEscaped ) );
 	CL_WebUI_JsonEscape( tags, tagsEscaped, sizeof( tagsEscaped ) );
+	CL_WebUI_JsonEscape( gameDirectory, gameDirectoryEscaped, sizeof( gameDirectoryEscaped ) );
 	CL_WebUI_JsonEscape( steamId, steamIdEscaped, sizeof( steamIdEscaped ) );
-	Com_sprintf( eventName, sizeof( eventName ), "servers.details.%s.response", cl_webui.serverDetailId );
+	CL_WebHost_FormatServerDetailId( browserIp, browserPort, responseId, sizeof( responseId ) );
+	Com_sprintf( eventName, sizeof( eventName ), "servers.details.%s.response", responseId );
 	Com_sprintf(
 		payload,
 		sizeof( payload ),
-		"{\"name\":\"%s\",\"numPlayers\":%d,\"maxPlayers\":%d,\"ping\":%d,\"map\":\"%s\",\"botPlayers\":%d,\"password\":%d,\"vac\":%d,\"ip\":%u,\"port\":%u,\"id\":\"%s\",\"steam_id\":\"%s\",\"tags\":\"%s\",\"gametype\":%d,\"lastPlayed\":0}",
+		"{\"name\":\"%s\",\"numPlayers\":%d,\"maxPlayers\":%d,\"ping\":%d,\"map\":\"%s\",\"botPlayers\":%d,\"password\":%s,\"vac\":%s,\"ip\":%u,\"port\":%u,\"id\":\"%s\",\"steam_id\":\"%s\",\"tags\":\"%s\",\"gametype\":%d,\"gamedir\":\"%s\",\"lastPlayed\":0}",
 		hostNameEscaped,
 		numPlayers,
 		maxPlayers,
 		ping > 0 ? ping : 0,
 		mapNameEscaped,
 		botPlayers,
-		password,
-		vac,
-		cl_webui.serverDetailIp,
-		(unsigned int)cl_webui.serverDetailPort,
-		cl_webui.serverDetailId,
+		password ? "true" : "false",
+		vac ? "true" : "false",
+		browserIp,
+		(unsigned int)browserPort,
+		responseId,
 		steamIdEscaped,
 		tagsEscaped,
-		gametype );
+		gametype,
+		gameDirectoryEscaped );
 	CL_WebView_PublishEvent( eventName, payload );
+}
+
+static void CL_WebHost_PublishServerDetailResponse( const netadr_t *address,
+	const char *infoString ) {
+	serverInfo_t *server;
+	int ping = 0;
+
+	if ( !CL_WebHost_DetailMatchesAddress( address ) ) {
+		return;
+	}
+
+	server = CL_WebHost_FindServerInfoByAddress( address );
+	if ( server && server->ping > 0 ) {
+		ping = server->ping;
+	}
+	CL_WebHost_PublishServerBrowserResponse( address, cl_webui.serverDetailIp,
+		cl_webui.serverDetailPort, infoString, ping );
 }
 
 static qboolean CL_WebHost_StartServerDetailRequest( const netadr_t *address ) {
@@ -4069,6 +4169,24 @@ static void CL_WebHost_ServerDetailsFrame( void ) {
 		if ( cl_webui.serverDetailSteam ) FNQL_Steam_CancelServerDetails();
 		CL_WebHost_PublishServerDetailFailed();
 	}
+}
+
+void CL_WebHost_OnServerInfoResponse( const netadr_t *address,
+	const char *infoString, int ping ) {
+	/*
+	 * Source-browser pings are the no-Steam fallback for retail WebUI list
+	 * requests.  CL_ServerInfoPacket owns validation and ping timing; this
+	 * bridge only projects the matching active refresh into web.pak's detail
+	 * response family.  Native Steam rows arrive through the provider instead.
+	 */
+	if ( !address || !cl_webui.serverRefreshActive || cl_webui.serverRefreshSteam
+		|| cls.pingUpdateSource != cl_webui.serverRefreshSource ) {
+		return;
+	}
+
+	CL_WebHost_PublishServerBrowserResponse( address,
+		CL_WebHost_PackedIPv4FromAddress( address ),
+		CL_WebHost_PortFromAddress( address ), infoString, ping );
 }
 
 qboolean CL_WebHost_OnServerStatusResponseInfo( const netadr_t *address, const char *infoString ) {
@@ -4115,19 +4233,22 @@ static const char *CL_WebHost_ServerRequestModeLabel( int requestMode ) {
 	switch ( requestMode ) {
 		case 1:
 			return "local";
+		case 2:
+			return "friends";
 		case 3:
 			return "favorites";
 		case 4:
 			return "history";
 		case 0:
-		case 2:
-			return "global";
 		default:
-			return "compatibility";
+			return "internet";
 	}
 }
 
 static const char *CL_WebHost_ServerBrowserCompatibilityReason( int requestMode ) {
+	if ( requestMode == 2 ) {
+		return "friends fallback mapped to global source";
+	}
 	if ( requestMode == 4 ) {
 		return "history fallback mapped to favorites source";
 	}
@@ -4150,21 +4271,43 @@ static void CL_WebHost_PublishServerBrowserCompatibility( int requestMode, int s
 	CL_WebView_PublishEvent( "servers.refresh.compatibility", payload );
 }
 
+static uint32_t CL_WebHost_ServerRequestModeToSteamRequestMode( int requestMode ) {
+	/* WebUI's Friends filter is value 2; Steam's server browser uses 5. */
+	switch ( requestMode ) {
+		case 1:
+			return FNQL_STEAM_SERVER_BROWSER_LAN;
+		case 2:
+			return FNQL_STEAM_SERVER_BROWSER_FRIENDS;
+		case 3:
+			return FNQL_STEAM_SERVER_BROWSER_FAVORITES;
+		case 4:
+			return FNQL_STEAM_SERVER_BROWSER_HISTORY;
+		case 0:
+		default:
+			return FNQL_STEAM_SERVER_BROWSER_INTERNET;
+	}
+}
+
 qboolean CL_Steam_RequestServers( int requestMode ) {
 	const int source = CL_WebHost_ServerRequestModeToSource( requestMode );
+	const qboolean nativeAvailable = FNQL_Steam_Available(
+		FNQL_STEAM_CAP_SERVER_BROWSER );
 
-	CL_WebHost_StartServerRefresh( requestMode, source );
+	CL_WebHost_StartServerRefresh( requestMode, source,
+		nativeAvailable ? qfalse : qtrue );
 	CL_WebView_PublishEvent( "servers.refresh.start", NULL );
-	if ( FNQL_Steam_Available( FNQL_STEAM_CAP_SERVER_BROWSER ) ) {
+	if ( nativeAvailable ) {
 		// The provider is allowed to synchronously notify the event sink. Claim
 		// ownership before entering it so an immediate completion cannot be
 		// mistaken for the legacy source-browser fallback.
 		cl_webui.serverRefreshSteam = qtrue;
 		if ( CL_Steam_ResultAccepted( FNQL_Steam_RequestServers(
-			(uint32_t)requestMode, (uint32_t)atoi( STEAMPATH_APPID ) ) ) ) {
+			CL_WebHost_ServerRequestModeToSteamRequestMode( requestMode ),
+			(uint32_t)atoi( STEAMPATH_APPID ) ) ) ) {
 			return qtrue;
 		}
 		cl_webui.serverRefreshSteam = qfalse;
+		CL_WebHost_StartServerRefresh( requestMode, source, qtrue );
 	}
 	CL_WebHost_PublishServerBrowserCompatibility( requestMode, source );
 	if ( source == AS_LOCAL ) {
@@ -4209,11 +4352,14 @@ qboolean CL_Steam_RefreshServerList( void ) {
 		return qfalse;
 	}
 
-	if ( cl_webui.serverRefreshSteam
-		&& CL_Steam_ResultAccepted( FNQL_Steam_RefreshServers() ) ) {
+	if ( cl_webui.serverRefreshSteam ) {
+		/* RefreshQuery can synchronously dispatch callbacks.  Re-arm the
+		 * active owner and deadline before crossing the provider boundary. */
 		cl_webui.serverRefreshActive = qtrue;
 		cl_webui.serverRefreshTimeoutTime = cls.realtime + CL_WEB_SERVER_REFRESH_TIMEOUT_MSEC;
-		return qtrue;
+		if ( CL_Steam_ResultAccepted( FNQL_Steam_RefreshServers() ) ) {
+			return qtrue;
+		}
 	}
 	return CL_Steam_RequestServers( cl_webui.serverRefreshRequestMode );
 }
@@ -4342,71 +4488,6 @@ static qboolean CL_Steam_ParseIdentity( const char *text, uint64_t *identity ) {
 
 static qboolean CL_Steam_SafeCommandText( const char *text ) {
 	return text && text[0] && !strpbrk( text, "\r\n;\"" ) ? qtrue : qfalse;
-}
-
-static void CL_Steam_ResetServerResponseList( int source ) {
-	serverInfo_t *servers;
-	int capacity;
-
-	servers = CL_WebHost_GetServerList( source, NULL, &capacity );
-	if ( servers ) {
-		Com_Memset( servers, 0, sizeof( *servers ) * capacity );
-	}
-	if ( source == AS_LOCAL ) {
-		cls.numlocalservers = 0;
-	} else if ( source == AS_GLOBAL ) {
-		cls.numglobalservers = 0;
-	} else if ( source == AS_FAVORITES ) {
-		cls.numfavoriteservers = 0;
-	}
-}
-
-static void CL_Steam_StoreServerResponse( const fnqlSteamServer_t *response ) {
-	serverInfo_t *servers;
-	serverInfo_t *server;
-	int *count;
-	int capacity;
-	char address[MAX_TOKEN_CHARS];
-
-	if ( !response || response->size < sizeof( *response )
-		|| !response->connection_port ) {
-		return;
-	}
-	servers = CL_WebHost_GetServerList( cl_webui.serverRefreshSource, NULL, &capacity );
-	if ( !servers ) {
-		return;
-	}
-	if ( cl_webui.serverRefreshSource == AS_LOCAL ) {
-		count = &cls.numlocalservers;
-	} else if ( cl_webui.serverRefreshSource == AS_FAVORITES ) {
-		count = &cls.numfavoriteservers;
-	} else {
-		count = &cls.numglobalservers;
-	}
-	if ( *count < 0 ) {
-		*count = 0;
-	}
-	if ( *count >= capacity ) {
-		return;
-	}
-	server = &servers[*count];
-	Com_Memset( server, 0, sizeof( *server ) );
-	CL_WebHost_FormatNumericAddress( response->ip, response->connection_port,
-		address, sizeof( address ) );
-	if ( !NET_StringToAdr( address, &server->adr, NA_UNSPEC ) ) {
-		return;
-	}
-	Q_strncpyz( server->hostName, response->server_name[0]
-		? response->server_name : address, sizeof( server->hostName ) );
-	Q_strncpyz( server->mapName, response->map, sizeof( server->mapName ) );
-	Q_strncpyz( server->game, response->game_directory, sizeof( server->game ) );
-	server->clients = response->players;
-	server->maxClients = response->max_players;
-	server->ping = response->ping;
-	server->visible = qtrue;
-	server->g_humanplayers = response->players - response->bot_players;
-	server->g_needpass = response->password_protected ? 1 : 0;
-	++*count;
 }
 
 static qboolean CL_Steam_ConsumeUgcQueryResults( void ) {
@@ -4837,26 +4918,22 @@ static void CL_Steam_OnProviderEvent( const fnqlSteamEvent_t *event, void *conte
 	}
 	switch ( event->type ) {
 		case FNQL_STEAM_EVENT_SERVER_LIST_START:
-			CL_Steam_ResetServerResponseList( cl_webui.serverRefreshSource );
+			/* The native provider owns this list. Do not erase or repurpose
+			 * legacy LAN/global/favorite caches while WebUI is displaying it. */
 			break;
 		case FNQL_STEAM_EVENT_SERVER_RESPONSE: {
-			char escapedName[256];
-			char escapedMap[128];
-			char escapedTags[256];
-			CL_Steam_StoreServerResponse( &event->server );
-			CL_WebUI_JsonEscape( event->server.server_name, escapedName, sizeof( escapedName ) );
-			CL_WebUI_JsonEscape( event->server.map, escapedMap, sizeof( escapedMap ) );
-			CL_WebUI_JsonEscape( event->server.game_tags, escapedTags, sizeof( escapedTags ) );
-			Com_sprintf( payload, sizeof( payload ),
-				"{\"ip\":%u,\"port\":%u,\"queryPort\":%u,\"ping\":%d,\"name\":\"%s\",\"map\":\"%s\",\"players\":%d,\"maxPlayers\":%d,\"bots\":%d,\"password\":%s,\"secure\":%s,\"steamId\":\"%llu\",\"tags\":\"%s\"}",
-				event->server.ip, (unsigned int)event->server.connection_port,
-				(unsigned int)event->server.query_port, event->server.ping,
-				escapedName, escapedMap, event->server.players,
-				event->server.max_players, event->server.bot_players,
-				event->server.password_protected ? "true" : "false",
-				event->server.secure ? "true" : "false",
-				(unsigned long long)event->server.steam_id, escapedTags );
-			CL_WebView_PublishEvent( "servers.refresh.response", payload );
+			char detailId[32];
+			if ( !cl_webui.serverRefreshActive || !cl_webui.serverRefreshSteam
+				|| event->result != FNQL_STEAM_RESULT_OK
+				|| event->server.size < sizeof( event->server )
+				|| !event->server.ip || !event->server.connection_port
+				|| event->server.app_id != (uint32_t)atoi( STEAMPATH_APPID ) ) {
+				break;
+			}
+			CL_WebHost_FormatServerDetailId( event->server.ip,
+				event->server.connection_port, detailId, sizeof( detailId ) );
+			CL_WebHost_PublishSteamServerResponse( &event->server,
+				event->server.ip, event->server.connection_port, detailId );
 			break;
 		}
 		case FNQL_STEAM_EVENT_SERVER_LIST_COMPLETE:

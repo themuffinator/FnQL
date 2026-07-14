@@ -726,10 +726,13 @@ cvar_t *Cvar_Set2( const char *var_name, const char *value, qboolean force ) {
 	 * Retail configuration files persist a few startup-only cvars.  Once the
 	 * startup value has been accepted, replaying that same value is a no-op;
 	 * do that before checking the write-protection flags so a normal retail
-	 * config load does not produce a misleading diagnostic.  A different
-	 * value still takes the protected-cvar path below.
+	 * config load does not produce a misleading diagnostic.  Resetting a
+	 * cvar that already matches its reset value is likewise a no-op.  A
+	 * different value still takes the protected-cvar path below.
 	 */
 	if ( value && strcmp( value, var->string ) == 0 )
+		return var;
+	if ( !value && strcmp( var->resetString, var->string ) == 0 )
 		return var;
 
 	if ( var->flags & (CVAR_ROM | CVAR_INIT | CVAR_CHEAT | CVAR_DEVELOPER) && !force )

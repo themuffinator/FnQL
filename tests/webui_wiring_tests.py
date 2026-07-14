@@ -495,7 +495,7 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn('!Q_stricmp( kind, "opensteamurl" )', source)
         self.assertIn("CL_Steam_OpenOverlayUrl( payload );", source)
 
-    def test_webui_native_server_browser_requests_use_client_lists(self) -> None:
+    def test_webui_server_browser_uses_retail_events_and_fallback_source_lists(self) -> None:
         source = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
         client_header = (ROOT / "code" / "client" / "client.h").read_text(encoding="utf-8")
         client_main = (ROOT / "code" / "client" / "cl_main.cpp").read_text(encoding="utf-8")
@@ -517,9 +517,9 @@ class WebUiWiringTests(unittest.TestCase):
             source.index("static void CL_WebHost_FormatNumericAddress"):
             source.index("static qboolean CL_WebHost_ParseServerEndpoint")
         ]
-        self.assertLess(numeric_address.index("ip & 0xffu"), numeric_address.index("( ip >> 8 ) & 0xffu"))
-        self.assertLess(numeric_address.index("( ip >> 8 ) & 0xffu"), numeric_address.index("( ip >> 16 ) & 0xffu"))
-        self.assertLess(numeric_address.index("( ip >> 16 ) & 0xffu"), numeric_address.index("( ip >> 24 ) & 0xffu"))
+        self.assertLess(numeric_address.index("( ip >> 24 ) & 0xffu"), numeric_address.index("( ip >> 16 ) & 0xffu"))
+        self.assertLess(numeric_address.index("( ip >> 16 ) & 0xffu"), numeric_address.index("( ip >> 8 ) & 0xffu"))
+        self.assertLess(numeric_address.index("( ip >> 8 ) & 0xffu"), numeric_address.index("ip & 0xffu"))
         self.assertIn("static qboolean CL_WebHost_SetFavoriteServer", source)
         self.assertIn("atoi( addStart + 1 ) != 0", source)
         self.assertIn("NET_StringToAdr( address, &adr, NA_UNSPEC )", source)
@@ -543,6 +543,9 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("static void CL_WebHost_FormatServerDetailId", source)
         self.assertIn("static serverInfo_t *CL_WebHost_FindServerInfoByAddress", source)
         self.assertIn("static qboolean CL_WebHost_DetailMatchesAddress", source)
+        self.assertIn("static void CL_WebHost_PublishSteamServerResponse", source)
+        self.assertIn("static void CL_WebHost_PublishServerBrowserResponse", source)
+        self.assertIn("static void CL_WebHost_PublishUnresponsiveServerRows", source)
         self.assertIn("static void CL_WebHost_PublishServerDetailResponse", source)
         self.assertIn("static void CL_WebHost_PublishServerDetailFailed", source)
         self.assertIn("static void CL_WebHost_PublishServerDetailRulesEnd", source)
@@ -555,7 +558,8 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("static qboolean CL_WebHost_StartServerDetailRequest", source)
         self.assertIn("static void CL_WebHost_ServerDetailsFrame", source)
         self.assertIn("CL_WebHost_ServerDetailsFrame();", source)
-        self.assertIn('Com_sprintf( eventName, sizeof( eventName ), "servers.details.%s.response", cl_webui.serverDetailId );', source)
+        self.assertIn('Com_sprintf( eventName, sizeof( eventName ), "servers.details.%s.response", detailId );', source)
+        self.assertIn('Com_sprintf( eventName, sizeof( eventName ), "servers.details.%s.response", responseId );', source)
         self.assertIn('Com_sprintf( eventName, sizeof( eventName ), "servers.details.%s.failed", cl_webui.serverDetailId );', source)
         self.assertIn('Com_sprintf( eventName, sizeof( eventName ), "servers.rules.%s.response", cl_webui.serverDetailId );', source)
         self.assertIn('Com_sprintf( eventName, sizeof( eventName ), "servers.rules.%s.end", cl_webui.serverDetailId );', source)
@@ -565,6 +569,8 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn('\\"steam_id\\":\\"%s\\"', source)
         self.assertIn('\\"rule\\":\\"%s\\",\\"value\\":\\"%s\\"', source)
         self.assertIn('\\"name\\":\\"%s\\",\\"score\\":%d,\\"time\\":%d', source)
+        self.assertIn('\\"gamedir\\":\\"%s\\"', source)
+        self.assertIn('\\"password\\":%s,\\"vac\\":%s', source)
         self.assertIn('sscanf( playerLine, "%d %d \\"%31[^\\"]\\""', source)
         self.assertIn("Info_ValueForKey( infoString, \"hostname\" )", source)
         self.assertIn("static const char *CL_WebHost_ServerSourceLabel", source)
@@ -577,6 +583,7 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("SteamMatchmakingServers", source)
         self.assertIn("Steamworks server browser is not available in this build", source)
         self.assertIn("history fallback mapped to favorites source", source)
+        self.assertIn("friends fallback mapped to global source", source)
         self.assertIn('\\"modeLabel\\":\\"%s\\"', source)
         self.assertIn("policy", source)
         self.assertIn("qboolean CL_Steam_RequestServers( int requestMode );", client_header)
@@ -584,7 +591,28 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("qboolean CL_Steam_RefreshServerList( void );", client_header)
         self.assertIn("qboolean CL_Steam_RequestServers( int requestMode )", source)
         self.assertIn("const int source = CL_WebHost_ServerRequestModeToSource( requestMode );", source)
-        self.assertIn("CL_WebHost_StartServerRefresh( requestMode, source );", source)
+        self.assertIn("CL_WebHost_StartServerRefresh( requestMode, source,", source)
+        self.assertIn("static uint32_t CL_WebHost_ServerRequestModeToSteamRequestMode", source)
+        self.assertIn("FNQL_STEAM_SERVER_BROWSER_FRIENDS", source)
+        steam_mode_mapping = source[
+            source.index("static uint32_t CL_WebHost_ServerRequestModeToSteamRequestMode"):
+            source.index("qboolean CL_Steam_RequestServers", source.index("static uint32_t CL_WebHost_ServerRequestModeToSteamRequestMode"))
+        ]
+        for request_mode, provider_mode in (
+            (1, "FNQL_STEAM_SERVER_BROWSER_LAN"),
+            (2, "FNQL_STEAM_SERVER_BROWSER_FRIENDS"),
+            (3, "FNQL_STEAM_SERVER_BROWSER_FAVORITES"),
+            (4, "FNQL_STEAM_SERVER_BROWSER_HISTORY"),
+        ):
+            self.assertIn(f"case {request_mode}:", steam_mode_mapping)
+            self.assertIn(f"return {provider_mode};", steam_mode_mapping)
+        self.assertIn("return FNQL_STEAM_SERVER_BROWSER_INTERNET;", steam_mode_mapping)
+        self.assertIn("nativeAvailable ? qfalse : qtrue", source)
+        self.assertIn("CL_WebHost_StartServerRefresh( requestMode, source, qtrue );", source)
+        self.assertIn("RefreshQuery can synchronously dispatch callbacks", source)
+        self.assertIn("CL_WebHost_PublishUnresponsiveServerRows( cl_webui.serverRefreshSource );", source)
+        self.assertNotIn("CL_Steam_ResetServerResponseList", source)
+        self.assertNotIn("CL_Steam_StoreServerResponse", source)
         self.assertIn('CL_WebView_PublishEvent( "servers.refresh.start", NULL );', source)
         self.assertIn("CL_WebHost_PublishServerBrowserCompatibility( requestMode, source );", source)
         steam_request = source[
@@ -619,7 +647,9 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertNotIn('!Q_stricmp( kind, "servers" ) || !Q_stricmp( kind, "refreshservers" )', source)
         self.assertIn('!Q_stricmp( kind, "serverdetails" )', source)
         self.assertIn('!Q_stricmp( kind, "favorite" )', source)
+        self.assertIn("void CL_WebHost_OnServerInfoResponse( const netadr_t *address, const char *infoString, int ping );", client_header)
         self.assertIn("qboolean CL_WebHost_OnServerStatusResponseInfo( const netadr_t *address, const char *infoString );", client_header)
+        self.assertIn("CL_WebHost_OnServerInfoResponse( from, infoString, ping.time );", client_main)
         self.assertIn("void CL_WebHost_OnServerStatusResponsePlayer( const netadr_t *address, const char *playerLine );", client_header)
         self.assertIn("void CL_WebHost_OnServerStatusResponseComplete( const netadr_t *address );", client_header)
         self.assertIn("qboolean publishBrowserDetails;", client_main)

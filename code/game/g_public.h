@@ -432,7 +432,9 @@ typedef enum {
 	G_QL_IMPORT_FS_FOPEN_FILE = 8,
 	G_QL_IMPORT_FS_FCLOSE_FILE = 9,
 	G_QL_IMPORT_ERROR = 10,
-	G_QL_IMPORT_CVAR_VARIABLE_INTEGER_VALUE = 11,
+	// Retail native qagame returns a float from this direct-table slot.  The
+	// legacy syscall keeps its integer-value contract below.
+	G_QL_IMPORT_CVAR_VARIABLE_VALUE = 11,
 	G_QL_IMPORT_CVAR_UPDATE = 12,
 	G_QL_IMPORT_CVAR_VARIABLE_STRING_BUFFER = 13,
 	G_QL_IMPORT_CVAR_SET_VALUE = 14,

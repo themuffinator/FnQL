@@ -712,6 +712,7 @@ qboolean CL_WebHost_GetCursorPosition( int *x, int *y );
 qboolean CL_WebHost_RequestCursorPosition( int *x, int *y );
 void CL_WebHost_HideBrowser( void );
 void CL_WebHost_NotifyAppActivation( qboolean active );
+void CL_WebHost_OnServerInfoResponse( const netadr_t *address, const char *infoString, int ping );
 qboolean CL_WebHost_OnServerStatusResponseInfo( const netadr_t *address, const char *infoString );
 void CL_WebHost_OnServerStatusResponsePlayer( const netadr_t *address, const char *playerLine );
 void CL_WebHost_OnServerStatusResponseComplete( const netadr_t *address );
