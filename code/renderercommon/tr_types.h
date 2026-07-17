@@ -138,6 +138,24 @@ typedef struct {
 	char		text[MAX_RENDER_STRINGS][MAX_RENDER_STRING_LENGTH];
 } refdef_t;
 
+/*
+ * Visual-only liquid disturbance supplied by the engine to the renderer.
+ * This is deliberately outside entityState/playerState and the VM trap ABI:
+ * it must never affect prediction, snapshots, protocols, or demo playback.
+ */
+typedef enum {
+	LIQUID_INTERACTION_PLAYER,
+	LIQUID_INTERACTION_PROJECTILE
+} liquidInteractionSource_t;
+
+typedef struct {
+	vec3_t		origin;
+	float		radius;
+	float		strength;
+	int		time;
+	liquidInteractionSource_t source;
+} liquidInteraction_t;
+
 
 typedef enum {
 	STEREO_CENTER,

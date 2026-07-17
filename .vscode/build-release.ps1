@@ -326,14 +326,26 @@ if ($Target -eq 'client') {
 	$setupArgs += @('-Dbuild-client=true', '-Dbuild-server=true')
 }
 
-if (Test-Path $coreDataPath) {
+$isReconfigure = Test-Path $coreDataPath
+if ($isReconfigure) {
 	$setupArgs = @('setup', '--reconfigure') + $setupArgs[1..($setupArgs.Count - 1)]
 }
 
 Write-Host "==> $mesonPath $($setupArgs -join ' ')"
 & $mesonPath @setupArgs
 if ($LASTEXITCODE -ne 0) {
-	throw 'Meson setup failed.'
+	if (-not $isReconfigure) {
+		throw 'Meson setup failed.'
+	}
+	# Reconfigure fails when coredata holds a stale option definition (e.g. an
+	# option changed type between pulls); a wipe rebuilds the configuration.
+	$wipeArgs = @('setup', '--wipe') + $setupArgs[2..($setupArgs.Count - 1)]
+	Write-Host 'Meson reconfigure failed; retrying with a clean configuration (--wipe).'
+	Write-Host "==> $mesonPath $($wipeArgs -join ' ')"
+	& $mesonPath @wipeArgs
+	if ($LASTEXITCODE -ne 0) {
+		throw 'Meson setup failed.'
+	}
 }
 
 if ($SetupOnly) {

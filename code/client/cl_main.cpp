@@ -27,6 +27,7 @@ extern "C" {
 
 #include "client_cpp.h"
 #include "demo_stream.hpp"
+#include "retail_challenge.hpp"
 #include "../qcommon/protocol_contract.hpp"
 #include "../qcommon/netchan_safety.hpp"
 #include "../platform/fnql_steam.h"
@@ -60,7 +61,8 @@ struct SteamChallengeTicket {
 	std::uint32_t size = 0;
 	std::uint32_t handle = 0;
 	std::uint64_t steamId = 0;
-	bool sentFnqlExtension = false;
+	fnql::client::auth::ChallengeRequestMode requestMode =
+		fnql::client::auth::ChallengeRequestMode::None;
 };
 
 SteamChallengeTicket steamChallengeTicket;
@@ -76,10 +78,23 @@ static void CL_ClearSteamChallengeTicket() {
 	steamChallengeTicket = {};
 }
 
+static void CL_EraseSteamChallengePayload() {
+	volatile byte *ticket = steamChallengeTicket.bytes.data();
+	for ( std::size_t i = 0; i < steamChallengeTicket.bytes.size(); ++i ) {
+		ticket[i] = 0;
+	}
+	steamChallengeTicket.size = 0;
+	steamChallengeTicket.requestMode =
+		fnql::client::auth::ChallengeRequestMode::None;
+}
+
 static bool CL_AcquireSteamChallengeTicket( std::uint32_t capacity ) {
 	if ( steamChallengeTicket.handle != 0 && steamChallengeTicket.size != 0 &&
 		steamChallengeTicket.steamId != 0 ) {
 		return steamChallengeTicket.size <= capacity;
+	}
+	if ( steamChallengeTicket.handle != 0 ) {
+		CL_ClearSteamChallengeTicket();
 	}
 	if ( !FNQL_Steam_Available( FNQL_STEAM_CAP_AUTH | FNQL_STEAM_CAP_IDENTITY ) ) {
 		return false;
@@ -103,18 +118,9 @@ static bool CL_AcquireSteamChallengeTicket( std::uint32_t capacity ) {
 	return true;
 }
 
-static void CL_WriteLittle32( byte *target, std::uint32_t value ) {
-	target[0] = static_cast<byte>( value );
-	target[1] = static_cast<byte>( value >> 8u );
-	target[2] = static_cast<byte>( value >> 16u );
-	target[3] = static_cast<byte>( value >> 24u );
-}
-
-static bool CL_SendFnqlSteamChallenge() {
-	static constexpr char command[] = "getchallenge ";
-	static constexpr char marker[] = "FnQLAuth";
-	constexpr std::size_t headerBytes = 4u + sizeof( command ) - 1u +
-		sizeof( marker ) - 1u + 4u + 8u;
+static bool CL_SendRetailSteamChallenge() {
+	constexpr std::size_t headerBytes =
+		fnql::client::auth::RetailSteamChallengeHeaderBytes;
 	static_assert( headerBytes < MAX_PACKETLEN );
 	const std::uint32_t ticketCapacity = static_cast<std::uint32_t>(
 		MAX_PACKETLEN - headerBytes );
@@ -122,26 +128,18 @@ static bool CL_SendFnqlSteamChallenge() {
 		return false;
 	}
 	std::array<byte, MAX_PACKETLEN> packet{};
-	packet[0] = packet[1] = packet[2] = packet[3] = 0xff;
-	std::size_t offset = 4;
-	std::memcpy( packet.data() + offset, command, sizeof( command ) - 1u );
-	offset += sizeof( command ) - 1u;
-	std::memcpy( packet.data() + offset, marker, sizeof( marker ) - 1u );
-	offset += sizeof( marker ) - 1u;
-	CL_WriteLittle32( packet.data() + offset,
-		static_cast<std::uint32_t>( clc.challenge ) );
-	offset += 4u;
-	CL_WriteLittle32( packet.data() + offset,
-		static_cast<std::uint32_t>( steamChallengeTicket.steamId ) );
-	CL_WriteLittle32( packet.data() + offset + 4u,
-		static_cast<std::uint32_t>( steamChallengeTicket.steamId >> 32u ) );
-	offset += 8u;
-	std::memcpy( packet.data() + offset, steamChallengeTicket.bytes.data(),
-		steamChallengeTicket.size );
-	offset += steamChallengeTicket.size;
-	NET_SendPacket( NS_CLIENT, static_cast<int>( offset ), packet.data(),
+	const std::size_t packetBytes =
+		fnql::client::auth::BuildRetailSteamChallenge(
+			packet.data(), packet.size(), steamChallengeTicket.steamId,
+			steamChallengeTicket.bytes.data(), steamChallengeTicket.size );
+	if ( packetBytes == 0 ) {
+		CL_ClearSteamChallengeTicket();
+		return false;
+	}
+	NET_SendPacket( NS_CLIENT, static_cast<int>( packetBytes ), packet.data(),
 		&clc.serverAddress );
-	steamChallengeTicket.sentFnqlExtension = true;
+	steamChallengeTicket.requestMode =
+		fnql::client::auth::ChallengeRequestMode::RetailSteam;
 	return true;
 }
 
@@ -1843,9 +1841,6 @@ This is also called on Com_Error and Com_Quit, so it shouldn't cause any errors
 qboolean CL_Disconnect( qboolean showMainMenu ) {
 	static bool cl_disconnecting = false;
 	bool cl_restarted = false;
-	const qboolean publishGameEnd = ( cls.state >= CA_CONNECTED || clc.demoplaying || clc.demorecording ) ? qtrue : qfalse;
-	CL_ClearSteamChallengeTicket();
-	CL_Workshop_Reset();
 
 	if ( !com_cl_running || !com_cl_running->integer ) {
 		return ToQboolean( cl_restarted );
@@ -1856,6 +1851,17 @@ qboolean CL_Disconnect( qboolean showMainMenu ) {
 	}
 
 	cl_disconnecting = true;
+	const qboolean publishGameEnd =
+		( cls.state >= CA_CONNECTED || clc.demoplaying || clc.demorecording )
+			? qtrue : qfalse;
+
+	// Retail enters fullscreen UI mode before publishing game.end. Resetting
+	// timescale here also prevents a slow-motion or demo timescale from leaking
+	// into the browser menu after the session has ended.
+	Cvar_Set( "timescale", "1" );
+	Cvar_Set( "r_uiFullScreen", "1" );
+	CL_ClearSteamChallengeTicket();
+	CL_Workshop_Reset();
 
 	if ( publishGameEnd ) {
 		CL_WebView_PublishGameEnd();
@@ -1943,6 +1949,13 @@ qboolean CL_Disconnect( qboolean showMainMenu ) {
 		noGameRestart = false;
 	else
 		cl_restarted = CL_RestoreOldGame();
+
+	if ( showMainMenu && !CL_WebHost_ShowAfterDisconnect() && uivm ) {
+		// The retail WebUI is the primary menu. Keep the retail native UI module
+		// usable when its external Awesomium runtime or web.pak is unavailable.
+		VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_MAIN );
+		Key_SetCatcher( ( Key_GetCatcher() & ~KEYCATCH_BROWSER ) | KEYCATCH_UI );
+	}
 
 	cl_disconnecting = false;
 
@@ -2148,25 +2161,16 @@ void CL_Disconnect_f( void ) {
 	SCR_StopCinematic();
 	Cvar_Set( "ui_singlePlayerActive", "0" );
 	if ( cls.state != CA_DISCONNECTED && cls.state != CA_CINEMATIC ) {
-		if ( (uivm && uivm->callLevel) || (cgvm && cgvm->callLevel) ) {
-			Com_Error( ERR_DISCONNECT, "Disconnected from server" );
-		} else {
-			// clear any previous "server full" type messages
-			clc.serverMessage[0] = '\0';
-			if ( com_sv_running && com_sv_running->integer ) {
-				// if running a local server, kill it
-				SV_Shutdown( "Disconnected from server" );
-			} else {
-				Com_Printf( "Disconnected from %s\n", cls.servername );
-			}
-			Cvar_Set( "com_errorMessage", "" );
-			if ( !CL_Disconnect( qfalse ) ) { // restart client if not done already
-				CL_FlushMemory();
-			}
-			if ( uivm ) {
-				VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_MAIN );
-			}
+		if ( com_sv_running && com_sv_running->integer
+			&& ( !com_dedicated || !com_dedicated->integer ) ) {
+			SV_Shutdown( "Server quit\n" );
+			return;
 		}
+
+		// Match retail's single recovery path so console, VM, and WebUI-issued
+		// disconnects cannot diverge in cleanup or menu restoration.
+		Cvar_Set( "com_errorMessage", "" );
+		Com_Error( ERR_DISCONNECT, "Disconnected from server" );
 	}
 }
 
@@ -2440,6 +2444,63 @@ we also have to reload the UI and CGame because the renderer
 doesn't know what graphics to reload
 =================
 */
+static int cl_windowResizeDeadline;
+static int cl_windowResizeWidth;
+static int cl_windowResizeHeight;
+static qboolean cl_windowResizePreserveWindow;
+static qboolean cl_windowResizeRestart;
+static qboolean cl_windowModeChange;
+
+
+/*
+=================
+CL_NotifyWindowResize
+
+Record the final client-area size reported by a desktop window manager. The
+renderer is restarted only after the resize stream settles, avoiding repeated
+context/swapchain rebuilds during an interactive drag.
+=================
+*/
+void CL_NotifyWindowResize( int width, int height, qboolean preserveWindow ) {
+	if ( !cls.rendererStarted || cl_windowModeChange || cl_windowResizeRestart ||
+		width < 4 || height < 4 ) {
+		return;
+	}
+
+	cl_windowResizeWidth = width;
+	cl_windowResizeHeight = height;
+	if ( !cl_windowResizeDeadline ) {
+		cl_windowResizePreserveWindow = preserveWindow;
+	} else if ( !preserveWindow ) {
+		cl_windowResizePreserveWindow = qfalse;
+	}
+	cl_windowResizeDeadline = Sys_Milliseconds() + 250;
+}
+
+
+qboolean CL_IsWindowResizeRestart( void ) {
+	return cl_windowResizeRestart;
+}
+
+
+static void CL_CheckWindowResize( void ) {
+	if ( !cl_windowResizeDeadline || Sys_Milliseconds() < cl_windowResizeDeadline ) {
+		return;
+	}
+
+	cl_windowResizeDeadline = 0;
+	Cvar_SetIntegerValue( "r_customWidth", cl_windowResizeWidth );
+	Cvar_SetIntegerValue( "r_customHeight", cl_windowResizeHeight );
+	Cvar_Set( "r_mode", "-1" );
+
+	if ( cl_windowResizePreserveWindow ) {
+		Cbuf_AddText( "vid_restart fast window_resize\n" );
+	} else {
+		Cbuf_AddText( "vid_restart window_resize\n" );
+	}
+}
+
+
 static void CL_Vid_Restart( refShutdownCode_t shutdownCode ) {
 
 	// Settings may have changed so stop recording now
@@ -2498,10 +2559,15 @@ Wrapper for CL_Vid_Restart
 =================
 */
 static void CL_Vid_Restart_f( void ) {
+	const qboolean windowResize =
+		( !Q_stricmp( Cmd_Argv( 1 ), "window_resize" ) ||
+		  !Q_stricmp( Cmd_Argv( 2 ), "window_resize" ) ) ? qtrue : qfalse;
 
 	if ( Q_stricmp( Cmd_Argv( 1 ), "keep_window" ) == 0 || Q_stricmp( Cmd_Argv( 1 ), "fast" ) == 0 ) {
 		// fast path: keep window
+		cl_windowResizeRestart = windowResize;
 		CL_Vid_Restart( REF_KEEP_WINDOW );
+		cl_windowResizeRestart = qfalse;
 	} else {
 		if ( cls.lastVidRestart ) {
 			if ( abs( cls.lastVidRestart - Sys_Milliseconds() ) < 500 ) {
@@ -2509,7 +2575,9 @@ static void CL_Vid_Restart_f( void ) {
 				return;
 			}
 		}
+		cl_windowResizeRestart = windowResize;
 		CL_Vid_Restart( REF_DESTROY_WINDOW );
+		cl_windowResizeRestart = qfalse;
 	}
 }
 
@@ -3019,14 +3087,32 @@ static void CL_CheckForResend( void ) {
 
 	switch ( cls.state ) {
 	case CA_CONNECTING:
-		// requesting a challenge .. IPv6 users always get in as authorize server supports no ipv6.
+		// The retired Quake III authorize service applies only to the legacy
+		// protocol. Protocol 91 authenticates with its Steam challenge ticket.
 #ifndef STANDALONE
-		if (!Cvar_VariableIntegerValue("com_standalone") && clc.serverAddress.type == NA_IP && !Sys_IsLANAddress( &clc.serverAddress ) )
+		if ( com_protocol->integer <= OLD_PROTOCOL_VERSION &&
+			!Cvar_VariableIntegerValue("com_standalone") &&
+			clc.serverAddress.type == NA_IP &&
+			!Sys_IsLANAddress( &clc.serverAddress ) )
 			CL_RequestAuthorization();
 #endif
-		// The challenge request shall be followed by a client challenge so no malicious server can hijack this connection.
-		if ( !CL_SendFnqlSteamChallenge() ) {
-			NET_OutOfBandPrint( NS_CLIENT, &clc.serverAddress, "getchallenge %d %s", clc.challenge, GAMENAME_FOR_MASTER );
+		if ( com_protocol->integer == QL_RETAIL_PROTOCOL_VERSION ) {
+			if ( !CL_SendRetailSteamChallenge() ) {
+				// Retail's deterministic no-Steam fallback is a bare textual
+				// challenge. The remote server remains authoritative about whether
+				// an unauthenticated client is allowed.
+				NET_OutOfBandPrint( NS_CLIENT, &clc.serverAddress, "getchallenge" );
+				steamChallengeTicket.requestMode =
+					fnql::client::auth::ChallengeRequestMode::RetailWithoutSteam;
+				Com_DPrintf( "Steam challenge ticket unavailable; sent protocol-91 no-Steam fallback.\n" );
+			}
+		} else {
+			// Legacy/ioq3 peers echo this nonce, preventing an unrelated server
+			// from redirecting the connection.
+			NET_OutOfBandPrint( NS_CLIENT, &clc.serverAddress,
+				"getchallenge %d %s", clc.challenge, GAMENAME_FOR_MASTER );
+			steamChallengeTicket.requestMode =
+				fnql::client::auth::ChallengeRequestMode::LegacyNonce;
 		}
 		break;
 
@@ -3344,14 +3430,6 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 	const char *s;
 	const char *c;
 	int challenge = 0;
-	auto rejectConnectionAttempt = []( const char *message ) {
-		Q_strncpyz( clc.serverMessage, message, sizeof( clc.serverMessage ) );
-		Com_Printf( "%s\n", message );
-		CL_ClearSteamChallengeTicket();
-		clc.connectPacketCount = 0;
-		clc.connectTime = 0;
-		cls.state = CA_DISCONNECTED;
-	};
 
 	MSG_BeginReadingOOB( msg );
 	MSG_ReadLong( msg );	// skip the -1
@@ -3369,6 +3447,10 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 	// challenge from the server we are connecting to
 	if ( !Q_stricmp(c, "challengeResponse" ) ) {
 		int serverProtocol = 0;
+		const fnql::client::auth::ChallengeRequestMode requestMode =
+			steamChallengeTicket.requestMode;
+		const bool retailRequest =
+			fnql::client::auth::IsRetailRequest( requestMode );
 
 		if ( cls.state != CA_CONNECTING ) {
 			Com_DPrintf( "Unwanted challenge response received. Ignored.\n" );
@@ -3400,22 +3482,26 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 				}
 			}
 		}
-
-		if ( steamChallengeTicket.sentFnqlExtension &&
-			Q_stricmp( Cmd_Argv( 4 ), fnql::protocol::FnqlHandshakeMarker.data() ) ) {
-			rejectConnectionAttempt(
-				"Authenticated challenge response is not from an FnQL host. Connection refused." );
-			return false;
+		if ( serverProtocol <= 0 && retailRequest ) {
+			// Retail protocol 91 sends a bare challengeResponse for both its
+			// binary Steam-ticket request and the no-Steam fallback. The request
+			// mode is therefore the protocol discriminator.
+			serverProtocol = QL_RETAIL_PROTOCOL_VERSION;
+			clc.compat = qfalse;
 		}
 
-		if ( serverProtocol == QL_RETAIL_PROTOCOL_VERSION &&
-			Q_stricmp( Cmd_Argv( 4 ), fnql::protocol::FnqlHandshakeMarker.data() ) ) {
-			rejectConnectionAttempt(
-				"Protocol 91 server is not an FnQL host. Connection refused." );
-			return false;
+		if ( retailRequest )
+		{
+			// Retail does not echo a client nonce. Constrain its handoff to the
+			// address that received our credential-bearing request; a same-host
+			// port handoff remains compatible with the retail proxy behavior.
+			if ( !NET_CompareBaseAdr( from, &clc.serverAddress ) )
+			{
+				Com_Printf( "Retail challenge response from unexpected host. Ignored.\n" );
+				return false;
+			}
 		}
-
-		if ( clc.compat )
+		else if ( clc.compat )
 		{
 			if ( !NET_CompareAdr( from, &clc.serverAddress ) )
 			{
@@ -3440,7 +3526,9 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 
 		// start sending connect instead of challenge request packets
 		clc.challenge = std::atoi( Cmd_Argv(1) );
-		clc.handshakeProtocol = serverProtocol > 0 ? serverProtocol : OLD_PROTOCOL_VERSION;
+		clc.handshakeProtocol = fnql::client::auth::SelectHandshakeProtocol(
+			requestMode, serverProtocol, QL_RETAIL_PROTOCOL_VERSION,
+			OLD_PROTOCOL_VERSION );
 		cls.state = CA_CHALLENGING;
 		clc.connectPacketCount = 0;
 		clc.connectTime = -99999;
@@ -3448,6 +3536,10 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 		// take this address as the new server address.  This allows
 		// a server proxy to hand off connections to multiple servers
 		clc.serverAddress = *from;
+		// Keep the Steam ticket handle alive until disconnect so a retail
+		// server's asynchronous validation cannot be invalidated by us. The
+		// raw ticket bytes are no longer needed after the accepted challenge.
+		CL_EraseSteamChallengePayload();
 		Com_DPrintf( "challengeResponse: %d\n", clc.challenge );
 		return true;
 	}
@@ -3464,10 +3556,13 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 			Com_Printf( "connectResponse packet while not connecting. Ignored.\n" );
 			return false;
 		}
-		if ( !NET_CompareAdr( from, &clc.serverAddress ) ) {
-			Com_Printf( "connectResponse from wrong address. Ignored.\n" );
+		if ( !NET_CompareBaseAdr( from, &clc.serverAddress ) ) {
+			Com_Printf( "connectResponse from wrong host. Ignored.\n" );
 			return false;
 		}
+		// Complete an allowed same-host proxy handoff so subsequent
+		// connectionless diagnostics are matched against the active port too.
+		clc.serverAddress = *from;
 
 		negotiatedProtocol = clc.compat ? OLD_PROTOCOL_VERSION :
 			( clc.handshakeProtocol > OLD_PROTOCOL_VERSION ? clc.handshakeProtocol :
@@ -3533,7 +3628,6 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 			Netchan_SelectWireProfile( negotiatedProtocol, clc.compat ) );
 
 		cls.state = CA_CONNECTED;
-		CL_ClearSteamChallengeTicket();
 		clc.lastPacketSentTime = cls.realtime - 9999; // send first packet immediately
 		return true;
 	}
@@ -3547,6 +3641,22 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 	// server responding to a get playerlist
 	if ( !Q_stricmp(c, "statusResponse") ) {
 		CL_ServerStatusResponse( from, msg );
+		return false;
+	}
+
+	// A server that has already dropped our netchan sends an out-of-band
+	// disconnect in response to late client packets. Retail accepts it only
+	// from the active endpoint and only after three quiet seconds, which keeps
+	// a spoofed packet from tearing down a healthy session.
+	if ( !Q_stricmp( c, "disconnect" ) ) {
+		if ( cls.state >= CA_AUTHORIZING
+			&& NET_CompareAdr( from, &clc.netchan.remoteAddress )
+			&& cls.realtime - clc.lastPacketTime >= 3000 ) {
+			Com_Printf( "Server disconnected for unknown reason\n" );
+			Cvar_Set( "com_errorMessage",
+				"Server disconnected for unknown reason\n" );
+			CL_Disconnect( qtrue );
+		}
 		return false;
 	}
 
@@ -3578,12 +3688,6 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 			s = MSG_ReadString( msg );
 			Q_strncpyz( clc.serverMessage, s, sizeof( clc.serverMessage ) );
 			Com_Printf( "%s", s );
-			if ( fromserver && cls.state == CA_CHALLENGING && clc.compat &&
-				com_protocol->integer == QL_RETAIL_PROTOCOL_VERSION &&
-				strstr( s, "Server uses protocol version 91" ) ) {
-				rejectConnectionAttempt(
-					"Protocol 91 server is not an FnQL host. Connection refused." );
-			}
 		}
 		return fromserver;
 	}
@@ -3682,11 +3786,8 @@ static void CL_CheckTimeout( void ) {
 		if ( ++cl.timeoutcount > 5 ) { // timeoutcount saves debugger
 			Com_Printf( "\nServer connection timed out.\n" );
 			Cvar_Set( "com_errorMessage", "Server connection timed out." );
-			if ( !CL_Disconnect( qfalse ) ) { // restart client if not done already
+			if ( !CL_Disconnect( qtrue ) ) { // restart client if not done already
 				CL_FlushMemory();
-			}
-			if ( uivm ) {
-				VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_MAIN );
 			}
 			return;
 		}
@@ -3781,6 +3882,8 @@ void CL_Frame( int msec, int realMsec ) {
 	if ( !com_cl_running->integer ) {
 		return;
 	}
+
+	CL_CheckWindowResize();
 
 	// save the msec before checking pause
 	cls.realFrametime = realMsec;
@@ -4015,8 +4118,14 @@ static void CL_InitRenderer( void ) {
 		CL_InitRef();
 	}
 
+	// Native window APIs can deliver resize messages synchronously while the
+	// requested mode is being installed. They describe that mode rather than a
+	// user resize and must not queue a second restart.
+	cl_windowModeChange = qtrue;
+
 	// this sets up the renderer and calls R_Init
 	re.BeginRegistration( &cls.glconfig );
+	cl_windowModeChange = qfalse;
 
 	// load character sets
 	cls.charSetShader = re.RegisterShader( "gfx/2d/bigchars" );

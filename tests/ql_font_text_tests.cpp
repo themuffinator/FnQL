@@ -37,6 +37,21 @@ int main() {
 		assert( QL_FontColorEscape( "^8literal", nullptr, &color ) == 0 );
 		assert( QL_FontColorEscape( "^^literal", nullptr, &color ) == 0 );
 	}
+	{
+		const unsigned char cached[] = { 0, 1, 1 };
+		const unsigned char supported[] = { 1, 1, 1 };
+		assert( QL_FontSelectFallbackFace( 3, cached, supported ) == 1 );
+	}
+	{
+		const unsigned char cached[] = { 0, 0, 0 };
+		const unsigned char supported[] = { 0, 1, 1 };
+		assert( QL_FontSelectFallbackFace( 3, cached, supported ) == 1 );
+	}
+	{
+		const unsigned char absent[] = { 0, 0, 0 };
+		assert( QL_FontSelectFallbackFace( 3, absent, absent ) == -1 );
+		assert( QL_FontSelectFallbackFace( 0, absent, absent ) == -1 );
+	}
 	assert( QL_FontScaleTenths( 12.34f ) == 123 );
 	assert( QL_FontScaleTenths( 0.0f ) == 480 );
 	assert( QL_FontScaleTenths( 10000.0f ) == 32767 );

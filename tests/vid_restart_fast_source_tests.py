@@ -102,9 +102,10 @@ class VidRestartFastSourceTests(unittest.TestCase):
 
         # windowed direction leaves fullscreen and restores borders/geometry
         self.assertIn("SDL_SetWindowFullscreen( SDL_window, false )", reuse)
-        self.assertIn("SDL_SetWindowBordered( SDL_window, r_noborder->integer ? false : true );", reuse)
-        self.assertIn("SDL_SetWindowSize( SDL_window, config->vidWidth, config->vidHeight );", reuse)
-        self.assertIn("SDL_SetWindowPosition( SDL_window, x, y );", reuse)
+        self.assertIn("SDL_SetWindowBordered( SDL_window, r_noborder->integer ? false : true )", reuse)
+        self.assertIn("SDL_SetWindowResizable( SDL_window, true )", reuse)
+        self.assertIn("SDL_SetWindowSize( SDL_window, config->vidWidth, config->vidHeight )", reuse)
+        self.assertIn("SDL_SetWindowPosition( SDL_window, x, y )", reuse)
 
         # a reused window receives no focus events, so flags must be derived live
         self.assertIn("gw_active = ( windowFlags & SDL_WINDOW_INPUT_FOCUS ) ? qtrue : qfalse;", reuse)

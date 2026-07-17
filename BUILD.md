@@ -54,7 +54,7 @@ Project Meson options:
 
 `-Dcurl=auto|enabled|disabled` - enable, require, or disable cURL download support
 
-`-Dcurl-dlopen=true|false` - resolve cURL at runtime instead of linking libcurl, enabled by default
+`-Dcurl-dlopen=auto|true|false` - resolve cURL at runtime instead of linking libcurl; `auto` (the default) links libcurl on Windows and resolves at runtime elsewhere
 
 `-Dsystem-jpeg=true|false` - require a system JPEG library instead of allowing the libjpeg-turbo subproject fallback, disabled by default
 
@@ -74,6 +74,12 @@ Legacy Make inputs remain available while CI and packaging finish migrating,
 but new local work should prefer `meson/build`. The Visual Studio solution is
 a maintained frontend for that same Meson graph rather than a separate source
 and dependency manifest.
+
+Make and CMake use the same pinned FontStash source owned by
+`subprojects/fontstash.wrap`. Before the first Make or CMake build from a clean
+checkout, fetch it with `meson subprojects download fontstash`. Client builds
+fail at configuration time if that retail host-font dependency is unavailable;
+they never silently substitute the incomplete host-font stubs.
 
 ### windows/msvc
 

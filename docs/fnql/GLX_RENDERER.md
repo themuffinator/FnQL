@@ -16,8 +16,9 @@ The current source-coupling ledger is [GLX_LEGACY_COUPLING.md](GLX_LEGACY_COUPLI
 
 GLx keeps FnQL's existing renderer ABI intact:
 
-- `REF_API_VERSION` is 10 after the versioned WebUI surface and QL host-font
-  exports; every in-tree renderer implements the same boundary.
+- `REF_API_VERSION` is 13 after the versioned WebUI, QL host-font, and
+  renderer-only liquid-interaction exports; every in-tree renderer implements
+  the same boundary.
 - `GetRefAPI` remains the only exported renderer entry point.
 - The engine continues to communicate through `refimport_t` and `refexport_t`.
 - `cl_renderer glx` loads the external renderer module named `fnql_glx_<arch>` from the single FnQL client executable.

@@ -559,16 +559,17 @@ static qboolean setup_ALSA( smode_t mode )
 
 	if ( snd_async )
 	{
-		err = _snd_pcm_writei( handle, dma.buffer, period_size * 2 );
-		if ( err < 0 )
+		const snd_pcm_sframes_t written = _snd_pcm_writei( handle, dma.buffer, period_size * 2 );
+		if ( written < 0 )
 		{
-			Com_Printf( S_COLOR_YELLOW "ALSA initial write error: %s\n", _snd_strerror( err ) );
+			Com_Printf( S_COLOR_YELLOW "ALSA initial write error: %s\n",
+				_snd_strerror( static_cast<int>( written ) ) );
 			goto __fail;
 		}
-		if ( err != period_size * 2 )
+		if ( static_cast<snd_pcm_uframes_t>( written ) != period_size * 2 )
 		{
-			Com_Printf( S_COLOR_YELLOW "ALSA initial write error: written %i expected %li\n", err,
-				period_size * 2 );
+			Com_Printf( S_COLOR_YELLOW "ALSA initial write error: written %li expected %lu\n",
+				static_cast<long>( written ), static_cast<unsigned long>( period_size * 2 ) );
 			goto __fail;
 		}
 		if ( __snd_pcm_state( handle ) == SND_PCM_STATE_PREPARED )
@@ -909,7 +910,7 @@ static void thread_proc_mmap( void )
 		buffer_pos = p / ( dma.samplebits / 8 );
 
 		commitres = _snd_pcm_mmap_commit( handle, offset, frames );
-		if ( commitres < 0 || commitres != frames )
+		if ( commitres < 0 || static_cast<snd_pcm_uframes_t>( commitres ) != frames )
 		{
 			if ( ( err = xrun_recovery( handle, commitres >= 0 ? -EPIPE : commitres ) ) < 0 )
 			{
@@ -1040,7 +1041,8 @@ static void async_proc( snd_async_handler_t *ahandler )
 
 	size = dma.samples / dma.channels;
 
-	while ( ( avail = _snd_pcm_avail_update( handle ) ) >= period_size )
+	while ( ( avail = _snd_pcm_avail_update( handle ) ) >= 0 &&
+		static_cast<snd_pcm_uframes_t>( avail ) >= period_size )
 	{
 #ifdef USE_SPINLOCK
 		_pthread_spin_lock( &lock );
@@ -1049,10 +1051,10 @@ static void async_proc( snd_async_handler_t *ahandler )
 #endif
 		pos = buffer_pos / dma.channels; // buffer position in full samples
 
-		while ( avail >= period_size )
+		while ( avail >= 0 && static_cast<snd_pcm_uframes_t>( avail ) >= period_size )
 		{
-			if ( avail > period_size )
-				x = period_size;
+			if ( static_cast<snd_pcm_uframes_t>( avail ) > period_size )
+				x = static_cast<snd_pcm_sframes_t>( period_size );
 			else
 				x = avail;
 

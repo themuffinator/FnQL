@@ -478,6 +478,33 @@ void CL_MouseEvent( int dx, int dy /*, int time*/ ) {
 
 /*
 =================
+CL_MouseAbsoluteEvent
+
+Dispatch an absolute pointer position without converting it into a gameplay
+delta. Retail QL's browser, UI, and cgame consumers receive raw host-window
+coordinates and perform their own projection. Console producers supply
+framebuffer pixels, including SDL's logical-to-framebuffer scaling.
+=================
+*/
+void CL_MouseAbsoluteEvent( int x, int y ) {
+	if ( Key_GetCatcher() & KEYCATCH_CONSOLE ) {
+		Con_SetMousePos( x, y );
+	} else if ( Key_GetCatcher() & KEYCATCH_BROWSER ) {
+		CL_WebView_OnMouseMove( x, y );
+	} else if ( !CL_AdvertisementBridge_IsDelayElapsed() ) {
+		return;
+	} else if ( Cvar_VariableIntegerValue( "cg_ignoreMouseInput" ) ) {
+		return;
+	} else if ( Key_GetCatcher() & KEYCATCH_UI ) {
+		VM_Call( uivm, 2, UI_MOUSE_EVENT, x, y );
+	} else if ( Key_GetCatcher() & KEYCATCH_CGAME ) {
+		VM_Call( cgvm, 2, CG_MOUSE_EVENT, x, y );
+	}
+}
+
+
+/*
+=================
 CL_JoystickEvent
 
 Joystick values stay set until changed

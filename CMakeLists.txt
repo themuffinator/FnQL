@@ -305,6 +305,14 @@ IF(FNQL_GLX_LOGIC_TESTS)
 ENDIF()
 
 enable_testing()
+ADD_EXECUTABLE(fnql_window_placement_tests tests/window_placement_tests.cpp)
+target_compile_features(fnql_window_placement_tests PRIVATE cxx_std_17)
+add_test(NAME fnql_window_placement COMMAND fnql_window_placement_tests)
+
+ADD_EXECUTABLE(fnql_ql_font_text_tests tests/ql_font_text_tests.cpp)
+target_compile_features(fnql_ql_font_text_tests PRIVATE cxx_std_17)
+add_test(NAME fnql_ql_font_text COMMAND fnql_ql_font_text_tests)
+
 ADD_EXECUTABLE(fnql_ql_bsp_contract_tests tests/ql_bsp_contract_tests.cpp)
 target_compile_features(fnql_ql_bsp_contract_tests PRIVATE cxx_std_17)
 target_include_directories(fnql_ql_bsp_contract_tests PRIVATE code/qcommon)
@@ -356,6 +364,10 @@ add_test(NAME fnql_factory_rotation COMMAND fnql_factory_rotation_tests)
 
 find_package(Python3 COMPONENTS Interpreter)
 IF(Python3_Interpreter_FOUND)
+	add_test(NAME fnql_ql_font_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/ql_font_source_tests.py")
+	add_test(NAME fnql_window_management_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/window_management_source_tests.py")
 	add_test(NAME fnql_ql_services_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/ql_services_source_tests.py")
 	add_test(NAME fnql_ql_cvar_configstring_source
@@ -378,6 +390,14 @@ IF(Python3_Interpreter_FOUND)
 ENDIF()
 
 # renderers
+set(FNQL_FONTSTASH_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/subprojects/fontstash/src")
+if(NOT EXISTS "${FNQL_FONTSTASH_INCLUDE_DIR}/fontstash.h")
+	message(FATAL_ERROR
+		"Retail host fonts require the pinned FontStash wrap. Run 'meson subprojects download fontstash' before configuring CMake.")
+endif()
+ADD_COMPILE_DEFINITIONS(BUILD_FONTSTASH)
+INCLUDE_DIRECTORIES(SYSTEM "${FNQL_FONTSTASH_INCLUDE_DIR}")
+
 AUX_SOURCE_DIRECTORY(code/renderercommon RENDERER_COMMON_SRCS)
 AUX_SOURCE_DIRECTORY(code/renderer RENDERER_GL_SRCS)
 AUX_SOURCE_DIRECTORY(code/rendererglx RENDERER_GLX_SRCS)
@@ -403,7 +423,7 @@ IF(USE_RENDERER_DLOPEN)
 	ENDIF()
 
 	ADD_LIBRARY(${RENDERER_PREFIX}_vulkan${RENDEXT} SHARED ${RENDERER_VK_SRCS} ${RENDERER_COMMON_SRCS} ${AUX_SRCS})
-	TARGET_COMPILE_DEFINITIONS(${RENDERER_PREFIX}_vulkan${RENDEXT} PRIVATE USE_RENDERER_DLOPEN)
+	TARGET_COMPILE_DEFINITIONS(${RENDERER_PREFIX}_vulkan${RENDEXT} PRIVATE USE_RENDERER_DLOPEN RENDERER_VULKAN)
 	SET_TARGET_PROPERTIES(${RENDERER_PREFIX}_vulkan${RENDEXT} PROPERTIES PREFIX "")
 ELSE()
 	IF(RENDERER_DEFAULT STREQUAL "glx")
@@ -411,6 +431,7 @@ ELSE()
 		TARGET_COMPILE_DEFINITIONS(${RENDERER_PREFIX}_glx PRIVATE RENDERER_GLX)
 	ELSEIF(USE_VULKAN)
 		ADD_LIBRARY(${RENDERER_PREFIX}_vulkan OBJECT ${RENDERER_VK_SRCS} ${RENDERER_COMMON_SRCS})
+		TARGET_COMPILE_DEFINITIONS(${RENDERER_PREFIX}_vulkan PRIVATE RENDERER_VULKAN)
 	ELSE()
 		ADD_LIBRARY(${RENDERER_PREFIX}_opengl OBJECT ${RENDERER_GL_SRCS} ${RENDERER_COMMON_SRCS})
 	ENDIF()

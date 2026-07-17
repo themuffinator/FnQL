@@ -33,7 +33,7 @@
 #define USE_DEDICATED_ALLOCATION
 #endif
 //#define MIN_IMAGE_ALIGN (128*1024)
-#define MAX_ATTACHMENTS_IN_POOL (11+VK_NUM_BLOOM_PASSES*2) // depth + depth fade + dlight/csm shadow atlases + msaa + msaa-resolve + depth-resolve + screenmap.msaa + screenmap.resolve + screenmap.depth + bloom_extract + blur pairs
+#define MAX_ATTACHMENTS_IN_POOL (13+VK_NUM_BLOOM_PASSES*2) // depth + depth fade + shadow atlases + main/motion/liquid resolves + msaa + screenmap color/msaa/depth + capture + bloom extract/blur pairs
 #define VK_MAX_FRAME_TIMESTAMPS 64
 #define VK_PIPELINE_CACHE_MAX_BYTES (32 * 1024 * 1024)
 
@@ -59,6 +59,7 @@ typedef enum {
 	TYPE_COLOR_RED,
 	TYPE_FOG_ONLY,
 	TYPE_DOT,
+	TYPE_LIQUID,
 
 	TYPE_SIGNLE_TEXTURE_LIGHTING,
 	TYPE_SIGNLE_TEXTURE_LIGHTING_LINEAR,
@@ -178,6 +179,7 @@ typedef enum {
 	RENDER_PASS_MAIN = 0,
 	RENDER_PASS_MAIN_LOAD,
 	RENDER_PASS_SCREENMAP,
+	RENDER_PASS_LIQUID_SNAPSHOT,
 	RENDER_PASS_POST_BLOOM,
 	RENDER_PASS_DLIGHT_SHADOW,
 	RENDER_PASS_SPOT_SHADOW,
@@ -379,9 +381,16 @@ void vk_bind_lighting( int stage, int bundle );
 void vk_draw_geometry( Vk_Depth_Range depth_range, qboolean indexed );
 void vk_draw_dot( uint32_t storage_offset );
 
-void vk_read_pixels( byte* buffer, uint32_t width, uint32_t height ); // screenshots
+void vk_read_pixels( byte *buffer, uint32_t x, uint32_t y, uint32_t width, uint32_t height ); // screenshots
+qboolean vk_capture_cubemap_face( uint32_t faceIndex, uint32_t faceSize );
+qboolean vk_read_cubemap_face( byte *buffer, uint32_t faceIndex, uint32_t faceSize );
+void vk_release_cubemap_capture( void );
 qboolean vk_bloom( void );
+qboolean vk_motion_blur( void );
+qboolean vk_capture_liquid_scene( void );
+void vk_get_liquid_mvp( float *mvp );
 void vk_draw_world_cel_outline( void );
+void vk_draw_global_fog( void );
 
 qboolean vk_alloc_vbo( const byte *vbo_data, int vbo_size );
 void vk_update_mvp( const float *m );
@@ -505,8 +514,10 @@ typedef struct {
 		VkRenderPass main;
 		VkRenderPass main_load;
 		VkRenderPass screenmap;
+		VkRenderPass liquid_snapshot;
 		VkRenderPass gamma;
 		VkRenderPass capture;
+		VkRenderPass motion_blur;
 		VkRenderPass bloom_extract;
 		VkRenderPass blur[VK_NUM_BLOOM_PASSES*2]; // horizontal-vertical pairs
 		VkRenderPass post_bloom;
@@ -527,6 +538,10 @@ typedef struct {
 
 	VkImage color_image;
 	VkImageView color_image_view;
+
+	VkImage motion_blur_image;
+	VkImageView motion_blur_image_view;
+	VkDescriptorSet motion_blur_descriptor;
 
 	VkImage bloom_image[1+VK_NUM_BLOOM_PASSES*2];
 	VkImageView bloom_image_view[1+VK_NUM_BLOOM_PASSES*2];
@@ -588,10 +603,34 @@ typedef struct {
 
 	} screenMap;
 
+	// Stable pre-fog scene copy sampled only by the enhanced-liquid passes.
+	struct {
+		VkDescriptorSet source_descriptor;
+		VkDescriptorSet color_descriptor;
+		VkImage color_image;
+		VkImageView color_image_view;
+	} liquidSnapshot;
+
 	struct {
 		VkImage image;
 		VkImageView image_view;
 	} capture;
+
+	struct {
+		VkImage image;
+		VkImageView image_view;
+		vk_memory_allocation_t image_allocation;
+		VkFramebuffer framebuffer;
+		VkPipeline pipeline;
+		VkBuffer readback_buffer;
+		vk_memory_allocation_t readback_allocation;
+		byte *readback_ptr;
+		VkDeviceSize face_stride;
+		uint32_t face_size;
+		uint32_t captured_mask;
+		qboolean invalidate_readback;
+		qboolean invalidate_pending;
+	} cubemap_capture;
 
 	struct {
 		VkFramebuffer blur[VK_NUM_BLOOM_PASSES*2];
@@ -600,7 +639,9 @@ typedef struct {
 		VkFramebuffer main_load[MAX_SWAPCHAIN_IMAGES];
 		VkFramebuffer gamma[MAX_SWAPCHAIN_IMAGES];
 		VkFramebuffer screenmap;
+		VkFramebuffer liquid_snapshot;
 		VkFramebuffer capture;
+		VkFramebuffer motion_blur;
 		VkFramebuffer dlight_shadow;
 		VkFramebuffer spot_shadow;
 		VkFramebuffer csm_shadow;
@@ -685,7 +726,9 @@ typedef struct {
 		VkShaderModule bloom_fs;
 		VkShaderModule blur_fs;
 		VkShaderModule blend_fs;
+		VkShaderModule motion_blur_fs;
 		VkShaderModule world_outline_fs;
+		VkShaderModule global_fog_fs;
 
 		VkShaderModule gamma_fs;
 		VkShaderModule gamma_vs;
@@ -695,6 +738,10 @@ typedef struct {
 
 		VkShaderModule dot_fs;
 		VkShaderModule dot_vs;
+
+		VkShaderModule liquid_fs;
+		VkShaderModule liquid_vs;
+		VkShaderModule liquid_copy_fs;
 	} modules;
 
 	VkPipelineCache pipelineCache;
@@ -756,6 +803,8 @@ typedef struct {
 	uint32_t surface_beam_pipeline;
 	uint32_t surface_axis_pipeline;
 	uint32_t dot_pipeline;
+	// dim 0: cullType_t, dim 1: polygon offset, dim 2: mirror view.
+	uint32_t liquid_pipelines[3][2][2];
 
 	VkPipeline gamma_pipeline;
 	VkPipeline capture_pipeline;
@@ -763,7 +812,11 @@ typedef struct {
 	VkPipeline blur_pipeline[VK_NUM_BLOOM_PASSES*2]; // horizontal & vertical pairs
 	VkPipeline bloom_blend_pipeline;
 	VkPipeline bloom_blend_cel_pipeline;
+	VkPipeline motion_blur_pipeline;
+	VkPipeline motion_blur_copy_pipeline;
+	VkPipeline liquid_snapshot_pipeline;
 	VkPipeline world_outline_pipeline;
+	VkPipeline global_fog_pipeline;
 
 	uint32_t frame_count;
 	qboolean active;
@@ -820,6 +873,8 @@ typedef struct {
 	uint32_t screenMapWidth;
 	uint32_t screenMapHeight;
 	uint32_t screenMapSamples;
+	uint32_t liquidSnapshotWidth;
+	uint32_t liquidSnapshotHeight;
 
 	uint32_t image_chunk_size;
 

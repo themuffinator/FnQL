@@ -64,6 +64,7 @@ constexpr float CON_TEXT_DRAG_THRESHOLD = 4.0f;
 constexpr int CONSOLE_HOST_FONT_MONO = 2;
 // Retail Quake Live sizes its console mono face from the fixed cell width.
 constexpr float CONSOLE_TTF_SCALE_PER_CELL = 2.1597f;
+constexpr float CON_CURSOR_IMAGE_SIZE = 32.0f;
 
 static int RoundToInt( float value )
 {
@@ -1103,19 +1104,6 @@ static qboolean Con_CollectCompletionMatch( const char *match, void *context ) {
 	return qtrue;
 }
 
-static void QDECL Con_CollectNativeArenaCompletionMatch( const char *name ) {
-	(void)Con_CollectCompletionMatch( name, nullptr );
-}
-
-static void Con_CollectNativeArenaCompletionMatches( qboolean firstArg ) {
-	if ( firstArg || !uivm || !uivm->dllExports ) {
-		return;
-	}
-
-	VM_Call( uivm, 1, UI_FOR_EACH_ARENA_NAME, (intptr_t)Con_CollectNativeArenaCompletionMatch );
-}
-
-
 static int Con_CompletionLower( int ch ) {
 	return tolower( static_cast<unsigned char>( ch ) );
 }
@@ -1839,8 +1827,7 @@ static void Con_RefreshCompletionState( void ) {
 
 	appendSpace = qfalse;
 	strictMatchCount = Field_QueryCompletionMatches( prefixBuffer.data(), &appendSpace,
-	Con_CollectCompletionMatch, nullptr );
-	Con_CollectNativeArenaCompletionMatches( firstArg ? qtrue : qfalse );
+		Con_CollectCompletionMatch, nullptr );
 
 	if ( ( strictMatchCount < 1 || con.completionCount < 1 ) &&
 		con.completionReplaceLength > 0 &&
@@ -3301,12 +3288,17 @@ static void Con_DrawMouseCursor( float alphaScale, const vec4_t lineColor ) {
 	y = con.mouseY;
 
 	if ( cls.cursorShader ) {
+		// The cursor image's hot point is its center, so offset the top-left
+		// draw origin by half its size to place the center on (mouseX, mouseY) -
+		// the same point used for all console hit-testing.
+		const float size = CON_CURSOR_IMAGE_SIZE;
+		const float half = size * 0.5f;
 		cursorColor[ 0 ] = 1.0f;
 		cursorColor[ 1 ] = 1.0f;
 		cursorColor[ 2 ] = 1.0f;
 		cursorColor[ 3 ] = alphaScale;
 		re.SetColor( cursorColor );
-		re.DrawStretchPic( x - 16.0f, y - 16.0f, 32.0f, 32.0f, 0, 0, 1, 1, cls.cursorShader );
+		re.DrawStretchPic( x - half, y - half, size, size, 0, 0, 1, 1, cls.cursorShader );
 		re.SetColor( nullptr );
 		return;
 	}
@@ -3625,20 +3617,18 @@ void Con_CharEvent( int key ) {
 }
 
 
-void Con_MouseEvent( int dx, int dy ) {
+/*
+==================
+Con_ProcessMouseMotion
+
+Runs the drag/selection state machine after con.mouseX/mouseY has been updated
+and clamped. Shared by the relative (Con_MouseEvent) and absolute
+(Con_SetMousePos) entry points.
+==================
+*/
+static void Con_ProcessMouseMotion( void ) {
 	int line, column;
 	float moveX, moveY;
-
-	if ( !( Key_GetCatcher() & KEYCATCH_CONSOLE ) ) {
-		return;
-	}
-
-	Con_ClampMouseToConsole();
-
-	con.mouseX += dx;
-	con.mouseY += dy;
-
-	Con_ClampMouseToConsole();
 
 	if ( con.scrollbarDragging ) {
 		Con_UpdateScrollbarDrag();
@@ -3672,6 +3662,53 @@ void Con_MouseEvent( int dx, int dy ) {
 	}
 
 	Con_UpdateScrollbarDrag();
+}
+
+
+/*
+==================
+Con_MouseEvent
+
+Relative pointer motion (window-pixel deltas).
+==================
+*/
+void Con_MouseEvent( int dx, int dy ) {
+	if ( !( Key_GetCatcher() & KEYCATCH_CONSOLE ) ) {
+		return;
+	}
+
+	Con_ClampMouseToConsole();
+
+	con.mouseX += dx;
+	con.mouseY += dy;
+
+	Con_ClampMouseToConsole();
+	Con_ProcessMouseMotion();
+}
+
+
+/*
+==================
+Con_SetMousePos
+
+Absolute pointer position in framebuffer pixels. Platform input paths convert
+logical host-window coordinates when needed (notably SDL high-DPI windows), so
+the software cursor stays aligned with the hidden system cursor.
+==================
+*/
+void Con_SetMousePos( int x, int y ) {
+	if ( !( Key_GetCatcher() & KEYCATCH_CONSOLE ) ) {
+		return;
+	}
+
+	// take ownership of the position before clamping, otherwise the first-time
+	// initialization in Con_ClampMouseToConsole would discard it
+	con.mouseInitialized = true;
+	con.mouseX = (float)x;
+	con.mouseY = (float)y;
+
+	Con_ClampMouseToConsole();
+	Con_ProcessMouseMotion();
 }
 
 
@@ -3924,6 +3961,7 @@ static void Con_ToggleMessageCatcher( void ) {
 		VM_Call( cgvm, 0, ( Key_GetCatcher() & KEYCATCH_MESSAGE ) ? CG_CHAT_DOWN : CG_CHAT_UP );
 	}
 }
+
 
 static int Con_GetChatFieldY( void ) {
 	int chatFieldY = 413;
@@ -4979,10 +5017,10 @@ static void Con_DrawSolidConsole( float frac ) {
 	if ( showVersion ) {
 		Con_SetScaledColor( versionColor, alphaScale );
 		if ( !Con_DrawHostText( xf + wf - ( ARRAY_LEN( Q3_VERSION ) - 1 ) * console_char_width,
-			lines - console_char_height, Q3_VERSION, qtrue, con_drawColor ) ) {
+			lines - console_char_height * statusRows, Q3_VERSION, qtrue, con_drawColor ) ) {
 			for ( i = 0; i < ARRAY_LEN( Q3_VERSION ) - 1; i++ ) {
 				Con_DrawSmallCharFloat( xf + wf - ( ARRAY_LEN( Q3_VERSION ) - 1 - i ) * console_char_width,
-					lines - console_char_height, Q3_VERSION[ i ] );
+					lines - console_char_height * statusRows, Q3_VERSION[ i ] );
 			}
 		}
 	}

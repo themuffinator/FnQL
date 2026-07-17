@@ -483,6 +483,7 @@ STARTUP_CVAR_NAMES = {
     "r_hdrPrecision",
     "r_hdrDisplay",
     "r_bloom",
+    "r_motionBlur",
     "r_bloom_soft_knee",
     "r_ext_multisample",
     "r_tonemap",

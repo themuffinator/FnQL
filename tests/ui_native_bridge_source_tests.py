@@ -552,14 +552,22 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
         self.assertIn("qboolean CL_WebHost_GetCursorPosition( int *x, int *y )", cl_webui)
         self.assertIn("CL_WebHost_SetCursorPosition( x, y );", cl_webui)
 
-    def test_console_completion_bridges_native_ui_arena_names(self) -> None:
+    def test_console_completion_stays_owned_by_fnql(self) -> None:
         cl_console = read_repo_file("code/client/cl_console.cpp")
+        cl_keys = read_repo_file("code/client/cl_keys.cpp")
 
-        self.assertIn("static void QDECL Con_CollectNativeArenaCompletionMatch", cl_console)
-        self.assertIn("static void Con_CollectNativeArenaCompletionMatches( qboolean firstArg )", cl_console)
-        self.assertIn("if ( firstArg || !uivm || !uivm->dllExports )", cl_console)
-        self.assertIn("VM_Call( uivm, 1, UI_FOR_EACH_ARENA_NAME, (intptr_t)Con_CollectNativeArenaCompletionMatch );", cl_console)
-        self.assertIn("Con_CollectNativeArenaCompletionMatches( firstArg ? qtrue : qfalse );", cl_console)
+        self.assertNotIn("Con_CollectNativeArenaCompletion", cl_console)
+        self.assertNotIn("UI_FOR_EACH_ARENA_NAME", cl_console)
+        self.assertIn("Field_QueryCompletionMatches", cl_console)
+        self.assertIn("Field_QueryCompletionCandidates", cl_console)
+        self.assertIn("Con_ApplySelectedCompletion", cl_console)
+
+        console_key = cl_keys[
+            cl_keys.index("static void Console_Key"):
+            cl_keys.index("static void Message_Key")
+        ]
+        self.assertNotIn("Field_AutoComplete", console_key)
+        self.assertIn("if ( Con_InputKey( key ) )", console_key)
 
     def test_ui_key_events_pass_retail_timestamp_argument(self) -> None:
         cl_keys = read_repo_file("code/client/cl_keys.cpp")

@@ -23,6 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_local.h"
 #include "tr_glx_compat.h"
+#include "../renderercommon/tr_levelshot.h"
 
 glconfig_t	glConfig;
 qboolean	nonPowerOfTwoTextures;
@@ -76,6 +77,8 @@ cvar_t	*r_neatsky;
 cvar_t	*r_drawSun;
 cvar_t	*r_dynamiclight;
 cvar_t	*r_depthFade;
+cvar_t	*r_globalFog;
+cvar_t	*r_globalFogStrength;
 cvar_t	*r_celShading;
 cvar_t	*r_celShadingWorld;
 cvar_t	*r_celShadingWorldWidth;
@@ -176,6 +179,14 @@ cvar_t	*r_bloom_blend_base;
 cvar_t	*r_bloom_intensity;
 cvar_t	*r_bloom_filter_size;
 cvar_t	*r_bloom_reflection;
+cvar_t	*r_motionBlur;
+cvar_t	*r_motionBlurStrength;
+cvar_t	*r_liquid;
+cvar_t	*r_liquidResolution;
+cvar_t	*r_liquidRefraction;
+cvar_t	*r_liquidWarpScale;
+cvar_t	*r_liquidReflection;
+cvar_t	*r_liquidRipples;
 cvar_t	*r_crt;
 cvar_t	*r_crtAmount;
 cvar_t	*r_crtScanlineStrength;
@@ -229,6 +240,7 @@ cvar_t	*r_lightmap;
 cvar_t	*r_vertexLight;
 cvar_t	*r_shadows;
 cvar_t	*r_flares;
+qboolean r_flaresFboEnabled;
 cvar_t	*r_nobind;
 cvar_t	*r_singleShader;
 cvar_t	*r_roundImagesDown;
@@ -1333,8 +1345,33 @@ static void R_AppendScreenshotToken( char *out, int outSize, const char *value )
 	}
 }
 
+static qboolean R_ScreenshotPatternHasToken( const char *pattern, const char *wantedToken )
+{
+	const char *token;
+
+	for ( token = pattern ? strchr( pattern, '{' ) : NULL; token;
+		token = strchr( token + 1, '{' ) ) {
+		const char *end = strchr( token + 1, '}' );
+		const char *format;
+		int tokenLength;
+
+		if ( !end ) {
+			break;
+		}
+		format = memchr( token + 1, ':', end - token - 1 );
+		tokenLength = (int)( ( format ? format : end ) - token - 1 );
+		if ( tokenLength == (int)strlen( wantedToken ) &&
+			!Q_stricmpn( token + 1, wantedToken, tokenLength ) ) {
+			return qtrue;
+		}
+		token = end;
+	}
+
+	return qfalse;
+}
+
 static qboolean R_ExpandScreenshotPattern( char *out, int outSize, const char *pattern, const char *commandName,
-	const char *faceName, const char *fileExt, int iter, qboolean *usedIter )
+	const char *faceName, const char *fileExt, int iter, qboolean *usedIter, const qtime_t *fixedTime )
 {
 	char tokenName[64];
 	char tokenValue[128];
@@ -1342,7 +1379,11 @@ static qboolean R_ExpandScreenshotPattern( char *out, int outSize, const char *p
 	qtime_t t;
 	int i;
 
-	ri.Com_RealTime( &t );
+	if ( fixedTime ) {
+		t = *fixedTime;
+	} else {
+		ri.Com_RealTime( &t );
+	}
 	out[0] = '\0';
 	*usedIter = qfalse;
 
@@ -1367,9 +1408,7 @@ static qboolean R_ExpandScreenshotPattern( char *out, int outSize, const char *p
 					if ( format ) {
 						*format++ = '\0';
 						padWidth = atoi( format );
-						if ( padWidth < 0 ) {
-							padWidth = 0;
-						}
+						padWidth = MAX( 0, MIN( 9, padWidth ) );
 					}
 
 					tokenValue[0] = '\0';
@@ -1662,6 +1701,8 @@ void RB_TakeScreenshotBMP( int x, int y, int width, int height, const char *file
 R_ScreenshotFilename
 ==================
 */
+static qboolean R_ValidScreenshotBaseName( const char *baseName );
+
 static void R_ScreenshotFilename( char *fileName, const char *fileExt, const char *commandName, const char *faceName ) {
 	char baseName[MAX_OSPATH];
 	const char *pattern;
@@ -1672,12 +1713,22 @@ static void R_ScreenshotFilename( char *fileName, const char *fileExt, const cha
 	for ( count = 0; count < 1000; count++ ) {
 		qboolean usedIter;
 
-		if ( !R_ExpandScreenshotPattern( baseName, sizeof( baseName ), pattern, commandName, faceName, fileExt, count, &usedIter ) ) {
+		if ( !R_ExpandScreenshotPattern( baseName, sizeof( baseName ), pattern, commandName, faceName,
+			fileExt, count, &usedIter, NULL ) ) {
+			Com_sprintf( baseName, sizeof( baseName ), "shot-%d", count );
+			usedIter = qtrue;
+		}
+		if ( !R_ValidScreenshotBaseName( baseName ) ) {
+			if ( count == 0 ) {
+				ri.Printf( PRINT_WARNING,
+					"WARNING: r_screenshotNameFormat produced an invalid path; using a safe fallback.\n" );
+			}
 			Com_sprintf( baseName, sizeof( baseName ), "shot-%d", count );
 			usedIter = qtrue;
 		}
 
-		if ( faceName && faceName[0] && !strstr( pattern, "{face}" ) ) {
+		if ( faceName && faceName[0] &&
+			!R_ScreenshotPatternHasToken( pattern, "face" ) ) {
 			Q_strcat( baseName, sizeof( baseName ), va( "-%s", faceName ) );
 		}
 
@@ -1694,6 +1745,106 @@ static void R_ScreenshotFilename( char *fileName, const char *fileExt, const cha
 	Com_sprintf( fileName, MAX_OSPATH, "screenshots/shot-overflow.%s", fileExt );
 }
 
+static qboolean R_ValidScreenshotBaseName( const char *baseName )
+{
+	const char *p;
+
+	if ( !baseName || !baseName[0] || baseName[0] == '/' || baseName[0] == '\\' ||
+		baseName[strlen( baseName ) - 1] == '/' ||
+		strchr( baseName, ':' ) || strchr( baseName, '\\' ) ) {
+		return qfalse;
+	}
+
+	for ( p = baseName; *p; p++ ) {
+		if ( p[0] == '.' && p[1] == '.' &&
+			( ( p == baseName || p[-1] == '/' ) && ( p[2] == '/' || p[2] == '\0' ) ) ) {
+			return qfalse;
+		}
+	}
+
+	return qtrue;
+}
+
+static qboolean R_CubemapScreenshotFilenames( char names[6][MAX_OSPATH], const char *fileExt,
+	const char *explicitBaseName )
+{
+	static const char *faceNames[6] = { "front", "back", "left", "right", "top", "bottom" };
+	const char *pattern;
+	qtime_t captureTime;
+	int count;
+	int i;
+
+	if ( explicitBaseName && explicitBaseName[0] ) {
+		if ( !R_ValidScreenshotBaseName( explicitBaseName ) ) {
+			ri.Printf( PRINT_WARNING, "WARNING: invalid screenshot cubemap basename '%s'.\n", explicitBaseName );
+			return qfalse;
+		}
+
+		for ( i = 0; i < 6; i++ ) {
+			if ( Com_sprintf( names[i], MAX_OSPATH, "screenshots/%s-%s.%s",
+				explicitBaseName, faceNames[i], fileExt ) >= MAX_OSPATH ) {
+				ri.Printf( PRINT_WARNING, "WARNING: screenshot cubemap basename is too long.\n" );
+				return qfalse;
+			}
+		}
+		return qtrue;
+	}
+
+	pattern = ( r_screenshotNameFormat && r_screenshotNameFormat->string[0] ) ?
+		r_screenshotNameFormat->string : "shot-{date}-{time}";
+	ri.Com_RealTime( &captureTime );
+
+	for ( count = 0; count < 1000; count++ ) {
+		qboolean available = qtrue;
+
+		for ( i = 0; i < 6; i++ ) {
+			char baseName[MAX_OSPATH];
+			qboolean usedIter;
+			int j;
+
+			if ( !R_ExpandScreenshotPattern( baseName, sizeof( baseName ), pattern,
+				"screenshot-cubemap", faceNames[i], fileExt, count, &usedIter, &captureTime ) ) {
+				Com_sprintf( baseName, sizeof( baseName ), "shot-%d", count );
+				usedIter = qtrue;
+			}
+			if ( !R_ScreenshotPatternHasToken( pattern, "face" ) ) {
+				Q_strcat( baseName, sizeof( baseName ), va( "-%s", faceNames[i] ) );
+			}
+			if ( !usedIter && count > 0 ) {
+				Q_strcat( baseName, sizeof( baseName ), va( "-%d", count ) );
+			}
+			if ( !R_ValidScreenshotBaseName( baseName ) ) {
+				if ( count == 0 && i == 0 ) {
+					ri.Printf( PRINT_WARNING,
+						"WARNING: r_screenshotNameFormat produced an invalid path; using a safe fallback.\n" );
+				}
+				Com_sprintf( baseName, sizeof( baseName ), "shot-%d-%s", count, faceNames[i] );
+			}
+			if ( Com_sprintf( names[i], MAX_OSPATH, "screenshots/%s.%s", baseName, fileExt ) >= MAX_OSPATH ||
+				ri.FS_FileExists( names[i] ) ) {
+				available = qfalse;
+				break;
+			}
+			for ( j = 0; j < i; j++ ) {
+				if ( !Q_stricmp( names[i], names[j] ) ) {
+					available = qfalse;
+					break;
+				}
+			}
+			if ( !available ) {
+				break;
+			}
+		}
+
+		if ( available ) {
+			return qtrue;
+		}
+	}
+
+	ri.Printf( PRINT_WARNING, "WARNING: could not find six available screenshot cubemap filenames.\n" );
+	return qfalse;
+}
+
 typedef struct {
 	int sourceX;
 	int sourceY;
@@ -1702,100 +1853,6 @@ typedef struct {
 	int outputWidth;
 	int outputHeight;
 } levelshotParams_t;
-
-static qboolean R_LevelshotValueIsDisabled( const char *value )
-{
-	return !value || !value[0] || !Q_stricmp( value, "0" ) || !Q_stricmp( value, "none" ) ||
-		!Q_stricmp( value, "source" ) || !Q_stricmp( value, "viewport" ) || !Q_stricmp( value, "default" );
-}
-
-static const char *R_LevelshotFindSeparator( const char *value )
-{
-	const char *sep;
-
-	sep = strchr( value, 'x' );
-	if ( !sep ) {
-		sep = strchr( value, 'X' );
-	}
-	if ( !sep ) {
-		sep = strchr( value, ':' );
-	}
-	if ( !sep ) {
-		sep = strchr( value, '/' );
-	}
-
-	return sep;
-}
-
-static qboolean R_ParseLevelshotSize( const char *value, int *width, int *height )
-{
-	const char *sep;
-
-	if ( R_LevelshotValueIsDisabled( value ) ) {
-		return qfalse;
-	}
-
-	sep = R_LevelshotFindSeparator( value );
-	if ( sep ) {
-		char left[32];
-		char right[32];
-		int leftLen = sep - value;
-		int rightLen = strlen( sep + 1 );
-
-		if ( leftLen <= 0 || leftLen >= (int)sizeof( left ) || rightLen <= 0 || rightLen >= (int)sizeof( right ) ) {
-			return qfalse;
-		}
-
-		Q_strncpyz( left, value, leftLen + 1 );
-		Q_strncpyz( right, sep + 1, rightLen + 1 );
-
-		*width = atoi( left );
-		*height = atoi( right );
-		return *width > 0 && *height > 0;
-	}
-
-	*width = atoi( value );
-	*height = *width;
-	return *width > 0;
-}
-
-static qboolean R_ParseLevelshotAspect( const char *value, float *aspect )
-{
-	const char *sep;
-
-	if ( R_LevelshotValueIsDisabled( value ) ) {
-		return qfalse;
-	}
-
-	sep = R_LevelshotFindSeparator( value );
-	if ( sep ) {
-		char left[32];
-		char right[32];
-		float leftValue;
-		float rightValue;
-		int leftLen = sep - value;
-		int rightLen = strlen( sep + 1 );
-
-		if ( leftLen <= 0 || leftLen >= (int)sizeof( left ) || rightLen <= 0 || rightLen >= (int)sizeof( right ) ) {
-			return qfalse;
-		}
-
-		Q_strncpyz( left, value, leftLen + 1 );
-		Q_strncpyz( right, sep + 1, rightLen + 1 );
-
-		leftValue = Q_atof( left );
-		rightValue = Q_atof( right );
-		if ( leftValue <= 0.0f || rightValue <= 0.0f ) {
-			return qfalse;
-		}
-
-		*aspect = leftValue / rightValue;
-		return qtrue;
-	}
-
-	*aspect = Q_atof( value );
-	return *aspect > 0.0f;
-}
 
 static void R_GetLevelshotCenteredRect( int width, int height, float aspect, int *x, int *y, int *outWidth, int *outHeight )
 {
@@ -1844,7 +1901,8 @@ static void R_ResolveLevelshotParams( int viewportWidth, int viewportHeight, lev
 			r_levelshotSize->string );
 	}
 
-	if ( r_levelshotDownscale && r_levelshotDownscale->value > 1.0f ) {
+	if ( r_levelshotDownscale && r_levelshotDownscale->value > 1.0f &&
+		R_LevelshotFloatIsFinite( r_levelshotDownscale->value ) ) {
 		params->outputWidth = MAX( 1, (int)( params->sourceWidth / r_levelshotDownscale->value + 0.5f ) );
 		params->outputHeight = MAX( 1, (int)( params->sourceHeight / r_levelshotDownscale->value + 0.5f ) );
 	} else {
@@ -1855,22 +1913,25 @@ static void R_ResolveLevelshotParams( int viewportWidth, int viewportHeight, lev
 
 static void R_ResampleLevelshot( const byte *source, int sourceWidth, int padlen, const levelshotParams_t *params, byte *out )
 {
-	int stride = sourceWidth * 3 + padlen;
+	size_t stride = (size_t)sourceWidth * 3u + (size_t)padlen;
 	int y;
 
 	if ( params->outputWidth == params->sourceWidth && params->outputHeight == params->sourceHeight ) {
 		for ( y = 0; y < params->outputHeight; y++ ) {
-			const byte *src = source + ( params->sourceY + y ) * stride + params->sourceX * 3;
-			byte *dst = out + y * params->outputWidth * 3;
+			const byte *src = source + (size_t)( params->sourceY + y ) * stride +
+				(size_t)params->sourceX * 3u;
+			byte *dst = out + (size_t)y * (size_t)params->outputWidth * 3u;
 
-			Com_Memcpy( dst, src, params->outputWidth * 3 );
+			Com_Memcpy( dst, src, (size_t)params->outputWidth * 3u );
 		}
 		return;
 	}
 
 	for ( y = 0; y < params->outputHeight; y++ ) {
-		int srcY0 = params->sourceY + ( y * params->sourceHeight ) / params->outputHeight;
-		int srcY1 = params->sourceY + ( ( y + 1 ) * params->sourceHeight + params->outputHeight - 1 ) / params->outputHeight;
+		int srcY0 = params->sourceY + (int)( ( (int64_t)y * params->sourceHeight ) /
+			params->outputHeight );
+		int srcY1 = params->sourceY + (int)( ( (int64_t)( y + 1 ) * params->sourceHeight +
+			params->outputHeight - 1 ) / params->outputHeight );
 		int x;
 
 		if ( srcY1 <= srcY0 ) {
@@ -1881,14 +1942,17 @@ static void R_ResampleLevelshot( const byte *source, int sourceWidth, int padlen
 		}
 
 		for ( x = 0; x < params->outputWidth; x++ ) {
-			int srcX0 = params->sourceX + ( x * params->sourceWidth ) / params->outputWidth;
-			int srcX1 = params->sourceX + ( ( x + 1 ) * params->sourceWidth + params->outputWidth - 1 ) / params->outputWidth;
+			int srcX0 = params->sourceX + (int)( ( (int64_t)x * params->sourceWidth ) /
+				params->outputWidth );
+			int srcX1 = params->sourceX + (int)( ( (int64_t)( x + 1 ) * params->sourceWidth +
+				params->outputWidth - 1 ) / params->outputWidth );
 			unsigned long long red = 0;
 			unsigned long long green = 0;
 			unsigned long long blue = 0;
-			int count = 0;
+			unsigned long long count = 0;
 			int sampleY;
-			byte *dst = out + ( y * params->outputWidth + x ) * 3;
+			byte *dst = out + ( (size_t)y * (size_t)params->outputWidth +
+				(size_t)x ) * 3u;
 
 			if ( srcX1 <= srcX0 ) {
 				srcX1 = srcX0 + 1;
@@ -1898,11 +1962,11 @@ static void R_ResampleLevelshot( const byte *source, int sourceWidth, int padlen
 			}
 
 			for ( sampleY = srcY0; sampleY < srcY1; sampleY++ ) {
-				const byte *row = source + sampleY * stride;
+				const byte *row = source + (size_t)sampleY * stride;
 				int sampleX;
 
 				for ( sampleX = srcX0; sampleX < srcX1; sampleX++ ) {
-					const byte *pixel = row + sampleX * 3;
+					const byte *pixel = row + (size_t)sampleX * 3u;
 
 					red += pixel[0];
 					green += pixel[1];
@@ -1939,23 +2003,40 @@ void RB_TakeLevelShot( void ) {
 	byte		*rgb;
 	byte		*source, *allsource;
 	size_t		offset = 0;
+	size_t		rgbBytes;
+	int			rgbByteCount;
+	int			fileByteCount;
 	int			padlen;
 	int			x, y;
 	levelshotParams_t params;
 
 	Com_sprintf(checkname, sizeof(checkname), "levelshots/%s.tga", tr.world->baseName);
 
-	allsource = RB_ReadPixels(0, 0, gls.captureWidth, gls.captureHeight, &offset, &padlen, 0 );
-	source = allsource + offset;
 	R_ResolveLevelshotParams( gls.captureWidth, gls.captureHeight, &params );
+	if ( !R_LevelshotCheckedRgbBytes( params.outputWidth, params.outputHeight,
+		&rgbBytes ) ) {
+		ri.Printf( PRINT_WARNING,
+			"WARNING: levelshot output %dx%d exceeds the safe TGA/allocation limit.\n",
+			params.outputWidth, params.outputHeight );
+		return;
+	}
+	rgbByteCount = (int)rgbBytes;
+	fileByteCount = rgbByteCount + 18;
 
-	rgb = ri.Hunk_AllocateTempMemory( params.outputWidth * params.outputHeight * 3 );
+	allsource = RB_ReadPixels(0, 0, gls.captureWidth, gls.captureHeight, &offset, &padlen, 0 );
+	if ( !allsource ) {
+		ri.Printf( PRINT_WARNING, "WARNING: unable to read pixels for levelshot.\n" );
+		return;
+	}
+	source = allsource + offset;
+
+	rgb = ri.Hunk_AllocateTempMemory( rgbByteCount );
 	R_ResampleLevelshot( source, gls.captureWidth, padlen, &params, rgb );
 
 	// gamma correction happens on the resampled RGB output
-	R_GammaCorrect( rgb, params.outputWidth * params.outputHeight * 3 );
+	R_GammaCorrect( rgb, rgbByteCount );
 
-	buffer = ri.Hunk_AllocateTempMemory( params.outputWidth * params.outputHeight * 3 + 18 );
+	buffer = ri.Hunk_AllocateTempMemory( fileByteCount );
 	Com_Memset (buffer, 0, 18);
 	buffer[2] = 2;		// uncompressed type
 	buffer[12] = params.outputWidth & 255;
@@ -1966,8 +2047,9 @@ void RB_TakeLevelShot( void ) {
 
 	for ( y = 0; y < params.outputHeight; y++ ) {
 		for ( x = 0; x < params.outputWidth; x++ ) {
-			const byte *src = rgb + ( y * params.outputWidth + x ) * 3;
-			byte *dst = buffer + 18 + ( y * params.outputWidth + x ) * 3;
+			const size_t pixel = (size_t)y * (size_t)params.outputWidth + (size_t)x;
+			const byte *src = rgb + pixel * 3u;
+			byte *dst = buffer + 18u + pixel * 3u;
 
 			dst[0] = src[2];
 			dst[1] = src[1];
@@ -1975,10 +2057,10 @@ void RB_TakeLevelShot( void ) {
 		}
 	}
 
-	ri.FS_WriteFile( checkname, buffer, params.outputWidth * params.outputHeight * 3 + 18 );
+	ri.FS_WriteFile( checkname, buffer, fileByteCount );
 
-	ri.Hunk_FreeTempMemory(rgb);
 	ri.Hunk_FreeTempMemory(buffer);
+	ri.Hunk_FreeTempMemory(rgb);
 	ri.Hunk_FreeTempMemory(allsource);
 
 	ri.Printf( PRINT_ALL, "Wrote %s (%dx%d)\n", checkname, params.outputWidth, params.outputHeight );
@@ -2001,11 +2083,8 @@ static void R_ScheduleLevelShot( void )
 
 static void R_ScheduleCubemapScreenshot( int typeMask, const char *ext )
 {
-	static const char *faceNames[6] = { "front", "back", "left", "right", "top", "bottom" };
-	char checkname[MAX_OSPATH];
 	const char *baseName;
 	int baseArg;
-	int i;
 	qboolean silent;
 
 	if ( !tr.world ) {
@@ -2014,12 +2093,22 @@ static void R_ScheduleCubemapScreenshot( int typeMask, const char *ext )
 	}
 
 	if ( backEnd.screenshotCubeActive || backEnd.screenshotCubeFrontPending ) {
+		ri.Printf( PRINT_WARNING, "WARNING: a screenshot cubemap capture is already pending.\n" );
+		return;
+	}
+	if ( backEnd.screenshotMask || backEnd.levelshotPending ) {
+		ri.Printf( PRINT_WARNING,
+			"WARNING: finish the pending screenshot or levelshot before starting a cubemap capture.\n" );
+		return;
+	}
+	if ( glConfig.stereoEnabled || ( r_anaglyphMode && r_anaglyphMode->integer ) ) {
+		ri.Printf( PRINT_WARNING, "WARNING: screenshot cubemap is unavailable in stereo rendering modes.\n" );
 		return;
 	}
 
 	baseArg = 2;
 	silent = qfalse;
-	if ( !strcmp( ri.Cmd_Argv( baseArg ), "silent" ) ) {
+	if ( !Q_stricmp( ri.Cmd_Argv( baseArg ), "silent" ) ) {
 		silent = qtrue;
 		baseArg++;
 	}
@@ -2030,19 +2119,13 @@ static void R_ScheduleCubemapScreenshot( int typeMask, const char *ext )
 	}
 
 	baseName = ( ri.Cmd_Argc() == baseArg + 1 ) ? ri.Cmd_Argv( baseArg ) : NULL;
-
-	for ( i = 0; i < 6; i++ ) {
-		if ( baseName && baseName[0] ) {
-			Com_sprintf( checkname, sizeof( checkname ), "screenshots/%s-%s.%s", baseName, faceNames[i], ext );
-		} else {
-			R_ScreenshotFilename( checkname, ext, "screenshot-cubemap", faceNames[i] );
-		}
-
-		Q_strncpyz( backEnd.screenshotCubeNames[i], checkname, sizeof( backEnd.screenshotCubeNames[i] ) );
+	if ( !R_CubemapScreenshotFilenames( backEnd.screenshotCubeNames, ext, baseName ) ) {
+		return;
 	}
 
 	backEnd.screenshotCubeFormat = typeMask;
 	backEnd.screenshotCubeSilent = silent;
+	backEnd.screenshotCubeFailed = qfalse;
 	backEnd.screenshotCubeFrontPending = qfalse;
 	backEnd.screenshotCubeActive = qtrue;
 	R_SetCaptureActive( qtrue );
@@ -2067,6 +2150,12 @@ static void R_ScreenShot_f( void ) {
 	qboolean	silent;
 	int			typeMask;
 	const char	*ext;
+	int argc = ri.Cmd_Argc();
+
+	if ( ( r_skipBackEnd && r_skipBackEnd->integer ) || ( r_norefresh && r_norefresh->integer ) ) {
+		ri.Printf( PRINT_WARNING, "WARNING: screenshots are unavailable while rendering is disabled.\n" );
+		return;
+	}
 
 	if ( ri.CL_IsMinimized() && !RE_CanMinimize() ) {
 		ri.Printf( PRINT_WARNING, "WARNING: unable to take screenshot when minimized because FBO is not available/enabled.\n" );
@@ -2089,13 +2178,30 @@ static void R_ScreenShot_f( void ) {
 
 	R_WarnExplicitHdrScreenshotCapture();
 
-	if ( !strcmp( ri.Cmd_Argv( 1 ), "levelshot" ) ) {
+	if ( !Q_stricmp( ri.Cmd_Argv( 1 ), "levelshot" ) ) {
+		if ( argc != 2 ) {
+			ri.Printf( PRINT_ALL, "usage: %s levelshot\n", ri.Cmd_Argv( 0 ) );
+			return;
+		}
+		if ( backEnd.screenshotCubeActive || backEnd.screenshotCubeFrontPending ) {
+			ri.Printf( PRINT_WARNING, "WARNING: a screenshot cubemap capture is already pending.\n" );
+			return;
+		}
 		R_ScheduleLevelShot();
 		return;
 	}
 
-	if ( !strcmp( ri.Cmd_Argv( 1 ), "cubemap" ) ) {
+	if ( !Q_stricmp( ri.Cmd_Argv( 1 ), "cubemap" ) ) {
 		R_ScheduleCubemapScreenshot( typeMask, ext );
+		return;
+	}
+	if ( argc > 2 ) {
+		ri.Printf( PRINT_ALL, "usage: %s [silent|levelshot|cubemap [silent] [basename]|filename]\n",
+			ri.Cmd_Argv( 0 ) );
+		return;
+	}
+	if ( backEnd.screenshotCubeActive || backEnd.screenshotCubeFrontPending ) {
+		ri.Printf( PRINT_WARNING, "WARNING: a screenshot cubemap capture is already pending.\n" );
 		return;
 	}
 
@@ -2103,9 +2209,9 @@ static void R_ScreenShot_f( void ) {
 	if ( backEnd.screenshotMask & typeMask )
 		return;
 
-	if ( !strcmp( ri.Cmd_Argv(1), "silent" ) ) {
+	if ( !Q_stricmp( ri.Cmd_Argv(1), "silent" ) ) {
 		silent = qtrue;
-	} else if ( typeMask == SCREENSHOT_BMP && !strcmp( ri.Cmd_Argv(1), "clipboard" ) ) {
+	} else if ( typeMask == SCREENSHOT_BMP && !Q_stricmp( ri.Cmd_Argv(1), "clipboard" ) ) {
 		backEnd.screenshotMask |= SCREENSHOT_BMP_CLIPBOARD;
 		silent = qtrue;
 	} else {
@@ -2114,7 +2220,16 @@ static void R_ScreenShot_f( void ) {
 
 	if ( ri.Cmd_Argc() == 2 && !silent ) {
 		// explicit filename
-		Com_sprintf( checkname, MAX_OSPATH, "screenshots/%s.%s", ri.Cmd_Argv( 1 ), ext );
+		if ( !R_ValidScreenshotBaseName( ri.Cmd_Argv( 1 ) ) ) {
+			ri.Printf( PRINT_WARNING, "WARNING: invalid screenshot filename '%s'.\n",
+				ri.Cmd_Argv( 1 ) );
+			return;
+		}
+		if ( Com_sprintf( checkname, MAX_OSPATH, "screenshots/%s.%s",
+			ri.Cmd_Argv( 1 ), ext ) >= MAX_OSPATH ) {
+			ri.Printf( PRINT_WARNING, "WARNING: screenshot filename is too long.\n" );
+			return;
+		}
 	} else {
 		if ( backEnd.screenshotMask & SCREENSHOT_BMP_CLIPBOARD ) {
 			// no need for filename, copy to system buffer
@@ -2580,6 +2695,14 @@ static void R_Register( void )
 	r_depthFade = ri.Cvar_Get( "r_depthFade", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_depthFade, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_depthFade, "Softens intersections between translucent particles and world geometry when the renderer supports depth-fade sampling." );
+	r_globalFog = ri.Cvar_Get( "r_globalFog", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_globalFog, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_globalFog, "Enable optional visual-only global fog from maps/<map>.fog on the OpenGL-lineage and Vulkan renderers. Requires r_fbo 1 and vid_restart." );
+	ri.Cvar_SetGroup( r_globalFog, CVG_RENDERER );
+	r_globalFogStrength = ri.Cvar_Get( "r_globalFogStrength", "1.0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_globalFogStrength, "0", "1", CV_FLOAT );
+	ri.Cvar_SetDescription( r_globalFogStrength, "Live opacity multiplier for the current map's optional global-fog sidecar." );
+	ri.Cvar_SetGroup( r_globalFogStrength, CVG_RENDERER );
 	r_celShading = ri.Cvar_Get( "r_celShading", "0", CVAR_ARCHIVE );
 	ri.Cvar_CheckRange( r_celShading, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_celShading, "Enable cel shading on model entities, including brush models, player models, and the first-person weapon." );
@@ -2883,7 +3006,7 @@ static void R_Register( void )
 	ri.Cvar_SetGroup( r_tonemapExposure, CVG_RENDERER );
 	r_hudExcludePostProcess = ri.Cvar_Get( "r_hudExcludePostProcess", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_hudExcludePostProcess, "0", "1", CV_INTEGER );
-	ri.Cvar_SetDescription( r_hudExcludePostProcess, "Exclude 3D HUD scenes (RDF_NOWORLDMODEL after the world view) from bloom extraction while keeping HUD/2D in the final output transform. Set to 0 for legacy post-processed HUD models." );
+	ri.Cvar_SetDescription( r_hudExcludePostProcess, "Exclude 3D HUD scenes (RDF_NOWORLDMODEL after the world view) from bloom extraction, while keeping HUD/2D drawing in the final output transform. Motion blur always keeps HUD and console drawing sharp." );
 	ri.Cvar_SetGroup( r_hudExcludePostProcess, CVG_RENDERER );
 	r_crt = ri.Cvar_Get( "r_crt", "0", CVAR_ARCHIVE_ND );
 	R_MakeCvarInstant( r_crt );
@@ -2988,6 +3111,41 @@ static void R_Register( void )
 	r_bloom_reflection = ri.Cvar_Get( "r_bloom_reflection", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_bloom_reflection, "-4", "4", CV_FLOAT );
 	ri.Cvar_SetDescription( r_bloom_reflection, "Bloom lens reflection effect, value is an intensity factor of the effect, negative value means blend only reflection and skip main bloom texture." );
+
+	r_motionBlur = ri.Cvar_Get( "r_motionBlur", "0", CVAR_ARCHIVE_ND );
+	R_MakeCvarInstant( r_motionBlur );
+	ri.Cvar_CheckRange( r_motionBlur, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_motionBlur, "Enable camera-driven directional screen motion blur. Requires \\r_fbo 1; HUD and console drawing remain sharp." );
+	ri.Cvar_SetGroup( r_motionBlur, CVG_RENDERER );
+	r_motionBlurStrength = ri.Cvar_Get( "r_motionBlurStrength", "0.25", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_motionBlurStrength, "0.0", "1.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_motionBlurStrength, "Camera-motion blur shutter scale. 0.25 is subtle; higher values increase the directional blur radius." );
+	ri.Cvar_SetGroup( r_motionBlurStrength, CVG_RENDERER );
+
+	r_liquid = ri.Cvar_Get( "r_liquid", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_liquid, "0", "2", CV_INTEGER );
+	ri.Cvar_SetDescription( r_liquid, "Enable warped scene refraction and a Fresnel screen-space reflection for liquids: 0 off, 1 water, 2 water/slime/lava. Requires r_fbo 1 and vid_restart; authored liquid stages remain intact." );
+	ri.Cvar_SetGroup( r_liquid, CVG_RENDERER );
+	r_liquidResolution = ri.Cvar_Get( "r_liquidResolution", "1.0", CVAR_ARCHIVE_ND | CVAR_LATCH );
+	ri.Cvar_CheckRange( r_liquidResolution, "0.25", "1.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_liquidResolution, "Resolution scale of the liquid scene snapshot. 1.0 samples the scene at full resolution and is sharpest; lower values reduce bandwidth and soften refraction. Requires vid_restart." );
+	ri.Cvar_SetGroup( r_liquidResolution, CVG_RENDERER );
+	r_liquidRefraction = ri.Cvar_Get( "r_liquidRefraction", "0.65", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_liquidRefraction, "0.0", "1.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_liquidRefraction, "Blend strength of warped scene refraction behind authored transparent liquid stages." );
+	ri.Cvar_SetGroup( r_liquidRefraction, CVG_RENDERER );
+	r_liquidWarpScale = ri.Cvar_Get( "r_liquidWarpScale", "1.0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_liquidWarpScale, "0.0", "2.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_liquidWarpScale, "Multiplier for the ambient wave distortion of the refraction. 1.0 is about 12 pixels at 1080 lines, scaled to the view height and fading with distance and grazing angle." );
+	ri.Cvar_SetGroup( r_liquidWarpScale, CVG_RENDERER );
+	r_liquidReflection = ri.Cvar_Get( "r_liquidReflection", "0.65", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_liquidReflection, "0.0", "1.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_liquidReflection, "Strength of the grazing-angle screen-space reflection of the captured scene, with a material sheen fallback where the mirrored sample is invalid." );
+	ri.Cvar_SetGroup( r_liquidReflection, CVG_RENDERER );
+	r_liquidRipples = ri.Cvar_Get( "r_liquidRipples", "1.0", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_liquidRipples, "0.0", "2.0", CV_FLOAT );
+	ri.Cvar_SetDescription( r_liquidRipples, "Amplitude of visual ripple rings when players or projectiles enter, leave, or move through liquid; 0 disables the impulse feed. Requires r_liquid." );
+	ri.Cvar_SetGroup( r_liquidRipples, CVG_RENDERER );
 #endif // USE_FBO
 
 	r_dlightBacks = ri.Cvar_Get( "r_dlightBacks", "1", CVAR_ARCHIVE_ND );
@@ -3048,14 +3206,14 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_portalOnly, "Set to 1 to render only first mirror/portal view if it is present on the scene." );
 
 	r_flareSize = ri.Cvar_Get( "r_flareSize", "40", CVAR_ARCHIVE_ND );
-	ri.Cvar_SetDescription( r_flareSize, "Radius of light flares. Requires \\r_flares 1." );
+	ri.Cvar_SetDescription( r_flareSize, "Radius of light flares. Requires \\r_flares 1 or 2." );
 	ri.Cvar_CheckRange( r_flareSize, "1", "40", CV_FLOAT );
 
 	r_flareFade = ri.Cvar_Get( "r_flareFade", "10", CVAR_CHEAT );
-	ri.Cvar_SetDescription( r_flareFade, "Distance to fade out light flares. Requires \\r_flares 1." );
+	ri.Cvar_SetDescription( r_flareFade, "Distance to fade out light flares. Requires \\r_flares 1 or 2." );
 	r_flareCoeff = ri.Cvar_Get( "r_flareCoeff", "150", CVAR_CHEAT );
 	ri.Cvar_CheckRange( r_flareCoeff, "0.1", NULL, CV_FLOAT );
-	ri.Cvar_SetDescription( r_flareCoeff, "Coefficient for the light flare intensity falloff function. Requires \\r_flares 1." );
+	ri.Cvar_SetDescription( r_flareCoeff, "Coefficient for the light flare intensity falloff function. Requires \\r_flares 1 or 2." );
 
 	r_skipBackEnd = ri.Cvar_Get ("r_skipBackEnd", "0", CVAR_CHEAT);
 	ri.Cvar_SetDescription( r_skipBackEnd, "Skips loading rendering backend." );
@@ -3170,13 +3328,15 @@ static void R_Register( void )
 
 	r_flares = ri.Cvar_Get( "r_flares", "0", CVAR_ARCHIVE_ND );
 	R_MakeCvarInstant( r_flares );
-	ri.Cvar_SetDescription( r_flares, "Enables corona effects on light sources. Applies after the current frame." );
+	ri.Cvar_CheckRange( r_flares, "0", "2", CV_INTEGER );
+	ri.Cvar_SetDescription( r_flares, "Controls map light flares: 0 disables them, 1 uses the classic corona, and 2 supplements the classic corona with layered high-quality lens artifacts. Applies after the current frame." );
 	ri.Cvar_SetGroup( r_flares, CVG_RENDERER );
+	r_flaresFboEnabled = r_flares->integer ? qtrue : qfalse;
 
 #ifdef USE_FBO
 	r_fbo = ri.Cvar_Get( "r_fbo", "0", CVAR_ARCHIVE_ND );
 	R_MakeCvarInstant( r_fbo );
-	ri.Cvar_SetDescription( r_fbo, "Use framebuffer objects, enables gamma correction in windowed mode and allows arbitrary video size and screenshot/video capture.\n Required for bloom, HDR rendering, anti-aliasing and greyscale effects.\n OpenGL 3.0+ required. Applies after the current frame." );
+	ri.Cvar_SetDescription( r_fbo, "Use framebuffer objects, enables gamma correction in windowed mode and allows arbitrary video size and screenshot/video capture.\n Required for bloom, motion blur, HDR rendering, anti-aliasing and greyscale effects.\n OpenGL 3.0+ required. Applies after the current frame." );
 	ri.Cvar_SetGroup( r_fbo, CVG_RENDERER );
 
 	r_ext_supersample = ri.Cvar_Get( "r_ext_supersample", "0", CVAR_ARCHIVE_ND );
@@ -3358,6 +3518,10 @@ static void RE_Shutdown( refShutdownCode_t code ) {
 				ri.GLimp_Shutdown( code == REF_UNLOAD_DLL ? qtrue : qfalse );
 			}
 			Com_Memset( &glConfig, 0, sizeof( glConfig ) );
+		} else {
+			// Keep the native window, but force InitOpenGL() back through
+			// GLimp_Init() so the retained window can adopt new geometry.
+			Com_Memset( &glConfig, 0, sizeof( glConfig ) );
 		}
 	}
 
@@ -3447,6 +3611,7 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 	re.AddLightToScene = RE_AddLightToScene;
 	re.AddAdditiveLightToScene = RE_AddAdditiveLightToScene;
 	re.AddLinearLightToScene = RE_AddLinearLightToScene;
+	re.AddLiquidInteractionToScene = RE_AddLiquidInteractionToScene;
 
 	re.RenderScene = RE_RenderScene;
 	re.AdvertisementBridge_UpdateLoadingViewParameters = AdvertisementBridge_UpdateLoadingViewParameters;

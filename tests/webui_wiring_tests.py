@@ -143,19 +143,16 @@ class WebUiWiringTests(unittest.TestCase):
 
         self.assertIn("static qboolean mouseAbsoluteMode", sdl_input)
         self.assertIn("browserActive || nativeUiActive || cgameUiActive", sdl_input)
-        self.assertIn("!absoluteMouse && ( !in_nograb->integer || consoleActive )", sdl_input)
-        self.assertIn(
-            "if ( browserActive || nativeUiActive || cgameUiActive ) {\n"
-            "\t\t\tIN_ShowCursor( qtrue );",
-            sdl_input,
-        )
-        self.assertIn("mouseAbsoluteMode != absoluteMouse", sdl_input)
+        self.assertIn("const qboolean retailAbsolute = ( !consoleActive &&", sdl_input)
+        self.assertIn("const qboolean showCursor = ( retailAbsolute", sdl_input)
+        self.assertIn("IN_ShowCursor( showCursor );", sdl_input)
+        self.assertIn("mouseAbsoluteMode != retailAbsolute", sdl_input)
         self.assertIn("(int)e.motion.x, (int)e.motion.y", sdl_input)
         self.assertIn("static int CL_WebHost_MapCursorCoordinate", webui)
         self.assertIn("cls.glconfig.vidWidth", webui)
         self.assertIn("status.surface.width", webui)
         self.assertIn("CL_WebView_OnMouseMove( x, y );", wndproc)
-        self.assertIn("CL_WebView_OnMouseButtonEvent( K_MOUSE1, qtrue );", wndproc)
+        self.assertIn("CL_WebView_OnMouseButtonEvent( key, down );", wndproc)
         self.assertIn("CL_WebView_OnMouseWheelEvent( 1 );", wndproc)
 
     def test_demo_playback_keys_use_retail_mousepass_and_freeze_bridge(self) -> None:
@@ -1320,21 +1317,23 @@ class WebUiWiringTests(unittest.TestCase):
 
         self.assertIn("browserActive = ( Key_GetCatcher() & KEYCATCH_BROWSER )", sdl_input)
         self.assertIn("browserActive || nativeUiActive || cgameUiActive", sdl_input)
-        self.assertIn("!absoluteMouse && ( !in_nograb->integer || consoleActive )", sdl_input)
+        self.assertIn("const qboolean retailAbsolute = ( !consoleActive &&", sdl_input)
         self.assertIn("relativeMouse = ( in_mouse->integer > 0 && grabMouse )", sdl_input)
-        self.assertIn("mouseAbsoluteMode != absoluteMouse", sdl_input)
+        self.assertIn("mouseAbsoluteMode != retailAbsolute", sdl_input)
         self.assertIn("IN_ShowCursor( qtrue );", sdl_input)
         self.assertIn("(int)e.motion.x, (int)e.motion.y", sdl_input)
         self.assertIn("&& !nativeUiActive && !cgameUiActive", sdl_input)
         self.assertIn("b = K_MOUSE6 + ( e.button.button - ( SDL_BUTTON_X2 + 1 ) );", sdl_input)
-        self.assertIn("Key_GetCatcher() & ( KEYCATCH_BROWSER | KEYCATCH_UI | KEYCATCH_CGAME )", win_input)
+        self.assertIn("catcher & KEYCATCH_BROWSER", win_input)
+        self.assertIn("catcher & KEYCATCH_UI", win_input)
+        self.assertIn("catcher & KEYCATCH_CGAME", win_input)
         self.assertIn("kDInputMouseButtonKeys[]", win_input)
         self.assertIn("K_MOUSE5, K_MOUSE6, K_MOUSE7, K_MOUSE8", win_input)
         self.assertIn("buttonIndex < ARRAY_LEN( kDInputMouseButtonKeys )", win_input)
         self.assertIn("btn_code = event.xbutton.button - 8 + K_MOUSE6;", linux_input)
         browser_input = win_input[
-            win_input.index("if ( Key_GetCatcher() & ( KEYCATCH_BROWSER | KEYCATCH_UI | KEYCATCH_CGAME ) ) {"):
-            win_input.index("if ( !gw_active", win_input.index("if ( Key_GetCatcher() & ( KEYCATCH_BROWSER | KEYCATCH_UI | KEYCATCH_CGAME ) ) {"))
+            win_input.index("if ( absolutePointerOwner )"):
+            win_input.index("if ( !gw_active", win_input.index("if ( absolutePointerOwner )"))
         ]
         self.assertIn("IN_DeactivateMouse();", browser_input)
         self.assertNotIn("IN_MouseMove();", browser_input)

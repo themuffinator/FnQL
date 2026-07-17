@@ -778,6 +778,65 @@ static qboolean RB_DrawSurfListNeedsDepthFadeSnapshot( const drawSurf_t *drawSur
 	}
 	return qfalse;
 }
+
+static qboolean RB_ShaderNeedsLiquidSnapshot( const shader_t *shader )
+{
+	const shader_t *state;
+
+	/* Deferred opaque lighting lands at SS_FOG. Earlier custom sort classes
+	 * cannot be snapshotted without changing their established draw order. */
+	if ( !shader || shader->sort < SS_FOG ) {
+		return qfalse;
+	}
+	state = shader->remappedShader ? shader->remappedShader : shader;
+	/* The refraction underlay and the sheen's screen-space reflection both
+	 * sample the snapshot, so either active pass justifies the capture. */
+	if ( !R_LiquidShaderSupported( state ) ||
+		!r_liquid ||
+		( ( !r_liquidRefraction || r_liquidRefraction->value <= 0.0f ) &&
+		  ( !r_liquidReflection || r_liquidReflection->value <= 0.0f ) ) ||
+		!R_LiquidContentsEnabled( shader->contentFlags | state->contentFlags,
+			r_liquid->integer ) ) {
+		return qfalse;
+	}
+	if ( !fboEnabled || !FBO_LiquidScreenTexture() || backEnd.liquidScreenMapDone ||
+		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ||
+		backEnd.screenshotCubeActive || backEnd.screenshotCubeFrontPending ||
+		R_ViewPassIsPortal( &backEnd.viewParms ) || glConfig.stereoEnabled ) {
+		return qfalse;
+	}
+	return qtrue;
+}
+
+static qboolean RB_DrawSurfListNeedsLiquidSnapshot( drawSurf_t *drawSurfs,
+	int numDrawSurfs )
+{
+	int i;
+
+	if ( !drawSurfs || numDrawSurfs <= 0 || !r_liquid ||
+		r_liquid->integer <= 0 ||
+		( ( !r_liquidRefraction || r_liquidRefraction->value <= 0.0f ) &&
+		  ( !r_liquidReflection || r_liquidReflection->value <= 0.0f ) ) ||
+		!R_LiquidViewportCoversTarget( backEnd.viewParms.viewportX,
+			backEnd.viewParms.viewportY, backEnd.viewParms.viewportWidth,
+			backEnd.viewParms.viewportHeight, glConfig.vidWidth, glConfig.vidHeight ) ||
+		!fboEnabled || !FBO_LiquidScreenTexture() ) {
+		return qfalse;
+	}
+	for ( i = 0; i < numDrawSurfs; i++ ) {
+		shader_t *shader;
+		int entityNum, fogNum, dlighted;
+
+		if ( drawSurfs[i].flags & DSF_SHADOW_CASTER_ONLY ) {
+			continue;
+		}
+		R_DecomposeSort( drawSurfs[i].sort, &entityNum, &shader, &fogNum, &dlighted );
+		if ( RB_ShaderNeedsLiquidSnapshot( shader ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
 #endif
 
 /*
@@ -801,11 +860,17 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 #ifdef USE_FBO
 	qboolean		depthFadeSnapshot;
 	qboolean		worldCelOutlineDrawn;
+	qboolean		liquidSnapshotPending;
 #endif
 	double			originalTime; // -EC-
 
 	// save original time for entity shader offsets
 	originalTime = backEnd.refdef.floatTime;
+	if ( !( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) &&
+		!R_ViewPassIsPortal( &backEnd.viewParms ) &&
+		!backEnd.screenshotCubeActive && !backEnd.screenshotCubeFrontPending ) {
+		backEnd.liquidScreenMapDone = qfalse;
+	}
 
 	// draw everything
 	oldEntityNum = -1;
@@ -821,6 +886,8 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 #ifdef USE_FBO
 	depthFadeSnapshot = qfalse;
 	worldCelOutlineDrawn = qfalse;
+	liquidSnapshotPending = RB_DrawSurfListNeedsLiquidSnapshot( drawSurfs,
+		numDrawSurfs );
 	FBO_ResetDepthFade();
 #endif
 	depthRange = qfalse;
@@ -857,6 +924,7 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 			}
 			depthFadeSnapshot = qtrue;
 		}
+
 #endif
 
 		//
@@ -893,6 +961,25 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 			// view-facing see-through/autosprite passes stay above it.
 			if ( shader->sort > SS_OPAQUE ) {
 				RB_DrawWorldCelOutlineForScene( &worldCelOutlineDrawn );
+			}
+			/* Capture at one deterministic boundary, after deferred opaque work and
+			 * before fog/underwater/regular transparency. Capturing immediately
+			 * before the first liquid made the snapshot depend on that shader's sort. */
+			if ( liquidSnapshotPending && shader->sort >= SS_FOG ) {
+				/* Opaque depth for waterline rejection; idempotent when the
+				 * depth-fade snapshot already ran this list. */
+				FBO_CopyLiquidDepth();
+				if ( FBO_CopyLiquidScreen() ) {
+					backEnd.liquidScreenMapDone = qtrue;
+				}
+				liquidSnapshotPending = qfalse;
+				qglMatrixMode( GL_PROJECTION );
+				qglLoadMatrixf( backEnd.viewParms.projectionMatrix );
+				qglMatrixMode( GL_MODELVIEW );
+				qglLoadMatrixf( backEnd.viewParms.world.modelMatrix );
+				backEnd.projection2D = qfalse;
+				glState.faceCulling = -1;
+				oldEntityNum = -1;
 			}
 #endif
 			RB_BeginSurface( shader, fogNum );
@@ -3854,8 +3941,19 @@ static const void *RB_DrawSurfs( const void *data ) {
 	// draw main system development information (surface outlines, etc)
 	RB_DebugGraphics();
 
+#ifdef USE_FBO
+	/* Apply the optional sidecar after scene and native BSP fog work, but before
+	 * motion blur, bloom/gamma, and later HUD/console scenes. */
+	FBO_DrawGlobalFog();
+#endif
+
 	//TODO Maybe check for rdf_noworld stuff but q3mme has full 3d ui
 	backEnd.doneSurfaces = qtrue; // for bloom
+#ifdef USE_FBO
+	if ( !( cmd->refdef.rdflags & RDF_NOWORLDMODEL ) ) {
+		FBO_MotionBlur();
+	}
+#endif
 
 	return (const void *)(cmd + 1);
 }
@@ -4174,6 +4272,70 @@ static const void *RB_MenuDepthOfField( const void *data )
 #endif // USE_FBO
 
 
+static qboolean RB_TakeCubemapScreenshot( int faceIndex, int x, int y, int size,
+	int format, const char *fileName, qboolean silent )
+{
+	vec3_t savedVieworg;
+	vec3_t savedViewaxis[3];
+	qboolean oldAllowWatermark;
+#ifdef USE_FBO
+	qboolean preparedFbo = qfalse;
+#endif
+
+	if ( faceIndex < 0 || faceIndex >= 6 || size <= 0 || !fileName || !fileName[0] ||
+		backEnd.screenshotCubeFailed ) {
+		return qfalse;
+	}
+
+#ifdef USE_FBO
+	if ( fboEnabled ) {
+		if ( !FBO_CubemapCaptureOutput() ) {
+			backEnd.screenshotCubeFailed = qtrue;
+			ri.Printf( PRINT_WARNING,
+				"WARNING: screenshot cubemap cancelled: unable to prepare the SDR capture output.\n" );
+			return qfalse;
+		}
+		preparedFbo = qtrue;
+		if ( superSampled ) {
+			FBO_BlitSS();
+		}
+	}
+#endif
+
+	VectorCopy( backEnd.refdef.vieworg, savedVieworg );
+	AxisCopy( backEnd.refdef.viewaxis, savedViewaxis );
+	VectorCopy( backEnd.screenshotCubeVieworg[faceIndex], backEnd.refdef.vieworg );
+	AxisCopy( backEnd.screenshotCubeViewaxis[faceIndex], backEnd.refdef.viewaxis );
+
+	oldAllowWatermark = rb_allowScreenshotWatermark;
+	rb_allowScreenshotWatermark = qfalse;
+	if ( format == SCREENSHOT_PNG ) {
+		RB_TakeScreenshotPNG( x, y, size, size, fileName );
+	} else if ( format == SCREENSHOT_JPG ) {
+		RB_TakeScreenshotJPEG( x, y, size, size, fileName );
+	} else if ( format == SCREENSHOT_BMP ) {
+		RB_TakeScreenshotBMP( x, y, size, size, fileName, qfalse );
+	} else {
+		RB_TakeScreenshot( x, y, size, size, fileName );
+	}
+	rb_allowScreenshotWatermark = oldAllowWatermark;
+
+	VectorCopy( savedVieworg, backEnd.refdef.vieworg );
+	AxisCopy( savedViewaxis, backEnd.refdef.viewaxis );
+
+#ifdef USE_FBO
+	if ( preparedFbo ) {
+		FBO_FinishCubemapCaptureOutput();
+	}
+#endif
+
+	if ( !silent ) {
+		ri.Printf( PRINT_ALL, "Wrote %s\n", fileName );
+	}
+	return qtrue;
+}
+
+
 static const void *RB_SwapBuffers( const void *data ) {
 
 	const swapBuffersCommand_t	*cmd;
@@ -4196,6 +4358,19 @@ static const void *RB_SwapBuffers( const void *data ) {
 		qglFinish();
 	}
 
+	if ( backEnd.screenshotCubeFrontPending && tr.frameCount > 1 ) {
+		RB_TakeCubemapScreenshot( 0, backEnd.screenshotCubeFrontX,
+			backEnd.screenshotCubeFrontY, backEnd.screenshotCubeFrontSize,
+			backEnd.screenshotCubeFormat, backEnd.screenshotCubeNames[0],
+			backEnd.screenshotCubeSilent );
+		backEnd.screenshotCubeFrontPending = qfalse;
+		backEnd.screenshotCubeActive = qfalse;
+		if ( !backEnd.levelshotPending && backEnd.screenshotMask == 0 ) {
+			ri.Cvar_Set( "cl_captureActive", "0" );
+		}
+		backEnd.screenshotCubeFailed = qfalse;
+	}
+
 #ifdef USE_FBO
 	if ( fboEnabled ) {
 		if ( !backEnd.framePostProcessed ) {
@@ -4208,7 +4383,7 @@ static const void *RB_SwapBuffers( const void *data ) {
 	// buffer swap may take undefined time to complete, we can't measure it in a reliable way
 	backEnd.pc.msec = ri.Milliseconds() - backEnd.pc.msec;
 
-	if ( ( backEnd.screenshotMask || backEnd.levelshotPending || backEnd.screenshotCubeFrontPending ) && tr.frameCount > 1 ) {
+	if ( ( backEnd.screenshotMask || backEnd.levelshotPending ) && tr.frameCount > 1 ) {
 #ifdef USE_FBO
 		if ( superSampled ) {
 			qglScissor( 0, 0, gls.captureWidth, gls.captureHeight );
@@ -4247,36 +4422,6 @@ static const void *RB_SwapBuffers( const void *data ) {
 			RB_TakeLevelShot();
 			backEnd.levelshotPending = qfalse;
 		}
-		if ( backEnd.screenshotCubeFrontPending ) {
-			qboolean oldAllowWatermark;
-
-			oldAllowWatermark = rb_allowScreenshotWatermark;
-			rb_allowScreenshotWatermark = qfalse;
-
-			if ( backEnd.screenshotCubeFormat == SCREENSHOT_PNG ) {
-				RB_TakeScreenshotPNG( backEnd.screenshotCubeFrontX, backEnd.screenshotCubeFrontY,
-					backEnd.screenshotCubeFrontSize, backEnd.screenshotCubeFrontSize, backEnd.screenshotCubeNames[0] );
-			} else if ( backEnd.screenshotCubeFormat == SCREENSHOT_JPG ) {
-				RB_TakeScreenshotJPEG( backEnd.screenshotCubeFrontX, backEnd.screenshotCubeFrontY,
-					backEnd.screenshotCubeFrontSize, backEnd.screenshotCubeFrontSize, backEnd.screenshotCubeNames[0] );
-			} else if ( backEnd.screenshotCubeFormat == SCREENSHOT_BMP ) {
-				RB_TakeScreenshotBMP( backEnd.screenshotCubeFrontX, backEnd.screenshotCubeFrontY,
-					backEnd.screenshotCubeFrontSize, backEnd.screenshotCubeFrontSize, backEnd.screenshotCubeNames[0], qfalse );
-			} else {
-				RB_TakeScreenshot( backEnd.screenshotCubeFrontX, backEnd.screenshotCubeFrontY,
-					backEnd.screenshotCubeFrontSize, backEnd.screenshotCubeFrontSize, backEnd.screenshotCubeNames[0] );
-			}
-
-			rb_allowScreenshotWatermark = oldAllowWatermark;
-
-			if ( !backEnd.screenshotCubeSilent ) {
-				ri.Printf( PRINT_ALL, "Wrote %s\n", backEnd.screenshotCubeNames[0] );
-			}
-
-			backEnd.screenshotCubeFrontPending = qfalse;
-			backEnd.screenshotCubeActive = qfalse;
-		}
-
 		backEnd.screenshotPNG[0] = '\0';
 		backEnd.screenshotJPG[0] = '\0';
 		backEnd.screenshotTGA[0] = '\0';
@@ -4297,6 +4442,7 @@ static const void *RB_SwapBuffers( const void *data ) {
 	backEnd.projection2D = qfalse;
 	backEnd.doneBloom = qfalse;
 	backEnd.doneSurfaces = qfalse;
+	backEnd.liquidScreenMapDone = qfalse;
 	backEnd.framePostProcessed = qfalse;
 	backEnd.bloomProtectHighlights = qfalse;
 	backEnd.drawConsole = qfalse;
@@ -4312,6 +4458,11 @@ static const void *RB_TakeScreenshotCmd( const void *data )
 	qboolean oldAllowWatermark;
 
 	cmd = (const screenshotCommand_t *)data;
+	if ( cmd->cubemapFace >= 0 ) {
+		RB_TakeCubemapScreenshot( cmd->cubemapFace, cmd->x, cmd->y, cmd->width,
+			cmd->format, cmd->fileName, cmd->silent );
+		return (const void *)(cmd + 1);
+	}
 
 	oldAllowWatermark = rb_allowScreenshotWatermark;
 	rb_allowScreenshotWatermark = cmd->allowWatermark;

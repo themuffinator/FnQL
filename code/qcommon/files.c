@@ -2840,7 +2840,7 @@ static pack_t *FS_LoadArchiveFile( const char *archivefile )
 }
 
 
-static qboolean FS_RootArchiveAllowsAudioZoneSidecar( const char *qpath )
+static qboolean FS_RootArchiveAllowsMapSidecar( const char *qpath )
 {
 	static const char mapsPrefix[] = "maps/";
 
@@ -2852,7 +2852,8 @@ static qboolean FS_RootArchiveAllowsAudioZoneSidecar( const char *qpath )
 		return qfalse;
 	}
 
-	return COM_CompareExtension( qpath, ".azb" );
+	return COM_CompareExtension( qpath, ".azb" ) ||
+		COM_CompareExtension( qpath, ".fog" );
 }
 
 
@@ -2861,7 +2862,7 @@ static qboolean FS_RootArchiveAllowsFile( const char *qpath )
 	return qpath != NULL &&
 		( !FS_FilenameCompare( qpath, FNQL_ROOT_ARCHIVE_RENDERER_SHADER ) ||
 			!FS_FilenameCompare( qpath, FNQL_ROOT_ARCHIVE_WEAPON_SOUNDS ) ||
-			FS_RootArchiveAllowsAudioZoneSidecar( qpath ) );
+			FS_RootArchiveAllowsMapSidecar( qpath ) );
 }
 
 
@@ -3027,7 +3028,7 @@ static int FS_RootArchiveBuildArchivePaths(
 FS_ReadFileFromRootArchive
 
 Read compatibility-safe source-port assets from a fixed archive next to the executable.
-Restricted to explicitly owned renderer, audio-zone, and sound-shader sidecars so it doesn't widen the general data search path.
+Restricted to explicitly owned renderer, audio-zone, global-fog, and sound-shader sidecars so it doesn't widen the general data search path.
 =================
 */
 static int FS_ReadFileFromRootArchive( const char *qpath, void **buffer )

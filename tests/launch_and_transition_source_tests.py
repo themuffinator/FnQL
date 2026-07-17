@@ -89,8 +89,13 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
         self.assertIn("if ( cls.state != CA_ACTIVE )", screen)
         self.assertIn("SCR_DrawNonGameBackdrop();", screen)
         self.assertIn("drawConnectScreen = cls.state == CA_CONNECTING", screen)
+        self.assertIn("browserOverlayAllowed = !drawConnectScreen && cls.state != CA_LOADING", screen)
+        self.assertIn("&& cls.state != CA_PRIMED;", screen)
+        self.assertIn("browserOverlayRequested = browserOverlayAllowed", screen)
         self.assertIn("uivm && ( !uiFullscreen || drawConnectScreen )", screen)
-        self.assertIn("CL_WebHost_DrawBrowserSurface();", screen)
+        browser_draw = screen[screen.index("// Native connection and level-loading screens"):]
+        self.assertIn("if ( browserOverlayAllowed )", browser_draw)
+        self.assertIn("CL_WebHost_DrawBrowserSurface();", browser_draw)
         self.assertIn("UI_DRAW_CONNECT_SCREEN, qfalse", screen)
         self.assertIn("UI_DRAW_CONNECT_SCREEN, qtrue", screen)
 
@@ -98,6 +103,54 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
         self.assertIn("!browserOverlayRequested", screen)
         self.assertIn("!CL_UIMenusAreVisible()", main)
         self.assertIn("KEYCATCH_BROWSER", main)
+
+    def test_retail_disconnect_flow_restores_webui_with_native_fallback(self) -> None:
+        main = read_source("code/client/cl_main.cpp")
+        common = read_source("code/qcommon/common.c")
+        keys = read_source("code/client/cl_keys.cpp")
+        webui = read_source("code/client/cl_webui.cpp")
+
+        disconnect_start = main.index("qboolean CL_Disconnect( qboolean showMainMenu )")
+        disconnect_end = main.index("void CL_ForwardCommandToServer", disconnect_start)
+        disconnect = main[disconnect_start:disconnect_end]
+
+        self.assertLess(
+            disconnect.index('Cvar_Set( "r_uiFullScreen", "1" );'),
+            disconnect.index("CL_WebView_PublishGameEnd();"),
+        )
+        self.assertIn('Cvar_Set( "timescale", "1" );', disconnect)
+        self.assertIn('CL_AddReliableCommand( "disconnect", qtrue );', disconnect)
+        self.assertIn("CL_WritePacket( 2 );", disconnect)
+        self.assertIn("CL_WebHost_ShowAfterDisconnect()", disconnect)
+        self.assertIn("UI_SET_ACTIVE_MENU, UIMENU_MAIN", disconnect)
+        self.assertLess(
+            disconnect.index("cls.state = CA_DISCONNECTED;"),
+            disconnect.index("CL_WebHost_ShowAfterDisconnect()"),
+        )
+
+        show = function_body(webui, "CL_WebHost_ShowAfterDisconnect")
+        self.assertIn("host.SetRenderingPaused( false )", show)
+        self.assertIn("host.SetFocus( true )", show)
+        self.assertIn("cl_webui.browserVisible = qtrue;", show)
+        self.assertIn("cl_webui.browserActive = qtrue;", show)
+        self.assertNotIn("CL_Awesomium_OpenURL", show)
+
+        recovery_start = common.index("if ( code == ERR_DISCONNECT")
+        recovery_end = common.index("} else {", common.index("} else if ( code == ERR_NEED_CD", recovery_start))
+        recovery = common[recovery_start:recovery_end]
+        self.assertNotIn("CL_Disconnect( qfalse );", recovery)
+        self.assertGreaterEqual(recovery.count("CL_Disconnect( qtrue );"), 3)
+
+        command_start = main.index("void CL_Disconnect_f( void )")
+        command_end = main.index("void CL_Reconnect_f", command_start)
+        command = main[command_start:command_end]
+        self.assertIn('Com_Error( ERR_DISCONNECT, "Disconnected from server" );', command)
+        self.assertNotIn("CL_Disconnect( qfalse )", command)
+
+        self.assertIn('if ( !Q_stricmp( c, "disconnect" ) )', main)
+        self.assertIn("cls.realtime - clc.lastPacketTime >= 3000", main)
+        self.assertIn("NET_CompareAdr( from, &clc.netchan.remoteAddress )", main)
+        self.assertIn("CL_Disconnect( qtrue )", keys)
 
     def test_retail_ui_coordinates_are_not_aspect_corrected_twice(self) -> None:
         ui = read_source("code/client/cl_ui.cpp")

@@ -24,6 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "tr_local.h"
 
 #include "tr_dsa.h"
+#include "../renderercommon/tr_levelshot.h"
 
 glconfig_t  glConfig;
 glRefConfig_t glRefConfig;
@@ -613,100 +614,6 @@ typedef struct {
 	int outputHeight;
 } levelshotParams_t;
 
-static qboolean R_LevelshotValueIsDisabled( const char *value )
-{
-	return !value || !value[0] || !Q_stricmp( value, "0" ) || !Q_stricmp( value, "none" ) ||
-		!Q_stricmp( value, "source" ) || !Q_stricmp( value, "viewport" ) || !Q_stricmp( value, "default" );
-}
-
-static const char *R_LevelshotFindSeparator( const char *value )
-{
-	const char *sep;
-
-	sep = strchr( value, 'x' );
-	if ( !sep ) {
-		sep = strchr( value, 'X' );
-	}
-	if ( !sep ) {
-		sep = strchr( value, ':' );
-	}
-	if ( !sep ) {
-		sep = strchr( value, '/' );
-	}
-
-	return sep;
-}
-
-static qboolean R_ParseLevelshotSize( const char *value, int *width, int *height )
-{
-	const char *sep;
-
-	if ( R_LevelshotValueIsDisabled( value ) ) {
-		return qfalse;
-	}
-
-	sep = R_LevelshotFindSeparator( value );
-	if ( sep ) {
-		char left[32];
-		char right[32];
-		int leftLen = sep - value;
-		int rightLen = strlen( sep + 1 );
-
-		if ( leftLen <= 0 || leftLen >= (int)sizeof( left ) || rightLen <= 0 || rightLen >= (int)sizeof( right ) ) {
-			return qfalse;
-		}
-
-		Q_strncpyz( left, value, leftLen + 1 );
-		Q_strncpyz( right, sep + 1, rightLen + 1 );
-
-		*width = atoi( left );
-		*height = atoi( right );
-		return *width > 0 && *height > 0;
-	}
-
-	*width = atoi( value );
-	*height = *width;
-	return *width > 0;
-}
-
-static qboolean R_ParseLevelshotAspect( const char *value, float *aspect )
-{
-	const char *sep;
-
-	if ( R_LevelshotValueIsDisabled( value ) ) {
-		return qfalse;
-	}
-
-	sep = R_LevelshotFindSeparator( value );
-	if ( sep ) {
-		char left[32];
-		char right[32];
-		float leftValue;
-		float rightValue;
-		int leftLen = sep - value;
-		int rightLen = strlen( sep + 1 );
-
-		if ( leftLen <= 0 || leftLen >= (int)sizeof( left ) || rightLen <= 0 || rightLen >= (int)sizeof( right ) ) {
-			return qfalse;
-		}
-
-		Q_strncpyz( left, value, leftLen + 1 );
-		Q_strncpyz( right, sep + 1, rightLen + 1 );
-
-		leftValue = Q_atof( left );
-		rightValue = Q_atof( right );
-		if ( leftValue <= 0.0f || rightValue <= 0.0f ) {
-			return qfalse;
-		}
-
-		*aspect = leftValue / rightValue;
-		return qtrue;
-	}
-
-	*aspect = Q_atof( value );
-	return *aspect > 0.0f;
-}
-
 static void R_GetLevelshotCenteredRect( int width, int height, float aspect, int *x, int *y, int *outWidth, int *outHeight )
 {
 	float viewportAspect = (float)width / (float)height;
@@ -754,7 +661,8 @@ static void R_ResolveLevelshotParams( int viewportWidth, int viewportHeight, lev
 			r_levelshotSize->string );
 	}
 
-	if ( r_levelshotDownscale && r_levelshotDownscale->value > 1.0f ) {
+	if ( r_levelshotDownscale && r_levelshotDownscale->value > 1.0f &&
+		R_LevelshotFloatIsFinite( r_levelshotDownscale->value ) ) {
 		params->outputWidth = MAX( 1, (int)( params->sourceWidth / r_levelshotDownscale->value + 0.5f ) );
 		params->outputHeight = MAX( 1, (int)( params->sourceHeight / r_levelshotDownscale->value + 0.5f ) );
 	} else {
@@ -765,22 +673,25 @@ static void R_ResolveLevelshotParams( int viewportWidth, int viewportHeight, lev
 
 static void R_ResampleLevelshot( const byte *source, int sourceWidth, int padlen, const levelshotParams_t *params, byte *out )
 {
-	int stride = sourceWidth * 3 + padlen;
+	size_t stride = (size_t)sourceWidth * 3u + (size_t)padlen;
 	int y;
 
 	if ( params->outputWidth == params->sourceWidth && params->outputHeight == params->sourceHeight ) {
 		for ( y = 0; y < params->outputHeight; y++ ) {
-			const byte *src = source + ( params->sourceY + y ) * stride + params->sourceX * 3;
-			byte *dst = out + y * params->outputWidth * 3;
+			const byte *src = source + (size_t)( params->sourceY + y ) * stride +
+				(size_t)params->sourceX * 3u;
+			byte *dst = out + (size_t)y * (size_t)params->outputWidth * 3u;
 
-			Com_Memcpy( dst, src, params->outputWidth * 3 );
+			Com_Memcpy( dst, src, (size_t)params->outputWidth * 3u );
 		}
 		return;
 	}
 
 	for ( y = 0; y < params->outputHeight; y++ ) {
-		int srcY0 = params->sourceY + ( y * params->sourceHeight ) / params->outputHeight;
-		int srcY1 = params->sourceY + ( ( y + 1 ) * params->sourceHeight + params->outputHeight - 1 ) / params->outputHeight;
+		int srcY0 = params->sourceY + (int)( ( (int64_t)y * params->sourceHeight ) /
+			params->outputHeight );
+		int srcY1 = params->sourceY + (int)( ( (int64_t)( y + 1 ) * params->sourceHeight +
+			params->outputHeight - 1 ) / params->outputHeight );
 		int x;
 
 		if ( srcY1 <= srcY0 ) {
@@ -791,14 +702,17 @@ static void R_ResampleLevelshot( const byte *source, int sourceWidth, int padlen
 		}
 
 		for ( x = 0; x < params->outputWidth; x++ ) {
-			int srcX0 = params->sourceX + ( x * params->sourceWidth ) / params->outputWidth;
-			int srcX1 = params->sourceX + ( ( x + 1 ) * params->sourceWidth + params->outputWidth - 1 ) / params->outputWidth;
+			int srcX0 = params->sourceX + (int)( ( (int64_t)x * params->sourceWidth ) /
+				params->outputWidth );
+			int srcX1 = params->sourceX + (int)( ( (int64_t)( x + 1 ) * params->sourceWidth +
+				params->outputWidth - 1 ) / params->outputWidth );
 			unsigned long long red = 0;
 			unsigned long long green = 0;
 			unsigned long long blue = 0;
-			int count = 0;
+			unsigned long long count = 0;
 			int sampleY;
-			byte *dst = out + ( y * params->outputWidth + x ) * 3;
+			byte *dst = out + ( (size_t)y * (size_t)params->outputWidth +
+				(size_t)x ) * 3u;
 
 			if ( srcX1 <= srcX0 ) {
 				srcX1 = srcX0 + 1;
@@ -808,11 +722,11 @@ static void R_ResampleLevelshot( const byte *source, int sourceWidth, int padlen
 			}
 
 			for ( sampleY = srcY0; sampleY < srcY1; sampleY++ ) {
-				const byte *row = source + sampleY * stride;
+				const byte *row = source + (size_t)sampleY * stride;
 				int sampleX;
 
 				for ( sampleX = srcX0; sampleX < srcX1; sampleX++ ) {
-					const byte *pixel = row + sampleX * 3;
+					const byte *pixel = row + (size_t)sampleX * 3u;
 
 					red += pixel[0];
 					green += pixel[1];
@@ -847,21 +761,38 @@ void RB_TakeLevelShot( void ) {
 	byte		*buffer;
 	byte		*rgb;
 	byte		*source, *allsource;
-	size_t			offset = 0;
+	size_t		offset = 0;
+	size_t		rgbBytes;
+	int			rgbByteCount;
+	int			fileByteCount;
 	int			padlen;
 	int			x, y;
 	levelshotParams_t params;
 
 	Com_sprintf(checkname, sizeof(checkname), "levelshots/%s.tga", tr.world->baseName);
 
-	allsource = RB_ReadPixels(0, 0, glConfig.vidWidth, glConfig.vidHeight, &offset, &padlen);
-	source = allsource + offset;
 	R_ResolveLevelshotParams( glConfig.vidWidth, glConfig.vidHeight, &params );
+	if ( !R_LevelshotCheckedRgbBytes( params.outputWidth, params.outputHeight,
+		&rgbBytes ) ) {
+		ri.Printf( PRINT_WARNING,
+			"WARNING: levelshot output %dx%d exceeds the safe TGA/allocation limit.\n",
+			params.outputWidth, params.outputHeight );
+		return;
+	}
+	rgbByteCount = (int)rgbBytes;
+	fileByteCount = rgbByteCount + 18;
 
-	rgb = ri.Hunk_AllocateTempMemory( params.outputWidth * params.outputHeight * 3 );
+	allsource = RB_ReadPixels(0, 0, glConfig.vidWidth, glConfig.vidHeight, &offset, &padlen);
+	if ( !allsource ) {
+		ri.Printf( PRINT_WARNING, "WARNING: unable to read pixels for levelshot.\n" );
+		return;
+	}
+	source = allsource + offset;
+
+	rgb = ri.Hunk_AllocateTempMemory( rgbByteCount );
 	R_ResampleLevelshot( source, glConfig.vidWidth, padlen, &params, rgb );
 
-	buffer = ri.Hunk_AllocateTempMemory( params.outputWidth * params.outputHeight * 3 + 18 );
+	buffer = ri.Hunk_AllocateTempMemory( fileByteCount );
 	Com_Memset (buffer, 0, 18);
 	buffer[2] = 2;		// uncompressed type
 	buffer[12] = params.outputWidth & 255;
@@ -871,13 +802,14 @@ void RB_TakeLevelShot( void ) {
 	buffer[16] = 24;	// pixel size
 
 	if ( glConfig.deviceSupportsGamma ) {
-		R_GammaCorrect( rgb, params.outputWidth * params.outputHeight * 3 );
+		R_GammaCorrect( rgb, rgbByteCount );
 	}
 
 	for ( y = 0; y < params.outputHeight; y++ ) {
 		for ( x = 0; x < params.outputWidth; x++ ) {
-			const byte *src = rgb + ( y * params.outputWidth + x ) * 3;
-			byte *dst = buffer + 18 + ( y * params.outputWidth + x ) * 3;
+			const size_t pixel = (size_t)y * (size_t)params.outputWidth + (size_t)x;
+			const byte *src = rgb + pixel * 3u;
+			byte *dst = buffer + 18u + pixel * 3u;
 
 			dst[0] = src[2];
 			dst[1] = src[1];
@@ -885,10 +817,10 @@ void RB_TakeLevelShot( void ) {
 		}
 	}
 
-	ri.FS_WriteFile( checkname, buffer, params.outputWidth * params.outputHeight * 3 + 18 );
+	ri.FS_WriteFile( checkname, buffer, fileByteCount );
 
-	ri.Hunk_FreeTempMemory(rgb);
 	ri.Hunk_FreeTempMemory(buffer);
+	ri.Hunk_FreeTempMemory(rgb);
 	ri.Hunk_FreeTempMemory(allsource);
 
 	ri.Printf( PRINT_ALL, "Wrote %s (%dx%d)\n", checkname, params.outputWidth, params.outputHeight );
@@ -1823,10 +1755,13 @@ static void RE_Shutdown( refShutdownCode_t code ) {
 
 	// shut down platform specific OpenGL stuff
 	if ( code != REF_KEEP_CONTEXT ) {
-		if ( ri.GLimp_Shutdown ) {
+		if ( code != REF_KEEP_WINDOW && ri.GLimp_Shutdown ) {
 			ri.GLimp_Shutdown( code == REF_UNLOAD_DLL ? qtrue: qfalse );
 		}
 
+		// REF_KEEP_WINDOW retains only the native desktop window. Clear the
+		// renderer's mode feedback so initialization rebuilds the drawable for
+		// its current client area instead of silently reusing stale dimensions.
 		Com_Memset( &glConfig, 0, sizeof( glConfig ) );
 		Com_Memset( &glRefConfig, 0, sizeof( glRefConfig ) );
 

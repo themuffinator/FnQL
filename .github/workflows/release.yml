@@ -224,15 +224,19 @@ jobs:
           if [ "${{ matrix.arch }}" = "x86" ]; then
             dpkg --add-architecture i386
             apt-get -qq update
-            apt-get -y install git make python3 binutils gcc-multilib g++-multilib libcurl4-openssl-dev:i386 libjpeg-dev:i386 libogg-dev:i386 libvorbis-dev:i386 mesa-common-dev:i386 libxxf86dga-dev:i386 libxrandr-dev:i386 libxxf86vm-dev:i386 libasound2-dev:i386 libopenal-dev:i386
+            apt-get -y install git make python3 python3-pip binutils gcc-multilib g++-multilib libcurl4-openssl-dev:i386 libjpeg-dev:i386 libogg-dev:i386 libvorbis-dev:i386 mesa-common-dev:i386 libxxf86dga-dev:i386 libxrandr-dev:i386 libxxf86vm-dev:i386 libasound2-dev:i386 libopenal-dev:i386
           else
             apt-get -qq update
-            apt-get -y install git make python3 binutils gcc g++ libcurl4-openssl-dev libjpeg-dev libogg-dev libvorbis-dev mesa-common-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev libasound2-dev libopenal-dev
+            apt-get -y install git make python3 python3-pip binutils gcc g++ libcurl4-openssl-dev libjpeg-dev libogg-dev libvorbis-dev mesa-common-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev libasound2-dev libopenal-dev
           fi
+          python3 -m pip install meson==1.9.1
 
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+
+      - name: Fetch pinned FontStash source
+        run: meson subprojects download fontstash
 
       - name: Stamp release build version
         run: python3 scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
@@ -266,12 +270,16 @@ jobs:
       - name: Install tools
         run: |
           apt-get -qq update
-          apt-get install -y git make python3 binutils gcc g++
+          apt-get install -y git make python3 python3-pip binutils gcc g++
           apt-get -y install libcurl4-openssl-dev libjpeg-dev libogg-dev libvorbis-dev mesa-common-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev libasound2-dev libopenal-dev
+          python3 -m pip install meson==1.9.1
 
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+
+      - name: Fetch pinned FontStash source
+        run: meson subprojects download fontstash
 
       - name: Stamp release build version
         run: python3 scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
@@ -309,13 +317,16 @@ jobs:
     steps:
       - name: Install tools
         run: |
-          for pkg in coreutils jpeg libogg libvorbis make openal-soft pkg-config sdl3; do
+          for pkg in coreutils jpeg libogg libvorbis make meson openal-soft pkg-config sdl3; do
             brew list --versions "$pkg" >/dev/null 2>&1 || brew install "$pkg"
           done
 
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+
+      - name: Fetch pinned FontStash source
+        run: meson subprojects download fontstash
 
       - name: Stamp release build version
         run: python3 scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"

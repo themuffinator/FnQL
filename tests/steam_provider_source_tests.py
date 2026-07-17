@@ -70,14 +70,19 @@ class SteamProviderSourceTests(unittest.TestCase):
         self.assertIn("FNQL_STEAM_EVENT_AUTH_RESULT", server)
         self.assertIn("Final asynchronous validation for an accepted begin_auth_session", api)
 
-    def test_fnql_client_sends_ticket_without_weakening_retail_refusal(self) -> None:
+    def test_fnql_client_uses_retail_ticket_shape_and_no_steam_fallback(self) -> None:
         client = (ROOT / "code/client/cl_main.cpp").read_text(encoding="utf-8")
+        builder = (ROOT / "code/client/retail_challenge.hpp").read_text(encoding="utf-8")
         server = (ROOT / "code/server/sv_client.cpp").read_text(encoding="utf-8")
         parser = (ROOT / "code/server/retail_auth_challenge.hpp").read_text(encoding="utf-8")
-        self.assertIn("CL_SendFnqlSteamChallenge", client)
+        self.assertIn("CL_SendRetailSteamChallenge", client)
         self.assertIn("FNQL_Steam_GetAuthTicket", client)
-        self.assertIn('marker[] = "FnQLAuth"', client)
-        self.assertIn("Authenticated challenge response is not from an FnQL host", client)
+        self.assertIn("BuildRetailSteamChallenge", client)
+        self.assertIn("RetailWithoutSteam", client)
+        self.assertIn('NET_OutOfBandPrint( NS_CLIENT, &clc.serverAddress, "getchallenge" )', client)
+        self.assertIn("No text terminator, client nonce, or FnQL marker", builder)
+        self.assertNotIn('marker[] = "FnQLAuth"', client)
+        self.assertNotIn("Authenticated challenge response is not from an FnQL host", client)
         self.assertIn("retail.fnqlExtension", server)
         self.assertIn("static_cast<std::int32_t>( retail.clientChallenge )", server)
         self.assertIn("FnqlHandshakeMarker", server)

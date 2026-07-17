@@ -1246,7 +1246,12 @@ void R_AddLitSurfFlags( surfaceType_t *surface, shader_t *shader, int fogIndex, 
 	struct litSurf_s *litsurf;
 
 	if ( tr.refdef.numLitSurfs >= ARRAY_LEN( backEndData->litSurfs ) )
+	{
+		if ( backEnd.screenshotCubeActive ) {
+			tr.cubemapDrawSurfLimitHit = qtrue;
+		}
 		return;
+	}
 
 	tr.pc.c_lit_surfs++;
 
@@ -2534,6 +2539,11 @@ R_AddDrawSurfFlags
 void R_AddDrawSurfFlags( surfaceType_t *surface, shader_t *shader,
 				   int fogIndex, int dlightMap, unsigned int flags ) {
 	int			index;
+
+	if ( tr.cubemapDrawSurfLimit > 0 && tr.refdef.numDrawSurfs >= tr.cubemapDrawSurfLimit ) {
+		tr.cubemapDrawSurfLimitHit = qtrue;
+		return;
+	}
 
 	// instead of checking for overflow, we just mask the index
 	// so it wraps around

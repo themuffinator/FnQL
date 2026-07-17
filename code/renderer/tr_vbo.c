@@ -642,6 +642,14 @@ static qboolean isStaticShader( shader_t *shader )
 	int i, svarsSize, mtx;
 	GLbitfield atestBits;
 
+	/* Liquid refraction/reflection UVs are view- and impulse-dependent, so keep these
+	 * surfaces on the dynamic tessellation path while the feature is active. */
+	if ( r_fbo && r_fbo->integer && FBO_LiquidScreenTexture() && r_liquid &&
+		r_liquid->integer > 0 &&
+		shader->sort >= SS_FOG && R_LiquidShaderSupported( shader ) &&
+		R_LiquidContentsEnabled( shader->contentFlags, r_liquid->integer ) )
+		return qfalse;
+
 	if ( shader->isStaticShader )
 		return qtrue;
 

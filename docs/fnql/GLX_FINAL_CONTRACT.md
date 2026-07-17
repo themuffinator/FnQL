@@ -30,7 +30,7 @@ for migration evidence, but not for the final replacement.
 
 The final GLx renderer has these non-negotiable properties:
 
-- Versioned C ABI: the engine-facing boundary is `REF_API_VERSION 10`,
+- Versioned C ABI: the engine-facing boundary is `REF_API_VERSION 13`,
   `GetRefAPI`, `refimport_t`, and `refexport_t`.
 - Modern C++ internals: renderer implementation code may use C++ ownership
   tools internally, but exceptions and C++ object ownership do not cross the C
@@ -62,7 +62,7 @@ The renderer module boundary remains deliberately boring:
 | Surface | Contract |
 |---|---|
 | Export | `GetRefAPI` remains the only exported renderer entry point. |
-| Version | `REF_API_VERSION` is bumped only when the whole engine ABI is deliberately versioned; WebUI and QL host-font exports moved it to `10`. |
+| Version | `REF_API_VERSION` is bumped only when the whole engine ABI is deliberately versioned; the renderer-only liquid-interaction export moved it to `13` after the WebUI and QL host-font revisions. |
 | Imports / exports | Engine communication stays in `refimport_t` and `refexport_t`. |
 | Module identity | `cl_renderer glx` loads the GLx module without changing game VM, demo, protocol, or pak behavior. |
 | Memory and errors | GLx uses engine-owned allocation/error surfaces at the ABI edge; C++ exceptions never cross the ABI. |

@@ -21,12 +21,16 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 #include "../client/client.h"
+#include "../platform/window_placement.hpp"
 #include "win_local.h"
 #include "glw_win.h"
 #include "win_raii.h"
 
 #ifndef WM_MOUSEWHEEL
 #define WM_MOUSEWHEEL (WM_MOUSELAST+1)  // message that will be supported by the OS 
+#endif
+#ifndef WM_DPICHANGED
+#define WM_DPICHANGED 0x02E0
 #endif
 
 //static UINT MSH_MOUSEWHEEL;
@@ -35,6 +39,130 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 cvar_t		*in_forceCharset;
 
 static HHOOK WinHook;
+static qboolean temporaryMouseCapture;
+
+
+static qboolean WIN_ConsoleOwnsPointer( void )
+{
+	return ( Key_GetCatcher() & KEYCATCH_CONSOLE ) ? qtrue : qfalse;
+}
+
+
+static qboolean WIN_ConsoleUsesAbsolutePointer( void )
+{
+	return WIN_ConsoleOwnsPointer() && !glw_state.cdsFullscreen ? qtrue : qfalse;
+}
+
+
+void WIN_ReleaseTemporaryMouseCapture( void )
+{
+	if ( temporaryMouseCapture && GetCapture() == g_wv.hWnd ) {
+		ReleaseCapture();
+	}
+	temporaryMouseCapture = qfalse;
+}
+
+
+static int WIN_MouseMessageKey( UINT message, WPARAM wParam, qboolean *down )
+{
+	*down = qfalse;
+	switch ( message ) {
+		case WM_LBUTTONDOWN: *down = qtrue; return K_MOUSE1;
+		case WM_LBUTTONUP: return K_MOUSE1;
+		case WM_RBUTTONDOWN: *down = qtrue; return K_MOUSE2;
+		case WM_RBUTTONUP: return K_MOUSE2;
+		case WM_MBUTTONDOWN: *down = qtrue; return K_MOUSE3;
+		case WM_MBUTTONUP: return K_MOUSE3;
+		case WM_XBUTTONDOWN:
+			*down = qtrue;
+			return GET_XBUTTON_WPARAM( wParam ) == XBUTTON1 ? K_MOUSE4 : K_MOUSE5;
+		case WM_XBUTTONUP:
+			return GET_XBUTTON_WPARAM( wParam ) == XBUTTON1 ? K_MOUSE4 : K_MOUSE5;
+		default: return 0;
+	}
+}
+
+
+static void WIN_UpdateTemporaryMouseCapture( HWND hWnd, UINT message, WPARAM wParam )
+{
+	switch ( message ) {
+		case WM_LBUTTONDOWN:
+		case WM_RBUTTONDOWN:
+		case WM_MBUTTONDOWN:
+		case WM_XBUTTONDOWN:
+			SetCapture( hWnd );
+			temporaryMouseCapture = qtrue;
+			break;
+		case WM_LBUTTONUP:
+		case WM_RBUTTONUP:
+		case WM_MBUTTONUP:
+		case WM_XBUTTONUP:
+			if ( !( GET_KEYSTATE_WPARAM( wParam ) &
+				( MK_LBUTTON | MK_RBUTTON | MK_MBUTTON | MK_XBUTTON1 | MK_XBUTTON2 ) ) &&
+				GetCapture() == hWnd ) {
+				WIN_ReleaseTemporaryMouseCapture();
+			}
+			break;
+		default:
+			break;
+	}
+}
+
+
+static LRESULT WIN_MouseMessageResult( UINT message )
+{
+	return ( message == WM_XBUTTONDOWN || message == WM_XBUTTONUP ) ? TRUE : 0;
+}
+
+
+static qboolean WIN_ConstrainWindowRectToWorkArea( RECT *rect )
+{
+	MONITORINFO monitorInfo;
+	HMONITOR monitor;
+	fnql::window::Position constrained;
+	const int width = rect->right - rect->left;
+	const int height = rect->bottom - rect->top;
+
+	monitor = MonitorFromRect( rect, MONITOR_DEFAULTTONEAREST );
+	Com_Memset( &monitorInfo, 0, sizeof( monitorInfo ) );
+	monitorInfo.cbSize = sizeof( monitorInfo );
+	if ( !monitor || !GetMonitorInfo( monitor, &monitorInfo ) ) {
+		return qfalse;
+	}
+
+	constrained = fnql::window::ConstrainClientOrigin(
+		{ rect->left, rect->top }, width, height,
+		{ monitorInfo.rcWork.left, monitorInfo.rcWork.top,
+			monitorInfo.rcWork.right - monitorInfo.rcWork.left,
+			monitorInfo.rcWork.bottom - monitorInfo.rcWork.top } );
+	if ( constrained.x == rect->left && constrained.y == rect->top ) {
+		return qfalse;
+	}
+
+	rect->left = constrained.x;
+	rect->top = constrained.y;
+	rect->right = rect->left + width;
+	rect->bottom = rect->top + height;
+	return qtrue;
+}
+
+
+static void WIN_RecoverWindowPlacement( HWND hWnd )
+{
+	RECT rect;
+
+	if ( glw_state.cdsFullscreen || IsIconic( hWnd ) || IsZoomed( hWnd ) ||
+		!GetWindowRect( hWnd, &rect ) ||
+		!WIN_ConstrainWindowRectToWorkArea( &rect ) ) {
+		return;
+	}
+
+	SetWindowPos( hWnd, NULL, rect.left, rect.top,
+		rect.right - rect.left, rect.bottom - rect.top,
+		SWP_NOACTIVATE | SWP_NOZORDER );
+	Cvar_SetIntegerValue( "vid_xpos", rect.left );
+	Cvar_SetIntegerValue( "vid_ypos", rect.top );
+}
 
 /*
 ==================
@@ -543,6 +671,13 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 	{
 	case WM_SETCURSOR:
 		if ( LOWORD( lParam ) == HTCLIENT ) {
+			if ( WIN_ConsoleOwnsPointer() ) {
+				// The console draws its own cursor. In a window the pointer remains
+				// free for the desktop; in fullscreen this also prevents an
+				// underlying UI/browser catcher from exposing its host cursor.
+				SetCursor( NULL );
+				return TRUE;
+			}
 			HCURSOR browserCursor = (HCURSOR)CL_WebHost_GetCursorHandle();
 			if ( browserCursor ) {
 				SetCursor( browserCursor );
@@ -560,7 +695,7 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 	case WM_MOUSEWHEEL:
 		// http://msdn.microsoft.com/library/default.asp?url=/library/en-us/winui/winui/windowsuserinterface/userinput/mouseinput/aboutmouseinput.asp
 		// Windows 98/Me, Windows NT 4.0 and later - uses WM_MOUSEWHEEL
-		if ( Key_GetCatcher() & KEYCATCH_BROWSER ) {
+		if ( !WIN_ConsoleOwnsPointer() && ( Key_GetCatcher() & KEYCATCH_BROWSER ) ) {
 			int wheelSteps = (short)HIWORD( wParam ) / WHEEL_DELTA;
 
 			while ( wheelSteps > 0 ) {
@@ -638,20 +773,35 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 		Cvar_SetDescription( in_forceCharset, "Try to translate non-ASCII chars in keyboard input or force EN/US keyboard layout." );
 
 		break;
-#if 0
+
 	case WM_DISPLAYCHANGE:
 		Com_DPrintf( "WM_DISPLAYCHANGE\n" );
-		// we need to force a vid_restart if the user has changed
-		// their desktop resolution while the game is running,
-		// but don't do anything if the message is a result of
-		// our own calling of ChangeDisplaySettings
-		if ( com_insideVidInit ) {
-			break;		// we did this on purpose
+		if ( !glw_state.cdsFullscreen && ( !r_fullscreen || !r_fullscreen->integer ) ) {
+			WIN_RecoverWindowPlacement( hWnd );
+			GetWindowRect( hWnd, &g_wv.winRect );
+			g_wv.winRectValid = qtrue;
+			UpdateMonitorInfo( &g_wv.winRect );
 		}
-		// something else forced a mode change, so restart all our gl stuff
-		Cbuf_AddText( "vid_restart\n" );
 		break;
-#endif
+
+	case WM_SETTINGCHANGE:
+		if ( wParam == SPI_SETWORKAREA && !glw_state.cdsFullscreen ) {
+			WIN_RecoverWindowPlacement( hWnd );
+		}
+		break;
+
+	case WM_DPICHANGED:
+		if ( !glw_state.cdsFullscreen && lParam ) {
+			RECT suggested = *(RECT *)lParam;
+			WIN_ConstrainWindowRectToWorkArea( &suggested );
+			SetWindowPos( hWnd, NULL, suggested.left, suggested.top,
+				suggested.right - suggested.left,
+				suggested.bottom - suggested.top,
+				SWP_NOACTIVATE | SWP_NOZORDER );
+			return 0;
+		}
+		break;
+
 	case WM_DESTROY:
 		Win_RemoveHotkey();
 		if ( hWinEventHook ) {
@@ -736,6 +886,11 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 		gw_minimized = minimized;
 
 		VID_AppActivate( gw_active );
+		if ( !gw_active ) {
+			// Release bounded UI/console drag capture on focus loss. Relative
+			// gameplay capture has already been deactivated by VID_AppActivate.
+			WIN_ReleaseTemporaryMouseCapture();
+		}
 		Win_AddHotkey();
 
 		if ( glw_state.cdsFullscreen ) {
@@ -807,6 +962,9 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 		break;
 
 	case WM_SIZE:
+		if ( wParam != SIZE_MINIMIZED && !glw_state.cdsFullscreen ) {
+			CL_NotifyWindowResize( LOWORD( lParam ), HIWORD( lParam ), qtrue );
+		}
 		if ( gw_active && focused && !gw_minimized ) {
 			GetWindowRect( hWnd, &g_wv.winRect );
 			g_wv.winRectValid = qtrue;
@@ -892,27 +1050,44 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 	case WM_RBUTTONUP:
 	case WM_MBUTTONDOWN:
 	case WM_MBUTTONUP:
+	case WM_XBUTTONDOWN:
+	case WM_XBUTTONUP:
 	case WM_MOUSEMOVE:
-		if ( Key_GetCatcher() & KEYCATCH_BROWSER ) {
+		if ( WIN_ConsoleUsesAbsolutePointer() ) {
 			const int x = (int)(short)LOWORD( lParam );
 			const int y = (int)(short)HIWORD( lParam );
+			qboolean down = qfalse;
+
+			if ( uMsg == WM_MOUSEMOVE ) {
+				Sys_QueEvent( g_wv.sysMsgTime, SE_MOUSE_ABSOLUTE, x, y, 0, NULL );
+				return 0;
+			}
+			const int key = WIN_MouseMessageKey( uMsg, wParam, &down );
+			if ( key ) {
+				// Keep position-before-click ordering even if Windows did not emit
+				// a distinct WM_MOUSEMOVE for this location.
+				Sys_QueEvent( g_wv.sysMsgTime, SE_MOUSE_ABSOLUTE, x, y, 0, NULL );
+				Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, key, down, 0, NULL );
+				WIN_UpdateTemporaryMouseCapture( hWnd, uMsg, wParam );
+			}
+			return WIN_MouseMessageResult( uMsg );
+		}
+		if ( !WIN_ConsoleOwnsPointer() && ( Key_GetCatcher() & KEYCATCH_BROWSER ) ) {
+			const int x = (int)(short)LOWORD( lParam );
+			const int y = (int)(short)HIWORD( lParam );
+			qboolean down = qfalse;
+			const int key = WIN_MouseMessageKey( uMsg, wParam, &down );
 
 			CL_WebView_OnMouseMove( x, y );
-			switch ( uMsg ) {
-				case WM_LBUTTONDOWN: CL_WebView_OnMouseButtonEvent( K_MOUSE1, qtrue ); break;
-				case WM_LBUTTONUP: CL_WebView_OnMouseButtonEvent( K_MOUSE1, qfalse ); break;
-				case WM_RBUTTONDOWN: CL_WebView_OnMouseButtonEvent( K_MOUSE2, qtrue ); break;
-				case WM_RBUTTONUP: CL_WebView_OnMouseButtonEvent( K_MOUSE2, qfalse ); break;
-				case WM_MBUTTONDOWN: CL_WebView_OnMouseButtonEvent( K_MOUSE3, qtrue ); break;
-				case WM_MBUTTONUP: CL_WebView_OnMouseButtonEvent( K_MOUSE3, qfalse ); break;
-				default: break;
+			if ( key ) {
+				CL_WebView_OnMouseButtonEvent( key, down );
+				WIN_UpdateTemporaryMouseCapture( hWnd, uMsg, wParam );
 			}
-			return 0;
+			return WIN_MouseMessageResult( uMsg );
 		}
-		if ( Key_GetCatcher() & ( KEYCATCH_UI | KEYCATCH_CGAME ) ) {
+		if ( !WIN_ConsoleOwnsPointer() && ( Key_GetCatcher() & ( KEYCATCH_UI | KEYCATCH_CGAME ) ) ) {
 			const int x = (int)(short)LOWORD( lParam );
 			const int y = (int)(short)HIWORD( lParam );
-			int key = 0;
 			qboolean down = qfalse;
 
 			if ( uMsg == WM_MOUSEMOVE ) {
@@ -920,24 +1095,18 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 				return 0;
 			}
 
-			switch ( uMsg ) {
-				case WM_LBUTTONDOWN: key = K_MOUSE1; down = qtrue; break;
-				case WM_LBUTTONUP: key = K_MOUSE1; break;
-				case WM_RBUTTONDOWN: key = K_MOUSE2; down = qtrue; break;
-				case WM_RBUTTONUP: key = K_MOUSE2; break;
-				case WM_MBUTTONDOWN: key = K_MOUSE3; down = qtrue; break;
-				case WM_MBUTTONUP: key = K_MOUSE3; break;
-				default: break;
-			}
+			const int key = WIN_MouseMessageKey( uMsg, wParam, &down );
 			if ( key ) {
+				Sys_QueEvent( g_wv.sysMsgTime, SE_MOUSE_ABSOLUTE, x, y, 0, NULL );
 				Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, key, down, 0, NULL );
+				WIN_UpdateTemporaryMouseCapture( hWnd, uMsg, wParam );
 			}
-			return 0;
+			return WIN_MouseMessageResult( uMsg );
 		}
 		if ( IN_MouseActive() ) {
 			int mstate = (wParam & (MK_LBUTTON|MK_RBUTTON)) + ((wParam & (MK_MBUTTON|MK_XBUTTON1|MK_XBUTTON2)) >> 2);
 			IN_Win32MouseEvent( LOWORD(lParam), HIWORD(lParam), mstate );
-			return 0;
+			return WIN_MouseMessageResult( uMsg );
 		}
 		break;
 

@@ -315,7 +315,7 @@
           <ul>
             <li>Retail Quake Live Steam installation compatibility, including practical default-path discovery and <code>baseq3</code> data expectations.</li>
             <li>Engine compatibility reconstructed from QLSRP evidence: filesystem behavior, pak/pk3 loading, protocol and demo paths, VM/native module ABI, server and client glue, renderer data formats, platform services, and runtime identity.</li>
-            <li>Modernized engine features inherited from FnQ3, including SDL3, OpenAL, modular OpenGL-lineage/GLx/Vulkan renderers, console and screenshot improvements, and deterministic release tooling.</li>
+            <li>Modernized engine features inherited from FnQ3, including SDL3, OpenAL, modular OpenGL-lineage/GLx/Vulkan renderers, console and screenshot improvements, opt-in motion blur, enhanced map lens flares and liquids, optional per-map global fog, and deterministic release tooling.</li>
             <li>Compatibility validation against a legitimate retail Quake Live installation.</li>
           </ul>
         </article>
@@ -367,9 +367,9 @@
         <article class="doc-column">
           <h3>Inherited feature guides</h3>
           <ul>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/DISPLAY.md">Display Guide</a> for renderer choice, video modes, render scaling, texture picmip, HDR, anti-aliasing, bloom, soft particles, dynamic lighting, shadow maps, and cel shading.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/DISPLAY.md">Display Guide</a> for renderer choice, video modes, render scaling, HDR, bloom, motion blur, map lens flares, enhanced liquids, optional global fog, dynamic lighting, shadow maps, and cel shading.</li>
             <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/VISUALS.md">Visuals Guide</a> for player highlighting and other presentation controls.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/ASPECT_CORRECTION.md">Aspect Correction Guide</a> for HUD, menu, and cinematic layout options.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/ASPECT_CORRECTION.md">Aspect Handling Guide</a> for menu and cinematic layout options.</li>
             <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/AUDIO.md">Audio Guide</a> for backend selection, devices, HRTF, fallback behavior, and troubleshooting.</li>
             <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/CONSOLE.md">Console Guide</a> for console layout, scaling, completion, and interaction.</li>
             <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/SCREENSHOTS.md">Screenshot Guide</a> for capture commands, naming, metadata sidecars, watermarks, and cube-map export.</li>

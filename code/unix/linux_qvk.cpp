@@ -126,7 +126,7 @@ extern "C" qboolean QVK_Init( void )
 	if ( glw_state.VulkanLib == NULL )
 	{
 		const char *dllnames[] = { "libvulkan.so.1", "libvulkan.so" };
-		int i;
+		size_t i;
 
 		for ( i = 0; i < ARRAY_LEN( dllnames ); i++ )
 		{

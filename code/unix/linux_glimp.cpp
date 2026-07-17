@@ -50,6 +50,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <unistd.h>
 
 #include "../client/client.h"
+#include "../platform/window_placement.hpp"
 #include "linux_local.h"
 #include "unix_glw.h"
 
@@ -133,6 +134,12 @@ static qboolean window_exposed;
 
 static qboolean mouse_avail;
 static qboolean mouse_active = qfalse;
+static Cursor invisible_cursor = None;
+static qboolean absolute_position_valid = qfalse;
+static int absolute_position_x;
+static int absolute_position_y;
+static int absolute_pointer_owner;
+static unsigned int temporary_capture_buttons;
 static int mwx, mwy;
 static int mx = 0, my = 0;
 
@@ -160,6 +167,35 @@ static int mouse_accel_denominator;
 static int mouse_threshold;
 
 static int win_x, win_y;
+
+static qboolean IN_ConsoleUsesAbsolutePointer( void )
+{
+	return ( Key_GetCatcher() & KEYCATCH_CONSOLE ) &&
+		( !glw_state.cdsFullscreen || glw_state.monitorCount > 1 ) ? qtrue : qfalse;
+}
+
+enum {
+	ABSOLUTE_POINTER_NONE,
+	ABSOLUTE_POINTER_CONSOLE,
+	ABSOLUTE_POINTER_RETAIL
+};
+
+static int IN_AbsolutePointerOwnerKind( void )
+{
+	const int catcher = Key_GetCatcher();
+	// Console toggling preserves any underlying UI/browser/cgame catcher. Give
+	// the overlay ownership first so fullscreen console input remains relative.
+	if ( catcher & KEYCATCH_CONSOLE ) {
+		return IN_ConsoleUsesAbsolutePointer() ? ABSOLUTE_POINTER_CONSOLE : ABSOLUTE_POINTER_NONE;
+	}
+	return ( catcher & ( KEYCATCH_BROWSER | KEYCATCH_UI | KEYCATCH_CGAME ) ) ?
+		ABSOLUTE_POINTER_RETAIL : ABSOLUTE_POINTER_NONE;
+}
+
+static qboolean IN_AbsolutePointerOwner( void )
+{
+	return IN_AbsolutePointerOwnerKind() != ABSOLUTE_POINTER_NONE ? qtrue : qfalse;
+}
 
 /*****************************************************************************
 ** KEYBOARD
@@ -419,6 +455,102 @@ static Cursor CreateNullCursor( Display *display, Window root )
 	return cursor;
 }
 
+static void IN_ShowWindowCursor( qboolean show )
+{
+	if ( show ) {
+		XUndefineCursor( dpy, win );
+		return;
+	}
+	if ( invisible_cursor == None ) {
+		invisible_cursor = CreateNullCursor( dpy, win );
+	}
+	XDefineCursor( dpy, win, invisible_cursor );
+}
+
+
+static void IN_QueueAbsolutePointerPosition( int eventTime, int x, int y )
+{
+	// X11 client coordinates are native framebuffer pixels here: retail owners
+	// receive them raw, while the console consumes them as its screen position.
+	if ( absolute_position_valid && x == absolute_position_x && y == absolute_position_y ) {
+		return;
+	}
+	absolute_position_valid = qtrue;
+	absolute_position_x = x;
+	absolute_position_y = y;
+	Sys_QueEvent( eventTime, SE_MOUSE_ABSOLUTE, x, y, 0, NULL );
+}
+
+
+static void IN_PollAbsolutePointerPosition( void )
+{
+	Window root;
+	Window child;
+	int rootX;
+	int rootY;
+	int windowX;
+	int windowY;
+	unsigned int mask;
+
+	if ( dpy && win && XQueryPointer( dpy, win, &root, &child, &rootX, &rootY,
+		&windowX, &windowY, &mask ) ) {
+		IN_QueueAbsolutePointerPosition( Sys_Milliseconds(), windowX, windowY );
+	}
+}
+
+
+static unsigned int IN_PointerButtonMask( unsigned int button )
+{
+	if ( button == 0 || button > sizeof( temporary_capture_buttons ) * 8 ) {
+		return 0;
+	}
+	return 1u << ( button - 1 );
+}
+
+
+static void IN_BeginTemporaryPointerCapture( unsigned int button )
+{
+	const unsigned int buttonMask = IN_PointerButtonMask( button );
+	// X11 commonly exposes vertical and horizontal wheel ticks as buttons 4-7;
+	// they may be press-only, so never let them establish a drag capture.
+	if ( !dpy || !win || !buttonMask || ( button >= 4 && button <= 7 ) ) {
+		return;
+	}
+
+	if ( !temporary_capture_buttons ) {
+		const int result = XGrabPointer( dpy, win, True, MOUSE_MASK,
+			GrabModeAsync, GrabModeAsync, None, None, CurrentTime );
+		if ( result != GrabSuccess ) {
+			Com_DPrintf( "Temporary X11 pointer capture failed: %d\n", result );
+			return;
+		}
+	}
+	temporary_capture_buttons |= buttonMask;
+}
+
+
+static void IN_EndTemporaryPointerCapture( void )
+{
+	if ( temporary_capture_buttons ) {
+		if ( dpy ) {
+			XUngrabPointer( dpy, CurrentTime );
+		}
+		temporary_capture_buttons = 0;
+	}
+}
+
+
+static void IN_ReleaseTemporaryPointerButton( unsigned int button )
+{
+	if ( !temporary_capture_buttons ) {
+		return;
+	}
+	temporary_capture_buttons &= ~IN_PointerButtonMask( button );
+	if ( !temporary_capture_buttons && dpy ) {
+		XUngrabPointer( dpy, CurrentTime );
+	}
+}
+
 
 static void install_mouse_grab( void )
 {
@@ -430,7 +562,7 @@ static void install_mouse_grab( void )
 	XSync( dpy, False );
 
 	// hide cursor
-	XDefineCursor( dpy, win, CreateNullCursor( dpy, win ) );
+	IN_ShowWindowCursor( qfalse );
 
 	// save old mouse settings
 	XGetPointerControl( dpy, &mouse_accel_numerator, &mouse_accel_denominator, &mouse_threshold );
@@ -507,13 +639,16 @@ static void uninstall_mouse_grab( void )
 	XChangePointerControl( dpy, qtrue, qtrue, mouse_accel_numerator, 
 		mouse_accel_denominator, mouse_threshold );
 
-	XWarpPointer( dpy, None, win, 0, 0, 0, 0, window_width / 2, window_height / 2 );
+	if ( !IN_AbsolutePointerOwner() ) {
+		XWarpPointer( dpy, None, win, 0, 0, 0, 0, window_width / 2, window_height / 2 );
+	}
 
 	XUngrabPointer( dpy, CurrentTime );
 	XUngrabKeyboard( dpy, CurrentTime );
 
-	// show cursor
-	XUndefineCursor( dpy, win );
+	// Retail UI owners retain the host cursor. The windowed console draws its
+	// own cursor, so hide the host cursor only over the client area.
+	IN_ShowWindowCursor( IN_ConsoleUsesAbsolutePointer() ? qfalse : qtrue );
 
 	XSync( dpy, False );
 }
@@ -628,6 +763,217 @@ static qboolean WindowMinimized( Display *dpy, Window win )
 }
 
 
+static int X11_CardinalCoordinate( unsigned long value )
+{
+	return static_cast<int>( static_cast<std::int32_t>(
+		static_cast<std::uint32_t>( value ) ) );
+}
+
+
+static int X11_CardinalExtent( unsigned long value )
+{
+	return fnql::window::SaturateToInt( static_cast<std::int64_t>( value ) );
+}
+
+
+static int X11_ReadCardinals( Window target, const char *name,
+	unsigned long *values, int capacity )
+{
+	Atom property;
+	Atom actualType;
+	int actualFormat;
+	unsigned long count;
+	unsigned long bytesAfter;
+	unsigned char *data = NULL;
+	int copied;
+
+	if ( !dpy || !target || capacity <= 0 ) {
+		return 0;
+	}
+
+	property = XInternAtom( dpy, name, True );
+	if ( property == None ||
+		XGetWindowProperty( dpy, target, property, 0, capacity, False,
+			XA_CARDINAL, &actualType, &actualFormat, &count, &bytesAfter,
+			&data ) != Success ||
+		actualType != XA_CARDINAL || actualFormat != 32 || !data ) {
+		if ( data ) {
+			XFree( data );
+		}
+		return 0;
+	}
+
+	copied = count < static_cast<unsigned long>( capacity )
+		? static_cast<int>( count ) : capacity;
+	memcpy( values, data, copied * sizeof( values[0] ) );
+	XFree( data );
+	return copied;
+}
+
+
+static qboolean X11_WindowHasState( Window target, const char *stateName )
+{
+	Atom property = XInternAtom( dpy, "_NET_WM_STATE", True );
+	Atom state = XInternAtom( dpy, stateName, True );
+	Atom actualType;
+	int actualFormat;
+	unsigned long count;
+	unsigned long bytesAfter;
+	unsigned char *data = NULL;
+	qboolean found = qfalse;
+
+	if ( property == None || state == None ||
+		XGetWindowProperty( dpy, target, property, 0, 32, False, XA_ATOM,
+			&actualType, &actualFormat, &count, &bytesAfter, &data ) != Success ||
+		actualType != XA_ATOM || actualFormat != 32 || !data ) {
+		if ( data ) {
+			XFree( data );
+		}
+		return qfalse;
+	}
+
+	for ( unsigned long i = 0; i < count; ++i ) {
+		if ( reinterpret_cast<Atom *>( data )[i] == state ) {
+			found = qtrue;
+			break;
+		}
+	}
+	XFree( data );
+	return found;
+}
+
+
+static fnql::window::Bounds X11_GetUsableBounds( Window root )
+{
+	fnql::window::Bounds monitor = {
+		glw_state.desktop_x, glw_state.desktop_y,
+		glw_state.desktop_width, glw_state.desktop_height
+	};
+	unsigned long desktopValue[1];
+	unsigned long workAreas[64];
+	int desktop = 0;
+	int workAreaCount;
+	int offset;
+	fnql::window::Bounds work;
+	const int monitorRight = monitor.x + monitor.width;
+	const int monitorBottom = monitor.y + monitor.height;
+	int workRight;
+	int workBottom;
+
+	if ( monitor.width <= 0 || monitor.height <= 0 ) {
+		monitor = { 0, 0, DisplayWidth( dpy, scrnum ),
+			DisplayHeight( dpy, scrnum ) };
+	}
+
+	if ( X11_ReadCardinals( root, "_NET_CURRENT_DESKTOP", desktopValue, 1 ) == 1 ) {
+		desktop = X11_CardinalExtent( desktopValue[0] );
+	}
+	workAreaCount = X11_ReadCardinals( root, "_NET_WORKAREA", workAreas,
+		static_cast<int>( sizeof( workAreas ) / sizeof( workAreas[0] ) ) );
+	offset = desktop >= 0 && desktop <= ( workAreaCount / 4 ) - 1
+		? desktop * 4 : 0;
+	if ( workAreaCount < offset + 4 ) {
+		return monitor;
+	}
+
+	work = {
+		X11_CardinalCoordinate( workAreas[offset] ),
+		X11_CardinalCoordinate( workAreas[offset + 1] ),
+		X11_CardinalExtent( workAreas[offset + 2] ),
+		X11_CardinalExtent( workAreas[offset + 3] )
+	};
+	workRight = work.x + work.width;
+	workBottom = work.y + work.height;
+
+	// EWMH exposes one work area for the whole desktop. Intersect it with the
+	// current RandR monitor so panels/docks and multi-monitor bounds both apply.
+	if ( work.x < monitor.x ) work.x = monitor.x;
+	if ( work.y < monitor.y ) work.y = monitor.y;
+	if ( workRight > monitorRight ) workRight = monitorRight;
+	if ( workBottom > monitorBottom ) workBottom = monitorBottom;
+	work.width = workRight - work.x;
+	work.height = workBottom - work.y;
+	return work.width > 0 && work.height > 0 ? work : monitor;
+}
+
+
+static fnql::window::Insets X11_GetFrameInsets( Window root, int clientX,
+	int clientY, int clientWidth, int clientHeight )
+{
+	unsigned long extents[4];
+	fnql::window::Insets frame{};
+
+	if ( X11_ReadCardinals( win, "_NET_FRAME_EXTENTS", extents, 4 ) == 4 ) {
+		frame.left = X11_CardinalExtent( extents[0] );
+		frame.right = X11_CardinalExtent( extents[1] );
+		frame.top = X11_CardinalExtent( extents[2] );
+		frame.bottom = X11_CardinalExtent( extents[3] );
+		return frame;
+	}
+
+	// Older window managers may not implement EWMH frame extents. Derive the
+	// same information from the reparented frame without assuming titlebar size.
+	Window rootReturn;
+	Window parent;
+	Window *children = NULL;
+	unsigned int childCount = 0;
+	if ( XQueryTree( dpy, win, &rootReturn, &parent, &children, &childCount ) ) {
+		if ( children ) {
+			XFree( children );
+		}
+		if ( parent != None && parent != root ) {
+			XWindowAttributes attributes;
+			Window ignored;
+			int frameX;
+			int frameY;
+			if ( XGetWindowAttributes( dpy, parent, &attributes ) &&
+				XTranslateCoordinates( dpy, parent, root, 0, 0,
+					&frameX, &frameY, &ignored ) ) {
+				frame.left = clientX > frameX ? clientX - frameX : 0;
+				frame.top = clientY > frameY ? clientY - frameY : 0;
+				frame.right = attributes.width > clientWidth + frame.left
+					? attributes.width - clientWidth - frame.left : 0;
+				frame.bottom = attributes.height > clientHeight + frame.top
+					? attributes.height - clientHeight - frame.top : 0;
+			}
+		}
+	}
+
+	return frame;
+}
+
+
+static qboolean X11_EnsureWindowOnScreen( int width, int height )
+{
+	Window root = RootWindow( dpy, scrnum );
+	Window ignored;
+	int clientX;
+	int clientY;
+	fnql::window::Position constrained;
+
+	if ( glw_state.cdsFullscreen || gw_minimized || !win ||
+		X11_WindowHasState( win, "_NET_WM_STATE_MAXIMIZED_HORZ" ) ||
+		X11_WindowHasState( win, "_NET_WM_STATE_MAXIMIZED_VERT" ) ||
+		!XTranslateCoordinates( dpy, win, root, 0, 0,
+			&clientX, &clientY, &ignored ) ) {
+		return qfalse;
+	}
+
+	RandR_UpdateMonitor( clientX, clientY, width, height );
+	constrained = fnql::window::ConstrainClientOrigin(
+		{ clientX, clientY }, width, height, X11_GetUsableBounds( root ),
+		X11_GetFrameInsets( root, clientX, clientY, width, height ) );
+	win_x = constrained.x;
+	win_y = constrained.y;
+	if ( constrained.x == clientX && constrained.y == clientY ) {
+		return qfalse;
+	}
+
+	XMoveWindow( dpy, win, constrained.x, constrained.y );
+	return qtrue;
+}
+
+
 static qboolean directMap( const byte chr )
 {
 	if ( !in_forceCharset->integer )
@@ -738,7 +1084,7 @@ void HandleEvents( void )
 
 		case ClientMessage:
 
-			if ( event.xclient.data.l[0] == wmDeleteEvent ) {
+			if ( static_cast<Atom>( event.xclient.data.l[0] ) == wmDeleteEvent ) {
 				Cmd_Clear();
 				Com_Quit_f();
 			}
@@ -811,7 +1157,12 @@ void HandleEvents( void )
 			break; // case KeyRelease
 
 		case MotionNotify:
-			if ( IN_MouseActive() )
+			if ( IN_AbsolutePointerOwner() )
+			{
+				t = Sys_XTimeToSysTime( event.xmotion.time );
+				IN_QueueAbsolutePointerPosition( t, event.xmotion.x, event.xmotion.y );
+			}
+			else if ( IN_MouseActive() )
 			{
 				t = Sys_XTimeToSysTime( event.xkey.time );
 #ifdef HAVE_XF86DGA
@@ -854,7 +1205,7 @@ void HandleEvents( void )
 
 		case ButtonPress:
 		case ButtonRelease:
-			if ( !IN_MouseActive() )
+			if ( !IN_MouseActive() && !IN_AbsolutePointerOwner() )
 				break;
 
 			if ( event.type == ButtonPress )
@@ -862,6 +1213,14 @@ void HandleEvents( void )
 			else
 				btn_press = qfalse;
 			t = Sys_XTimeToSysTime( event.xkey.time );
+			if ( IN_AbsolutePointerOwner() ) {
+				// Preserve pointer-position-before-click ordering, including when
+				// the click is the first event after an absolute owner opens.
+				IN_QueueAbsolutePointerPosition( t, event.xbutton.x, event.xbutton.y );
+				if ( btn_press ) {
+					IN_BeginTemporaryPointerCapture( event.xbutton.button );
+				}
+			}
 			// NOTE TTimo there seems to be a weird mapping for K_MOUSE1 K_MOUSE2 K_MOUSE3 ..
 			btn_code = -1;
 			switch ( event.xbutton.button )
@@ -887,6 +1246,9 @@ void HandleEvents( void )
 			{
 				Sys_QueEvent( t, SE_KEY, btn_code, btn_press, 0, NULL );
 			}
+			if ( !btn_press && IN_AbsolutePointerOwner() ) {
+				IN_ReleaseTemporaryPointerButton( event.xbutton.button );
+			}
 			break; // case ButtonPress/ButtonRelease
 
 		case CreateNotify:
@@ -905,20 +1267,27 @@ void HandleEvents( void )
 
 			if ( !glw_state.cdsFullscreen && window_created && !gw_minimized && window_exposed )
 			{
-				unsigned int w, h, border, depth;
-				Window r;
-				int x, y;
-
-				if ( XGetGeometry( dpy, win, &r, &x, &y, &w, &h, &border, &depth ) ) {
-					// workaround to compensate constant shift added by window decorations
-					if ( x < 200 && y < 200 ) {
-						win_x -= x;
-						win_y -= y;
-					}
-				}
+				Window ignored;
+				XTranslateCoordinates( dpy, win, RootWindow( dpy, scrnum ), 0, 0,
+					&win_x, &win_y, &ignored );
+				RandR_UpdateMonitor( win_x, win_y,
+					event.xconfigure.width, event.xconfigure.height );
+				X11_EnsureWindowOnScreen( event.xconfigure.width,
+					event.xconfigure.height );
 
 				Cvar_SetIntegerValue( "vid_xpos", win_x );
 				Cvar_SetIntegerValue( "vid_ypos", win_y );
+
+				if ( window_width > 0 && window_height > 0 &&
+					( window_width != event.xconfigure.width ||
+					window_height != event.xconfigure.height ) ) {
+					// The legacy X11 path recreates its native window on restart;
+					// unlike SDL/Win32, it cannot retain the current X Window safely.
+					CL_NotifyWindowResize( event.xconfigure.width,
+						event.xconfigure.height, qfalse );
+				}
+				window_width = event.xconfigure.width;
+				window_height = event.xconfigure.height;
 
 				RandR_UpdateMonitor( win_x, win_y,
 					event.xconfigure.width,
@@ -933,6 +1302,7 @@ void HandleEvents( void )
 				gw_active = qtrue;
 				Com_DPrintf( "FocusIn\n" );
 			} else {
+				IN_EndTemporaryPointerCapture();
 				gw_active = qfalse;
 				Com_DPrintf( "FocusOut\n" );
 			}
@@ -941,6 +1311,10 @@ void HandleEvents( void )
 
 		case Expose:
 			window_exposed = qtrue;
+			if ( !glw_state.cdsFullscreen && window_created && !gw_minimized &&
+				window_width > 0 && window_height > 0 ) {
+				X11_EnsureWindowOnScreen( window_width, window_height );
+			}
 			break;
 		}
 	}
@@ -1164,6 +1538,10 @@ void GLimp_Shutdown( qboolean unloadDLL )
 		// ( https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=33 )
 		if ( unloadDLL )
 		{
+			if ( invisible_cursor != None ) {
+				XFreeCursor( dpy, invisible_cursor );
+				invisible_cursor = None;
+			}
 			XCloseDisplay( dpy );
 			dpy = NULL;
 		}
@@ -1230,6 +1608,10 @@ void VKimp_Shutdown( qboolean unloadDLL )
 		// ( https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=33 )
 		if ( unloadDLL )
 		{
+			if ( invisible_cursor != None ) {
+				XFreeCursor( dpy, invisible_cursor );
+				invisible_cursor = None;
+			}
 			XCloseDisplay( dpy );
 			dpy = NULL;
 		}
@@ -1656,10 +2038,12 @@ rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, qboolean
 
 	XStoreName( dpy, win, cl_title );
 
-	/* GH: Don't let the window be resized */
-	sizehints.flags = PMinSize | PMaxSize;
-	sizehints.min_width = sizehints.max_width = actualWidth;
-	sizehints.min_height = sizehints.max_height = actualHeight;
+	// Keep the native fallback consistent with SDL: the window manager owns
+	// interactive sizing and the client refreshes its renderer after it settles.
+	memset( &sizehints, 0, sizeof( sizehints ) );
+	sizehints.flags = PMinSize;
+	sizehints.min_width = 320;
+	sizehints.min_height = 240;
 
 	XSetWMNormalHints( dpy, win, &sizehints );
 
@@ -1681,6 +2065,10 @@ rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, qboolean
 	else
 	{
 		XMoveWindow( dpy, win, vid_xpos->integer, vid_ypos->integer );
+		// Give the window manager a chance to publish its real frame extents,
+		// then correct the client origin against monitor and work-area bounds.
+		XSync( dpy, False );
+		X11_EnsureWindowOnScreen( actualWidth, actualHeight );
 	}
 
 //	XSync( dpy, False );
@@ -1791,6 +2179,35 @@ static void InitCvars( void )
 }
 
 
+void GLimp_QueryDisplayOutput( rendererDisplayOutput_t *output )
+{
+	if ( !output ) {
+		return;
+	}
+
+	Com_Memset( output, 0, sizeof( *output ) );
+	output->displayIndex = scrnum;
+	output->nativeBackend = ROUTPUT_BACKEND_SDR_SRGB;
+	output->sdrWhiteNits = 203.0f;
+	output->hdrHeadroom = 1.0f;
+	output->maxLuminanceNits = 203.0f;
+	output->maxFullFrameLuminanceNits = 203.0f;
+	Q_strncpyz( output->videoDriver, "x11", sizeof( output->videoDriver ) );
+	Q_strncpyz( output->reason,
+		"X11 path has no explicit HDR compositor protocol; Linux HDR is only enabled through SDL3 Wayland output checks",
+		sizeof( output->reason ) );
+
+	if ( !dpy || !win ) {
+		return;
+	}
+
+	output->valid = qtrue;
+	if ( DisplayString( dpy ) ) {
+		Q_strncpyz( output->displayName, DisplayString( dpy ), sizeof( output->displayName ) );
+	}
+}
+
+
 #ifdef USE_OPENGL_API
 /*
 ** GLW_LoadOpenGL
@@ -1868,36 +2285,6 @@ static qboolean GLW_StartOpenGL( void )
 
 	return qtrue;
 }
-
-void GLimp_QueryDisplayOutput( rendererDisplayOutput_t *output )
-{
-	if ( !output ) {
-		return;
-	}
-
-	Com_Memset( output, 0, sizeof( *output ) );
-	output->displayIndex = scrnum;
-	output->nativeBackend = ROUTPUT_BACKEND_SDR_SRGB;
-	output->sdrWhiteNits = 203.0f;
-	output->hdrHeadroom = 1.0f;
-	output->maxLuminanceNits = 203.0f;
-	output->maxFullFrameLuminanceNits = 203.0f;
-	Q_strncpyz( output->videoDriver, "x11", sizeof( output->videoDriver ) );
-	Q_strncpyz( output->reason,
-		"X11 path has no explicit HDR compositor protocol; Linux HDR is only enabled through SDL3 Wayland output checks",
-		sizeof( output->reason ) );
-
-	if ( !dpy || !win ) {
-		return;
-	}
-
-	output->valid = qtrue;
-	if ( DisplayString( dpy ) ) {
-		Q_strncpyz( output->displayName, DisplayString( dpy ), sizeof( output->displayName ) );
-	}
-}
-
-
 /*
 ** GLimp_Init
 **
@@ -2110,6 +2497,9 @@ void IN_Init( void )
 
 void IN_Shutdown( void )
 {
+	IN_EndTemporaryPointerCapture();
+	absolute_pointer_owner = ABSOLUTE_POINTER_NONE;
+	absolute_position_valid = qfalse;
 	mouse_avail = qfalse;
 
 	Cmd_RemoveCommand( "minimize" );
@@ -2133,18 +2523,33 @@ void IN_Restart_f( void )
 
 void IN_Frame( void )
 {
+	const int pointerOwner = IN_AbsolutePointerOwnerKind();
 
 #ifdef USE_JOYSTICK
 	IN_JoyMove();
 #endif
 
-	if ( Key_GetCatcher() & KEYCATCH_CONSOLE ) {
-		// temporarily deactivate if not in the game and
-		// running on the desktop with multimonitor configuration
-		if ( !glw_state.cdsFullscreen || glw_state.monitorCount > 1 ) {
-			IN_DeactivateMouse();
+	if ( pointerOwner != ABSOLUTE_POINTER_NONE ) {
+		if ( pointerOwner != absolute_pointer_owner ) {
+			IN_EndTemporaryPointerCapture();
+			absolute_position_valid = qfalse;
+		}
+		absolute_pointer_owner = pointerOwner;
+		IN_DeactivateMouse();
+		if ( !gw_active || gw_minimized ) {
+			IN_EndTemporaryPointerCapture();
+			IN_ShowWindowCursor( qtrue );
 			return;
 		}
+		IN_ShowWindowCursor( pointerOwner == ABSOLUTE_POINTER_CONSOLE ? qfalse : qtrue );
+		IN_PollAbsolutePointerPosition();
+		return;
+	}
+
+	if ( absolute_pointer_owner != ABSOLUTE_POINTER_NONE ) {
+		IN_EndTemporaryPointerCapture();
+		absolute_pointer_owner = ABSOLUTE_POINTER_NONE;
+		absolute_position_valid = qfalse;
 	}
 
 	if ( !gw_active || gw_minimized || in_nograb->integer ) {

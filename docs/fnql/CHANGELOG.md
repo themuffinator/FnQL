@@ -7,6 +7,11 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
 ## [Unreleased]
 
 ### Highlights
+- Enabled bidirectional retail protocol-91 interoperability: FnQL clients now
+  use Quake Live's exact Steam-ticket challenge, correctly infer bare retail
+  responses, retain ticket validity through authorization, and expose a real
+  no-Steam fallback. A live windowed Win32 probe joined a retail-operated
+  server through gamestate and active play.
 - Expanded the retail Quake Live engine-compatibility foundation across native
   modules, protocol 91 and demos, BSP advertisements, WebUI resources, and
   optional dedicated-server services.
@@ -55,6 +60,16 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
   gamepads; the non-SDL Windows joystick mapping is available as an opt-in.
 
 ### Rendering and Display
+- Added compatibility-preserving, opt-in camera motion blur, enhanced map lens
+  flares, and liquid refraction/reflection with bounded visual ripple impulses;
+  all remain disabled by default and do not alter BSP, VM, snapshot, protocol,
+  prediction, or demo state.
+- Fixed Vulkan enhanced-liquid state restoration and added six-face Vulkan
+  cubemap capture with one batched readback and consistent square projections.
+- Added a strict, size-bounded `maps/<map>.fog` presentation sidecar for
+  optional global fog on OpenGL-lineage and Vulkan renderers. It is disabled
+  by default, preserves authored BSP fog, and ships without map-specific fog
+  assets.
 - Added a dedicated non-power-of-two RGBA WebUI surface to OpenGL, OpenGL2,
   GLx, and Vulkan without consuming cinematic handles; verified the complete
   retail menu through an engine renderer screenshot.
@@ -63,6 +78,9 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
 - _None yet._
 
 ### Builds and Packaging
+- Made `curl-dlopen` an `auto|true|false` Meson option so Windows links the
+  bundled libcurl fallback by default while supported Unix builds retain
+  runtime resolution; stale Meson option metadata now gets one `--wipe` retry.
 - Added Meson/CMake compatibility contract tests and made the complete Python
   source-regression suite discoverable from the default test workflows.
 - Cleared Clang and MSVC strict-warning builds across the client, dedicated
@@ -80,6 +98,15 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
   default while keeping clearly labelled x64 engine-only configurations.
 
 ### Fixes
+- Freed the host pointer for the windowed console and snapped its software
+  cursor to absolute framebuffer coordinates across SDL, native Win32, and X11,
+  while retaining Quake Live's existing raw-coordinate UI/cgame/browser lane.
+- Hardened Linux Vulkan loading, ALSA signed-frame handling, XRandR mode
+  arithmetic, X11 Vulkan-only output probing, and GLx material-key formatting.
+- Unified every recoverable client disconnect path with retail QL: the engine
+  now publishes `game.end`, restores the paused WebUI surface and input focus,
+  retains native UI fallback, honors guarded out-of-band server disconnects,
+  and sends the retail three-packet reliable disconnect burst.
 - Corrected the Windows DirectInput mouse format to carry all eight advertised
   buttons and removed undefined OpenGL buffer-offset arithmetic.
 - Made renderer2 HDR/light-grid and VBO byte calculations overflow-safe,

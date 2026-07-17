@@ -48,6 +48,7 @@ layout(constant_id = 41) const float crtScanlineStrength = 0.55;
 layout(constant_id = 42) const float crtMaskStrength = 0.35;
 layout(constant_id = 43) const float crtCurvature = 0.01;
 layout(constant_id = 44) const float crtChromatic = 1.35;
+layout(constant_id = 45) const int cubemapCaptureMode = 0;
 
 layout(push_constant) uniform PostPushConstants {
 	vec4 crtRuntime; // time seconds, inv source width, inv source height, unused
@@ -306,10 +307,14 @@ vec3 applyCRT(vec2 uv, vec3 originalColor) {
 }
 
 void main() {
-	vec3 color = resolvePostColor(frag_tex_coord);
+	vec2 sampleCoord = frag_tex_coord;
+	if ( cubemapCaptureMode != 0 ) {
+		sampleCoord = pc.crtRuntime.xy + frag_tex_coord * pc.crtRuntime.zw;
+	}
+	vec3 color = resolvePostColor(sampleCoord);
 
 	if ( crtMode != 0 ) {
-		color = applyCRT(frag_tex_coord, color);
+		color = applyCRT(sampleCoord, color);
 	}
 	if ( outputColorSpace != 1 && ditherMode == 1 ) {
 		color = dither(color);

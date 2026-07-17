@@ -27,6 +27,21 @@ class QLFontSourceTests(unittest.TestCase):
         self.assertIn("qlHostFonts.fallbackIds[1] = qlHostFonts.faceIds[3];", source)
         self.assertIn("qlHostFonts.fallbackIds[2] = qlHostFonts.faceIds[4];", source)
 
+        requested_cache = source.index(
+            "QL_FindCachedHostGlyph( requestedFont, codepoint"
+        )
+        requested_cmap = source.index(
+            "fons__tt_getGlyphIndex( &requestedFont->font, codepoint )"
+        )
+        fallback_cache = source.index("cachedGlyphs[i] = QL_FindCachedHostGlyph")
+        fallback_cmap = source.index(
+            "supported[i] = fons__tt_getGlyphIndex( &fonts[i]->font, codepoint )"
+        )
+        self.assertLess(requested_cache, requested_cmap)
+        self.assertLess(requested_cmap, fallback_cache)
+        self.assertLess(fallback_cache, fallback_cmap)
+        self.assertIn("QL_FontSelectFallbackFace( count, cached, supported )", source)
+
     def test_retail_fontstash_revision_and_scratch_size_are_pinned(self) -> None:
         wrap = read("subprojects/fontstash.wrap")
         source = read("code/renderercommon/tr_font_stash.c")
@@ -35,9 +50,29 @@ class QLFontSourceTests(unittest.TestCase):
         self.assertIn("#define FONTSTASH_IMPLEMENTATION", source)
         self.assertIn("#include <fontstash.h>", source)
 
+    def test_every_supported_build_graph_enables_the_host_font_lane(self) -> None:
+        meson = read("meson.build")
+        makefile = read("Makefile")
+        cmake = read("CMakeLists.txt")
+        release = read(".github/workflows/release.yml")
+
+        self.assertIn("'code/renderercommon/tr_font_stash.c'", meson)
+        self.assertIn("common_c_args += ['-DBUILD_FONTSTASH']", meson)
+        self.assertEqual(makefile.count("/tr_font_stash.o"), 4)
+        self.assertIn("BASE_CFLAGS += -DBUILD_FONTSTASH", makefile)
+        self.assertIn("-DRENDERER_OPENGL2", makefile)
+        self.assertIn("-DRENDERER_VULKAN", makefile)
+        self.assertIn("meson subprojects download fontstash", makefile)
+        self.assertIn("ADD_COMPILE_DEFINITIONS(BUILD_FONTSTASH)", cmake)
+        self.assertIn("PRIVATE USE_RENDERER_DLOPEN RENDERER_VULKAN", cmake)
+        self.assertIn("subprojects/fontstash/src", cmake)
+        self.assertGreaterEqual(
+            release.count("meson subprojects download fontstash"), 3
+        )
+
     def test_host_text_service_is_exported_by_every_renderer(self) -> None:
         public = read("code/renderercommon/tr_public.h")
-        self.assertIn("REF_API_VERSION\t\t12", public)
+        self.assertIn("REF_API_VERSION\t\t13", public)
         self.assertIn("(*DrawScaledText)", public)
         self.assertIn("(*MeasureScaledText)", public)
         self.assertIn("(*GetScaledFontMetrics)", public)
@@ -129,6 +164,20 @@ class QLFontSourceTests(unittest.TestCase):
         self.assertNotIn("SCR_DrawSmallChar( cl_conXOffset", source)
         self.assertNotIn("SCR_DrawSmallString( xf + wf", source)
         self.assertNotIn("g_console_field_width = ((cls.glconfig.vidWidth / smallchar_width))", read("code/client/cl_main.cpp"))
+
+    def test_console_version_shares_the_input_line_baseline(self) -> None:
+        source = read("code/client/cl_console.cpp")
+        input_draw = source[source.index("static void Con_DrawInput(") :]
+        version_draw = source[source.index("\tif ( showVersion ) {") :]
+
+        self.assertIn(
+            "y = con.vislines - ( console_char_height * Con_GetFooterRows() );",
+            input_draw,
+        )
+        self.assertGreaterEqual(
+            version_draw.count("lines - console_char_height * statusRows"),
+            2,
+        )
 
     def test_client_large_text_and_chat_use_the_retail_host_font_lane(self) -> None:
         screen = read("code/client/cl_scrn.cpp")

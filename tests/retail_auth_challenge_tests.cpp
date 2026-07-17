@@ -1,4 +1,5 @@
 #include "../code/server/retail_auth_challenge.hpp"
+#include "../code/client/retail_challenge.hpp"
 
 #include <array>
 #include <cstdint>
@@ -6,6 +7,7 @@
 #include <cstring>
 
 namespace auth = fnql::server::auth;
+namespace clientAuth = fnql::client::auth;
 
 namespace {
 
@@ -86,6 +88,45 @@ void TestParser() {
 	Check( parsed.kind == auth::ChallengePayloadKind::MalformedRetail, "short ticket rejected" );
 }
 
+void TestClientPacketAndProtocolSelection() {
+	constexpr std::uint64_t steamId = 0x1122334455667788ull;
+	std::array<std::uint8_t, 16> ticket{};
+	for ( std::size_t i = 0; i < ticket.size(); ++i ) {
+		ticket[i] = static_cast<std::uint8_t>( 0x80u + i );
+	}
+	std::array<std::uint8_t,
+		clientAuth::RetailSteamChallengeHeaderBytes + ticket.size()> packet{};
+	const std::size_t packetBytes = clientAuth::BuildRetailSteamChallenge(
+		packet.data(), packet.size(), steamId, ticket.data(), ticket.size() );
+	Check( packetBytes == packet.size(), "client retail packet length" );
+	Check( std::memcmp( packet.data(),
+		"\xff\xff\xff\xff" "getchallenge ", 17 ) == 0,
+		"client emits exact retail command prefix" );
+	Check( packet[17] == 0x88 && packet[18] == 0x77 &&
+		packet[23] == 0x22 && packet[24] == 0x11,
+		"client emits little-endian SteamID" );
+	Check( std::memcmp( packet.data() + 25, ticket.data(), ticket.size() ) == 0,
+		"client appends opaque ticket without marker or terminator" );
+
+	Check( clientAuth::SelectHandshakeProtocol(
+		clientAuth::ChallengeRequestMode::RetailSteam, 0, 91, 68 ) == 91,
+		"bare authenticated retail response selects protocol 91" );
+	Check( clientAuth::SelectHandshakeProtocol(
+		clientAuth::ChallengeRequestMode::RetailWithoutSteam, 0, 91, 68 ) == 91,
+		"bare no-Steam retail response selects protocol 91" );
+	Check( clientAuth::SelectHandshakeProtocol(
+		clientAuth::ChallengeRequestMode::LegacyNonce, 0, 91, 68 ) == 68,
+		"legacy challenge retains protocol 68 fallback" );
+	Check( clientAuth::SelectHandshakeProtocol(
+		clientAuth::ChallengeRequestMode::RetailSteam, 71, 91, 68 ) == 71,
+		"explicit server protocol remains authoritative" );
+
+	Check( clientAuth::BuildRetailSteamChallenge(
+		packet.data(), packet.size() - 1, steamId,
+		ticket.data(), ticket.size() ) == 0,
+		"client packet builder rejects short output" );
+}
+
 void TestCache() {
 	auth::AuthCache<2> cache;
 	auth::AuthRecord out{};
@@ -120,6 +161,7 @@ void TestCache() {
 
 int main() {
 	TestParser();
+	TestClientPacketAndProtocolSelection();
 	TestCache();
 	if ( failures != 0 ) {
 		std::fprintf( stderr, "%d test(s) failed\n", failures );

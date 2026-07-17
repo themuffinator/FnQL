@@ -24,6 +24,10 @@ def read_win_wndproc() -> str:
     return (ROOT / "code/win32/win_wndproc.cpp").read_text(encoding="utf-8")
 
 
+def read_linux_glimp() -> str:
+    return (ROOT / "code/unix/linux_glimp.cpp").read_text(encoding="utf-8")
+
+
 def function_body(source: str, name: str) -> str:
     match = re.search(
         rf"static\s+(?:qboolean|void)\s+{name}\s*\([^)]*\)\s*\{{",
@@ -89,20 +93,21 @@ class JoinMenuSourceTests(unittest.TestCase):
         self.assertIn("static void IN_QueueAbsoluteMousePosition", sdl_input)
         self.assertIn("SE_MOUSE_ABSOLUTE, positionX, positionY", sdl_input)
         self.assertIn(
-            "if ( !absoluteMouse ) {\n"
+            "if ( grabMouse )\n"
             "\t\t\tSDL_WarpMouseInWindow",
             sdl_input,
         )
         self.assertIn(
-            "if ( nativeUiActive || cgameUiActive ) {\n"
+            "if ( browserActive || nativeUiActive || cgameUiActive ) {\n"
             "\t\tIN_QueueAbsoluteMousePosition();",
             sdl_input,
         )
         self.assertIn("static void IN_WindowMouse", win_input)
-        self.assertIn(
-            "Key_GetCatcher() & ( KEYCATCH_BROWSER | KEYCATCH_UI | KEYCATCH_CGAME )",
-            win_input,
-        )
+        self.assertIn("static int IN_AbsolutePointerOwnerKind", win_input)
+        self.assertIn("catcher & KEYCATCH_BROWSER", win_input)
+        self.assertIn("catcher & KEYCATCH_UI", win_input)
+        self.assertIn("catcher & KEYCATCH_CGAME", win_input)
+        self.assertIn("if ( absolutePointerOwner )", win_input)
         self.assertIn("IN_WindowMouse();", win_input)
         self.assertIn(
             "SetCursor( LoadCursor( NULL, IDC_ARROW ) );",
@@ -115,6 +120,46 @@ class JoinMenuSourceTests(unittest.TestCase):
             common,
         )
         self.assertIn("case SE_MOUSE_ABSOLUTE:", common)
+
+    def test_windowed_console_reuses_retail_absolute_event_without_changing_ui_coordinates(self) -> None:
+        sdl_input = read_sdl_input()
+        win_input = read_win_input()
+        win_wndproc = read_win_wndproc()
+        linux_glimp = read_linux_glimp()
+        client_input = (ROOT / "code/client/cl_input.cpp").read_text(encoding="utf-8")
+        qcommon = (ROOT / "code/qcommon/qcommon.h").read_text(encoding="utf-8")
+
+        # FnQL already has the retail-shaped absolute event. Do not add FnQ3's
+        # second event or its synthetic 640x480 cursor-delta priming scheme.
+        self.assertIsNone(re.search(r"\bSE_MOUSE_ABS\b", qcommon))
+        self.assertNotIn("-0x4000", client_input)
+        self.assertIn("void CL_MouseAbsoluteEvent( int x, int y )", client_input)
+        self.assertIn("Con_SetMousePos( x, y );", client_input)
+        self.assertIn("VM_Call( uivm, 2, UI_MOUSE_EVENT, x, y );", client_input)
+        self.assertIn("VM_Call( cgvm, 2, CG_MOUSE_EVENT, x, y );", client_input)
+
+        # SDL frees and hides the host pointer only for the windowed console;
+        # browser/UI/cgame retain their visible, raw-coordinate retail lane.
+        self.assertIn(
+            "const qboolean consoleAbsolute = ( consoleActive && !glw_state.isFullscreen )",
+            sdl_input,
+        )
+        self.assertIn(
+            "const qboolean retailAbsolute = ( !consoleActive &&",
+            sdl_input,
+        )
+        self.assertIn("s_absCursor = consoleAbsolute;", sdl_input)
+        self.assertIn("if ( s_absCursor )", sdl_input)
+        self.assertIn("IN_DriveAbsCursor();", sdl_input)
+
+        # The non-SDL platform paths provide the same windowed-console policy.
+        self.assertIn("if ( catcher & KEYCATCH_CONSOLE )", win_input)
+        self.assertIn("return !glw_state.cdsFullscreen ? KEYCATCH_CONSOLE : 0", win_input)
+        self.assertIn("static qboolean WIN_ConsoleUsesAbsolutePointer", win_wndproc)
+        self.assertIn("SE_MOUSE_ABSOLUTE, x, y", win_wndproc)
+        self.assertIn("static qboolean IN_ConsoleUsesAbsolutePointer", linux_glimp)
+        self.assertIn("if ( IN_AbsolutePointerOwner() )", linux_glimp)
+        self.assertIn("SE_MOUSE_ABSOLUTE", linux_glimp)
 
 
 if __name__ == "__main__":

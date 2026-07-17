@@ -28,7 +28,7 @@ The standard commands remain familiar:
 - `screenshotJPEG`: Save a JPG screenshot.
 - `screenshotBMP`: Save a BMP screenshot.
 - `screenshot levelshot`: Save a levelshot to `levelshots/<map>.tga` using the current levelshot sizing and crop settings.
-- `screenshot cubemap`: Save a six-face PNG cube map on the OpenGL-lineage renderers.
+- `screenshot cubemap`: Save a six-face PNG cube map on the OpenGL-lineage and Vulkan renderers.
 - `screenshotPNG cubemap`: Explicit PNG cube-map command.
 - `screenshotTGA cubemap`: Save a six-face TGA cube map.
 - `screenshotJPEG cubemap`: Save a six-face JPG cube map.
@@ -214,15 +214,18 @@ seta r_screenshotWatermarkMargin "24"
 
 ## Cube Maps
 
-The OpenGL-lineage renderers, `opengl` and canonical `glx`, can capture a six-face cube map from the current camera position through the `screenshot ... cubemap` subcommand.
+The OpenGL-lineage renderers, `opengl` and canonical `glx`, and the Vulkan renderer can capture a six-face cube map from the current camera position through the `screenshot ... cubemap` subcommand.
 
 - Each face is saved as a square image.
 - The renderer captures the five non-front faces from one frozen scene state inside the same scene submission.
 - The front face is taken from that same capture frame after the normal front view finishes drawing.
 - That keeps world time, entity state, and shader animation state aligned across the set instead of advancing between faces.
+- Every face uses an exact square 90-degree projection and the same camera-relative face orientation on GLx and Vulkan.
+- Faces receive the SDR output transform and color grading, while view-dependent screen effects such as bloom, CRT distortion, and camera motion blur are excluded to keep cube edges consistent.
 - Cube-map watermarks are always disabled.
 - If `r_levelshotHideHud 0`, the HUD appears only on the `front` face.
 - If `r_levelshotHideViewWeapon 0`, the first-person weapon appears only on the `front` face.
+- Vulkan batches all six GPU face copies into one host readback after the frame instead of stalling once per face.
 
 Example:
 
@@ -242,7 +245,7 @@ That produces:
 Renderer status:
 
 - OpenGL-lineage renderers: full cube-map capture support on `opengl` and canonical `glx`.
-- Vulkan renderer: normal screenshots, naming, metadata sidecars, watermarks, and levelshot visibility controls are supported, but `screenshot ... cubemap` currently prints a warning and does not capture.
+- Vulkan renderer: full cube-map capture support with the same face names, orientation, visibility controls, and SDR output contract.
 - `renderer2`: normal screenshots and levelshots honor the same levelshot visibility controls, but cube-map capture is not implemented there.
 
 ## Recommended Starting Points

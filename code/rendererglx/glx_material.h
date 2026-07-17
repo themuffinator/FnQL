@@ -21,6 +21,7 @@ typedef void ( APIENTRY *PFNGLXGETPROGRAMINFOLOGPROC )( GLuint program, GLsizei 
 typedef void ( APIENTRY *PFNGLXUSEPROGRAMPROC )( GLuint program );
 typedef GLint ( APIENTRY *PFNGLXGETUNIFORMLOCATIONPROC )( GLuint program, const GLchar *name );
 typedef void ( APIENTRY *PFNGLXUNIFORM1IPROC )( GLint location, GLint v0 );
+typedef void ( APIENTRY *PFNGLXMATERIALUNIFORM4FVPROC )( GLint location, GLsizei count, const GLfloat *value );
 typedef void ( APIENTRY *PFNGLXDELETEPROGRAMPROC )( GLuint program );
 typedef void ( APIENTRY *PFNGLXDELETESHADERPROC )( GLuint shader );
 typedef void ( APIENTRY *PFNGLXMATERIALOBJECTLABELPROC )( GLenum identifier, GLuint name, GLsizei length, const GLchar *label );
@@ -39,6 +40,7 @@ struct MaterialFns {
 	PFNGLXUSEPROGRAMPROC UseProgram;
 	PFNGLXGETUNIFORMLOCATIONPROC GetUniformLocation;
 	PFNGLXUNIFORM1IPROC Uniform1i;
+	PFNGLXMATERIALUNIFORM4FVPROC Uniform4fv;
 	PFNGLXDELETEPROGRAMPROC DeleteProgram;
 	PFNGLXDELETESHADERPROC DeleteShader;
 	PFNGLXMATERIALOBJECTLABELPROC ObjectLabel;
@@ -52,6 +54,22 @@ struct MaterialProgram {
 	GLuint fragmentShader;
 	GLint texture0Uniform;
 	GLint texture1Uniform;
+	unsigned int binds;
+	qboolean valid;
+};
+
+struct LiquidProgram {
+	GLuint program;
+	GLuint vertexShader;
+	GLuint fragmentShader;
+	GLint textureUniform;
+	GLint depthTextureUniform;
+	GLint paramsUniform;
+	GLint eyeAndCountUniform;
+	GLint targetInverseUniform;
+	GLint reflectUniform;
+	GLint impulsesUniform;
+	GLint amplitudesUniform;
 	unsigned int binds;
 	qboolean valid;
 };
@@ -84,6 +102,8 @@ struct MaterialState {
 	cvar_t *r_glxMaterialPrecache;
 	MaterialFns fns;
 	MaterialProgram programs[GLX_MATERIAL_PROGRAM_LIMIT];
+	LiquidProgram liquidProgram;
+	qboolean liquidProgramAttempted;
 	RenderProductTier tier;
 	int programCount;
 	int lastFoundProgram;
@@ -132,6 +152,9 @@ qboolean GLX_Material_Active( const MaterialState &state );
 qboolean GLX_Material_BindIR( MaterialState *state, const MaterialIR &material );
 qboolean GLX_Material_BindStage( MaterialState *state, const MaterialRequest &request );
 qboolean GLX_Material_BindFog( MaterialState *state );
+qboolean GLX_Material_BindLiquid( MaterialState *state, const float *params,
+	const float *eyeAndCount, const float *targetInverse, const float *reflect,
+	const float *impulses, const float *amplitudes );
 void GLX_Material_Unbind( MaterialState *state );
 void GLX_Material_PrintInfo( const MaterialState &state );
 const char *GLX_Material_ModeName( MaterialProgramMode mode );

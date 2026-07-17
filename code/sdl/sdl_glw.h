@@ -49,6 +49,8 @@ typedef struct
 	// Window coordinates, used for mouse centering and drag/grab behavior.
 	int window_width;
 	int window_height;
+	int pixel_width;
+	int pixel_height;
 
 	int monitorCount;
 
@@ -64,6 +66,7 @@ void IN_Shutdown( void );
 void IN_Frame( void );
 void HandleEvents( void );
 void GLW_UpdateWindowState( void );
+void GLW_EnsureWindowOnScreen( void );
 void GLW_HideFullscreenWindow( void );
 void GLW_RestoreGamma( void );
 

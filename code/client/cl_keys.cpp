@@ -541,13 +541,6 @@ static void Console_Key( int key ) {
 		return;
 	}
 
-	// command completion
-
-	if (key == K_TAB) {
-		Field_AutoComplete(&g_consoleField);
-		return;
-	}
-
 	// command history (ctrl-p ctrl-n for unix style)
 
 	if ( (key == K_MWHEELUP && keys[K_SHIFT].down) || ( key == K_UPARROW ) || ( key == K_KP_UPARROW ) ||
@@ -793,11 +786,11 @@ static void CL_ToggleMenuInternal( int key, qboolean sendKeyUp, unsigned time ) 
 			Cvar_Set( "com_errorMessage", "" );
 			if ( cls.state == CA_CINEMATIC ) {
 				SCR_StopCinematic();
-			} else if ( !CL_Disconnect( qfalse ) ) { // restart client if not done already
+				CL_ActivateNativeMenu( UIMENU_MAIN );
+			} else if ( !CL_Disconnect( qtrue ) ) { // restart client if not done already
 				CL_FlushMemory();
 			}
 #endif
-			CL_ActivateNativeMenu( UIMENU_MAIN );
 		}
 		return;
 	}

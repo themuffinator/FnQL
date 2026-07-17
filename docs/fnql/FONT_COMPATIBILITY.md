@@ -19,11 +19,14 @@ Static retail executable comparison shows that host text uses the historical
 FontStash/STB rasterizer, treats font handles 0, 1, and 2 as the normal, sans,
 and mono face slots, decodes UTF-8, consumes only `^0` through `^7` as color
 controls, truncates requested sizes to tenths, and probes sans, bundled Unicode,
-and Windows Unicode fallbacks after the requested face. The retail import's
-integer text argument is a glyph-count limit: `-1` is unlimited, `0` draws no
-glyphs, and positive values count decoded glyphs. A non-null float pointer is
-always an in/out clip boundary. Measurement returns the exact five-float visual
-bounds packet: left, top, right, bottom, and ascent.
+and Windows Unicode fallbacks after the requested face. Within glyph lookup,
+retail checks the requested face's cache and cmap before any fallback cache;
+only a requested-face cmap miss proceeds to the ordered fallback caches and
+then their cmaps. This makes face choice independent of earlier text draws. The
+retail import's integer text argument is a glyph-count limit: `-1` is unlimited,
+`0` draws no glyphs, and positive values count decoded glyphs. A non-null float
+pointer is always an in/out clip boundary. Measurement returns the exact
+five-float visual bounds packet: left, top, right, bottom, and ascent.
 
 ## FnQL implementation
 
@@ -70,10 +73,11 @@ bundled fallback without assuming a system font layout.
 ## Regression gates
 
 - `fnql_ql_font_text` validates bounded UTF-8 decoding, retail color controls,
-  and the exact five-float bounds bridge.
+  fallback selection policy, and the exact five-float bounds bridge.
 - `fnql_ql_font_source` validates face order, renderer exports, ABI semantics,
   retained atlas growth/reset/debug configuration, bounded fallback behavior,
-  and the console's mono-TTF preference.
+  the console's mono-TTF preference, and active host-font compilation in Meson,
+  Make, and CMake renderer graphs.
 - Native validation builds the client plus classic OpenGL, OpenGL2, GLX, and
   Vulkan renderer modules.
 - The retail smoke probe must always use `+set r_fullscreen 0`; successful

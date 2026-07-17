@@ -3079,6 +3079,9 @@ public:
 		unsigned int texModWaveFuncs0, unsigned int texModWaveFuncs1, int fogAdjust,
 		int materialCombine, qboolean fogPass );
 	qboolean BindFogMaterial();
+	qboolean BindLiquidMaterial( const float *params, const float *eyeAndCount,
+		const float *targetInverse, const float *reflect,
+		const float *impulses, const float *amplitudes );
 	void UnbindMaterial();
 	qboolean DlightProgramAvailable( qboolean linear, int fogMode, qboolean absLight,
 		qboolean shadow );
@@ -5092,6 +5095,14 @@ qboolean RendererModule::BindFogMaterial()
 	return GLX_Material_BindFog( &material_ );
 }
 
+qboolean RendererModule::BindLiquidMaterial( const float *params,
+	const float *eyeAndCount, const float *targetInverse, const float *reflect,
+	const float *impulses, const float *amplitudes )
+{
+	return GLX_Material_BindLiquid( &material_, params, eyeAndCount,
+		targetInverse, reflect, impulses, amplitudes );
+}
+
 void RendererModule::UnbindMaterial()
 {
 	GLX_Material_Unbind( &material_ );
@@ -6263,6 +6274,14 @@ extern "C" qboolean GLX_Renderer_BindMaterialStage( int flags, unsigned int stat
 extern "C" qboolean GLX_Renderer_BindFogMaterial( void )
 {
 	return glx::g_module.BindFogMaterial();
+}
+
+extern "C" qboolean GLX_Renderer_BindLiquidMaterial( const float *params,
+	const float *eyeAndCount, const float *targetInverse, const float *reflect,
+	const float *impulses, const float *amplitudes )
+{
+	return glx::g_module.BindLiquidMaterial( params, eyeAndCount, targetInverse,
+		reflect, impulses, amplitudes );
 }
 
 extern "C" void GLX_Renderer_UnbindMaterial( void )

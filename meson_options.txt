@@ -36,9 +36,10 @@ option('curl',
   description: 'cURL support for HTTP/FTP downloads')
 
 option('curl-dlopen',
-  type: 'boolean',
-  value: true,
-  description: 'Resolve cURL at runtime instead of linking libcurl')
+  type: 'combo',
+  choices: ['auto', 'true', 'false'],
+  value: 'auto',
+  description: 'Resolve cURL at runtime instead of linking libcurl (auto: linked on Windows, runtime elsewhere)')
 
 option('system-jpeg',
   type: 'boolean',

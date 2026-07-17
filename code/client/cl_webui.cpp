@@ -2017,6 +2017,48 @@ void CL_WebHost_HideBrowser( void ) {
 
 /*
 =============
+CL_WebHost_ShowAfterDisconnect
+
+Restores ownership of the already-loaded retail WebUI after game.end.  Game
+transitions pause and unfocus the WebView, so publishing the lifecycle event is
+not by itself sufficient to make the menu drawable or interactive.  Keep the
+existing document alive (and therefore keep its post-game route and state)
+instead of navigating it back to a hard-coded hash.
+
+Returns false only when the WebUI cannot own the menu, allowing the caller to
+activate the retail native UI module as a deterministic fallback.
+=============
+*/
+qboolean CL_WebHost_ShowAfterDisconnect( void ) {
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+
+	cl_webui.keyCaptureArmed = qfalse;
+	cl_webui.browserVisible = qtrue;
+	cl_webui.browserActive = qtrue;
+
+	if ( !CL_WebUI_ServiceAvailable() || !CL_WebUI_EnsureBackendStarted()
+		|| !host.IsRunning() ) {
+		CL_WebHost_MarkBrowserUnavailable();
+		return qfalse;
+	}
+
+	if ( !CL_WebUI_RecordBackendResult( host.SetRenderingPaused( false ) )
+		|| !CL_WebUI_RecordBackendResult( host.SetFocus( true ) ) ) {
+		CL_WebHost_MarkBrowserUnavailable();
+		return qfalse;
+	}
+
+	// The browser supersedes the native main menu as soon as its retained
+	// surface is ready. Pending surfaces remain explicitly visible in bridge
+	// state and acquire KEYCATCH_BROWSER on the next WebUI frame.
+	Key_SetCatcher( Key_GetCatcher() & ~KEYCATCH_UI );
+	CL_RefreshOnlineServicesBridgeState();
+	return qtrue;
+}
+
+
+/*
+=============
 CL_WebHost_HideForGameTransition
 
 A connection or map load owns the screen.  Unlike an ordinary browser-hide
@@ -4698,7 +4740,7 @@ static void CL_Steam_HandleP2PEvent( const fnqlSteamEvent_t *event ) {
 	}
 	const fnqlSteamResult_t result = FNQL_Steam_AcceptP2PSession(
 		FNQL_STEAM_ROLE_CLIENT, serverId );
-	Com_DPrintf( "Steam client P2P request from active FnQL server %llu: %s\n",
+	Com_DPrintf( "Steam client P2P request from active authenticated server %llu: %s\n",
 		(unsigned long long)serverId,
 		result == FNQL_STEAM_RESULT_OK ? "accepted" : "failed" );
 	if ( result == FNQL_STEAM_RESULT_OK ) {
@@ -4735,7 +4777,7 @@ void CL_SteamP2PFrame( void ) {
 			!= FNQL_STEAM_RESULT_OK ) return;
 		cl_steamAcceptedP2PServer = serverId;
 		cl_steamPendingP2PRemote = 0;
-		Com_DPrintf( "Accepted deferred Steam P2P request from active FnQL server %llu.\n",
+		Com_DPrintf( "Accepted deferred Steam P2P request from active authenticated server %llu.\n",
 			(unsigned long long)serverId );
 	}
 	if ( hasVoice && cl_steamVoiceRecording ) {

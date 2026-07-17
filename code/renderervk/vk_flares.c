@@ -22,6 +22,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // tr_flares.c
 
 #include "tr_local.h"
+#include "../renderercommon/tr_lens_flare.h"
 
 /*
 =============================================================================
@@ -382,6 +383,54 @@ static void RB_TestFlare( flare_t *f ) {
 
 /*
 ==================
+RB_AddLensFlareSprites
+
+Adds the optional optical layers through the dedicated additive flare surface.
+==================
+*/
+static void RB_AddLensFlareSprites( const flare_t *f, float baseRadius,
+	const vec3_t color, const byte fogFactors[3] ) {
+	float centreX;
+	float centreY;
+	float attenuation;
+	int i;
+
+	if ( r_flares->integer < 2 || !tr.lensFlareShader ) {
+		return;
+	}
+
+	centreX = backEnd.viewParms.viewportX + backEnd.viewParms.viewportWidth * 0.5f;
+	centreY = backEnd.viewParms.viewportY + backEnd.viewParms.viewportHeight * 0.5f;
+	attenuation = R_LensFlareEdgeAttenuation( (float)f->windowX, (float)f->windowY,
+		centreX, centreY, (float)backEnd.viewParms.viewportWidth,
+		(float)backEnd.viewParms.viewportHeight );
+
+	RB_BeginSurface( tr.lensFlareShader, 0 );
+	for ( i = 0; i < R_LensFlareSpriteCount(); i++ ) {
+		const lensFlareSprite_t *sprite = &r_lensFlareSprites[i];
+		float x;
+		float y;
+		float halfWidth = baseRadius * sprite->halfWidthScale;
+		float halfHeight = baseRadius * sprite->halfHeightScale;
+		color4ub_t c;
+
+		R_LensFlareSpritePosition( sprite, (float)f->windowX, (float)f->windowY,
+			centreX, centreY, &x, &y );
+
+		c.rgba[0] = R_LensFlareSpriteColor( color[0], fogFactors[0], sprite, 0, attenuation );
+		c.rgba[1] = R_LensFlareSpriteColor( color[1], fogFactors[1], sprite, 1, attenuation );
+		c.rgba[2] = R_LensFlareSpriteColor( color[2], fogFactors[2], sprite, 2, attenuation );
+		c.rgba[3] = 255;
+
+		RB_AddQuadStamp2( x - halfWidth, y - halfHeight,
+			halfWidth * 2.0f, halfHeight * 2.0f, 0, 0, 1, 1, c );
+	}
+	RB_EndSurface();
+}
+
+
+/*
+==================
 RB_RenderFlare
 ==================
 */
@@ -457,6 +506,7 @@ static void RB_RenderFlare( flare_t *f ) {
 	RB_AddQuadStamp2( f->windowX - size, f->windowY - size, size * 2, size * 2, 0, 0, 1, 1, c );
 
 	RB_EndSurface();
+	RB_AddLensFlareSprites( f, size, color, fogFactors );
 }
 
 

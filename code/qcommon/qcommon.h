@@ -1248,6 +1248,10 @@ void CL_CharEvent( int key );
 // char events are for field typing, not game control
 
 void CL_MouseEvent( int dx, int dy /*, int time*/ );
+void CL_MouseAbsoluteEvent( int x, int y );
+// Host-window coordinates stay raw for retail UI/cgame/browser consumers.
+// Console producers supply framebuffer pixels, converting logical coordinates
+// where the platform requires it.
 
 void CL_JoystickEvent( int axis, int value, int time );
 
@@ -1352,7 +1356,7 @@ typedef enum {
 	SE_KEY,		// evValue is a key code, evValue2 is the down flag
 	SE_CHAR,	// evValue is an ascii char
 	SE_MOUSE,	// evValue and evValue2 are relative signed x / y moves
-	SE_MOUSE_ABSOLUTE,	// evValue and evValue2 are absolute window x / y coordinates
+	SE_MOUSE_ABSOLUTE,	// raw host-window x/y for retail consumers; framebuffer x/y for the console
 	SE_JOYSTICK_AXIS,	// evValue is an axis number and evValue2 is the current state (-127 to 127)
 	SE_CONSOLE,	// evPtr is a char*
 	SE_MAX,

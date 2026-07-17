@@ -29,10 +29,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #	include <SDL3/SDL_vulkan.h>
 #endif
 #include <climits>
-#include <limits>
-#include <vector>
 
 #include "../client/client.h"
+#include "../platform/window_placement.hpp"
 #ifdef _WIN32
 #	include "../win32/win_raii.h"
 #endif
@@ -308,6 +307,13 @@ void GLW_UpdateWindowState( void )
 			glw_state.window_height = h;
 		}
 
+		if ( !SDL_GetWindowSizeInPixels( SDL_window, &w, &h ) ) {
+			Com_DPrintf( "SDL_GetWindowSizeInPixels failed: %s\n", SDL_GetError() );
+		} else {
+			glw_state.pixel_width = w;
+			glw_state.pixel_height = h;
+		}
+
 		display = SDL_GetDisplayForWindow( SDL_window );
 		if ( !display ) {
 			Com_DPrintf( "SDL_GetDisplayForWindow() failed: %s\n", SDL_GetError() );
@@ -360,81 +366,79 @@ static qboolean GLW_EnterFullscreen( SDL_Window *window, const SDL_DisplayMode *
 }
 
 
-static SDL_DisplayID FindNearestDisplay( int *x, int *y, int w, int h )
+static SDL_DisplayID GLW_ConstrainWindowPosition( SDL_Window *window,
+	int *x, int *y, int w, int h )
 {
-	const int cx = *x + w / 2;
-	const int cy = *y + h / 2;
-	int i, index, numDisplays;
-	SDL_Rect *m;
-	SDL_DisplayID display = 0;
+	SDL_Rect requested = { *x, *y, w, h };
+	SDL_Rect usable;
+	SDL_DisplayID display;
+	fnql::window::Insets decorations{};
+	fnql::window::Position constrained;
 
-	index = -1; // selected display index
-
-	fnql::sdl::ScopedSdlMemory<SDL_DisplayID> displays( SDL_GetDisplays( &numDisplays ) );
-	if ( !displays || numDisplays <= 0 ) {
+	display = SDL_GetDisplayForRect( &requested );
+	if ( !display ) {
+		display = SDL_GetPrimaryDisplay();
+	}
+	if ( !display ) {
 		return 0;
 	}
 
-	glw_state.monitorCount = numDisplays;
-
-	std::vector<SDL_Rect> bounds( static_cast<std::size_t>( numDisplays ) );
-
-	for ( i = 0; i < numDisplays; i++ )
-	{
-		if ( !SDL_GetDisplayBounds( displays.get()[i], &bounds[ static_cast<std::size_t>( i ) ] ) ) {
-			SDL_Rect &rect = bounds[ static_cast<std::size_t>( i ) ];
-			rect.x = 0;
-			rect.y = 0;
-			rect.w = 0;
-			rect.h = 0;
-		}
-		//Com_Printf( "[%i]: x=%i, y=%i, w=%i, h=%i\n", i, list[i].x, list[i].y, list[i].w, list[i].h );
+	if ( !SDL_GetDisplayUsableBounds( display, &usable ) &&
+		!SDL_GetDisplayBounds( display, &usable ) ) {
+		Com_DPrintf( "SDL display bounds query failed: %s\n", SDL_GetError() );
+		return display;
 	}
 
-	// select display by window center intersection
-	for ( i = 0; i < numDisplays; i++ )
-	{
-		m = &bounds[ static_cast<std::size_t>( i ) ];
-		if ( cx >= m->x && cx < (m->x + m->w) && cy >= m->y && cy < (m->y + m->h) )
-		{
-			index = i;
-			break;
-		}
+	if ( window ) {
+		SDL_GetWindowBordersSize( window, &decorations.top, &decorations.left,
+			&decorations.bottom, &decorations.right );
 	}
 
-	// select display by nearest distance between window center and display center
-	if ( index == -1 )
-	{
-		unsigned long nearest, dist;
-		int dx, dy;
-		nearest = (std::numeric_limits<unsigned long>::max)();
-		for ( i = 0; i < numDisplays; i++ )
-		{
-			m = &bounds[ static_cast<std::size_t>( i ) ];
-			dx = (m->x + m->w/2) - cx;
-			dy = (m->y + m->h/2) - cy;
-			dist = ( dx * dx ) + ( dy * dy );
-			if ( dist < nearest )
-			{
-				nearest = dist;
-				index = i;
-			}
-		}
-	}
-
-	// adjust x and y coordinates if needed
-	if ( index >= 0 )
-	{
-		m = &bounds[ static_cast<std::size_t>( index ) ];
-		display = displays.get()[index];
-		if ( *x < m->x )
-			*x = m->x;
-
-		if ( *y < m->y )
-			*y = m->y;
-	}
+	constrained = fnql::window::ConstrainClientOrigin(
+		{ *x, *y }, w, h,
+		{ usable.x, usable.y, usable.w, usable.h }, decorations );
+	*x = constrained.x;
+	*y = constrained.y;
 
 	return display;
+}
+
+
+void GLW_EnsureWindowOnScreen( void )
+{
+	SDL_WindowFlags flags;
+	int x, y, w, h;
+	int constrainedX, constrainedY;
+
+	if ( !SDL_window ) {
+		return;
+	}
+
+	flags = SDL_GetWindowFlags( SDL_window );
+	if ( flags & ( SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MAXIMIZED | SDL_WINDOW_MINIMIZED ) ) {
+		return;
+	}
+
+	if ( !SDL_GetWindowPosition( SDL_window, &x, &y ) ||
+		!SDL_GetWindowSize( SDL_window, &w, &h ) ) {
+		Com_DPrintf( "SDL window geometry query failed: %s\n", SDL_GetError() );
+		return;
+	}
+
+	constrainedX = x;
+	constrainedY = y;
+	GLW_ConstrainWindowPosition( SDL_window, &constrainedX, &constrainedY, w, h );
+	if ( constrainedX == x && constrainedY == y ) {
+		return;
+	}
+
+	if ( !SDL_SetWindowPosition( SDL_window, constrainedX, constrainedY ) ) {
+		Com_DPrintf( "SDL_SetWindowPosition failed while recovering window: %s\n", SDL_GetError() );
+		return;
+	}
+	GLW_SyncWindow( "window placement recovery" );
+	Cvar_SetIntegerValue( "vid_xpos", constrainedX );
+	Cvar_SetIntegerValue( "vid_ypos", constrainedY );
 }
 
 
@@ -644,19 +648,36 @@ static qboolean GLW_ReuseExistingWindow( glconfig_t *config, SDL_DisplayID displ
 	else
 	{
 		int x, y;
+		const qboolean retainOsGeometry = CL_IsWindowResizeRestart();
 
 		if ( !SDL_SetWindowFullscreen( SDL_window, false ) ) {
 			Com_DPrintf( "SDL_SetWindowFullscreen failed: %s\n", SDL_GetError() );
 			return qfalse;
 		}
 
-		SDL_SetWindowBordered( SDL_window, r_noborder->integer ? false : true );
-		SDL_SetWindowSize( SDL_window, config->vidWidth, config->vidHeight );
+		if ( !SDL_SetWindowBordered( SDL_window, r_noborder->integer ? false : true ) ) {
+			Com_DPrintf( "SDL_SetWindowBordered failed: %s\n", SDL_GetError() );
+		}
+		if ( !SDL_SetWindowResizable( SDL_window, true ) ) {
+			Com_DPrintf( "SDL_SetWindowResizable failed: %s\n", SDL_GetError() );
+		}
 
-		x = vid_xpos->integer;
-		y = vid_ypos->integer;
-		FindNearestDisplay( &x, &y, config->vidWidth, config->vidHeight );
-		SDL_SetWindowPosition( SDL_window, x, y );
+		if ( !retainOsGeometry ) {
+			if ( !SDL_SetWindowSize( SDL_window, config->vidWidth, config->vidHeight ) ) {
+				Com_DPrintf( "SDL_SetWindowSize failed: %s\n", SDL_GetError() );
+			}
+
+			// Let decoration changes settle before using their real insets to
+			// constrain the requested client-area origin.
+			GLW_SyncWindow( "windowed style transition" );
+			x = vid_xpos->integer;
+			y = vid_ypos->integer;
+			GLW_ConstrainWindowPosition( SDL_window, &x, &y,
+				config->vidWidth, config->vidHeight );
+			if ( !SDL_SetWindowPosition( SDL_window, x, y ) ) {
+				Com_DPrintf( "SDL_SetWindowPosition failed: %s\n", SDL_GetError() );
+			}
+		}
 
 		GLW_SyncWindow( "windowed transition" );
 		GLW_UpdateWindowState();
@@ -732,7 +753,7 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, q
 
 		// find out to which display our window belongs to
 		// according to previously stored \vid_xpos and \vid_ypos coordinates
-		display = FindNearestDisplay( &x, &y, 640, 480 );
+		display = GLW_ConstrainWindowPosition( NULL, &x, &y, 640, 480 );
 
 		//Com_Printf("Selected display: %i\n", display );
 	}
@@ -822,16 +843,18 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, q
 		gw_active = qfalse;
 		gw_minimized = qtrue;
 
-		if ( fullscreen )
-		{
-			flags |= SDL_WINDOW_HIDDEN;
-		}
-		else if ( r_noborder->integer )
+		if ( !fullscreen && r_noborder->integer )
 		{
 			flags |= SDL_WINDOW_BORDERLESS;
 		}
 
-		flags |= SDL_WINDOW_HIGH_PIXEL_DENSITY;
+		// Create at the requested size before enabling resize constraints, and
+		// keep the first placement invisible until decoration-aware recovery.
+		flags |= SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+		if ( !fullscreen ) {
+			GLW_ConstrainWindowPosition( NULL, &x, &y,
+				config->vidWidth, config->vidHeight );
+		}
 	}
 
 	for ( i = 0; i < 16 && !reusedWindow; i++ )
@@ -944,6 +967,13 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, q
 			continue;
 		}
 
+		if ( !SDL_SetWindowResizable( SDL_window, true ) ) {
+			Com_DPrintf( "SDL_SetWindowResizable failed: %s\n", SDL_GetError() );
+		}
+		if ( !SDL_SetWindowMinimumSize( SDL_window, 320, 240 ) ) {
+			Com_DPrintf( "SDL_SetWindowMinimumSize failed: %s\n", SDL_GetError() );
+		}
+
 		if ( fullscreen )
 		{
 			if ( !GLW_ApplyFullscreen( config, display, testColorBits ) ) {
@@ -953,7 +983,13 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, q
 		}
 		else
 		{
-			GLW_SyncWindow( "window creation" );
+			GLW_SyncWindow( "resizable window creation" );
+			GLW_ConstrainWindowPosition( SDL_window, &x, &y,
+				config->vidWidth, config->vidHeight );
+			if ( !SDL_SetWindowPosition( SDL_window, x, y ) ) {
+				Com_DPrintf( "SDL_SetWindowPosition failed: %s\n", SDL_GetError() );
+			}
+			GLW_SyncWindow( "window creation placement" );
 			GLW_UpdateWindowState();
 		}
 
@@ -1011,6 +1047,12 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, q
 			Com_DPrintf( "SDL_RaiseWindow failed: %s\n", SDL_GetError() );
 		}
 		GLW_SyncWindow( "window show" );
+	}
+
+	if ( !fullscreen ) {
+		// X11 decoration extents may not exist until the compositor has shown
+		// the window, so perform one final placement pass after presentation.
+		GLW_EnsureWindowOnScreen();
 	}
 
 	GLW_UpdateWindowState();

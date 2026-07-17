@@ -22,9 +22,12 @@ Every change should protect these project constraints:
    implementation, including narrow fixes. Prefer resilient error handling,
    explicit fallback behavior, and platform-conscious paths over assumptions
    that only hold on the current development machine.
-7. The target engine should load retail Quake Live, should not allow joining
-   retail Quake Live servers, and should allow retail Quake Live clients to
-   join FnQL-hosted servers while Steamworks integration is stubbed out.
+7. The target engine should load retail Quake Live and interoperate in both
+   directions: FnQL clients should join retail-operated protocol-91 servers,
+   and retail Quake Live clients should join FnQL-hosted servers. Use the
+   legitimate Steam session-ticket path when available. Without Steam, retain
+   the retail-shaped fallback and report the remote server's authorization
+   decision honestly; never synthesize authentication success.
 8. Changes must not regress existing behavior in any aspect. Preserve working
    compatibility, features, performance, determinism, diagnostics, build
    configurations, release behavior, and supported-platform paths. If retail

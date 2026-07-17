@@ -351,13 +351,32 @@ static FONSglyph *QL_FindCachedHostGlyph( FONSfont *font,
 
 static FONSglyph *QL_GetHostGlyph( FONSfont *requestedFont,
 	unsigned int codepoint, short isize, short iblur ) {
-	FONSfont *fonts[QL_HOST_FALLBACK_COUNT + 1];
+	FONSfont *fonts[QL_HOST_FALLBACK_COUNT];
+	FONSglyph *cachedGlyphs[QL_HOST_FALLBACK_COUNT] = { NULL };
+	unsigned char cached[QL_HOST_FALLBACK_COUNT] = { 0 };
+	unsigned char supported[QL_HOST_FALLBACK_COUNT] = { 0 };
 	FONSfont *selectedFont;
 	int count = 0;
+	int selectedIndex;
 	int i;
 
 	if ( !requestedFont || !qlHostFonts.stash ) return NULL;
-	fonts[count++] = requestedFont;
+
+	/*
+	 * Observed retail order is requested cache, requested cmap, all fallback
+	 * caches, then fallback cmaps. In particular, a cached fallback must not
+	 * override a glyph that the requested face can rasterize.
+	 */
+	{
+		FONSglyph *glyph = QL_FindCachedHostGlyph( requestedFont, codepoint,
+			isize, iblur );
+		if ( glyph ) return glyph;
+	}
+	if ( fons__tt_getGlyphIndex( &requestedFont->font, codepoint ) != 0 ) {
+		return fons__getGlyph( qlHostFonts.stash, requestedFont, codepoint,
+			isize, iblur );
+	}
+
 	for ( i = 0; i < QL_HOST_FALLBACK_COUNT; ++i ) {
 		const int faceId = qlHostFonts.fallbackIds[i];
 		FONSfont *font;
@@ -365,22 +384,30 @@ static FONSglyph *QL_GetHostGlyph( FONSfont *requestedFont,
 		qboolean duplicate = qfalse;
 		if ( faceId < 0 || faceId >= qlHostFonts.stash->nfonts ) continue;
 		font = qlHostFonts.stash->fonts[faceId];
+		if ( font == requestedFont ) continue;
 		for ( j = 0; j < count; ++j ) {
 			if ( fonts[j] == font ) duplicate = qtrue;
 		}
 		if ( !duplicate ) fonts[count++] = font;
 	}
-	/* Retail searches all four caches before probing the cmap and rasterizing. */
 	for ( i = 0; i < count; ++i ) {
-		FONSglyph *glyph = QL_FindCachedHostGlyph( fonts[i], codepoint, isize, iblur );
-		if ( glyph ) return glyph;
+		cachedGlyphs[i] = QL_FindCachedHostGlyph( fonts[i], codepoint,
+			isize, iblur );
+		cached[i] = cachedGlyphs[i] != NULL;
 	}
-	selectedFont = requestedFont;
+	selectedIndex = QL_FontSelectFallbackFace( count, cached, supported );
+	if ( selectedIndex >= 0 ) {
+		return cachedGlyphs[selectedIndex];
+	}
 	for ( i = 0; i < count; ++i ) {
-		if ( fons__tt_getGlyphIndex( &fonts[i]->font, codepoint ) != 0 ) {
-			selectedFont = fonts[i];
-			break;
-		}
+		supported[i] = fons__tt_getGlyphIndex( &fonts[i]->font, codepoint ) != 0;
+	}
+	selectedIndex = QL_FontSelectFallbackFace( count, cached, supported );
+	if ( selectedIndex < 0 ) {
+		/* Preserve FontStash's requested-face missing-glyph behavior. */
+		selectedFont = requestedFont;
+	} else {
+		selectedFont = fonts[selectedIndex];
 	}
 	return fons__getGlyph( qlHostFonts.stash, selectedFont, codepoint, isize, iblur );
 }

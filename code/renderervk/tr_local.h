@@ -51,6 +51,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/qfiles.h"
 #include "../qcommon/qcommon.h"
 #include "../renderercommon/tr_public.h"
+#include "../renderercommon/tr_global_fog.h"
+#include "../renderercommon/tr_liquid.h"
 #include "tr_common.h"
 #include "iqm.h"
 
@@ -610,6 +612,9 @@ typedef struct {
 
 	unsigned int num_dlights;
 	struct dlight_s	*dlights;
+
+	int			numLiquidInteractions;
+	liquidInteraction_t liquidInteractions[LIQUID_MAX_ACTIVE_IMPULSES];
 
 	int			numPolys;
 	struct srfPoly_s	*polys;
@@ -1621,6 +1626,7 @@ typedef struct {
 
 	int			numfogs;
 	fog_t		*fogs;
+	globalFog_t	globalFog;
 
 	vec3_t		lightGridOrigin;
 	vec3_t		lightGridSize;
@@ -1859,6 +1865,7 @@ typedef struct {
 	qboolean	projection2D;	// if qtrue, drawstretchpic doesn't need to change modes
 	color4ub_t	color2D;
 	qboolean	doneSurfaces;   // done any 3d surfaces already
+	qboolean	liquidScreenMapDone; // stable pre-fog snapshot is ready for liquid refraction
 	qboolean	bloomProtectHighlights; // preserve dark cel/player-highlight edges during bloom composite
 	trRefEntity_t	entity2D;	// currentEntity will point at this when doing 2D rendering
 
@@ -1872,6 +1879,17 @@ typedef struct {
 	qboolean screenShotTGAsilent;
 	qboolean screenShotJPGsilent;
 	qboolean screenShotBMPsilent;
+	int		screenshotCubeFormat;
+	qboolean screenshotCubeSilent;
+	qboolean screenshotCubeActive;
+	qboolean screenshotCubeFrontPending;
+	qboolean screenshotCubeFailed;
+	int		screenshotCubeFrontX;
+	int		screenshotCubeFrontY;
+	int		screenshotCubeFrontSize;
+	char	screenshotCubeNames[6][ MAX_OSPATH ];
+	vec3_t	screenshotCubeVieworg[6];
+	vec3_t	screenshotCubeViewaxis[6][3];
 	videoFrameCommand_t	vcmd;	// avi capture
 	
 	qboolean throttle;
@@ -1880,6 +1898,7 @@ typedef struct {
 
 	qboolean screenMapDone;
 	qboolean doneBloom;
+	qboolean doneMotionBlur;
 
 } backEndState_t;
 
@@ -1907,6 +1926,8 @@ typedef struct {
 #endif
 
 	int						frameSceneNum;	// zeroed at RE_BeginFrame
+	int						cubemapDrawSurfLimit;
+	qboolean				cubemapDrawSurfLimitHit;
 
 	qboolean				worldMapLoaded;
 	world_t					*world;
@@ -1933,6 +1954,7 @@ typedef struct {
 	shader_t				*enemyOutlineShader;
 
 	shader_t				*flareShader;
+	shader_t				*lensFlareShader;
 	shader_t				*sunShader;
 
 	int						numLightmaps;
@@ -2062,6 +2084,8 @@ extern cvar_t	*r_neatsky;				// nomip and nopicmip for skyboxes, cnq3 like look
 extern cvar_t	*r_drawSun;				// controls drawing of sun quad
 extern cvar_t	*r_dynamiclight;		// dynamic lights enabled/disabled
 extern cvar_t	*r_depthFade;			// soft-particle depth fade enabled/disabled
+extern cvar_t	*r_globalFog;			// opt-in per-map screen-space global fog
+extern cvar_t	*r_globalFogStrength;	// global fog opacity multiplier
 extern cvar_t	*r_celShading;			// cel shading enabled/disabled on model entities
 extern cvar_t	*r_celShadingWorld;		// cel edge outlines enabled/disabled on BSP world geometry
 extern cvar_t	*r_celShadingWorldWidth;		// screen-space world cel outline radius in pixels
@@ -2158,6 +2182,14 @@ extern cvar_t	*r_bloom_intensity;
 extern cvar_t	*r_bloom_threshold_mode;
 extern cvar_t	*r_bloom_modulate;
 extern cvar_t	*r_bloom_soft_knee;
+extern cvar_t	*r_motionBlur;
+extern cvar_t	*r_motionBlurStrength;
+extern cvar_t	*r_liquid;
+extern cvar_t	*r_liquidResolution;
+extern cvar_t	*r_liquidRefraction;
+extern cvar_t	*r_liquidWarpScale;
+extern cvar_t	*r_liquidReflection;
+extern cvar_t	*r_liquidRipples;
 extern cvar_t	*r_crt;
 extern cvar_t	*r_crtAmount;
 extern cvar_t	*r_crtScanlineStrength;
@@ -2386,6 +2418,7 @@ shader_t	*R_FindShader( const char *name, int lightmapIndex, qboolean mipRawImag
 shader_t	*R_GetShaderByHandle( qhandle_t hShader );
 shader_t	*R_GetShaderByState( int index, long *cycleTime );
 shader_t	*R_FindShaderByName( const char *name );
+qboolean	R_LiquidShaderSupported( const shader_t *shader );
 void		R_InitShaders( void );
 void		R_ShaderList_f( void );
 void		RE_RemapShader(const char *oldShader, const char *newShader, const char *timeOffset);
@@ -2438,6 +2471,8 @@ typedef struct shaderCommands_s
 #endif
 
 	shader_t	*shader;
+	int			liquidContentFlags;	// original and remapped shader contents
+	float		liquidSort;			// original shader sort used for safe snapshot ordering
 	double		shaderTime;	// -EC- set to double for frameloss fix
 	int			fogNum;
 #ifdef USE_LEGACY_DLIGHTS
@@ -2622,6 +2657,7 @@ void RE_AddLightToScene( const vec3_t org, float intensity, float r, float g, fl
 void RE_AddAdditiveLightToScene( const vec3_t org, float intensity, float r, float g, float b );
 void RE_AddLinearLightToScene( const vec3_t start, const vec3_t end, float intensity, float r, float g, float b );
 void AdvertisementBridge_UpdateLoadingViewParameters( void );
+void RE_AddLiquidInteractionToScene( const liquidInteraction_t *interaction );
 #ifdef USE_PMLIGHT
 void R_DlightTest_f( void );
 #endif
@@ -2767,6 +2803,16 @@ typedef struct drawSurfsCommand_s {
 	int		numDrawSurfs;
 } drawSurfsCommand_t;
 
+typedef struct {
+	int		commandId;
+	int		x, y;
+	int		width, height;
+	int		format;
+	qboolean	silent;
+	int		cubemapFace;
+	char	fileName[MAX_OSPATH];
+} screenshotCommand_t;
+
 typedef struct
 {
 	int commandId;
@@ -2789,6 +2835,7 @@ typedef enum {
 	RC_SET_COLOR,
 	RC_STRETCH_PIC,
 	RC_DRAW_SURFS,
+	RC_SCREENSHOT,
 	RC_DRAW_BUFFER,
 	RC_SWAP_BUFFERS,
 	RC_FINISHBLOOM,
@@ -2825,6 +2872,7 @@ extern	int		max_polys;
 extern	int		max_polyverts;
 
 extern	backEndData_t	*backEndData;
+extern	qboolean rb_allowScreenshotWatermark;
 
 void RB_ExecuteRenderCommands( const void *data );
 void RB_TakeScreenshotPNG( int x, int y, int width, int height, const char *fileName );
@@ -2832,8 +2880,12 @@ void RB_TakeScreenshot( int x, int y, int width, int height, const char *fileNam
 void RB_TakeScreenshotJPEG( int x, int y, int width, int height, const char *fileName );
 void RB_TakeScreenshotBMP( int x, int y, int width, int height, const char *fileName, int clipboard );
 void RB_TakeLevelShot( void );
+void RB_SaveCubemapScreenshot( byte *rgb, int width, int height, int format,
+	const char *fileName, const vec3_t vieworg, vec3_t viewaxis[3] );
 
 void R_AddDrawSurfCmd( drawSurf_t *drawSurfs, int numDrawSurfs );
+qboolean R_AddScreenshotCmd( int x, int y, int width, int height, int format,
+	const char *fileName, qboolean silent, int cubemapFace );
 
 void RE_SetColor( const float *rgba );
 void RE_StretchPic ( float x, float y, float w, float h, 

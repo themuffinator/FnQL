@@ -32,6 +32,7 @@ extern "C" {
 
 #include <algorithm>
 #include <array>
+#include <climits>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -87,6 +88,426 @@ struct clEnemyHighlightPending_t {
 
 static std::array<clEnemyHighlightPending_t, kEnemyHighlightMaxPending> cl_enemyHighlightPending;
 static int cl_enemyHighlightNumPending;
+
+constexpr int kLiquidMaxEmissionsPerTime = 8;
+constexpr int kLiquidMaxSampleGapMsec = 500;
+constexpr int kLiquidPlayerWakeIntervalMsec = 140;
+constexpr int kLiquidProjectileWakeIntervalMsec = 90;
+constexpr float kLiquidPlayerMaxTrackedSpeed = 2400.0f;
+constexpr float kLiquidProjectileMaxTrackedSpeed = 6000.0f;
+constexpr float kLiquidPlayerWakeDistance = 8.0f;
+constexpr float kLiquidProjectileWakeDistance = 5.0f;
+constexpr float kLiquidPlayerWakeSurfaceRange = 64.0f;
+constexpr float kLiquidProjectileWakeSurfaceRange = 32.0f;
+
+struct clLiquidEntityKind_t {
+	qboolean valid;
+	liquidInteractionSource_t source;
+	int eFlags;
+};
+
+struct clLiquidMotionTrack_t {
+	qboolean valid;
+	liquidInteractionSource_t source;
+	vec3_t origin;
+	int contents;
+	int time;
+	int eFlags;
+	vec3_t wakeOrigin;
+	int wakeTime;
+};
+
+static std::array<clLiquidEntityKind_t, MAX_GENTITIES> cl_liquidEntityKinds;
+static std::array<clLiquidMotionTrack_t, MAX_GENTITIES> cl_liquidEntityTracks;
+static clLiquidMotionTrack_t cl_liquidViewTrack;
+static int cl_liquidKindSnapshot = -1;
+static int cl_liquidServerCount = -1;
+static int cl_liquidLocalPlayerSampleTime = INT_MIN;
+static int cl_liquidEmissionTime = INT_MIN;
+static int cl_liquidEmissionCount;
+static int cl_liquidFeedCheckFrame = INT_MIN;
+static qboolean cl_liquidFeedEnabled;
+static qboolean cl_liquidFeedWasEnabled;
+
+
+static qboolean CL_CaptureHidesHud( void ) {
+	return ( cl_captureActive && cl_captureActive->integer &&
+		r_levelshotHideHud && r_levelshotHideHud->integer ) ? qtrue : qfalse;
+}
+
+
+static qboolean CL_LiquidOriginValid( const vec3_t origin ) {
+	return ( origin && std::isfinite( origin[0] ) && std::isfinite( origin[1] ) &&
+		std::isfinite( origin[2] ) ) ? qtrue : qfalse;
+}
+
+
+static int CL_LiquidContents( const vec3_t origin ) {
+	return CM_PointContents( origin, 0 ) & MASK_WATER;
+}
+
+
+static void CL_ResetLiquidMotionTracks( void ) {
+	cl_liquidEntityTracks.fill( clLiquidMotionTrack_t{} );
+	cl_liquidViewTrack = clLiquidMotionTrack_t{};
+	cl_liquidLocalPlayerSampleTime = INT_MIN;
+	cl_liquidEmissionTime = INT_MIN;
+	cl_liquidEmissionCount = 0;
+}
+
+
+static void CL_ClearLiquidInteractionState( void ) {
+	cl_liquidEntityKinds.fill( clLiquidEntityKind_t{} );
+	CL_ResetLiquidMotionTracks();
+	cl_liquidKindSnapshot = -1;
+	cl_liquidServerCount = -1;
+	cl_liquidFeedCheckFrame = INT_MIN;
+	cl_liquidFeedEnabled = qfalse;
+	cl_liquidFeedWasEnabled = qfalse;
+}
+
+
+static qboolean CL_LiquidInteractionFeedEnabled( void ) {
+	qboolean enabled;
+
+	// This is reached once per sound-position submission, which can be hundreds
+	// of calls per rendered frame. Avoid repeating a named cvar lookup for every
+	// entity while still noticing changes on the next rendered frame.
+	if ( cl_liquidFeedCheckFrame != cls.framecount ) {
+		cl_liquidFeedCheckFrame = cls.framecount;
+		cl_liquidFeedEnabled = ( re.AddLiquidInteractionToScene &&
+			Cvar_VariableIntegerValue( "r_liquid" ) > 0 &&
+			Cvar_VariableValue( "r_liquidRipples" ) > 0.0f ) ? qtrue : qfalse;
+	}
+	enabled = cl_liquidFeedEnabled;
+
+	if ( enabled != cl_liquidFeedWasEnabled ) {
+		CL_ResetLiquidMotionTracks();
+		cl_liquidFeedWasEnabled = enabled;
+	}
+
+	return enabled;
+}
+
+
+static void CL_RebuildLiquidEntityKinds( void ) {
+	int serverCount;
+	int i;
+
+	if ( !cl.snap.valid ) {
+		cl_liquidEntityKinds.fill( clLiquidEntityKind_t{} );
+		CL_ResetLiquidMotionTracks();
+		cl_liquidKindSnapshot = -1;
+		cl_liquidServerCount = -1;
+		return;
+	}
+
+	if ( cl_liquidKindSnapshot == cl.snap.messageNum ) {
+		return;
+	}
+
+	serverCount = cl.snap.snapFlags & SNAPFLAG_SERVERCOUNT;
+	if ( ( cl_liquidServerCount != -1 && serverCount != cl_liquidServerCount ) ||
+		( cl_liquidKindSnapshot != -1 && cl.snap.messageNum < cl_liquidKindSnapshot ) ) {
+		CL_ResetLiquidMotionTracks();
+	}
+
+	cl_liquidServerCount = serverCount;
+	cl_liquidKindSnapshot = cl.snap.messageNum;
+	cl_liquidEntityKinds.fill( clLiquidEntityKind_t{} );
+
+	if ( cl.snap.ps.clientNum >= 0 && cl.snap.ps.clientNum < MAX_GENTITIES ) {
+		clLiquidEntityKind_t &kind = cl_liquidEntityKinds[cl.snap.ps.clientNum];
+		kind.valid = qtrue;
+		kind.source = LIQUID_INTERACTION_PLAYER;
+		kind.eFlags = cl.snap.ps.eFlags;
+	}
+
+	for ( i = 0; i < cl.snap.numEntities; i++ ) {
+		const entityState_t *state = &cl.parseEntities[
+			( cl.snap.parseEntitiesNum + i ) & ( MAX_PARSE_ENTITIES - 1 ) ];
+		clLiquidEntityKind_t *kind;
+
+		if ( state->number < 0 || state->number >= MAX_GENTITIES ) {
+			continue;
+		}
+		if ( state->eType != ET_PLAYER && state->eType != ET_MISSILE ) {
+			continue;
+		}
+
+		kind = &cl_liquidEntityKinds[state->number];
+		kind->valid = qtrue;
+		kind->source = state->eType == ET_PLAYER ?
+			LIQUID_INTERACTION_PLAYER : LIQUID_INTERACTION_PROJECTILE;
+		kind->eFlags = state->eFlags;
+	}
+
+	for ( i = 0; i < MAX_GENTITIES; i++ ) {
+		if ( !cl_liquidEntityKinds[i].valid ) {
+			cl_liquidEntityTracks[i].valid = qfalse;
+		}
+	}
+}
+
+
+static qboolean CL_TraceLiquidHit( const vec3_t start, const vec3_t end, vec3_t hit ) {
+	trace_t trace;
+
+	Com_Memset( &trace, 0, sizeof( trace ) );
+	CM_BoxTrace( &trace, start, end, nullptr, nullptr, 0, MASK_WATER, qfalse );
+	if ( trace.startsolid || trace.allsolid || trace.fraction < 0.0f || trace.fraction >= 1.0f ||
+		!( trace.contents & MASK_WATER ) || !CL_LiquidOriginValid( trace.endpos ) ) {
+		return qfalse;
+	}
+
+	VectorCopy( trace.endpos, hit );
+	return qtrue;
+}
+
+
+static qboolean CL_FindLiquidBoundary( const vec3_t outside, const vec3_t inside, vec3_t boundary ) {
+	vec3_t dry;
+	vec3_t wet;
+	vec3_t midpoint;
+	int i;
+
+	if ( CL_LiquidContents( outside ) || !CL_LiquidContents( inside ) ) {
+		return qfalse;
+	}
+	if ( CL_TraceLiquidHit( outside, inside, boundary ) ) {
+		return qtrue;
+	}
+
+	VectorCopy( outside, dry );
+	VectorCopy( inside, wet );
+	for ( i = 0; i < 8; i++ ) {
+		VectorAdd( dry, wet, midpoint );
+		VectorScale( midpoint, 0.5f, midpoint );
+		if ( CL_LiquidContents( midpoint ) ) {
+			VectorCopy( midpoint, wet );
+		} else {
+			VectorCopy( midpoint, dry );
+		}
+	}
+
+	VectorCopy( wet, boundary );
+	return qtrue;
+}
+
+
+static qboolean CL_FindLiquidSurfaceAbove( const vec3_t origin, float maxRise, vec3_t surface ) {
+	vec3_t outside;
+
+	if ( !CL_LiquidContents( origin ) ) {
+		return qfalse;
+	}
+
+	VectorCopy( origin, outside );
+	outside[2] += maxRise;
+	if ( CL_LiquidContents( outside ) ) {
+		return qfalse;
+	}
+
+	return CL_FindLiquidBoundary( outside, origin, surface );
+}
+
+
+static void CL_EmitLiquidInteraction( const vec3_t origin, float radius, float strength,
+	int time, liquidInteractionSource_t source ) {
+	liquidInteraction_t interaction{};
+
+	if ( !re.AddLiquidInteractionToScene || !CL_LiquidOriginValid( origin ) ) {
+		return;
+	}
+	if ( cl_liquidEmissionTime != time ) {
+		cl_liquidEmissionTime = time;
+		cl_liquidEmissionCount = 0;
+	}
+	if ( cl_liquidEmissionCount >= kLiquidMaxEmissionsPerTime ) {
+		return;
+	}
+
+	VectorCopy( origin, interaction.origin );
+	interaction.radius = std::clamp( radius, 4.0f, 96.0f );
+	interaction.strength = std::clamp( strength, 0.05f, 2.0f );
+	interaction.time = time;
+	interaction.source = source;
+	re.AddLiquidInteractionToScene( &interaction );
+	cl_liquidEmissionCount++;
+}
+
+
+static void CL_SeedLiquidMotionTrack( clLiquidMotionTrack_t *track,
+	liquidInteractionSource_t source, const vec3_t origin, int time, int eFlags ) {
+	track->valid = qtrue;
+	track->source = source;
+	VectorCopy( origin, track->origin );
+	track->contents = CL_LiquidContents( origin );
+	track->time = time;
+	track->eFlags = eFlags;
+	VectorCopy( origin, track->wakeOrigin );
+	track->wakeTime = time;
+}
+
+
+static void CL_UpdateLiquidMotionTrack( clLiquidMotionTrack_t *track,
+	liquidInteractionSource_t source, const vec3_t origin, int time, int eFlags ) {
+	vec3_t delta;
+	vec3_t boundary;
+	float distance;
+	float speed;
+	float speedScale;
+	float maxSpeed;
+	float crossingRadius;
+	float crossingStrength;
+	int newContents;
+	int64_t elapsed;
+	qboolean oldWet;
+	qboolean newWet;
+
+	if ( !track->valid || track->source != source || time < track->time ) {
+		CL_SeedLiquidMotionTrack( track, source, origin, time, eFlags );
+		return;
+	}
+	// Stereo and recursive screen updates can submit the same cgame frame more
+	// than once. Treat an equal-time sample as idempotent so it cannot reset the
+	// accumulated wake interval or manufacture zero-time motion.
+	if ( time == track->time ) {
+		return;
+	}
+
+	elapsed = (int64_t)time - (int64_t)track->time;
+	VectorSubtract( origin, track->origin, delta );
+	distance = VectorLength( delta );
+	speed = distance * 1000.0f / (float)elapsed;
+	maxSpeed = source == LIQUID_INTERACTION_PLAYER ?
+		kLiquidPlayerMaxTrackedSpeed : kLiquidProjectileMaxTrackedSpeed;
+
+	if ( elapsed > kLiquidMaxSampleGapMsec || !std::isfinite( speed ) || speed > maxSpeed ||
+		( ( track->eFlags ^ eFlags ) & EF_TELEPORT_BIT ) ) {
+		CL_SeedLiquidMotionTrack( track, source, origin, time, eFlags );
+		return;
+	}
+
+	newContents = CL_LiquidContents( origin );
+	oldWet = track->contents ? qtrue : qfalse;
+	newWet = newContents ? qtrue : qfalse;
+	speedScale = std::clamp( speed / ( source == LIQUID_INTERACTION_PLAYER ? 500.0f : 1400.0f ), 0.0f, 1.0f );
+	if ( source == LIQUID_INTERACTION_PLAYER ) {
+		crossingRadius = 36.0f + 20.0f * speedScale;
+		crossingStrength = 0.55f + 0.55f * speedScale;
+	} else {
+		crossingRadius = 16.0f + 16.0f * speedScale;
+		crossingStrength = 0.35f + 0.65f * speedScale;
+	}
+
+	if ( !oldWet && newWet ) {
+		if ( CL_FindLiquidBoundary( track->origin, origin, boundary ) ) {
+			CL_EmitLiquidInteraction( boundary, crossingRadius, crossingStrength, time, source );
+		}
+		VectorCopy( origin, track->wakeOrigin );
+		track->wakeTime = time;
+	} else if ( oldWet && !newWet ) {
+		if ( CL_FindLiquidBoundary( origin, track->origin, boundary ) ) {
+			CL_EmitLiquidInteraction( boundary, crossingRadius, crossingStrength, time, source );
+		}
+		VectorCopy( origin, track->wakeOrigin );
+		track->wakeTime = time;
+	} else if ( !oldWet && !newWet && source == LIQUID_INTERACTION_PROJECTILE && distance >= 8.0f ) {
+		vec3_t exitBoundary;
+		qboolean entered;
+		qboolean exited;
+
+		entered = CL_TraceLiquidHit( track->origin, origin, boundary );
+		exited = CL_TraceLiquidHit( origin, track->origin, exitBoundary );
+		if ( entered ) {
+			CL_EmitLiquidInteraction( boundary, crossingRadius, crossingStrength, time, source );
+		}
+		if ( exited && ( !entered || DistanceSquared( boundary, exitBoundary ) > 4.0f ) ) {
+			CL_EmitLiquidInteraction( exitBoundary, crossingRadius, crossingStrength, time, source );
+		}
+	} else if ( oldWet && newWet ) {
+		const int wakeInterval = source == LIQUID_INTERACTION_PLAYER ?
+			kLiquidPlayerWakeIntervalMsec : kLiquidProjectileWakeIntervalMsec;
+		const float wakeDistance = source == LIQUID_INTERACTION_PLAYER ?
+			kLiquidPlayerWakeDistance : kLiquidProjectileWakeDistance;
+		const float surfaceRange = source == LIQUID_INTERACTION_PLAYER ?
+			kLiquidPlayerWakeSurfaceRange : kLiquidProjectileWakeSurfaceRange;
+
+		if ( (int64_t)time - (int64_t)track->wakeTime >= wakeInterval &&
+			DistanceSquared( origin, track->wakeOrigin ) >= wakeDistance * wakeDistance ) {
+			if ( CL_FindLiquidSurfaceAbove( origin, surfaceRange, boundary ) ) {
+				const float wakeRadius = source == LIQUID_INTERACTION_PLAYER ?
+					20.0f + 12.0f * speedScale : 10.0f + 10.0f * speedScale;
+				const float wakeStrength = source == LIQUID_INTERACTION_PLAYER ?
+					0.18f + 0.37f * speedScale : 0.12f + 0.28f * speedScale;
+
+				CL_EmitLiquidInteraction( boundary, wakeRadius, wakeStrength, time, source );
+			}
+			VectorCopy( origin, track->wakeOrigin );
+			track->wakeTime = time;
+		}
+	} else {
+		VectorCopy( origin, track->wakeOrigin );
+		track->wakeTime = time;
+	}
+
+	VectorCopy( origin, track->origin );
+	track->contents = newContents;
+	track->time = time;
+	track->eFlags = eFlags;
+}
+
+
+static void CL_UpdateLiquidEntityPosition( int entityNum, const vec3_t origin ) {
+	const clLiquidEntityKind_t *kind;
+
+	if ( !CL_LiquidInteractionFeedEnabled() || !CL_LiquidOriginValid( origin ) ||
+		entityNum < 0 || entityNum >= MAX_GENTITIES ) {
+		return;
+	}
+
+	CL_RebuildLiquidEntityKinds();
+	kind = &cl_liquidEntityKinds[entityNum];
+	if ( !kind->valid ) {
+		cl_liquidEntityTracks[entityNum].valid = qfalse;
+		return;
+	}
+
+	CL_UpdateLiquidMotionTrack( &cl_liquidEntityTracks[entityNum], kind->source,
+		origin, cl.serverTime, kind->eFlags );
+	if ( kind->source == LIQUID_INTERACTION_PLAYER && entityNum == cl.snap.ps.clientNum ) {
+		cl_liquidLocalPlayerSampleTime = cl.serverTime;
+	}
+}
+
+
+static void CL_UpdateLocalViewLiquidInteraction( const refdef_t *refdef ) {
+	if ( !CL_LiquidInteractionFeedEnabled() ) {
+		cl_liquidViewTrack.valid = qfalse;
+		return;
+	}
+	// Cgame commonly submits a HUD/model scene after the world view. It must not
+	// erase the previous world-camera sample used by this fallback.
+	if ( !refdef || ( refdef->rdflags & RDF_NOWORLDMODEL ) ) {
+		return;
+	}
+	if ( ( refdef->rdflags & RDF_HYPERSPACE ) || !CL_LiquidOriginValid( refdef->vieworg ) ) {
+		cl_liquidViewTrack.valid = qfalse;
+		return;
+	}
+
+	if ( cl_liquidLocalPlayerSampleTime != INT_MIN &&
+		refdef->time >= cl_liquidLocalPlayerSampleTime &&
+		(int64_t)refdef->time - (int64_t)cl_liquidLocalPlayerSampleTime <= 100 ) {
+		CL_SeedLiquidMotionTrack( &cl_liquidViewTrack, LIQUID_INTERACTION_PLAYER,
+			refdef->vieworg, refdef->time, 0 );
+		return;
+	}
+
+	CL_UpdateLiquidMotionTrack( &cl_liquidViewTrack, LIQUID_INTERACTION_PLAYER,
+		refdef->vieworg, refdef->time, 0 );
+}
 
 //extern qboolean loadCamera(const char *name);
 //extern void startCamera(int time);
@@ -1017,6 +1438,7 @@ void CL_ShutdownCGame( void ) {
 	Key_SetCatcher( Key_GetCatcher( ) & ~KEYCATCH_CGAME );
 	cls.cgameStarted = qfalse;
 	CL_ClearEnemyHighlightState();
+	CL_ClearLiquidInteractionState();
 
 	if ( !cgvm ) {
 		return;
@@ -1255,9 +1677,13 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 	case CG_S_STOPLOOPINGSOUND:
 		S_StopLoopingSound( args[1] );
 		return 0;
-	case CG_S_UPDATEENTITYPOSITION:
-		S_UpdateEntityPosition( args[1], VMA(2) );
+	case CG_S_UPDATEENTITYPOSITION: {
+		const vec_t *origin = VMA(2);
+
+		S_UpdateEntityPosition( args[1], origin );
+		CL_UpdateLiquidEntityPosition( args[1], origin );
 		return 0;
+	}
 	case CG_S_RESPATIALIZE:
 		S_Respatialize( args[1], VMA(2), VMA(3), args[4] );
 		return 0;
@@ -1313,6 +1739,15 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		const refdef_t *refdef = VMA(1);
 		refdef_t adjustedRefdef;
 
+		/* Cgame uses separate RDF_NOWORLDMODEL scenes for 3D HUD models.  A
+		 * capture that hides the HUD must discard these without suppressing the
+		 * primary world scene or carrying deferred highlight entities forward. */
+		if ( refdef && CL_CaptureHidesHud() &&
+			( refdef->rdflags & RDF_NOWORLDMODEL ) ) {
+			cl_enemyHighlightNumPending = 0;
+			return 0;
+		}
+
 		if ( refdef && cl_captureActive && cl_captureActive->integer &&
 			r_levelshotHideViewWeapon && r_levelshotHideViewWeapon->integer ) {
 			adjustedRefdef = *refdef;
@@ -1321,6 +1756,7 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 			adjustedRefdef.rdflags |= RDF_NOFIRSTPERSON;
 		}
 
+		CL_UpdateLocalViewLiquidInteraction( refdef );
 		CL_FlushEnemyHighlightRefEntities( refdef );
 		re.RenderScene( refdef );
 		return 0;
@@ -1329,7 +1765,9 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		re.SetColor( VMA(1) );
 		return 0;
 	case CG_R_DRAWSTRETCHPIC:
-		re.DrawStretchPic( VMF(1), VMF(2), VMF(3), VMF(4), VMF(5), VMF(6), VMF(7), VMF(8), args[9] );
+		if ( !CL_CaptureHidesHud() ) {
+			re.DrawStretchPic( VMF(1), VMF(2), VMF(3), VMF(4), VMF(5), VMF(6), VMF(7), VMF(8), args[9] );
+		}
 		return 0;
 	case CG_R_MODELBOUNDS:
 		re.ModelBounds( args[1], VMA(2), VMA(3) );
@@ -1828,7 +2266,10 @@ static void QDECL QL_CG_trap_R_MirrorVector( vec3_t in, orientation_t *surface, 
 
 static void QDECL QL_CG_trap_DrawScaledText( int x, int y, const char *text, int fontHandle,
 		float scale, int limit, float *maxX, int forceColor ) {
-	RE_DrawScaledText( x, y, text, fontHandle, scale, limit, maxX, forceColor != qfalse ? qtrue : qfalse, ql_cgame_currentColor );
+	if ( !CL_CaptureHidesHud() ) {
+		RE_DrawScaledText( x, y, text, fontHandle, scale, limit, maxX,
+			forceColor != qfalse ? qtrue : qfalse, ql_cgame_currentColor );
+	}
 }
 
 static uint64_t QDECL QL_CG_trap_MeasureText( const char *text, const char *end, int fontHandle,
@@ -2206,6 +2647,7 @@ void CL_InitCGame( void ) {
 
 	Cbuf_NestedReset();
 	CL_ClearEnemyHighlightState();
+	CL_ClearLiquidInteractionState();
 
 	t1 = Sys_Milliseconds();
 

@@ -301,6 +301,7 @@ RB_SurfacePolychain
 static void RB_SurfacePolychain( const srfPoly_t *p ) {
 	int		i;
 	int		numv;
+	vec3_t	polyNormal;
 
 #ifdef USE_VBO
 	VBO_Flush();
@@ -314,8 +315,32 @@ static void RB_SurfacePolychain( const srfPoly_t *p ) {
 
 	// fan triangles into the tess array
 	numv = tess.numVertexes;
+#ifdef USE_TESS_NEEDS_NORMAL
+	if ( tess.needsNormal ) {
+#else
+	{
+#endif
+		vec3_t edge0, edge1;
+
+		VectorSet( polyNormal, 0.0f, 0.0f, 1.0f );
+		if ( p->numVerts >= 3 ) {
+			VectorSubtract( p->verts[1].xyz, p->verts[0].xyz, edge0 );
+			VectorSubtract( p->verts[2].xyz, p->verts[0].xyz, edge1 );
+			CrossProduct( edge0, edge1, polyNormal );
+			if ( VectorNormalize( polyNormal ) == 0.0f ) {
+				VectorSet( polyNormal, 0.0f, 0.0f, 1.0f );
+			}
+		}
+	}
 	for ( i = 0; i < p->numVerts; i++ ) {
 		VectorCopy( p->verts[i].xyz, tess.xyz[numv] );
+#ifdef USE_TESS_NEEDS_NORMAL
+		if ( tess.needsNormal ) {
+#else
+		{
+#endif
+			VectorCopy( polyNormal, tess.normal[numv] );
+		}
 		tess.texCoords[0][numv][0] = p->verts[i].st[0];
 		tess.texCoords[0][numv][1] = p->verts[i].st[1];
 		tess.vertexColors[numv] = p->verts[ i ].modulate;

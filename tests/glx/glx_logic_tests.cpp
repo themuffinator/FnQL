@@ -25,12 +25,15 @@ the Free Software Foundation; either version 2 of the License, or
 #include "glx_render_ir.h"
 #include "glx_static_world_logic.h"
 #include "glx_stream_logic.h"
+#include "tr_cubemap.h"
+#include "tr_lens_flare.h"
+#include "tr_liquid.h"
+#include "tr_motion_blur.h"
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <cmath>
-#include <limits>
 #include <limits>
 
 namespace glx {
@@ -105,6 +108,43 @@ bool Check( bool condition, const char *test, int line, const char *expression )
 }
 
 #define CHECK( expression ) do { if ( !Check( ( expression ), __func__, __LINE__, #expression ) ) return false; } while ( 0 )
+
+bool CubemapFaceAxesAreOrthonormalAndConsistent()
+{
+	const vec3_t baseAxis[3] = {
+		{ 1.0f, 0.0f, 0.0f },
+		{ 0.0f, 1.0f, 0.0f },
+		{ 0.0f, 0.0f, 1.0f }
+	};
+	const vec3_t expected[6][3] = {
+		{ {  1.0f,  0.0f,  0.0f }, {  0.0f,  1.0f, 0.0f }, {  0.0f, 0.0f, 1.0f } },
+		{ { -1.0f,  0.0f,  0.0f }, {  0.0f, -1.0f, 0.0f }, {  0.0f, 0.0f, 1.0f } },
+		{ {  0.0f,  1.0f,  0.0f }, { -1.0f,  0.0f, 0.0f }, {  0.0f, 0.0f, 1.0f } },
+		{ {  0.0f, -1.0f,  0.0f }, {  1.0f,  0.0f, 0.0f }, {  0.0f, 0.0f, 1.0f } },
+		{ {  0.0f,  0.0f,  1.0f }, {  0.0f,  1.0f, 0.0f }, { -1.0f, 0.0f, 0.0f } },
+		{ {  0.0f,  0.0f, -1.0f }, {  0.0f,  1.0f, 0.0f }, {  1.0f, 0.0f, 0.0f } }
+	};
+
+	for ( int face = 0; face < 6; face++ ) {
+		vec3_t axis[3];
+		vec3_t cross;
+
+		R_CubemapFaceAxis( baseAxis, face, axis );
+		for ( int basis = 0; basis < 3; basis++ ) {
+			for ( int component = 0; component < 3; component++ ) {
+				CHECK( axis[basis][component] == expected[face][basis][component] );
+			}
+			CHECK( std::fabs( DotProduct( axis[basis], axis[basis] ) - 1.0f ) < 0.00001f );
+		}
+		CHECK( std::fabs( DotProduct( axis[0], axis[1] ) ) < 0.00001f );
+		CHECK( std::fabs( DotProduct( axis[0], axis[2] ) ) < 0.00001f );
+		CHECK( std::fabs( DotProduct( axis[1], axis[2] ) ) < 0.00001f );
+		CrossProduct( axis[0], axis[1], cross );
+		CHECK( VectorCompare( cross, axis[2] ) );
+	}
+
+	return true;
+}
 
 bool NearlyEqual( float lhs, float rhs, float epsilon )
 {
@@ -3727,6 +3767,162 @@ bool GL46ExecutorPolicyIsHighEndAndRequiresModernDriverFeatures()
 	return true;
 }
 
+bool MotionBlurUsesCameraMotionAndRejectsViewDiscontinuities()
+{
+	motionBlurViewState_t state {};
+	const float origin[3] = { 0.0f, 0.0f, 0.0f };
+	const float cutOrigin[3] = { MOTION_BLUR_CUT_DISTANCE + 1.0f, 0.0f, 0.0f };
+	const float identity[3][3] = {
+		{ 1.0f, 0.0f, 0.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 1.0f }
+	};
+	float invalidOrigin[3] = { 0.0f, 0.0f, 0.0f };
+	float invalidAxis[3][3];
+	float yawed[3][3];
+	float radius[2];
+	float bounds[4];
+	int viewRect[4];
+	const float angle = 5.0f * 0.01745329251994329577f;
+	const float nan = std::numeric_limits<float>::quiet_NaN();
+
+	yawed[0][0] = std::cos( angle );
+	yawed[0][1] = std::sin( angle );
+	yawed[0][2] = 0.0f;
+	yawed[1][0] = -std::sin( angle );
+	yawed[1][1] = std::cos( angle );
+	yawed[1][2] = 0.0f;
+	yawed[2][0] = yawed[2][1] = 0.0f;
+	yawed[2][2] = 1.0f;
+	std::memcpy( invalidAxis, identity, sizeof( invalidAxis ) );
+	invalidOrigin[1] = nan;
+	invalidAxis[2][1] = nan;
+
+	CHECK( R_MotionBlur_Calculate( &state, qtrue, nan, 992, origin,
+		identity, 90.0f, 73.0f, 640, 480, radius ) == qfalse );
+	CHECK( state.valid == qfalse );
+	CHECK( R_MotionBlur_Calculate( &state, qtrue, 0.25f, 992, invalidOrigin,
+		identity, 90.0f, 73.0f, 640, 480, radius ) == qfalse );
+	CHECK( R_MotionBlur_Calculate( &state, qtrue, 0.25f, 992, origin,
+		invalidAxis, 90.0f, 73.0f, 640, 480, radius ) == qfalse );
+	CHECK( R_MotionBlur_Calculate( &state, qtrue, 0.25f, 992, origin,
+		identity, nan, 73.0f, 640, 480, radius ) == qfalse );
+
+	CHECK( R_MotionBlur_Calculate( &state, qtrue, 0.25f, 1000, origin,
+		identity, 90.0f, 73.0f, 640, 480, radius ) == qfalse );
+	CHECK( R_MotionBlur_Calculate( &state, qtrue, 0.25f, 1016, origin,
+		yawed, 90.0f, 73.0f, 640, 480, radius ) == qtrue );
+	CHECK( std::fabs( radius[0] * 640.0f ) > 1.0f );
+	CHECK( std::fabs( radius[1] ) < 0.00001f );
+	CHECK( R_MotionBlur_Calculate( &state, qtrue, 0.25f, 1032, origin,
+		yawed, 90.0f, 73.0f, 640, 480, radius ) == qfalse );
+
+	CHECK( R_MotionBlur_Calculate( &state, qtrue, 0.25f,
+		1032 + MOTION_BLUR_MAX_DELTA_MSEC + 1, origin, identity,
+		90.0f, 73.0f, 640, 480, radius ) == qfalse );
+	CHECK( R_MotionBlur_Calculate( &state, qtrue, 0.25f, 1200, cutOrigin,
+		identity, 90.0f, 73.0f, 640, 480, radius ) == qfalse );
+	CHECK( R_MotionBlur_Calculate( &state, qfalse, 0.25f, 1216, origin,
+		identity, 90.0f, 73.0f, 640, 480, radius ) == qfalse );
+	CHECK( state.valid == qfalse );
+	CHECK( R_MotionBlur_Calculate( &state, qtrue, 0.25f,
+		std::numeric_limits<int>::min(), origin, identity,
+		90.0f, 73.0f, 640, 480, radius ) == qfalse );
+	CHECK( R_MotionBlur_Calculate( &state, qtrue, 0.25f,
+		std::numeric_limits<int>::max(), origin, yawed,
+		90.0f, 73.0f, 640, 480, radius ) == qfalse );
+
+	CHECK( R_MotionBlur_CalculateViewRect( 640, 480, 32, 24, 576, 432,
+		viewRect, bounds ) == qtrue );
+	CHECK( viewRect[0] == 32 && viewRect[1] == 24 );
+	CHECK( viewRect[2] == 576 && viewRect[3] == 432 );
+	CHECK( std::fabs( bounds[0] - 32.5f / 640.0f ) < 0.00001f );
+	CHECK( std::fabs( bounds[3] - 455.5f / 480.0f ) < 0.00001f );
+	CHECK( R_MotionBlur_CalculateViewRect( 640, 480, -10, 20, 100, 100,
+		viewRect, bounds ) == qtrue );
+	CHECK( viewRect[0] == 0 && viewRect[2] == 90 );
+	CHECK( R_MotionBlur_CalculateViewRect( 640, 480, 700, 20, 100, 100,
+		viewRect, bounds ) == qfalse );
+
+	return true;
+}
+
+bool LiquidClassificationAndImpulseLifetimeStayDeterministic()
+{
+	liquidInteraction_t interaction {};
+	const vec3_t origin = { 10.0f, 20.0f, 30.0f };
+	const vec3_t world = { 14.0f, 26.0f, 38.0f };
+	const vec3_t axis[3] = {
+		{ 1.0f, 0.0f, 0.0f },
+		{ 0.0f, 1.0f, 0.0f },
+		{ 0.0f, 0.0f, 1.0f }
+	};
+	vec3_t local;
+
+	CHECK( !R_LiquidContentsEnabled( CONTENTS_WATER, 0 ) );
+	CHECK( R_LiquidContentsEnabled( CONTENTS_WATER, 1 ) );
+	CHECK( !R_LiquidContentsEnabled( CONTENTS_SLIME, 1 ) );
+	CHECK( R_LiquidContentsEnabled( CONTENTS_SLIME | CONTENTS_LAVA, 2 ) );
+	CHECK( R_LiquidContentsReflectionScale( CONTENTS_WATER ) == 1.0f );
+	CHECK( R_LiquidContentsReflectionScale( CONTENTS_SLIME ) == 0.55f );
+	CHECK( R_LiquidContentsReflectionScale( CONTENTS_LAVA ) == 0.25f );
+	CHECK( R_LiquidViewportCoversTarget( 0, 0, 1920, 1080, 1920, 1080 ) );
+	CHECK( !R_LiquidViewportCoversTarget( 96, 54, 1728, 972, 1920, 1080 ) );
+	CHECK( !R_LiquidViewportCoversTarget( 0, 0, 1920, 1080, 0, 1080 ) );
+
+	interaction.time = 1000;
+	interaction.radius = 18.0f;
+	interaction.strength = 1.0f;
+	CHECK( !R_LiquidInteractionActive( &interaction, 999 ) );
+	CHECK( R_LiquidInteractionActive( &interaction,
+		1000 + LIQUID_IMPULSE_LIFETIME_MSEC - 1 ) );
+	CHECK( !R_LiquidInteractionActive( &interaction,
+		1000 + LIQUID_IMPULSE_LIFETIME_MSEC ) );
+	interaction.time = std::numeric_limits<int>::min();
+	CHECK( !R_LiquidInteractionActive( &interaction,
+		std::numeric_limits<int>::max() ) );
+
+	R_LiquidWorldToLocal( world, origin, axis, local );
+	CHECK( local[0] == 4.0f );
+	CHECK( local[1] == 6.0f );
+	CHECK( local[2] == 8.0f );
+	return true;
+}
+
+bool LensFlareLayoutIsVisibleAndDeterministic()
+{
+	float x;
+	float y;
+	const float nan = std::numeric_limits<float>::quiet_NaN();
+
+	CHECK( R_LensFlareSpriteCount() == 6 );
+	CHECK( r_lensFlareSprites[0].axisPosition == 0.0f );
+	CHECK( r_lensFlareSprites[0].halfWidthScale == r_lensFlareSprites[0].halfHeightScale );
+	CHECK( r_lensFlareSprites[1].halfWidthScale >
+		r_lensFlareSprites[1].halfHeightScale * 10.0f );
+	CHECK( r_lensFlareSprites[R_LensFlareSpriteCount() - 1].axisPosition > 1.0f );
+	R_LensFlareSpritePosition( &r_lensFlareSprites[R_LensFlareSpriteCount() - 1],
+		0.0f, 20.0f, 100.0f, 60.0f, &x, &y );
+	CHECK( std::fabs( x - 148.0f ) < 0.0001f );
+	CHECK( std::fabs( y - 79.2f ) < 0.0001f );
+	CHECK( R_LensFlareEdgeAttenuation( 100.0f, 60.0f, 100.0f, 60.0f,
+		200.0f, 120.0f ) == 1.0f );
+	CHECK( R_LensFlareEdgeAttenuation( 0.0f, 60.0f, 100.0f, 60.0f,
+		200.0f, 120.0f ) == 0.75f );
+	CHECK( R_LensFlareEdgeAttenuation( 0.0f, 0.0f, 0.0f, 0.0f,
+		0.0f, 120.0f ) == 0.0f );
+	CHECK( R_LensFlareEdgeAttenuation( nan, 0.0f, 0.0f, 0.0f,
+		200.0f, 120.0f ) == 0.0f );
+	CHECK( R_LensFlareSpriteColor( 0.4f, 255,
+		&r_lensFlareSprites[0], 0, 0.75f ) >= 20 );
+	CHECK( R_LensFlareSpriteColor( 1.0f, 255,
+		&r_lensFlareSprites[3], 0, 1.0f ) >= 89 );
+	CHECK( R_LensFlareSpriteColor( nan, 255,
+		&r_lensFlareSprites[0], 0, 1.0f ) == 0 );
+	CHECK( R_LensFlareSpriteColor( 1.0f, 255,
+		&r_lensFlareSprites[0], 3, 1.0f ) == 0 );
+
+	return true;
+}
+
 } // namespace
 
 int main()
@@ -3737,6 +3933,7 @@ int main()
 	};
 
 	const Test tests[] = {
+		{ "CubemapFaceAxesAreOrthonormalAndConsistent", CubemapFaceAxesAreOrthonormalAndConsistent },
 		{ "MaterialKeysClassifyRcShapes", MaterialKeysClassifyRcShapes },
 		{ "MaterialKeysRejectUnsupportedCombines", MaterialKeysRejectUnsupportedCombines },
 		{ "MaterialKeysTreatSpecialSceneFlagsAsGates", MaterialKeysTreatSpecialSceneFlagsAsGates },
@@ -3772,6 +3969,9 @@ int main()
 		{ "PostShaderSourcesEmitDeterministicProgramShape", PostShaderSourcesEmitDeterministicProgramShape },
 		{ "GL41ExecutorPolicyIsMacModernAndAvoidsUnavailableAppleFeatures", GL41ExecutorPolicyIsMacModernAndAvoidsUnavailableAppleFeatures },
 		{ "GL46ExecutorPolicyIsHighEndAndRequiresModernDriverFeatures", GL46ExecutorPolicyIsHighEndAndRequiresModernDriverFeatures },
+		{ "MotionBlurUsesCameraMotionAndRejectsViewDiscontinuities", MotionBlurUsesCameraMotionAndRejectsViewDiscontinuities },
+		{ "LiquidClassificationAndImpulseLifetimeStayDeterministic", LiquidClassificationAndImpulseLifetimeStayDeterministic },
+		{ "LensFlareLayoutIsVisibleAndDeterministic", LensFlareLayoutIsVisibleAndDeterministic },
 	};
 
 	for ( const Test &test : tests ) {

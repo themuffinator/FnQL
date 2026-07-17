@@ -367,7 +367,7 @@ void NORETURN FORMAT_PRINTF(2, 3) QDECL Com_Error( errorParm_t code, const char 
 		SV_Shutdown( "Server disconnected" );
 		Com_EndRedirect();
 #ifndef DEDICATED
-		CL_Disconnect( qfalse );
+		CL_Disconnect( qtrue );
 		CL_FlushMemory();
 #endif
 		VM_Forced_Unload_Done();
@@ -384,7 +384,7 @@ void NORETURN FORMAT_PRINTF(2, 3) QDECL Com_Error( errorParm_t code, const char 
 		SV_Shutdown( va( "Server crashed: %s",  com_errorMessage ) );
 		Com_EndRedirect();
 #ifndef DEDICATED
-		CL_Disconnect( qfalse );
+		CL_Disconnect( qtrue );
 		CL_FlushMemory();
 #endif
 		VM_Forced_Unload_Done();
@@ -398,7 +398,7 @@ void NORETURN FORMAT_PRINTF(2, 3) QDECL Com_Error( errorParm_t code, const char 
 		Com_EndRedirect();
 #ifndef DEDICATED
 		if ( com_cl_running && com_cl_running->integer ) {
-			CL_Disconnect( qfalse );
+			CL_Disconnect( qtrue );
 			VM_Forced_Unload_Start();
 			CL_FlushMemory();
 			VM_Forced_Unload_Done();
@@ -2912,8 +2912,10 @@ int Com_EventLoop( void ) {
 			CL_CharEvent( ev.evValue );
 			break;
 		case SE_MOUSE:
-		case SE_MOUSE_ABSOLUTE:
 			CL_MouseEvent( ev.evValue, ev.evValue2 /*, ev.evTime*/ );
+			break;
+		case SE_MOUSE_ABSOLUTE:
+			CL_MouseAbsoluteEvent( ev.evValue, ev.evValue2 );
 			break;
 		case SE_JOYSTICK_AXIS:
 			CL_JoystickEvent( ev.evValue, ev.evValue2, ev.evTime );

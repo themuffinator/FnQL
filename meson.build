@@ -22,7 +22,7 @@ cc = meson.get_compiler('c')
 cpp = meson.get_compiler('cpp')
 
 fallback_defaults = ['default_library=static']
-quiet_fallback_defaults = fallback_defaults + ['warning_level=0', 'c_args=-w', 'cpp_args=-w']
+quiet_fallback_defaults = fallback_defaults + ['warning_level=0']
 curl_fallback_defaults = quiet_fallback_defaults + ['tests=disabled']
 openal_fallback_defaults = quiet_fallback_defaults
 vorbis_fallback_defaults = quiet_fallback_defaults + [
@@ -111,8 +111,8 @@ if cc.get_argument_syntax() == 'gcc'
     link_args += cc.get_supported_link_arguments(['-Wl,--gc-sections'])
   endif
 elif cc.get_id() == 'msvc'
-  common_c_args += ['/wd4201', '/D_CRT_SECURE_NO_WARNINGS', '/D_CRT_NONSTDC_NO_WARNINGS', '/D_WINSOCK_DEPRECATED_NO_WARNINGS']
-  common_cpp_args += ['/wd4201', '/EHsc', '/D_CRT_SECURE_NO_WARNINGS', '/D_CRT_NONSTDC_NO_WARNINGS', '/D_WINSOCK_DEPRECATED_NO_WARNINGS']
+  common_c_args += ['/wd4201']
+  common_cpp_args += ['/wd4201', '/EHsc']
 endif
 
 if get_option('strict-warnings')
@@ -126,8 +126,13 @@ if get_option('strict-warnings')
 endif
 
 if win32
-	common_c_args += ['-DWIN32', '-D_WINDOWS', '-DNOMINMAX', '-D_CRT_SECURE_NO_WARNINGS', '-D_CRT_NONSTDC_NO_WARNINGS', '-D_WINSOCK_DEPRECATED_NO_WARNINGS']
-	common_cpp_args += ['-DWIN32', '-D_WINDOWS', '-DNOMINMAX', '-D_CRT_SECURE_NO_WARNINGS', '-D_CRT_NONSTDC_NO_WARNINGS', '-D_WINSOCK_DEPRECATED_NO_WARNINGS']
+  # MSVC marks portable C and Winsock interfaces as deprecated. Apply the
+  # compatibility policy globally so bundled fallback dependencies receive the
+  # same warning-clean Windows build as project-owned targets.
+  win32_compat_args = ['-D_CRT_SECURE_NO_WARNINGS', '-D_CRT_NONSTDC_NO_WARNINGS', '-D_WINSOCK_DEPRECATED_NO_WARNINGS']
+  add_global_arguments(win32_compat_args, language: ['c', 'cpp'])
+  common_c_args += ['-DWIN32', '-D_WINDOWS', '-DNOMINMAX']
+  common_cpp_args += ['-DWIN32', '-D_WINDOWS', '-DNOMINMAX']
 elif darwin
   common_c_args += ['-DMACOS_X']
   common_cpp_args += ['-DMACOS_X']
@@ -567,7 +572,11 @@ endif
 
 curl_opt = get_option('curl')
 use_curl = false
-use_curl_dlopen = get_option('curl-dlopen')
+# Windows has no system libcurl to resolve at runtime (the engine would look for
+# libcurl-3.dll and nothing ships it), so 'auto' links libcurl there and keeps
+# runtime resolution on platforms with a system libcurl.
+curl_dlopen_opt = get_option('curl-dlopen')
+use_curl_dlopen = curl_dlopen_opt == 'true' or (curl_dlopen_opt == 'auto' and not win32)
 curl_dep = dependency('', required: false)
 curl_header_dep = dependency('', required: false)
 curl_c_args = []
@@ -1039,11 +1048,43 @@ ql_font_text_tests = executable('fnql_ql_font_text_tests',
   cpp_args: common_cpp_args,
 )
 test('fnql_ql_font_text', ql_font_text_tests)
+
+window_placement_tests = executable('fnql_window_placement_tests',
+  'tests/window_placement_tests.cpp',
+  cpp_args: common_cpp_args,
+)
+test('fnql_window_placement', window_placement_tests)
+
 test('fnql_ql_font_source', python,
   args: files('tests/ql_font_source_tests.py'),
 )
 test('fnql_map_overbright_cap_source', python,
   args: files('tests/map_overbright_cap_source_tests.py'),
+)
+test('fnql_window_management_source', python,
+  args: files('tests/window_management_source_tests.py'),
+)
+
+global_fog_tests = executable('fnql_global_fog_tests',
+  'tests/global_fog_tests.cpp',
+  'code/qcommon/q_shared.c',
+  c_args: common_c_args,
+  cpp_args: common_cpp_args,
+)
+test('fnql_global_fog', global_fog_tests)
+test('fnql_global_fog_source', python,
+  args: files('tests/global_fog_source_tests.py'),
+)
+
+levelshot_validation_tests = executable('fnql_levelshot_validation_tests',
+  'tests/levelshot_validation_tests.cpp',
+  'code/qcommon/q_shared.c',
+  c_args: common_c_args,
+  cpp_args: common_cpp_args,
+)
+test('fnql_levelshot_validation', levelshot_validation_tests)
+test('fnql_renderer_port_safety_source', python,
+  args: files('tests/renderer_port_safety_tests.py'),
 )
 
 netchan_safety_tests = executable('fnql_netchan_safety_tests',
@@ -1162,6 +1203,12 @@ test('fnql_ql_cvar_configstring_source', python,
 test('fnql_join_menu_source', python,
   args: files('tests/join_menu_source_tests.py'),
 )
+test('fnql_windowed_mouse_source', python,
+  args: files('tests/windowed_mouse_source_tests.py'),
+)
+test('fnql_platform_port_safety_source', python,
+  args: files('tests/platform_port_safety_tests.py'),
+)
 test('fnql_cvar_factory_snapshot_source', python,
   args: files('tests/cvar_factory_snapshot_tests.py'),
 )
@@ -1250,6 +1297,7 @@ test('fnql_python_source_regressions', python,
     '-p', '*_tests.py',
   ],
   workdir: meson.current_source_dir(),
+  timeout: 120,
 )
 
 curl_summary = 'disabled'

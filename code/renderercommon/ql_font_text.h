@@ -86,6 +86,30 @@ static inline int QL_FontColorEscape( const char *text, const char *end, int *co
 	return 2;
 }
 
+/*
+ * Once the requested face has missed both its cache and cmap, retail checks
+ * every fallback cache before probing the fallback cmaps in face order.
+ */
+static inline int QL_FontSelectFallbackFace( int faceCount,
+	const unsigned char *cached, const unsigned char *supported ) {
+	int i;
+
+	if ( faceCount <= 0 || !cached || !supported ) {
+		return -1;
+	}
+	for ( i = 0; i < faceCount; ++i ) {
+		if ( cached[i] ) {
+			return i;
+		}
+	}
+	for ( i = 0; i < faceCount; ++i ) {
+		if ( supported[i] ) {
+			return i;
+		}
+	}
+	return -1;
+}
+
 static inline int QL_FontScaleTenths( float scale ) {
 	int value;
 

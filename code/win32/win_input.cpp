@@ -52,6 +52,30 @@ static WinMouseVars_t s_wmv;
 
 static POINT window_center;
 static POINT client_center;
+static int s_absolutePointerOwner;
+
+static int IN_AbsolutePointerOwnerKind( void )
+{
+	const int catcher = Key_GetCatcher();
+	// The console is an overlay and preserves the underlying UI/browser bits.
+	// Give it ownership first so a fullscreen console keeps relative input.
+	if ( catcher & KEYCATCH_CONSOLE ) {
+		return !glw_state.cdsFullscreen ? KEYCATCH_CONSOLE : 0;
+	}
+	if ( catcher & KEYCATCH_BROWSER ) {
+		return KEYCATCH_BROWSER;
+	}
+	if ( catcher & KEYCATCH_UI ) {
+		return KEYCATCH_UI;
+	}
+	return ( catcher & KEYCATCH_CGAME ) ? KEYCATCH_CGAME : 0;
+}
+
+
+static qboolean IN_UseAbsolutePointer( void )
+{
+	return IN_AbsolutePointerOwnerKind() ? qtrue : qfalse;
+}
 
 #ifdef USE_MIDI
 //
@@ -157,9 +181,10 @@ qboolean IN_MouseActive( void )
 ================
 IN_WindowMouse
 
-Retail UI and cgame overlays consume absolute client coordinates. Poll while a
-key catcher owns the pointer so entering the join menu always delivers an
-initial position even when Windows emits no WM_MOUSEMOVE transition.
+Retail browser/UI/cgame overlays consume raw Win32 client coordinates. The
+windowed console uses that same native client space as framebuffer pixels.
+Poll while either owner holds the pointer so opening it under a stationary
+cursor still delivers an initial position without a WM_MOUSEMOVE transition.
 ================
 */
 static void IN_WindowMouse( void )
@@ -292,7 +317,7 @@ static void IN_DeactivateWin32Mouse( void )
 {
 	CURSORINFO ci;
 
-	if ( !gw_minimized ) {
+	if ( !gw_minimized && !IN_UseAbsolutePointer() ) {
 		IN_UpdateWindow( NULL, qfalse );
 		SetCursorPos( window_center.x, window_center.y );
 	}
@@ -1203,6 +1228,8 @@ IN_Shutdown
 ===========
 */
 void IN_Shutdown( void ) {
+	WIN_ReleaseTemporaryMouseCapture();
+	s_absolutePointerOwner = 0;
 	IN_DeactivateMouse();
 	IN_ShutdownDIMouse();
 #ifdef USE_MIDI
@@ -1326,6 +1353,7 @@ Called every frame, even if not generating commands
 ==================
 */
 void IN_Frame( void ) {
+	const int absolutePointerOwner = IN_AbsolutePointerOwnerKind();
 	// post joystick events
 #ifdef USE_JOYSTICK
 	IN_JoyMove();
@@ -1335,11 +1363,18 @@ void IN_Frame( void ) {
 		return;
 	}
 
-	if ( Key_GetCatcher() & ( KEYCATCH_BROWSER | KEYCATCH_UI | KEYCATCH_CGAME ) ) {
+	if ( absolutePointerOwner ) {
+		if ( absolutePointerOwner != s_absolutePointerOwner ) {
+			WIN_ReleaseTemporaryMouseCapture();
+			s_wmv.cursorPositionValid = qfalse;
+		}
+		s_absolutePointerOwner = absolutePointerOwner;
 		IN_DeactivateMouse();
 		IN_WindowMouse();
 		return;
 	}
+	WIN_ReleaseTemporaryMouseCapture();
+	s_absolutePointerOwner = 0;
 	s_wmv.cursorPositionValid = qfalse;
 
 	if ( !gw_active || gw_minimized || ( in_nograb->integer && !( Key_GetCatcher() & KEYCATCH_CONSOLE ) ) ) {

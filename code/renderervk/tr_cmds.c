@@ -537,7 +537,8 @@ static void R_IssueRenderCommands( void ) {
 	// clear it out, in case this is a sync and not a buffer flip
 	cmdList->used = 0;
 
-	if ( backEnd.screenshotMask == 0 && !backEnd.levelshotPending ) {
+	if ( backEnd.screenshotMask == 0 && !backEnd.levelshotPending &&
+		!backEnd.screenshotCubeActive && !backEnd.screenshotCubeFrontPending ) {
 		if ( ri.CL_IsMinimized() )
 			return; // skip backend when minimized
 		if ( backEnd.throttle )
@@ -547,6 +548,9 @@ static void R_IssueRenderCommands( void ) {
 		if ( ri.CL_IsMinimized() && !RE_CanMinimize() ) {
 			backEnd.screenshotMask = 0;
 			backEnd.levelshotPending = qfalse;
+			backEnd.screenshotCubeActive = qfalse;
+			backEnd.screenshotCubeFrontPending = qfalse;
+			backEnd.screenshotCubeFailed = qfalse;
 			ri.Cvar_Set( "cl_captureActive", "0" );
 			return;
 		}
@@ -631,6 +635,9 @@ void R_AddDrawSurfCmd( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 
 	cmd = R_GetCommandBuffer( sizeof( *cmd ) );
 	if ( !cmd ) {
+		if ( backEnd.screenshotCubeActive ) {
+			backEnd.screenshotCubeFailed = qtrue;
+		}
 		return;
 	}
 	cmd->commandId = RC_DRAW_SURFS;
@@ -649,6 +656,31 @@ void R_AddDrawSurfCmd( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 		tr.drawSurfCmd = cmd;
 	}
 #endif
+}
+
+qboolean R_AddScreenshotCmd( int x, int y, int width, int height, int format,
+	const char *fileName, qboolean silent, int cubemapFace )
+{
+	screenshotCommand_t *cmd;
+
+	cmd = R_GetCommandBuffer( sizeof( *cmd ) );
+	if ( !cmd ) {
+		if ( cubemapFace >= 0 ) {
+			backEnd.screenshotCubeFailed = qtrue;
+		}
+		return qfalse;
+	}
+
+	cmd->commandId = RC_SCREENSHOT;
+	cmd->x = x;
+	cmd->y = y;
+	cmd->width = width;
+	cmd->height = height;
+	cmd->format = format;
+	cmd->silent = silent;
+	cmd->cubemapFace = cubemapFace;
+	Q_strncpyz( cmd->fileName, fileName, sizeof( cmd->fileName ) );
+	return qtrue;
 }
 
 
@@ -774,6 +806,7 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 
 #ifdef USE_VULKAN
 	backEnd.doneBloom = qfalse;
+	backEnd.doneMotionBlur = qfalse;
 #endif
 	backEnd.bloomProtectHighlights = qfalse;
 

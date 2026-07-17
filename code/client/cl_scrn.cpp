@@ -977,6 +977,7 @@ static void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 	bool browserPendingSurface;
 	bool browserDrawableSurface;
 	bool browserSuppressUiRefresh;
+	bool browserOverlayAllowed;
 	bool uiMenuVisible;
 	bool drawConnectScreen;
 	float menuDepthOfFieldAmount;
@@ -986,9 +987,13 @@ static void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 	uiFullscreen = uivm && VM_Call( uivm, 0, UI_IS_FULLSCREEN );
 	uiMenuVisible = CL_UIMenusAreVisible();
 	uiVisible = ( Key_GetCatcher() & KEYCATCH_UI ) && uivm;
-	browserOverlayRequested = ( Key_GetCatcher() & KEYCATCH_BROWSER )
+	drawConnectScreen = cls.state == CA_CONNECTING || cls.state == CA_CHALLENGING
+		|| cls.state == CA_CONNECTED;
+	browserOverlayAllowed = !drawConnectScreen && cls.state != CA_LOADING
+		&& cls.state != CA_PRIMED;
+	browserOverlayRequested = browserOverlayAllowed && ( ( Key_GetCatcher() & KEYCATCH_BROWSER )
 		|| Cvar_VariableIntegerValue( "web_browserActive" )
-		|| Cvar_VariableIntegerValue( "ui_browserAwesomiumPending" );
+		|| Cvar_VariableIntegerValue( "ui_browserAwesomiumPending" ) );
 	browserDrawableSurface = browserOverlayRequested && CL_WebHost_HasDrawableSurface();
 	browserPendingSurface = browserOverlayRequested && !browserDrawableSurface;
 	browserSuppressUiRefresh = browserDrawableSurface || ( Key_GetCatcher() & KEYCATCH_BROWSER );
@@ -1016,9 +1021,6 @@ static void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 	// The retail connection dialog owns the whole frame while establishing a
 	// connection.  Unlike a main menu, fullscreen must not suppress its draw
 	// syscall or the non-game backdrop would be presented by itself.
-	drawConnectScreen = cls.state == CA_CONNECTING || cls.state == CA_CHALLENGING
-		|| cls.state == CA_CONNECTED;
-
 	if ( cls.state != CA_ACTIVE ) {
 		// BeginFrame does not clear the colour buffer.  Replace every previous
 		// gameplay or browser frame before drawing a 4:3 native status screen.
@@ -1091,7 +1093,11 @@ static void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 		VM_Call( uivm, 1, UI_REFRESH, cls.realtime );
 	}
 
-	CL_WebHost_DrawBrowserSurface();
+	// Native connection and level-loading screens retain exclusive ownership of
+	// the frame even if a late browser callback leaves its overlay state armed.
+	if ( browserOverlayAllowed ) {
+		CL_WebHost_DrawBrowserSurface();
+	}
 
 	// console draws next
 	Con_DrawConsole ();

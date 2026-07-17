@@ -21,6 +21,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 #include "tr_local.h"
+#include "../renderercommon/tr_cubemap.h"
+#include "../renderercommon/tr_liquid.h"
 
 static int			r_firstSceneDrawSurf;
 #ifdef USE_PMLIGHT
@@ -37,6 +39,93 @@ static int			r_numpolys;
 static int			r_firstScenePoly;
 
 static int			r_numpolyverts;
+
+static liquidInteraction_t r_liquidInteractions[LIQUID_MAX_STORED_IMPULSES];
+static int r_numLiquidInteractions;
+static int r_liquidInteractionTime = -1;
+
+static void R_PruneLiquidInteractions( int sceneTime )
+{
+	int readIndex;
+	int writeIndex = 0;
+
+	if ( r_liquidInteractionTime > sceneTime ) {
+		r_numLiquidInteractions = 0;
+	}
+	r_liquidInteractionTime = sceneTime;
+	for ( readIndex = 0; readIndex < r_numLiquidInteractions; readIndex++ ) {
+		if ( !R_LiquidInteractionActive( &r_liquidInteractions[readIndex], sceneTime ) ) {
+			continue;
+		}
+		if ( writeIndex != readIndex ) {
+			r_liquidInteractions[writeIndex] = r_liquidInteractions[readIndex];
+		}
+		writeIndex++;
+	}
+	r_numLiquidInteractions = writeIndex;
+}
+
+void RE_AddLiquidInteractionToScene( const liquidInteraction_t *interaction )
+{
+#ifdef USE_FBO
+	int i;
+
+	if ( !interaction || !r_liquidRipples || r_liquidRipples->value <= 0.0f ||
+		interaction->radius <= 0.0f || interaction->strength <= 0.0f ) {
+		return;
+	}
+
+	R_PruneLiquidInteractions( interaction->time );
+	for ( i = 0; i < r_numLiquidInteractions; i++ ) {
+		const int64_t timeDelta = (int64_t)r_liquidInteractions[i].time -
+			(int64_t)interaction->time;
+
+		if ( timeDelta >= -80 && timeDelta <= 80 &&
+			DistanceSquared( r_liquidInteractions[i].origin, interaction->origin ) <= Square( 20.0f ) ) {
+			r_liquidInteractions[i].radius = MAX( r_liquidInteractions[i].radius, interaction->radius );
+			r_liquidInteractions[i].strength = MAX( r_liquidInteractions[i].strength, interaction->strength );
+			return;
+		}
+	}
+
+	if ( r_numLiquidInteractions == LIQUID_MAX_STORED_IMPULSES ) {
+		memmove( r_liquidInteractions, r_liquidInteractions + 1,
+			( LIQUID_MAX_STORED_IMPULSES - 1 ) * sizeof( r_liquidInteractions[0] ) );
+		r_numLiquidInteractions--;
+	}
+	r_liquidInteractions[r_numLiquidInteractions++] = *interaction;
+#else
+	(void)interaction;
+#endif
+}
+
+static void R_CopyLiquidInteractionsToRefdef( int sceneTime )
+{
+	int first;
+	int count;
+
+	tr.refdef.numLiquidInteractions = 0;
+#ifdef USE_FBO
+	if ( !r_liquidRipples || r_liquidRipples->value <= 0.0f ) {
+		Com_Memset( r_liquidInteractions, 0, sizeof( r_liquidInteractions ) );
+		r_numLiquidInteractions = 0;
+		r_liquidInteractionTime = sceneTime;
+		return;
+	}
+	R_PruneLiquidInteractions( sceneTime );
+	count = MIN( r_numLiquidInteractions, LIQUID_MAX_ACTIVE_IMPULSES );
+	first = r_numLiquidInteractions - count;
+	if ( count > 0 ) {
+		Com_Memcpy( tr.refdef.liquidInteractions, r_liquidInteractions + first,
+			count * sizeof( tr.refdef.liquidInteractions[0] ) );
+		tr.refdef.numLiquidInteractions = count;
+	}
+#else
+	(void)sceneTime;
+	(void)first;
+	(void)count;
+#endif
+}
 
 
 /*
@@ -1085,43 +1174,23 @@ void AdvertisementBridge_UpdateLoadingViewParameters( void ) {
 	}
 }
 
-static void R_SetCubemapFaceAxis( vec3_t baseAxis[3], int faceIndex, vec3_t outAxis[3] )
+static void R_CancelScreenshotCubemap( const char *reason )
 {
-	switch ( faceIndex ) {
-		case 0: // front
-			AxisCopy( baseAxis, outAxis );
-			break;
-		case 1: // back
-			VectorNegate( baseAxis[0], outAxis[0] );
-			VectorNegate( baseAxis[1], outAxis[1] );
-			VectorCopy( baseAxis[2], outAxis[2] );
-			break;
-		case 2: // left
-			VectorCopy( baseAxis[1], outAxis[0] );
-			VectorNegate( baseAxis[0], outAxis[1] );
-			VectorCopy( baseAxis[2], outAxis[2] );
-			break;
-		case 3: // right
-			VectorNegate( baseAxis[1], outAxis[0] );
-			VectorCopy( baseAxis[0], outAxis[1] );
-			VectorCopy( baseAxis[2], outAxis[2] );
-			break;
-		case 4: // top
-			VectorCopy( baseAxis[2], outAxis[0] );
-			VectorCopy( baseAxis[1], outAxis[1] );
-			VectorNegate( baseAxis[0], outAxis[2] );
-			break;
-		case 5: // bottom
-		default:
-			VectorNegate( baseAxis[2], outAxis[0] );
-			VectorCopy( baseAxis[1], outAxis[1] );
-			VectorCopy( baseAxis[0], outAxis[2] );
-			break;
+	tr.cubemapDrawSurfLimit = 0;
+	tr.cubemapDrawSurfLimitHit = qfalse;
+	backEnd.screenshotCubeFailed = qtrue;
+	backEnd.screenshotCubeFrontPending = qfalse;
+	backEnd.screenshotCubeActive = qfalse;
+	ri.Cvar_Set( "cl_captureActive", "0" );
+
+	if ( reason && reason[0] ) {
+		ri.Printf( PRINT_WARNING, "WARNING: screenshot cubemap cancelled: %s\n", reason );
 	}
 }
 
 static void R_RenderScreenshotCubemapViews( void )
 {
+	trRefdef_t originalRefdef;
 	trRefdef_t cubeRefdef;
 	viewParms_t cubeParms;
 	vec3_t baseAxis[3];
@@ -1131,14 +1200,19 @@ static void R_RenderScreenshotCubemapViews( void )
 	int captureY;
 	int i;
 
+	originalRefdef = tr.refdef;
 	faceSize = MIN( glConfig.vidWidth, glConfig.vidHeight );
 	captureSize = MIN( gls.captureWidth, gls.captureHeight );
-	captureX = ( gls.captureWidth - captureSize ) / 2;
-	captureY = ( gls.captureHeight - captureSize ) / 2;
+	if ( faceSize <= 0 || captureSize <= 0 ) {
+		R_CancelScreenshotCubemap( "the capture target has invalid dimensions" );
+		return;
+	}
+	captureX = 0;
+	captureY = 0;
 
 	cubeRefdef = tr.refdef;
-	cubeRefdef.x = ( glConfig.vidWidth - faceSize ) / 2;
-	cubeRefdef.y = ( glConfig.vidHeight - faceSize ) / 2;
+	cubeRefdef.x = 0;
+	cubeRefdef.y = glConfig.vidHeight - faceSize;
 	cubeRefdef.width = faceSize;
 	cubeRefdef.height = faceSize;
 	cubeRefdef.fov_x = 90.0f;
@@ -1147,11 +1221,23 @@ static void R_RenderScreenshotCubemapViews( void )
 	AxisCopy( tr.refdef.viewaxis, baseAxis );
 
 	for ( i = 1; i < 6; i++ ) {
+		const int facesRemaining = 7 - i;
+		const int surfacesRemaining = MAX_DRAWSURFS - cubeRefdef.numDrawSurfs;
+
+		if ( surfacesRemaining < facesRemaining ) {
+			tr.refdef = originalRefdef;
+			R_CancelScreenshotCubemap( "the frame draw-surface buffer is full" );
+			return;
+		}
+
+		tr.cubemapDrawSurfLimit = cubeRefdef.numDrawSurfs + surfacesRemaining / facesRemaining;
+		tr.cubemapDrawSurfLimitHit = qfalse;
 		tr.frameSceneNum++;
 		tr.sceneCount++;
 		tr.refdef = cubeRefdef;
+		tr.refdef.rdflags |= RDF_NOFIRSTPERSON;
 
-		R_SetCubemapFaceAxis( baseAxis, i, tr.refdef.viewaxis );
+		R_CubemapFaceAxis( baseAxis, i, tr.refdef.viewaxis );
 
 		Com_Memset( &cubeParms, 0, sizeof( cubeParms ) );
 		cubeParms.viewportX = cubeRefdef.x;
@@ -1162,7 +1248,7 @@ static void R_RenderScreenshotCubemapViews( void )
 		cubeParms.scissorY = cubeParms.viewportY;
 		cubeParms.scissorWidth = cubeParms.viewportWidth;
 		cubeParms.scissorHeight = cubeParms.viewportHeight;
-		cubeParms.portalView = PV_PORTAL;
+		cubeParms.portalView = PV_NONE;
 		cubeParms.fovX = 90.0f;
 		cubeParms.fovY = 90.0f;
 		cubeParms.stereoFrame = tr.refdef.stereoFrame;
@@ -1177,8 +1263,19 @@ static void R_RenderScreenshotCubemapViews( void )
 		VectorCopy( tr.refdef.vieworg, cubeParms.pvsOrigin );
 
 		R_RenderView( &cubeParms );
-		R_AddScreenshotCmd( captureX, captureY, captureSize, captureSize, backEnd.screenshotCubeFormat,
-			backEnd.screenshotCubeNames[i], backEnd.screenshotCubeSilent, qfalse );
+		if ( tr.cubemapDrawSurfLimitHit || backEnd.screenshotCubeFailed ||
+			!R_AddScreenshotCmd( captureX, captureY, captureSize, captureSize,
+				backEnd.screenshotCubeFormat, backEnd.screenshotCubeNames[i],
+				backEnd.screenshotCubeSilent, qfalse, i ) ) {
+			tr.refdef = originalRefdef;
+			R_CancelScreenshotCubemap( tr.cubemapDrawSurfLimitHit ?
+				"a face exceeded its safe draw-surface budget" :
+				"the render-command buffer is full" );
+			return;
+		}
+
+		VectorCopy( tr.refdef.vieworg, backEnd.screenshotCubeVieworg[i] );
+		AxisCopy( tr.refdef.viewaxis, backEnd.screenshotCubeViewaxis[i] );
 
 		/*
 		=============
@@ -1196,10 +1293,14 @@ static void R_RenderScreenshotCubemapViews( void )
 
 	tr.refdef = cubeRefdef;
 	AxisCopy( baseAxis, tr.refdef.viewaxis );
+	VectorCopy( tr.refdef.vieworg, backEnd.screenshotCubeVieworg[0] );
+	AxisCopy( tr.refdef.viewaxis, backEnd.screenshotCubeViewaxis[0] );
 	backEnd.screenshotCubeFrontX = captureX;
 	backEnd.screenshotCubeFrontY = captureY;
 	backEnd.screenshotCubeFrontSize = captureSize;
 	backEnd.screenshotCubeFrontPending = qtrue;
+	tr.cubemapDrawSurfLimit = MAX_DRAWSURFS;
+	tr.cubemapDrawSurfLimitHit = qfalse;
 }
 
 
@@ -1293,6 +1394,7 @@ void RE_RenderScene( const refdef_t *fd ) {
 
 	tr.refdef.num_dlights = r_numdlights - r_firstSceneDlight;
 	tr.refdef.dlights = &backEndData->dlights[r_firstSceneDlight];
+	R_CopyLiquidInteractionsToRefdef( tr.refdef.time );
 
 	tr.refdef.numPolys = r_numpolys - r_firstScenePoly;
 	tr.refdef.polys = &backEndData->polys[r_firstScenePoly];
@@ -1303,7 +1405,8 @@ void RE_RenderScene( const refdef_t *fd ) {
 		tr.refdef.num_dlights = 0;
 	}
 
-	if ( backEnd.screenshotCubeActive && !( tr.refdef.rdflags & RDF_NOWORLDMODEL ) ) {
+	if ( backEnd.screenshotCubeActive && tr.frameCount > 1 &&
+		!( tr.refdef.rdflags & RDF_NOWORLDMODEL ) ) {
 		R_RenderScreenshotCubemapViews();
 	}
 
@@ -1352,6 +1455,15 @@ void RE_RenderScene( const refdef_t *fd ) {
 	VectorCopy( fd->vieworg, parms.pvsOrigin );
 
 	R_RenderView( &parms );
+	if ( backEnd.screenshotCubeFrontPending ) {
+		tr.cubemapDrawSurfLimit = 0;
+		if ( tr.cubemapDrawSurfLimitHit || backEnd.screenshotCubeFailed ) {
+			R_CancelScreenshotCubemap( tr.cubemapDrawSurfLimitHit ?
+				"the front face exceeded the remaining draw-surface budget" :
+				"the render-command buffer is full" );
+		}
+		tr.cubemapDrawSurfLimitHit = qfalse;
+	}
 
 	// the next scene rendered in this frame will tack on after this one
 	r_firstSceneDrawSurf = tr.refdef.numDrawSurfs;

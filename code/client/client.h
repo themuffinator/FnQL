@@ -584,6 +584,7 @@ void Con_ClearNotify( void );
 void Con_RunConsole( void );
 void Con_DrawConsole( void );
 void Con_MouseEvent( int dx, int dy );
+void Con_SetMousePos( int x, int y );
 qboolean Con_KeyEvent( int key, qboolean down );
 qboolean Con_InputKey( int key );
 void Con_CharEvent( int key );
@@ -710,6 +711,7 @@ void CL_WebHost_OnChangeTooltip( const char *tooltip );
 void CL_WebHost_SetCursorPosition( int x, int y );
 qboolean CL_WebHost_GetCursorPosition( int *x, int *y );
 qboolean CL_WebHost_RequestCursorPosition( int *x, int *y );
+qboolean CL_WebHost_ShowAfterDisconnect( void );
 void CL_WebHost_HideBrowser( void );
 void CL_WebHost_HideForGameTransition( void );
 void CL_WebHost_NotifyAppActivation( qboolean active );
@@ -821,6 +823,8 @@ void	CL_LoadJPG( const char *filename, unsigned char **pic, int *width, int *hei
 
 // base backend functions
 void	HandleEvents( void );
+void	CL_NotifyWindowResize( int width, int height, qboolean preserveWindow );
+qboolean CL_IsWindowResizeRestart( void );
 
 // platform-specific
 void	GLimp_InitGamma(glconfig_t *config);

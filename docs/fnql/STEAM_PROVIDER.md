@@ -286,9 +286,10 @@ Lobby entry projects the bounded owner, member limit, member identities and
 persona names, plus indexed key/value metadata into retail's
 `lobby.<id>.enter` document. Chat and membership events resolve persona names
 instead of emitting anonymous placeholders. Menu invites use the active lobby;
-in-match direct invites are allowed only after the current server's FnQL Steam
-identity configstring has been validated, so this path cannot advertise a
-retail-operated server.
+in-match direct invites are allowed only after the active server's Steam
+identity configstring has been validated. This supports both authenticated
+FnQL hosts and retail-operated servers without allowing an unverified endpoint
+to become a P2P target.
 
 The legacy GameServer master-server UDP bridge is capability-gated separately
 from P2P. Every IPv4 server packet is offered to Steam without consuming the
@@ -332,8 +333,9 @@ every channel-1 packet, caps work per frame, tags and relays compressed voice
 through the qagame suppression predicate, and closes unknown senders. FnQL
 clients decode bounded mono PCM only from the tracked server and still apply
 the local SteamID mute set. Channel 16 keeps authenticated retail sessions
-alive. This preserves the retail voice lane without allowing P2P callbacks to
-become an alternate route into retail-operated servers.
+alive. P2P callbacks remain bound to the Steam identity published by the active
+authenticated server and cannot redirect the ordinary UDP connection
+handshake.
 
 Voice capture is user-controlled through `+voice` and `-voice`; the provider
 also mirrors that state to Steam Friends' in-game speaking indicator. Channel 0 is
@@ -415,10 +417,31 @@ Authentication is asynchronous as well. A successful `BeginAuthSession` only
 accepts a ticket for validation; the client remains unverified until the
 provider forwards Steam's matching `ValidateAuthTicketResponse_t`. Rejections
 drop the client and responses that never arrive hit a bounded server timeout.
-An opted-in FnQL client sends its provider ticket in a bounded binary challenge
-extension carrying the normal FnQL nonce. The server echoes the FnQL handshake
-marker before the client proceeds, so adding authenticated FnQL-to-FnQL play
-does not create a route for FnQL clients to join retail-operated servers.
+An FnQL protocol-91 client sends its provider ticket in the retail-observed
+binary challenge layout: the out-of-band marker and `getchallenge ` command,
+followed immediately by a little-endian 64-bit SteamID and the opaque session
+ticket. There is no FnQL marker or client nonce in this retail wire form. A
+bare `challengeResponse` is classified from the recorded request mode as
+protocol 91, and the raw ticket bytes are erased once that response is accepted.
+The provider ticket handle remains live until disconnect so asynchronous
+server validation cannot be invalidated prematurely.
+
+When identity or ticket acquisition is unavailable, FnQL sends retail's bare
+text `getchallenge` fallback. It still negotiates protocol 91 from the request
+mode and proceeds if the server permits unauthenticated clients; a server that
+requires Steam remains authoritative and its refusal is displayed unchanged.
+FnQL never fabricates a SteamID, ticket, or successful authorization. The
+server retains its parser for the older marked FnQL extension so older FnQL
+clients do not regress, but new clients use the retail packet shape.
+
+The live Windows-x86 validation on 2026-07-17 loaded provider 0.3.0 with all
+25 Win32 capabilities, sent the legitimate account's session ticket to retail
+endpoint `168.100.161.119:27076`, accepted its bare challenge/connect responses,
+completed pure and required-Workshop setup, loaded the retail cgame, and entered
+the active match. The same endpoint did not respond to repeated bare challenges
+when `com_steamIntegration=0`, demonstrating that the no-Steam path reaches the
+remote authorization boundary without FnQL fabricating or locally rejecting a
+session.
 
 The target retail `steam_api.dll` does not export the later Web API auth-ticket
 entry point. FnQL therefore does not advertise or synthesize that capability;

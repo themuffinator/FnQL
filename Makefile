@@ -241,6 +241,7 @@ RXDIR=$(MOUNT_DIR)/rendererglx
 RVDIR=$(MOUNT_DIR)/renderervk
 SDLDIR=$(MOUNT_DIR)/sdl
 SDLHDIR=$(MOUNT_DIR)/libsdl/include
+FONTSTASHDIR ?= subprojects/fontstash/src
 
 CMDIR=$(MOUNT_DIR)/qcommon
 UDIR=$(MOUNT_DIR)/unix
@@ -399,6 +400,10 @@ ifeq ($(USE_CURL),1)
 endif
 
 ifeq ($(BUILD_CLIENT),1)
+  ifeq ($(wildcard $(FONTSTASHDIR)/fontstash.h),)
+    $(error Retail host fonts require $(FONTSTASHDIR)/fontstash.h; run 'meson subprojects download fontstash' before using Make)
+  endif
+  BASE_CFLAGS += -DBUILD_FONTSTASH -isystem $(FONTSTASHDIR)
   ifneq ($(USE_SYSTEM_JPEG),1)
     $(error USE_SYSTEM_JPEG=0 requires the removed in-tree libjpeg sources; use Meson for the libjpeg-turbo subproject fallback or install system libjpeg)
   endif
@@ -848,6 +853,11 @@ $(echo_cmd) "REND_CC $<"
 $(Q)$(CC) $(CFLAGS) $(RENDCFLAGS) -o $@ -c $<
 endef
 
+define DO_REND2_CC
+$(echo_cmd) "REND2_CC $<"
+$(Q)$(CC) $(CFLAGS) $(RENDCFLAGS) -DRENDERER_OPENGL2 -o $@ -c $<
+endef
+
 define DO_GLX_REND_CC
 $(echo_cmd) "GLX_REND_CC $<"
 $(Q)$(CC) $(CFLAGS) $(RENDCFLAGS) -DRENDERER_GLX -o $@ -c $<
@@ -867,6 +877,11 @@ endef
 define DO_BOT_CC
 $(echo_cmd) "BOT_CC $<"
 $(Q)$(CC) $(CFLAGS) $(BOTCFLAGS) -DBOTLIB -o $@ -c $<
+endef
+
+define DO_RENDV_CC
+$(echo_cmd) "RENDV_CC $<"
+$(Q)$(CC) $(CFLAGS) $(RENDCFLAGS) -DRENDERER_VULKAN -o $@ -c $<
 endef
 
 define DO_BOT_CXX
@@ -1004,6 +1019,7 @@ Q3REND1OBJ = \
   $(B)/rend1/tr_curve.o \
   $(B)/rend1/tr_flares.o \
   $(B)/rend1/tr_font.o \
+  $(B)/rend1/tr_font_stash.o \
   $(B)/rend1/tr_image.o \
   $(B)/rend1/tr_image_png.o \
   $(B)/rend1/tr_image_jpg.o \
@@ -1045,6 +1061,7 @@ Q3RENDXOBJ = \
   $(B)/rendx/tr_curve.o \
   $(B)/rendx/tr_flares.o \
   $(B)/rendx/tr_font.o \
+  $(B)/rendx/tr_font_stash.o \
   $(B)/rendx/tr_image.o \
   $(B)/rendx/tr_image_png.o \
   $(B)/rendx/tr_image_jpg.o \
@@ -1100,6 +1117,7 @@ Q3REND2OBJ = \
   $(B)/rend2/tr_fbo.o \
   $(B)/rend2/tr_flares.o \
   $(B)/rend2/tr_font.o \
+  $(B)/rend2/tr_font_stash.o \
   $(B)/rend2/tr_glsl.o \
   $(B)/rend2/tr_image.o \
   $(B)/rend2/tr_image_bmp.o \
@@ -1174,6 +1192,7 @@ Q3RENDVOBJ = \
   $(B)/rendv/tr_cmds.o \
   $(B)/rendv/tr_curve.o \
   $(B)/rendv/tr_font.o \
+  $(B)/rendv/tr_font_stash.o \
   $(B)/rendv/tr_image.o \
   $(B)/rendv/tr_image_png.o \
   $(B)/rendv/tr_image_jpg.o \
@@ -1752,16 +1771,16 @@ $(B)/rend2/glsl/%.c: $(R2DIR)/glsl/%.glsl $(STRINGIFY)
 	$(DO_REF_STR)
 
 $(B)/rend2/glsl/%.o: $(B)/renderer2/glsl/%.c
-	$(DO_REND_CC)
+	$(DO_REND2_CC)
 
 $(B)/rend2/%.o: $(R2DIR)/%.c
-	$(DO_REND_CC)
+	$(DO_REND2_CC)
 
 $(B)/rend2/%.o: $(RCDIR)/%.c
-	$(DO_REND_CC)
+	$(DO_REND2_CC)
 
 $(B)/rend2/%.o: $(CMDIR)/%.c
-	$(DO_REND_CC)
+	$(DO_REND2_CC)
 
 $(B)/rendx/%.o: $(R1DIR)/%.c
 	$(DO_GLX_REND_CC)
@@ -1776,13 +1795,13 @@ $(B)/rendx/%.o: $(RXDIR)/%.cpp
 	$(DO_GLX_REND_CXX)
 
 $(B)/rendv/%.o: $(RVDIR)/%.c
-	$(DO_REND_CC)
+	$(DO_RENDV_CC)
 
 $(B)/rendv/%.o: $(RCDIR)/%.c
-	$(DO_REND_CC)
+	$(DO_RENDV_CC)
 
 $(B)/rendv/%.o: $(CMDIR)/%.c
-	$(DO_REND_CC)
+	$(DO_RENDV_CC)
 
 $(B)/client/%.o: $(UDIR)/%.c
 	$(DO_CC)

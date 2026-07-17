@@ -38,7 +38,8 @@ remains compatible.
   client glue, renderer data formats, platform services, and runtime identity.
 - Modernized engine features inherited from FnQ3, including SDL3, OpenAL,
   modular OpenGL-lineage/GLx/Vulkan renderers, console and screenshot
-  improvements, and deterministic release tooling.
+  improvements, opt-in motion blur, enhanced map lens flares and liquids,
+  optional per-map global fog, and deterministic release tooling.
 - Compatibility validation against a legitimate retail Quake Live installation.
 
 ### Out of scope
@@ -87,7 +88,9 @@ staging, security, and compatibility contract.
   flow, and maintainer conventions.
 - [GLx Renderer Guide](docs/GLX.md) for the canonical OpenGL-lineage renderer,
   migration notes, and troubleshooting.
-- [Display Guide](docs/DISPLAY.md), [Audio Guide](docs/AUDIO.md),
+- [Display Guide](docs/DISPLAY.md) for renderer selection, motion blur, map lens
+  flares, enhanced liquids, optional global fog, and other presentation controls;
+  [Audio Guide](docs/AUDIO.md),
   [Console Guide](docs/CONSOLE.md), and [Screenshot Guide](docs/SCREENSHOTS.md)
   for inherited FnQ3 feature documentation that will be updated as Quake Live
   compatibility work lands.

@@ -420,6 +420,13 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsafe control"):
             vk_runtime_sweep.parse_extra_sets(["r_safe=1\nquit"])
 
+    def test_motion_blur_toggle_is_applied_before_vulkan_initialization(self) -> None:
+        startup = vk_runtime_sweep.launch_cvars(
+            {"r_motionBlur": "1", "r_motionBlurStrength": "0.25"}
+        )
+
+        self.assertEqual(startup, {"r_motionBlur": "1"})
+
     def test_runtime_options_reject_invalid_waits_and_timeouts(self) -> None:
         args = argparse.Namespace(
             width=640,
@@ -1545,6 +1552,18 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
 
 
 class VkRendererSourceTests(unittest.TestCase):
+    def test_vulkan_cubemap_capture_batches_readback_and_subrect_copy_is_origin_relative(self) -> None:
+        vk_c = (ROOT / "code" / "renderervk" / "vk.c").read_text(encoding="utf-8")
+        backend = (ROOT / "code" / "renderervk" / "tr_backend.c").read_text(encoding="utf-8")
+
+        self.assertIn("vk.cubemap_capture.face_stride * 6", vk_c)
+        self.assertIn("copy.bufferOffset = (VkDeviceSize)faceIndex * vk.cubemap_capture.face_stride", vk_c)
+        self.assertIn("vk.cubemap_capture.invalidate_pending = qfalse", vk_c)
+        self.assertIn("vk_queue_wait_idle();\n\t\t\tRB_SaveCubemapScreenshots();", backend)
+        self.assertIn("region.dstOffset.x = 0;", vk_c)
+        self.assertIn("region.dstOffset.y = 0;", vk_c)
+        self.assertNotIn("region.dstOffset = region.srcOffset;", vk_c)
+
     def test_vulkan_depth_fade_msaa_fallback_and_depth_resolve_scaffolding(self) -> None:
         vk_c = (ROOT / "code" / "renderervk" / "vk.c").read_text(encoding="utf-8")
         vk_h = (ROOT / "code" / "renderervk" / "vk.h").read_text(encoding="utf-8")

@@ -69,6 +69,9 @@ validation are recorded in [`FONT_COMPATIBILITY.md`](./FONT_COMPATIBILITY.md).
 Retail factory definition, CVar override, map/arena rotation, native-module,
 dedicated-startup, and WebUI contracts are recorded in
 [`FACTORY_COMPATIBILITY.md`](./FACTORY_COMPATIBILITY.md).
+The opt-in, visual-only per-map fog sidecar grammar, filesystem precedence,
+renderer coverage, and feature-local fallback behavior are recorded in
+[`GLOBAL_FOG.md`](./GLOBAL_FOG.md).
 
 ## Repository Layout
 
@@ -166,6 +169,7 @@ Expected behavior:
 
 Renderer-focused verification lives beside the release packaging flow:
 
+- [`docs/fnql/LIQUID_RENDERING.md`](./LIQUID_RENDERING.md) documents the opt-in liquid scene capture and overlay, GLx/Vulkan parity contract, client visual impulse feed, compatibility boundaries, screen-space limitations, and possible higher tiers.
 - [`docs/fnql/GLX_FINAL_CONTRACT.md`](./GLX_FINAL_CONTRACT.md) is the accepted target ADR for the final GLx replacement renderer: stable C ABI, GLx-owned draw behavior, five product tiers, deterministic pass order, and a scene-linear color pipeline.
 - [`docs/fnql/GLX_COLORSPACE_AUDIT.md`](./GLX_COLORSPACE_AUDIT.md) records the audited sRGB/linear texture classes, framebuffer-sRGB policy, blending expectations, and screenshot capture color space for GLx color-pipeline work.
 - [`docs/fnql/DLIGHT_SHADOWMAP_ROADMAP.md`](./DLIGHT_SHADOWMAP_ROADMAP.md) tracks the GLx/Vulkan dynamic-light shadow-map roadmap, current implementation status, test command, launch helper, and RenderDoc checkpoints.
