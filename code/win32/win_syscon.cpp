@@ -143,6 +143,7 @@ static UINT texTimerID; // for flushing text in buffer
 
 static char conBuffer[ MAXPRINTMSG ];
 static int  conBufPos;
+extern qboolean com_fullyInitialized;
 
 static void AddBufferText( const char *text, int textLength );
 
@@ -1240,6 +1241,17 @@ void Conbuf_AppendText( const char *msg )
 	// accumulate
 	memcpy( conBuffer + conBufPos, buffer, bufLen + 1 );
 	conBufPos += bufLen;
+
+	// The main message pump is not active during common startup. A timer-only
+	// flush therefore leaves the system console visibly blank until the first
+	// frame; show those diagnostics synchronously, then retain batching at run
+	// time to avoid per-print edit-control traffic.
+	if ( !com_fullyInitialized && s_wcd.hwndBuffer && conBufPos ) {
+		AddBufferText( conBuffer, conBufPos );
+		conBufPos = 0;
+		UpdateWindow( s_wcd.hwndBuffer );
+		return;
+	}
 
 	// set flush timer
 	if ( texTimerID == 0 ) {

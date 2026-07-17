@@ -4850,7 +4850,7 @@ static void Con_DrawNotify( void )
 			continue;
 		text = con.text.data() + (i % con.totallines)*con.linewidth;
 
-		if (cl.snap.ps.pm_type != PM_INTERMISSION && Key_GetCatcher( ) & (KEYCATCH_UI | KEYCATCH_CGAME) ) {
+		if (cl.snap.ps.pm_type != PM_INTERMISSION && Key_GetCatcher( ) & (KEYCATCH_UI | KEYCATCH_CGAME | KEYCATCH_BROWSER) ) {
 			continue;
 		}
 
@@ -4874,7 +4874,7 @@ static void Con_DrawNotify( void )
 
 	re.SetColor( nullptr );
 
-	if ( Key_GetCatcher() & (KEYCATCH_UI | KEYCATCH_CGAME) ) {
+	if ( Key_GetCatcher() & (KEYCATCH_UI | KEYCATCH_CGAME | KEYCATCH_BROWSER) ) {
 		return;
 	}
 
@@ -5096,7 +5096,7 @@ void Con_DrawConsole( void ) {
 
 	// if disconnected, render console full screen
 	if ( cls.state == CA_DISCONNECTED ) {
-		if ( !( Key_GetCatcher( ) & (KEYCATCH_UI | KEYCATCH_CGAME)) ) {
+		if ( !( Key_GetCatcher( ) & (KEYCATCH_UI | KEYCATCH_CGAME | KEYCATCH_BROWSER)) ) {
 			Con_DrawSolidConsole( 1.0 );
 			return;
 		}

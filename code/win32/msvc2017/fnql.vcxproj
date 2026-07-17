@@ -271,7 +271,6 @@
     <ClCompile Include="..\..\client\audio\openal\AudioSystem.cpp" />
     <ClCompile Include="..\..\client\cl_avi.cpp" />
     <ClCompile Include="..\..\client\cl_cgame.cpp" />
-    <ClCompile Include="..\..\client\cl_hud.cpp" />
     <ClCompile Include="..\..\client\cl_cin.cpp" />
     <ClCompile Include="..\..\client\cl_console.cpp" />
     <ClCompile Include="..\..\client\cl_curl.cpp" />

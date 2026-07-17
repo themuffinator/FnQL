@@ -204,6 +204,7 @@ struct StartupParameters {
 	// it after the call must make an owned copy.
 	std::string_view runtimePath{};
 	std::string_view basePath{};
+	std::string_view retailPath{};
 	std::string_view playerName{};
 	std::uint32_t appId = 0;
 	std::uint32_t identityLow = 0;

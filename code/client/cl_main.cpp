@@ -180,8 +180,6 @@ cvar_t	*cl_menuAspect;
 cvar_t	*cl_menuDepthOfField;
 cvar_t	*cl_menuDepthOfFieldTime;
 cvar_t	*cl_cinematicAspect;
-cvar_t	*cl_hudAspect;
-cvar_t	*cl_hudDump;
 cvar_t	*cl_captureActive;
 cvar_t	*cl_playerHighlight;
 cvar_t	*cl_playerHighlightRimIntensity;
@@ -1408,7 +1406,7 @@ void CL_MapLoading( void ) {
 		return;
 	}
 
-	CL_WebHost_Shutdown();
+	CL_WebHost_HideForGameTransition();
 	Con_Close();
 	Key_SetCatcher( 0 );
 
@@ -2318,6 +2316,7 @@ static void CL_Connect_f( void ) {
 	// server connection string
 	Cvar_Set( "cl_currentServerAddress", server );
 	CL_WebView_PublishGameStartForAddress( &clc.serverAddress );
+	CL_WebHost_HideForGameTransition();
 }
 
 #define MAX_RCON_MESSAGE (MAX_STRING_CHARS+4)
@@ -3795,8 +3794,10 @@ void CL_Frame( int msec, int realMsec ) {
 		cls.cddialog = qfalse;
 		VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_NEED_CD );
 	} else	if ( cls.state == CA_DISCONNECTED && !( Key_GetCatcher( ) & KEYCATCH_UI )
+		&& !( Key_GetCatcher() & KEYCATCH_BROWSER ) && !CL_UIMenusAreVisible()
 		&& !com_sv_running->integer && uivm ) {
-		// if disconnected, bring up the menu
+		// Bring up the menu once.  UI_MENUS_ANY_VISIBLE covers menus whose input
+		// catcher was temporarily yielded during a renderer or browser transition.
 		S_StopAllSounds();
 		VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_MAIN );
 	}
@@ -4737,12 +4738,12 @@ void CL_Init( void ) {
 	Cvar_SetDescription( cl_freezeDemo, "Hold demo simulation time while preserving client input and UI frame timing." );
 	cl_drawRecording = Cvar_Get("cl_drawRecording", "1", CVAR_ARCHIVE);
 	Cvar_SetDescription( cl_drawRecording, "Demo recording indicator: hidden (0), detailed (1), or compact REC icon (2)." );
-	cl_menuAspect = Cvar_Get( "cl_menuAspect", "0", CVAR_ARCHIVE );
+	cl_menuAspect = Cvar_Get( "cl_menuAspect", "1", CVAR_ARCHIVE );
 	Cvar_CheckRange( cl_menuAspect, "0", "1", CV_INTEGER );
 	Cvar_SetDescription( cl_menuAspect,
 		"Menu aspect correction:\n"
-		" 0 - stretch menu widgets to the framebuffer\n"
-		" 1 - keep menu widgets, including 3D model viewports, in centered 4:3 space" );
+		" 1 - retain the retail QL centered 4:3 menu layout (default)\n"
+		" 0 - stretch menu widgets, including 3D model viewports, to the framebuffer" );
 	cl_menuDepthOfField = Cvar_Get( "cl_menuDepthOfField", "0", CVAR_ARCHIVE );
 	Cvar_CheckRange( cl_menuDepthOfField, "0", "1", CV_FLOAT );
 	Cvar_SetDescription( cl_menuDepthOfField,
@@ -4757,15 +4758,6 @@ void CL_Init( void ) {
 		"Cinematic aspect correction:\n"
 		" 0 - stretch UI and fullscreen cinematics to the framebuffer\n"
 		" 1 - keep UI and fullscreen cinematics in centered 4:3 space" );
-	cl_hudAspect = Cvar_Get( "cl_hudAspect", "1", CVAR_ARCHIVE );
-	Cvar_CheckRange( cl_hudAspect, "0", "1", CV_INTEGER );
-	Cvar_SetDescription( cl_hudAspect,
-		"HUD aspect correction mode:\n"
-		" 0 - stretch HUD to the framebuffer\n"
-		" 1 - keep HUD in centered 4:3 uniform space and apply fnql-hud.json rules when present" );
-	cl_hudDump = Cvar_Get( "cl_hudDump", "0", CVAR_ARCHIVE );
-	Cvar_CheckRange( cl_hudDump, "0", "1", CV_INTEGER );
-	Cvar_SetDescription( cl_hudDump, "Dump deduplicated cgame HUD input groups to fnql-hud-dump.json in the active game directory." );
 	cl_captureActive = Cvar_Get( "cl_captureActive", "0", CVAR_TEMP | CVAR_PRIVATE | CVAR_NORESTART | CVAR_NOTABCOMPLETE );
 	Cvar_SetDescription( cl_captureActive, "Internal capture flag used while screenshot levelshot and cubemap frames are being rendered." );
 	r_levelshotHideHud = Cvar_Get( "r_levelshotHideHud", "1", CVAR_ARCHIVE_ND );
@@ -4808,8 +4800,6 @@ void CL_Init( void ) {
 	CL_MigrateLegacyPlayerHighlightCvar( cl_playerHighlightRedColor, "cl_enemyHighlightRedColor", "208 96 96" );
 	CL_MigrateLegacyPlayerHighlightCvar( cl_playerHighlightBlueColor, "cl_enemyHighlightBlueColor", "96 144 224" );
 	CL_MigrateLegacyPlayerHighlightCvar( cl_playerHighlightFreeColor, "cl_enemyHighlightFreeColor", "208 96 96" );
-	CL_HudInit();
-
 	cl_aviFrameRate = Cvar_Get ("cl_aviFrameRate", "25", CVAR_ARCHIVE);
 	Cvar_CheckRange( cl_aviFrameRate, "1", "1000", CV_INTEGER );
 	Cvar_SetDescription( cl_aviFrameRate, "The framerate used for capturing video." );
@@ -4997,7 +4987,6 @@ void CL_Shutdown( const char *finalmsg, qboolean quit ) {
 	CL_Workshop_Shutdown();
 	CL_WebHost_Shutdown();
 	CL_WebPak_Shutdown();
-	CL_HudShutdown();
 
 	// clear and mute all sounds until next registration
 	S_DisableSounds();

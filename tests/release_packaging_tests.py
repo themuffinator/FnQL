@@ -112,12 +112,12 @@ class ReleasePackagingTests(unittest.TestCase):
         }
         self.assertTrue(required_destinations.issubset(packaged))
         self.assertEqual(packaged, expected_packaged)
-        self.assertIn("baseq3/fnql-hud.json", packaged)
+        self.assertNotIn("baseq3/fnql-hud.json", packaged)
 
     def test_meson_root_archive_inputs_include_non_map_pkg_assets(self) -> None:
         meson_build = (ROOT / "meson.build").read_text(encoding="utf-8")
 
-        self.assertIn("'pkg/baseq3/fnql-hud.json'", meson_build)
+        self.assertNotIn("'pkg/baseq3/fnql-hud.json'", meson_build)
         self.assertIn("'pkg/baseq3/scripts/fnql.shader'", meson_build)
         self.assertIn("'pkg/baseq3/sound/fnql-weapon-sounds.sndshd'", meson_build)
         self.assertIn("'pkg/missionpack/sound/fnql-weapon-sounds.sndshd'", meson_build)
@@ -173,13 +173,14 @@ class ReleasePackagingTests(unittest.TestCase):
             package_root = root / "pkg"
             (package_root / "baseq3" / "maps").mkdir(parents=True)
             (package_root / "baseq3" / "maps" / "q3dm1.azb").write_bytes(b"zone")
-            (package_root / "baseq3" / "fnql-hud.json").write_text(
-                "{}",
+            (package_root / "baseq3" / "scripts" / "custom.shader").parent.mkdir(parents=True)
+            (package_root / "baseq3" / "scripts" / "custom.shader").write_text(
+                "textures/custom {}",
                 encoding="utf-8",
             )
-            (package_root / "missionpack" / "fnql-hud.json").parent.mkdir(parents=True)
-            (package_root / "missionpack" / "fnql-hud.json").write_text(
-                "{}",
+            (package_root / "missionpack" / "sound" / "custom.sndshd").parent.mkdir(parents=True)
+            (package_root / "missionpack" / "sound" / "custom.sndshd").write_text(
+                "custom {}",
                 encoding="utf-8",
             )
             (package_root / "baseq2" / "maps").mkdir(parents=True)
@@ -191,10 +192,10 @@ class ReleasePackagingTests(unittest.TestCase):
                 names = set(archive.namelist())
 
         self.assertIn("baseq3/maps/q3dm1.azb", names)
-        self.assertIn("baseq3/fnql-hud.json", names)
-        self.assertIn("missionpack/fnql-hud.json", names)
+        self.assertIn("baseq3/scripts/custom.shader", names)
+        self.assertIn("missionpack/sound/custom.sndshd", names)
         self.assertIn("baseq2/maps/q2dm1.azb", names)
-        self.assertNotIn("pkg/baseq3/fnql-hud.json", names)
+        self.assertNotIn("pkg/baseq3/scripts/custom.shader", names)
 
     def test_release_layout_verifier_requires_root_package_archive(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

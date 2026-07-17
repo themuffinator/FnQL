@@ -453,8 +453,6 @@ extern	cvar_t	*cl_menuAspect;
 extern	cvar_t	*cl_menuDepthOfField;
 extern	cvar_t	*cl_menuDepthOfFieldTime;
 extern	cvar_t	*cl_cinematicAspect;
-extern	cvar_t	*cl_hudAspect;
-extern	cvar_t	*cl_hudDump;
 extern	cvar_t	*cl_captureActive;
 extern	cvar_t	*cl_playerHighlight;
 extern	cvar_t	*cl_playerHighlightRimIntensity;
@@ -606,6 +604,7 @@ void CL_SaveConsoleHistory( void );
 void	SCR_Init( void );
 void	SCR_Done( void );
 void	SCR_UpdateScreen( void );
+qboolean CL_UIMenusAreVisible( void );
 
 void	SCR_DebugGraph( float value );
 
@@ -623,6 +622,7 @@ void	SCR_DrawStringExt( int x, int y, float size, const char *string, const floa
 void	SCR_DrawSmallStringExt( int x, int y, const char *string, const float *setColor, qboolean forceColor, qboolean noColorEscape );
 void	SCR_DrawSmallChar( int x, int y, int ch );
 void	SCR_DrawSmallString( int x, int y, const char *s, int len );
+void	CL_CopyRetailGlconfig( void *glconfig );
 void	RE_DrawScaledText( int x, int y, const char *text, int fontHandle, float scale, int limit, float *maxX, qboolean forceColor, const float *baseColor );
 void	RE_MeasureScaledText( const char *text, const char *end, int fontHandle, float scale, int limit, float *bounds );
 
@@ -711,6 +711,7 @@ void CL_WebHost_SetCursorPosition( int x, int y );
 qboolean CL_WebHost_GetCursorPosition( int *x, int *y );
 qboolean CL_WebHost_RequestCursorPosition( int *x, int *y );
 void CL_WebHost_HideBrowser( void );
+void CL_WebHost_HideForGameTransition( void );
 void CL_WebHost_NotifyAppActivation( qboolean active );
 void CL_WebHost_OnServerInfoResponse( const netadr_t *address, const char *infoString, int ping );
 qboolean CL_WebHost_OnServerStatusResponseInfo( const netadr_t *address, const char *infoString );
@@ -756,7 +757,7 @@ void CL_AdvertisementBridge_GetLabelList1Entry( int index, char *buffer, int buf
 int CL_AdvertisementBridge_GetLabelList2Count( void );
 void CL_AdvertisementBridge_GetLabelList2Entry( int index, char *buffer, int bufferSize );
 qboolean CL_Awesomium_RequestResource( const char *virtualPath, void **outBuffer, int *outLength );
-qboolean CL_Awesomium_Startup( const char *runtimePath, const char *basePath, const char *playerName, unsigned int appId, unsigned int steamIdLow, unsigned int steamIdHigh, int width, int height, const char *initialConfigJson, const char *initialMapJson, const char *initialFactoryJson );
+qboolean CL_Awesomium_Startup( const char *runtimePath, const char *basePath, const char *retailPath, const char *playerName, unsigned int appId, unsigned int steamIdLow, unsigned int steamIdHigh, int width, int height, const char *initialConfigJson, const char *initialMapJson, const char *initialFactoryJson );
 qboolean CL_Awesomium_OpenURL( const char *url );
 void CL_Awesomium_Update( void );
 qboolean CL_Awesomium_Resize( int width, int height );
@@ -783,18 +784,6 @@ void CL_Awesomium_ClearCache( void );
 void CL_Awesomium_Reload( qboolean ignoreCache );
 void CL_Awesomium_Shutdown( void );
 const char *CL_Awesomium_LastError( void );
-
-//
-// cl_hud.cpp
-//
-void CL_HudInit( void );
-void CL_HudShutdown( void );
-void CL_HudResetCGame( void );
-void CL_HudBeginFrame( void );
-void CL_HudEndFrame( void );
-void CL_HudRegisterShaderName( qhandle_t shader, const char *name );
-void CL_HudAdjustRefdef( refdef_t *refdef );
-void CL_HudDrawStretchPic( float x, float y, float w, float h, float s1, float t1, float s2, float t2, qhandle_t shader );
 
 //
 // cl_ui.cpp

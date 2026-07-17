@@ -53,7 +53,6 @@ cvar_t	*r_detailTextures;
 
 cvar_t	*r_znear;
 cvar_t	*r_zproj;
-cvar_t	*r_fovCorrection;
 cvar_t	*r_stereoSeparation;
 
 cvar_t	*r_skipBackEnd;
@@ -244,6 +243,7 @@ cvar_t	*r_lodCurveError;
 
 cvar_t	*r_overBrightBits;
 cvar_t	*r_mapOverBrightBits;
+cvar_t	*r_mapOverBrightCap;
 cvar_t	*r_mapGreyScale;
 
 cvar_t	*r_debugSurface;
@@ -2450,6 +2450,10 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_overBrightBits, "Sets the intensity of overall brightness of texture pixels." );
 	r_mapOverBrightBits = ri.Cvar_Get( "r_mapOverBrightBits", "2", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_SetDescription( r_mapOverBrightBits, "Sets the number of overbright bits baked into all lightmaps and map data." );
+	// Retail Quake Live persists this bounded cap and applies it while normalizing overbright map RGB.
+	r_mapOverBrightCap = ri.Cvar_Get( "r_mapOverBrightCap", "255", CVAR_ARCHIVE | CVAR_LATCH | CVAR_VM_CREATED | CVAR_CLOUD );
+	ri.Cvar_CheckRange( r_mapOverBrightCap, "0", "255", CV_FLOAT );
+	ri.Cvar_SetDescription( r_mapOverBrightCap, "Caps the brightest normalized map-lighting channel after overbright conversion; 255 preserves retail default brightness." );
 	r_intensity = ri.Cvar_Get( "r_intensity", "1.25", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_CheckRange( r_intensity, "1", "255", CV_FLOAT );
 	ri.Cvar_SetDescription( r_intensity, "Global texture lighting scale." );
@@ -2520,9 +2524,6 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_znear, "Viewport distance from view origin (how close objects can be to the player before they're clipped out of the scene)." );
 	r_zproj = ri.Cvar_Get( "r_zproj", "64", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_zproj, "Projected viewport frustum." );
-	r_fovCorrection = ri.Cvar_Get( "r_fovCorrection", "1", CVAR_ARCHIVE_ND );
-	ri.Cvar_CheckRange( r_fovCorrection, "0", "1", CV_INTEGER );
-	ri.Cvar_SetDescription( r_fovCorrection, "Auto-correct 4:3-authored scene FOV for the current viewport aspect. Disable this if game code already supplies aspect-correct FOV values." );
 	r_stereoSeparation = ri.Cvar_Get( "r_stereoSeparation", "64", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_stereoSeparation, "Control eye separation. Resulting separation is \\r_zproj divided by this value in standard units." );
 	r_ignoreGLErrors = ri.Cvar_Get( "r_ignoreGLErrors", "1", CVAR_ARCHIVE_ND );

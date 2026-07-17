@@ -106,6 +106,7 @@ R_ColorShiftLightingBytes
 */
 static	void R_ColorShiftLightingBytes( const byte in[4], byte out[4] ) {
 	int		shift, r, g, b;
+	const int	cap = r_mapOverBrightCap ? r_mapOverBrightCap->integer : 255;
 
 	// shift the color data based on overbright range
 	shift = r_mapOverBrightBits->integer - tr.overbrightBits;
@@ -121,9 +122,9 @@ static	void R_ColorShiftLightingBytes( const byte in[4], byte out[4] ) {
 
 		max = r > g ? r : g;
 		max = max > b ? max : b;
-		r = r * 255 / max;
-		g = g * 255 / max;
-		b = b * 255 / max;
+		r = r * cap / max;
+		g = g * cap / max;
+		b = b * cap / max;
 	}
 
 	out[0] = r;
@@ -142,6 +143,7 @@ R_ColorShiftLightingFloats
 static void R_ColorShiftLightingFloats(const float in[4], float out[4])
 {
 	float	r, g, b;
+	const float cap = ( r_mapOverBrightCap ? r_mapOverBrightCap->integer : 255 ) / 255.0f;
 	float   scale = (1 << (r_mapOverBrightBits->integer - tr.overbrightBits)) / 255.0f;
 
 	r = in[0] * scale;
@@ -154,9 +156,9 @@ static void R_ColorShiftLightingFloats(const float in[4], float out[4])
 
 		max = r > g ? r : g;
 		max = max > b ? max : b;
-		r = r / max;
-		g = g / max;
-		b = b / max;
+		r = r * cap / max;
+		g = g * cap / max;
+		b = b * cap / max;
 	}
 
 	out[0] = r;

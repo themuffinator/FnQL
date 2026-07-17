@@ -130,6 +130,15 @@ static int QL_FonsRenderCreate( void *userPtr, int width, int height ) {
 		width > QL_HOST_ATLAS_MAX_WIDTH || height > QL_HOST_ATLAS_MAX_HEIGHT ) {
 		return 0;
 	}
+	// fonsResetAtlas invokes renderResize even when the dimensions do not
+	// change.  Recreating an engine image for that reset leaks Vulkan world
+	// image chunks until map loading aborts.  The resize caller has already
+	// completed queued draws, and later glyph updates overwrite every sampled
+	// slot, so the retained image needs neither recreation nor a full clear.
+	if ( host->atlasImage && host->atlasWidth == width
+		&& host->atlasHeight == height ) {
+		return 1;
+	}
 	rgba = ri.Malloc( width * height * 4 );
 	if ( !rgba ) return 0;
 	for ( i = 0; i < width * height; ++i ) {

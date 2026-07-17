@@ -10,9 +10,6 @@
     <ClCompile Include="..\..\client\cl_cgame.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\client\cl_hud.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="..\..\client\cl_cin.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

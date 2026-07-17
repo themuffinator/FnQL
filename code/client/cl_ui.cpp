@@ -614,24 +614,26 @@ static void CL_UIAdjustStretchPic( float *x, float *y, float *w, float *h ) {
 	const float xscale = cls.glconfig.vidWidth / 640.0f;
 	const float yscale = cls.glconfig.vidHeight / 480.0f;
 
-	if ( !cl_menuAspect || !cl_menuAspect->integer || xscale <= 0.0f || yscale <= 0.0f ) {
+	// The retail UI applies its centered 4:3 transform before this syscall, so
+	// the incoming coordinates are already framebuffer pixels.  Preserve that
+	// layout by default; only undo it for the optional full-frame stretch mode.
+	if ( !cl_menuAspect || cl_menuAspect->integer || cls.scale <= 0.0f
+		|| xscale <= 0.0f || yscale <= 0.0f ) {
 		return;
 	}
 
 	if ( x ) {
-		*x /= xscale;
+		*x = ( *x - cls.biasX ) / cls.scale * xscale;
 	}
 	if ( y ) {
-		*y /= yscale;
+		*y = *y / cls.scale * yscale;
 	}
 	if ( w ) {
-		*w /= xscale;
+		*w = *w / cls.scale * xscale;
 	}
 	if ( h ) {
-		*h /= yscale;
+		*h = *h / cls.scale * yscale;
 	}
-
-	SCR_AdjustFrom640Uniform( x, y, w, h );
 }
 
 
@@ -641,7 +643,7 @@ static void CL_UIAdjustRefdef( refdef_t *refdef ) {
 	float w;
 	float h;
 
-	if ( !refdef || !cl_menuAspect || !cl_menuAspect->integer ) {
+	if ( !refdef || !cl_menuAspect || cl_menuAspect->integer ) {
 		return;
 	}
 
@@ -656,34 +658,6 @@ static void CL_UIAdjustRefdef( refdef_t *refdef ) {
 	refdef->y = RoundToInt( y );
 	refdef->width = RoundToInt( w );
 	refdef->height = RoundToInt( h );
-}
-
-
-static void CL_UIRenderScene( const refdef_t *refdef ) {
-	cvar_t *rFovCorrection;
-	int savedInteger;
-	float savedValue;
-	bool savedModified;
-
-	if ( !refdef || !Cvar_VariableIntegerValue( "r_fovCorrection" ) ) {
-		re.RenderScene( refdef );
-		return;
-	}
-
-	rFovCorrection = Cvar_Get( "r_fovCorrection", "0", 0 );
-	savedInteger = rFovCorrection->integer;
-	savedValue = rFovCorrection->value;
-	savedModified = rFovCorrection->modified != qfalse;
-
-	rFovCorrection->integer = 0;
-	rFovCorrection->value = 0.0f;
-	rFovCorrection->modified = qfalse;
-
-	re.RenderScene( refdef );
-
-	rFovCorrection->integer = savedInteger;
-	rFovCorrection->value = savedValue;
-	rFovCorrection->modified = savedModified ? qtrue : qfalse;
 }
 
 
@@ -962,9 +936,8 @@ static intptr_t CL_UISystemCalls( intptr_t *args ) {
 	case UI_R_RENDERSCENE: {
 		const refdef_t *vmRefdef = VMA(1);
 		refdef_t refdef = *vmRefdef;
-		refdef.rdflags |= RDF_NOFOVCORRECTION;
 		CL_UIAdjustRefdef( &refdef );
-		CL_UIRenderScene( &refdef );
+		re.RenderScene( &refdef );
 		return 0;
 	}
 
@@ -1037,8 +1010,8 @@ static intptr_t CL_UISystemCalls( intptr_t *args ) {
 		return Key_GetCatcher();
 
 	case UI_KEY_SETCATCHER:
-		// Don't allow the ui module to close the console
-		Key_SetCatcher( args[1] | ( Key_GetCatcher( ) & KEYCATCH_CONSOLE ) );
+		// Console and browser ownership are controlled by their host subsystems.
+		Key_SetCatcher( args[1] | ( Key_GetCatcher( ) & ( KEYCATCH_CONSOLE | KEYCATCH_BROWSER ) ) );
 		return 0;
 
 	case UI_GETCLIPBOARDDATA:
@@ -1553,7 +1526,10 @@ static void QDECL QL_UI_trap_GetClientState( uiClientState_t *state ) {
 }
 
 static void QDECL QL_UI_trap_GetGlconfig( glconfig_t *glconfig ) {
-	UI_Import_Call( UI_GETGLCONFIG, { UI_Import_Ptr( glconfig ) } );
+	// The native retail UI consumes the QL glconfig ABI, which has an extra
+	// multitexture field ahead of the video dimensions.  The generic UI syscall
+	// path is retained for bytecode UI modules and uses the legacy layout.
+	CL_CopyRetailGlconfig( glconfig );
 }
 
 static int QDECL QL_UI_trap_GetConfigString( int index, char *buffer, int bufferSize ) {
@@ -1916,6 +1892,19 @@ static void CL_InitUIImports( void ) {
 	ql_ui_imports[UI_QL_IMPORT_CM_LOADMODEL] = (ql_import_f)QL_UI_trap_CM_LoadModel;
 	ql_ui_imports[UI_QL_IMPORT_SET_PBCLSTATUS] = (ql_import_f)QL_UI_trap_SetPbClStatus;
 	ql_ui_imports[UI_QL_IMPORT_LAUNCHER_READSCREENSHOT] = (ql_import_f)QL_UI_trap_Launcher_ReadScreenshot;
+}
+
+
+/*
+====================
+CL_UIMenusAreVisible
+
+The retail UI keeps its own menu stack.  Input ownership alone cannot tell us
+whether reactivating the main menu would replace an already-visible menu.
+====================
+*/
+qboolean CL_UIMenusAreVisible( void ) {
+	return ( uivm && VM_Call( uivm, 0, UI_MENUS_ANY_VISIBLE ) ) ? qtrue : qfalse;
 }
 
 

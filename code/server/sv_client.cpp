@@ -332,10 +332,12 @@ SV_FreeIP4DB
 */
 void SV_FreeIP4DB( void )
 {
-	SV_ZFree( ipdb_range );
-
+	iprange_t *allocation = ipdb_range;
+	ipdb_range = nullptr;
 	ipdb_loaded = false;
 	ipdb_tld = nullptr;
+	num_tlds = 0;
+	SV_ZFree( allocation );
 }
 
 
@@ -1080,6 +1082,7 @@ static fnql::server::stats::Session *SV_ClientStatsSession( int clientNum,
 	fnql::server::stats::Session &session = clientStatsSessions[clientNum];
 	session.Begin( client.platformSteamIdValue );
 	if ( client.platformAuthSession && client.platformAuthValidated &&
+		client.platformAuthTicketSession &&
 		client.platformSteamIdValue != 0 &&
 		!session.RequestIssued() &&
 		( FNQL_Steam_Capabilities() &
@@ -1095,6 +1098,7 @@ static fnql::server::stats::Session *SV_ClientStatsSession( int clientNum,
 
 static bool SV_StatsProviderReady( const client_t &client ) {
 	return client.platformAuthSession && client.platformAuthValidated &&
+		client.platformAuthTicketSession &&
 		client.platformSteamIdValue != 0 &&
 		FNQL_Steam_Available( FNQL_STEAM_CAP_GAME_SERVER_STATS );
 }
@@ -1244,7 +1248,7 @@ void SV_HandleSteamProviderEvent( unsigned int type, int result,
 			client.state == CS_FREE || client.state == CS_ZOMBIE ) {
 			continue;
 		}
-		if ( type == FNQL_STEAM_EVENT_AUTH_RESULT && client.platformAuthSession ) {
+		if ( type == FNQL_STEAM_EVENT_AUTH_RESULT && client.platformAuthTicketSession ) {
 			if ( result == FNQL_STEAM_RESULT_OK ) {
 				if ( !client.platformAuthValidated ) {
 					client.platformAuthValidated = qtrue;
@@ -1490,8 +1494,10 @@ void SV_DirectConnect( const netadr_t *from ) {
 	const char	*ip, *info, *v;
 	bool		compat;
 	bool		longstr;
+	bool		localLoopback;
 	std::uint64_t retailSteamId = 0;
 	bool		platformAuthSession = false;
+	bool		platformAuthTicketSession = false;
 	bool		platformAuthValidated = false;
 
 	Com_DPrintf( "SVC_DirectConnect()\n" );
@@ -1761,7 +1767,18 @@ void SV_DirectConnect( const netadr_t *from ) {
 	}
 
 gotnewcl:
-	if ( cl_proto == QL_RETAIL_PROTOCOL_VERSION && !NET_IsLocalAddress( from ) ) {
+	localLoopback = from && from->type == NA_LOOPBACK;
+
+	// FnQL clients send their retail-shaped ticket in the challenge request for
+	// both remote and loopback connections.  Keep the ticket bound to the
+	// challenge in both cases. For the in-process loopback transport, retail
+	// qagame needs an authenticated provisional slot before it will accept the
+	// client, but Steam can legitimately decline to mint a GameServer ticket for
+	// the same running client. A signed-in provider identity is sufficient for
+	// that non-networked path. This does not relax the external policy: remote
+	// protocol-91 clients still need a matching ticket whenever the provider
+	// exposes authentication.
+	if ( cl_proto == QL_RETAIL_PROTOCOL_VERSION ) {
 		fnql::server::auth::AuthRecord auth{};
 		const bool hasRetailAuth = pendingRetailAuth.Consume(
 			SV_AuthAddressKey( from ), challenge,
@@ -1769,25 +1786,42 @@ gotnewcl:
 		const bool providerAvailable =
 			SV_PlatformServiceAvailable( SV_PLATFORM_CAPABILITY_AUTH ) != qfalse;
 
-		if ( providerAvailable && !hasRetailAuth ) {
-			NET_OutOfBandPrint( NS_SERVER, from,
-				"print\nA valid platform authentication ticket is required.\n" );
-			return;
-		}
-		if ( hasRetailAuth ) {
-			retailSteamId = auth.steamId;
-			if ( providerAvailable ) {
-				const fnqlSteamResult_t result = FNQL_Steam_BeginAuthSession(
-					auth.ticket.data(), static_cast<std::uint32_t>( auth.ticketBytes ),
-					auth.steamId );
-				if ( result != FNQL_STEAM_RESULT_OK && result != FNQL_STEAM_RESULT_PENDING ) {
-					fnql::server::auth::SecureErase( &auth, sizeof( auth ) );
-					NET_OutOfBandPrint( NS_SERVER, from,
-						"print\nPlatform authentication rejected the connection.\n" );
-					return;
+		if ( localLoopback && providerAvailable ) {
+			fnqlSteamStatus_t localStatus{};
+			localStatus.size = sizeof( localStatus );
+			if ( !FNQL_Steam_GetStatus( &localStatus ) || !localStatus.local_steam_id ) {
+				fnql::server::auth::SecureErase( &auth, sizeof( auth ) );
+				NET_OutOfBandPrint( NS_SERVER, from,
+					"print\nA signed-in Steam identity is required for local play.\n" );
+				return;
+			}
+			retailSteamId = localStatus.local_steam_id;
+			platformAuthSession = true;
+			platformAuthValidated = true;
+			Com_DPrintf( "Accepted local loopback Steam identity %llu without a GameServer ticket.\n",
+				static_cast<unsigned long long>( retailSteamId ) );
+		} else {
+			if ( providerAvailable && !hasRetailAuth ) {
+				NET_OutOfBandPrint( NS_SERVER, from,
+					"print\nA valid platform authentication ticket is required.\n" );
+				return;
+			}
+			if ( hasRetailAuth ) {
+				retailSteamId = auth.steamId;
+				if ( providerAvailable ) {
+					const fnqlSteamResult_t result = FNQL_Steam_BeginAuthSession(
+						auth.ticket.data(), static_cast<std::uint32_t>( auth.ticketBytes ),
+						auth.steamId );
+					if ( result != FNQL_STEAM_RESULT_OK && result != FNQL_STEAM_RESULT_PENDING ) {
+						fnql::server::auth::SecureErase( &auth, sizeof( auth ) );
+						NET_OutOfBandPrint( NS_SERVER, from,
+							"print\nPlatform authentication rejected the connection.\n" );
+						return;
+					}
+					platformAuthSession = true;
+					platformAuthTicketSession = true;
+					platformAuthValidated = result == FNQL_STEAM_RESULT_OK;
 				}
-				platformAuthSession = true;
-				platformAuthValidated = result == FNQL_STEAM_RESULT_OK;
 			}
 		}
 		fnql::server::auth::SecureErase( &auth, sizeof( auth ) );
@@ -1820,6 +1854,7 @@ gotnewcl:
 	if ( retailSteamId != 0 ) {
 		newcl->platformSteamIdValue = retailSteamId;
 		newcl->platformAuthSession = platformAuthSession ? qtrue : qfalse;
+		newcl->platformAuthTicketSession = platformAuthTicketSession ? qtrue : qfalse;
 		newcl->platformAuthValidated = platformAuthValidated ? qtrue : qfalse;
 		newcl->platformAuthStartedTime = static_cast<std::uint32_t>( svs.time );
 		Com_sprintf( newcl->platformSteamId, SV_ArraySize( newcl->platformSteamId ),
@@ -1914,12 +1949,13 @@ void SV_FreeClient(client_t *client)
 			clientStatsSessions[clientNum].Reset();
 		}
 	}
-	if ( client->platformAuthSession && client->platformSteamIdValue != 0 ) {
+	if ( client->platformAuthTicketSession && client->platformSteamIdValue != 0 ) {
 		SV_SteamP2PCloseClient( client->platformSteamIdValue );
 		FNQL_Steam_EndAuthSession( client->platformSteamIdValue );
-		client->platformAuthSession = qfalse;
-		client->platformAuthValidated = qfalse;
 	}
+	client->platformAuthTicketSession = qfalse;
+	client->platformAuthSession = qfalse;
+	client->platformAuthValidated = qfalse;
 	SV_StopDemoRecord( client, qfalse );
 	SV_Netchan_FreeQueue(client);
 	SV_CloseDownload(client);

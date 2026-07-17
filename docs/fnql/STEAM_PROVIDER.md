@@ -48,10 +48,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .vscode/build-release.ps1 `
 ```
 
 `FNQL_STEAM_REPO` may name a different sibling path. The VS Code task
-`meson: build Win32 debug + Steam` performs the same operation, and the launch
-configuration `OpenGL + Steam (Retail QL / Win32)` keeps the game windowed and
-opts in to Steam. Only `fnql_steam.dll` is staged into the build tree; private
-source is never copied into FnQL.
+`meson: build Win32 debug (Steam)` performs the same operation. The standard
+`Retail QL / Win32` launch entries run the matching release build directory
+(`meson/build/win32`); every launch keeps the game windowed and explicitly
+enables Steam, but never starts a build task. Run `meson: build (Steam)` before
+those launch entries. Use `meson: build Win32 debug (Steam)` only when manually
+launching the separate debug build directory.
+Only `fnql_steam.dll` is staged into the build tree; private source is never
+copied into FnQL.
 
 Runtime controls and diagnostics:
 

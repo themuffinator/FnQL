@@ -52,7 +52,10 @@ static SDL_JoystickID stickInstance;
 
 static qboolean mouseAvailable = qfalse;
 static qboolean mouseActive = qfalse;
-static qboolean mouseBrowserMode = qfalse;
+static qboolean mouseAbsoluteMode = qfalse;
+static qboolean mouseAbsolutePositionValid = qfalse;
+static int mouseAbsoluteX = 0;
+static int mouseAbsoluteY = 0;
 
 static cvar_t *in_mouse;
 
@@ -418,6 +421,36 @@ static void IN_GobbleMouseEvents( void )
 }
 
 
+/*
+===============
+IN_QueueAbsoluteMousePosition
+
+Retail polls the window cursor while UI or cgame capture is active instead of
+depending solely on motion messages. Queue the first position after every
+capture transition, then only changes, so a join menu opened under a stationary
+pointer receives deterministic coordinates and can activate its drawn cursor.
+===============
+*/
+static void IN_QueueAbsoluteMousePosition( void )
+{
+	float x;
+	float y;
+
+	SDL_GetMouseState( &x, &y );
+	const int positionX = static_cast<int>( x );
+	const int positionY = static_cast<int>( y );
+	if ( mouseAbsolutePositionValid
+		&& positionX == mouseAbsoluteX && positionY == mouseAbsoluteY ) {
+		return;
+	}
+
+	mouseAbsolutePositionValid = qtrue;
+	mouseAbsoluteX = positionX;
+	mouseAbsoluteY = positionY;
+	Com_QueueEvent( Sys_Milliseconds(), SE_MOUSE_ABSOLUTE, positionX, positionY, 0, NULL );
+}
+
+
 //#define DEBUG_EVENTS
 
 /*
@@ -429,32 +462,45 @@ static void IN_ActivateMouse( void )
 {
 	const qboolean consoleActive = ( Key_GetCatcher() & KEYCATCH_CONSOLE ) ? qtrue : qfalse;
 	const qboolean browserActive = ( Key_GetCatcher() & KEYCATCH_BROWSER ) ? qtrue : qfalse;
-	const qboolean grabMouse = ( !browserActive && ( !in_nograb->integer || consoleActive ) ) ? qtrue : qfalse;
-	const qboolean relativeMouse = ( in_mouse->integer > 0 && grabMouse && !browserActive ) ? qtrue : qfalse;
+	const qboolean nativeUiActive = ( Key_GetCatcher() & KEYCATCH_UI ) ? qtrue : qfalse;
+	const qboolean cgameUiActive = ( Key_GetCatcher() & KEYCATCH_CGAME ) ? qtrue : qfalse;
+	const qboolean absoluteMouse = ( browserActive || nativeUiActive || cgameUiActive ) ? qtrue : qfalse;
+	const qboolean grabMouse = ( !absoluteMouse && ( !in_nograb->integer || consoleActive ) ) ? qtrue : qfalse;
+	const qboolean relativeMouse = ( in_mouse->integer > 0 && grabMouse ) ? qtrue : qfalse;
 
 	if ( !mouseAvailable )
 		return;
 
-	if ( !mouseActive || mouseBrowserMode != browserActive )
+	if ( !mouseActive || mouseAbsoluteMode != absoluteMouse )
 	{
 		IN_GobbleMouseEvents();
+		mouseAbsolutePositionValid = qfalse;
 
 		SDL_SetWindowRelativeMouseMode( SDL_window, relativeMouse ? true : false );
 		SDL_SetWindowMouseGrab( SDL_window, grabMouse ? true : false );
 
-		if ( browserActive ) {
+		// Retail releases capture and shows the system cursor whenever the
+		// browser, native UI, or cgame join overlay owns absolute input.  The
+		// retail menu does not consistently paint a software cursor itself.
+		if ( browserActive || nativeUiActive || cgameUiActive ) {
 			IN_ShowCursor( qtrue );
 		} else if ( glw_state.isFullscreen ) {
 			IN_ShowCursor( qfalse );
 		}
 
-		SDL_WarpMouseInWindow( SDL_window, glw_state.window_width / 2, glw_state.window_height / 2 );
+		// Preserve the desktop cursor position when an absolute-input owner
+		// opens. Centering it here made join-menu activation depend on whether a
+		// synthetic warp motion happened to survive the transition event flush.
+		if ( !absoluteMouse ) {
+			SDL_WarpMouseInWindow( SDL_window,
+				glw_state.window_width / 2, glw_state.window_height / 2 );
+		}
 
 #ifdef DEBUG_EVENTS
 		Com_Printf( "%4i %s\n", Sys_Milliseconds(), __func__ );
 #endif
 	}
-	mouseBrowserMode = browserActive;
+	mouseAbsoluteMode = absoluteMouse;
 
 	// in_nograb makes no sense in fullscreen mode
 	if ( !glw_state.isFullscreen )
@@ -513,7 +559,8 @@ static void IN_DeactivateMouse( void )
 
 		mouseActive = qfalse;
 	}
-	mouseBrowserMode = qfalse;
+	mouseAbsoluteMode = qfalse;
+	mouseAbsolutePositionValid = qfalse;
 
 	// Always show the cursor when the mouse is disabled,
 	// but not when fullscreen
@@ -1417,7 +1464,14 @@ void HandleEvents( void )
 			case SDL_EVENT_MOUSE_MOTION:
 				if( Key_GetCatcher() & KEYCATCH_BROWSER )
 				{
-					Com_QueueEvent( in_eventTime, SE_MOUSE,
+					Com_QueueEvent( in_eventTime, SE_MOUSE_ABSOLUTE,
+						(int)e.motion.x, (int)e.motion.y, 0, NULL );
+				}
+				else if( Key_GetCatcher() & ( KEYCATCH_UI | KEYCATCH_CGAME ) )
+				{
+					// Retail UI_MOUSE_EVENT and CG_MOUSE_EVENT consume framebuffer-
+					// absolute coordinates and project them into 640x480 cursor space.
+					Com_QueueEvent( in_eventTime, SE_MOUSE_ABSOLUTE,
 						(int)e.motion.x, (int)e.motion.y, 0, NULL );
 				}
 				else if( mouseActive )
@@ -1532,18 +1586,24 @@ IN_Frame
 void IN_Frame( void )
 {
 	const qboolean browserActive = ( Key_GetCatcher() & KEYCATCH_BROWSER ) ? qtrue : qfalse;
+	const qboolean nativeUiActive = ( Key_GetCatcher() & KEYCATCH_UI ) ? qtrue : qfalse;
+	const qboolean cgameUiActive = ( Key_GetCatcher() & KEYCATCH_CGAME ) ? qtrue : qfalse;
 
 #ifdef USE_JOYSTICK
 	IN_JoyMove();
 #endif
 
 	if ( !gw_active || !mouse_focus || ( in_nograb->integer &&
-		!( Key_GetCatcher() & KEYCATCH_CONSOLE ) && !browserActive ) ) {
+		!( Key_GetCatcher() & KEYCATCH_CONSOLE ) && !browserActive
+		&& !nativeUiActive && !cgameUiActive ) ) {
 		IN_DeactivateMouse();
 		return;
 	}
 
 	IN_ActivateMouse();
+	if ( nativeUiActive || cgameUiActive ) {
+		IN_QueueAbsoluteMousePosition();
+	}
 
 	//IN_ProcessEvents();
 	//HandleEvents();

@@ -219,7 +219,10 @@ static void CL_WebUI_SetCvarIfChanged( const char *name, const char *value ) {
 
 	current = Cvar_VariableString( name );
 	if ( strcmp( current, value ) ) {
-		Cvar_Set( name, value );
+		// These are engine-owned status cvars and several are intentionally ROM
+		// to the console and UI.  Internal state publication must bypass that
+		// user-facing protection or the failed set is retried every frame.
+		Cvar_Set2( name, value, qtrue );
 	}
 }
 
@@ -299,7 +302,7 @@ static const char *CL_WebHost_ResourceBridgeParityScopeLabel( void ) {
 
 static const char *CL_WebHost_ResourceBridgeParityReasonLabel( void ) {
 	return FNQL_Steam_Available( FNQL_STEAM_CAP_AVATARS )
-		? "large-avatar renderer bridge active; non-avatar SteamDataSource resources remain unavailable"
+		? "Steam avatar PNG data source and renderer bridge active; non-avatar SteamDataSource resources remain unavailable"
 		: "external Steam avatar provider is disabled or unavailable";
 }
 
@@ -755,10 +758,27 @@ static qboolean CL_Steam_GetLocalIdentityWords( unsigned int *identityLow,
 	return qtrue;
 }
 
+static void CL_Steam_GetLocalDisplayName( char *buffer, size_t bufferSize ) {
+	fnqlSteamStatus_t status = {};
+
+	if ( !buffer || bufferSize == 0 ) {
+		return;
+	}
+	buffer[0] = '\0';
+	status.size = sizeof( status );
+	if ( FNQL_Steam_Available( FNQL_STEAM_CAP_IDENTITY )
+		&& FNQL_Steam_GetStatus( &status ) && status.persona_name[0] ) {
+		Q_strncpyz( buffer, status.persona_name, (int)bufferSize );
+		return;
+	}
+	Cvar_VariableStringBuffer( "name", buffer, (int)bufferSize );
+}
+
 static qboolean CL_WebUI_EnsureBackendStarted( void ) {
 	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
 	char runtimePath[MAX_OSPATH];
 	char basePath[MAX_OSPATH];
+	char retailPath[MAX_OSPATH];
 	char playerName[MAX_CVAR_VALUE_STRING];
 	cgameClientIdentity_t identity;
 	unsigned int identityLow = 0u;
@@ -783,10 +803,12 @@ static qboolean CL_WebUI_EnsureBackendStarted( void ) {
 
 	runtimePath[0] = '\0';
 	basePath[0] = '\0';
+	retailPath[0] = '\0';
 	playerName[0] = '\0';
 	Cvar_VariableStringBuffer( "fs_homepath", runtimePath, sizeof( runtimePath ) );
 	Cvar_VariableStringBuffer( "fs_basepath", basePath, sizeof( basePath ) );
-	Cvar_VariableStringBuffer( "name", playerName, sizeof( playerName ) );
+	Cvar_VariableStringBuffer( "fs_steampath", retailPath, sizeof( retailPath ) );
+	CL_Steam_GetLocalDisplayName( playerName, sizeof( playerName ) );
 	if ( CL_CopyClientIdentity( clc.clientNum, &identity ) ) {
 		identityLow = identity.identityLow;
 		identityHigh = identity.identityHigh;
@@ -819,6 +841,7 @@ static qboolean CL_WebUI_EnsureBackendStarted( void ) {
 	started = CL_Awesomium_Startup(
 		runtimePath,
 		basePath,
+		retailPath,
 		playerName,
 		(unsigned int)atoi( STEAMPATH_APPID ),
 		identityLow,
@@ -917,12 +940,12 @@ void CL_RefreshOnlineServicesBridgeState( void ) {
 	CL_WebUI_SetCvarIfChanged( "ui_resourceBridgeParityScope", CL_WebHost_ResourceBridgeParityScopeLabel() );
 	CL_WebUI_SetCvarIfChanged( "ui_resourceBridgeParityReason", CL_WebHost_ResourceBridgeParityReasonLabel() );
 	CL_WebUI_SetCvarIfChanged( "ui_resourceBridgeSteamDataSourceSubset",
-		FNQL_Steam_Available( FNQL_STEAM_CAP_AVATARS ) ? "large avatars" : "none" );
+		FNQL_Steam_Available( FNQL_STEAM_CAP_AVATARS ) ? "small medium and large avatars" : "none" );
 	CL_WebUI_SetCvarIfChanged( "ui_resourceBridgeSteamDataSourceNativeGap",
 		FNQL_Steam_Available( FNQL_STEAM_CAP_AVATARS )
 			? "non-avatar SteamDataSource resources are unavailable"
 			: "SteamDataSource and avatar callbacks are unavailable" );
-	CL_WebUI_SetCvarIfChanged( "ui_resourceBridgeSteamDataSourceFallbackOwner", "renderer pak shader registry" );
+	CL_WebUI_SetCvarIfChanged( "ui_resourceBridgeSteamDataSourceFallbackOwner", "Awesomium Steam DataSource and renderer shader registry" );
 	CL_AdvertisementBridge_UpdateCvars();
 	CL_WebHost_UpdateOverlayOwnership();
 }
@@ -1040,7 +1063,10 @@ qhandle_t CL_Steam_RegisterShader( const char *url ) {
 		{ "asset://steam/avatar/large/", FNQL_STEAM_AVATAR_LARGE },
 		{ "steam://avatar/small/", FNQL_STEAM_AVATAR_SMALL },
 		{ "steam://avatar/medium/", FNQL_STEAM_AVATAR_MEDIUM },
-		{ "steam://avatar/large/", FNQL_STEAM_AVATAR_LARGE }
+		{ "steam://avatar/large/", FNQL_STEAM_AVATAR_LARGE },
+		// Retail web.pak uses the unqualified form for profile and friend rows.
+		{ "asset://steam/avatar/", FNQL_STEAM_AVATAR_LARGE },
+		{ "steam://avatar/", FNQL_STEAM_AVATAR_LARGE }
 	};
 	uint64_t avatarSteamId;
 
@@ -1113,9 +1139,9 @@ static void CL_WebUI_RegisterCvars( void ) {
 	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgePolicy", "webpak-unavailable", CVAR_ROM ), "Read-only policy label for Quake Live UI resource and avatar requests." );
 	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgeParityScope", "retail web.pak resource bridge", CVAR_ROM ), "Read-only parity scope for Quake Live UI resource requests." );
 	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgeParityReason", "external retail assets only", CVAR_ROM ), "Read-only parity note for Quake Live UI resource requests." );
-	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgeSteamDataSourceSubset", "avatar-only SteamDataSource", CVAR_ROM ), "Read-only supported SteamDataSource subset for Quake Live UI resources." );
+	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgeSteamDataSourceSubset", "small medium and large avatars", CVAR_ROM ), "Read-only supported SteamDataSource subset for Quake Live UI resources." );
 	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgeSteamDataSourceNativeGap", "missing non-avatar SteamDataSource owner", CVAR_ROM ), "Read-only native gap for Quake Live UI resource requests." );
-	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgeSteamDataSourceFallbackOwner", "QLResourceInterceptor launcher/web fallback", CVAR_ROM ), "Read-only fallback owner for non-URI UI shader requests." );
+	Cvar_SetDescription( Cvar_Get( "ui_resourceBridgeSteamDataSourceFallbackOwner", "Awesomium Steam DataSource and renderer shader registry", CVAR_ROM ), "Read-only fallback owner for non-URI UI shader requests." );
 	Cvar_SetDescription( Cvar_Get( "ui_advertisementBridgeProvider", "Unavailable", CVAR_ROM ), "Read-only provider label for the Quake Live advertisement bridge." );
 	Cvar_SetDescription( Cvar_Get( "ui_advertisementBridgePolicy", "default-off", CVAR_ROM ), "Read-only policy label for the Quake Live advertisement bridge." );
 	Cvar_SetDescription( Cvar_Get( "ui_advertisementBridgeParityScope", "retail WebUI advertisement bridge", CVAR_ROM ), "Read-only parity scope for the Quake Live advertisement bridge." );
@@ -1973,6 +1999,21 @@ void CL_WebHost_HideBrowser( void ) {
 	CL_RefreshOnlineServicesBridgeState();
 }
 
+
+/*
+=============
+CL_WebHost_HideForGameTransition
+
+A connection or map load owns the screen.  Unlike an ordinary browser-hide
+request, this must also cancel pending key-binding capture so it cannot retain
+the browser surface or input while the native status screen is active.
+=============
+*/
+void CL_WebHost_HideForGameTransition( void ) {
+	cl_webui.keyCaptureArmed = qfalse;
+	CL_WebHost_HideBrowser();
+}
+
 static std::string CL_WebHost_JsonParseExpression( const char *json ) {
 	const unsigned char *cursor = reinterpret_cast<const unsigned char *>(
 		json && json[0] ? json : "{}" );
@@ -2259,6 +2300,7 @@ static void CL_WebHost_UpdateBrowserDemoList( const char *demoListJson ) {
 }
 
 static void CL_WebHost_UpdateBrowserFriendList( const char *friendListJson ) {
+	const char *json;
 	char *script;
 	int scriptSize;
 
@@ -2266,7 +2308,8 @@ static void CL_WebHost_UpdateBrowserFriendList( const char *friendListJson ) {
 		return;
 	}
 
-	scriptSize = (int)strlen( ( friendListJson && friendListJson[0] ) ? friendListJson : "[]" ) + 128;
+	json = ( friendListJson && friendListJson[0] ) ? friendListJson : "[]";
+	scriptSize = (int)strlen( json ) + 512;
 	script = (char *)Z_Malloc( scriptSize );
 	if ( !script ) {
 		return;
@@ -2275,8 +2318,10 @@ static void CL_WebHost_UpdateBrowserFriendList( const char *friendListJson ) {
 	Com_sprintf(
 		script,
 		scriptSize,
-		"(function(){if(window.__qlr_set_friend_list){window.__qlr_set_friend_list(%s);}})();",
-		( friendListJson && friendListJson[0] ) ? friendListJson : "[]"
+		"(function(){var f=%s;if(window.__qlr_set_friend_list){window.__qlr_set_friend_list(f);}"
+		"if(window.EnginePublish){for(var i=0;i<f.length;i++){var v=f[i];if(v&&v.id){"
+		"window.EnginePublish('users.persona.'+v.id+'.change',{id:v.id,friend:v});}}}})();",
+		json
 	);
 	CL_Awesomium_ExecuteJavascript( script, "" );
 	Z_Free( script );
@@ -3028,7 +3073,10 @@ static void CL_WebHost_FormatSteamAvatarUrl( const char *steamId, char *buffer, 
 		return;
 	}
 
-	Com_sprintf( buffer, bufferSize, "steam://avatar/large/%s", steamId );
+	// Retail web.pak requests the unqualified form and treats it as the large
+	// profile image. The Awesomium Steam data source also accepts explicit size
+	// tokens for engine-owned callers.
+	Com_sprintf( buffer, bufferSize, "asset://steam/avatar/%s", steamId );
 }
 
 static void CL_WebHost_FormatSteamProfileUrl( const char *steamId, char *buffer, size_t bufferSize ) {
@@ -3084,7 +3132,7 @@ static void CL_WebHost_BuildConfigJson( char *buffer, size_t bufferSize ) {
 	CL_WebHost_FormatSteamId( identityLow, identityHigh, steamId, sizeof( steamId ) );
 	CL_WebHost_FormatSteamAvatarUrl( steamId, playerAvatarUrl, sizeof( playerAvatarUrl ) );
 	CL_WebHost_FormatSteamProfileUrl( steamId, playerProfileUrl, sizeof( playerProfileUrl ) );
-	Cvar_VariableStringBuffer( "name", playerName, sizeof( playerName ) );
+	CL_Steam_GetLocalDisplayName( playerName, sizeof( playerName ) );
 	Cvar_VariableStringBuffer( "version", version, sizeof( version ) );
 	CL_WebUI_JsonEscape( steamId, escapedSteamId, sizeof( escapedSteamId ) );
 	CL_WebUI_JsonEscape( playerName, escapedPlayerName, sizeof( escapedPlayerName ) );
@@ -6286,6 +6334,229 @@ qboolean CL_Awesomium_RequestResource( const char *virtualPath, void **outBuffer
 	return qtrue;
 }
 
+static uint32_t CL_WebUI_PngCrc32( const byte *data, size_t length ) {
+	uint32_t crc = 0xffffffffu;
+	for ( size_t i = 0; i < length; ++i ) {
+		crc ^= data[i];
+		for ( int bit = 0; bit < 8; ++bit ) {
+			crc = ( crc & 1u ) ? ( crc >> 1 ) ^ 0xedb88320u : crc >> 1;
+		}
+	}
+	return ~crc;
+}
+
+static uint32_t CL_WebUI_PngAdler32( const byte *data, size_t length ) {
+	uint32_t first = 1;
+	uint32_t second = 0;
+	for ( size_t i = 0; i < length; ++i ) {
+		first = ( first + data[i] ) % 65521u;
+		second = ( second + first ) % 65521u;
+	}
+	return ( second << 16 ) | first;
+}
+
+static void CL_WebUI_PngWriteU32( byte *output, uint32_t value ) {
+	output[0] = static_cast<byte>( value >> 24 );
+	output[1] = static_cast<byte>( value >> 16 );
+	output[2] = static_cast<byte>( value >> 8 );
+	output[3] = static_cast<byte>( value );
+}
+
+static byte *CL_WebUI_PngWriteChunk( byte *output, uint32_t type,
+	const byte *data, uint32_t length ) {
+	CL_WebUI_PngWriteU32( output, length );
+	output += 4;
+	CL_WebUI_PngWriteU32( output, type );
+	output += 4;
+	if ( data && length ) {
+		Com_Memcpy( output, data, length );
+	}
+	const uint32_t crc = CL_WebUI_PngCrc32( output - 4,
+		static_cast<size_t>( length ) + 4u );
+	output += length;
+	CL_WebUI_PngWriteU32( output, crc );
+	return output + 4;
+}
+
+static qboolean CL_WebUI_EncodeAvatarPng( const byte *rgba, uint32_t width,
+	uint32_t height, void **outBuffer, int *outLength ) {
+	constexpr byte signature[8] = { 0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a };
+	constexpr uint32_t ihdrType = 0x49484452u;
+	constexpr uint32_t idatType = 0x49444154u;
+	constexpr uint32_t iendType = 0x49454e44u;
+	byte header[13]{};
+	byte *raw = nullptr;
+	byte *compressed = nullptr;
+	byte *png = nullptr;
+
+	if ( outBuffer ) {
+		*outBuffer = nullptr;
+	}
+	if ( outLength ) {
+		*outLength = 0;
+	}
+	if ( !rgba || !width || !height || !outBuffer || !outLength
+		|| width > 1024u || height > 1024u ) {
+		return qfalse;
+	}
+
+	const size_t rowBytes = static_cast<size_t>( width ) * 4u;
+	if ( rowBytes > ( std::numeric_limits<size_t>::max )() - 1u
+		|| static_cast<size_t>( height )
+			> ( std::numeric_limits<size_t>::max )() / ( rowBytes + 1u ) ) {
+		return qfalse;
+	}
+	const size_t rawBytes = ( rowBytes + 1u ) * static_cast<size_t>( height );
+	const size_t blockCount = ( rawBytes + 65534u ) / 65535u;
+	if ( blockCount > ( std::numeric_limits<size_t>::max )() / 5u ) {
+		return qfalse;
+	}
+	const size_t idatBytes = 2u + rawBytes + blockCount * 5u + 4u;
+	const size_t pngBytes = 8u + 12u + 13u + 12u + idatBytes + 12u;
+	if ( idatBytes > 0xffffffffu || pngBytes > CL_WEB_MAX_RESOURCE_BYTES
+		|| pngBytes > static_cast<size_t>( ( std::numeric_limits<int>::max )() ) ) {
+		return qfalse;
+	}
+
+	raw = static_cast<byte *>( Z_Malloc( rawBytes ) );
+	compressed = static_cast<byte *>( Z_Malloc( idatBytes ) );
+	png = static_cast<byte *>( Z_Malloc( pngBytes ) );
+	if ( !raw || !compressed || !png ) {
+		if ( png ) Z_Free( png );
+		if ( compressed ) Z_Free( compressed );
+		if ( raw ) Z_Free( raw );
+		return qfalse;
+	}
+
+	size_t rawPosition = 0;
+	for ( uint32_t row = 0; row < height; ++row ) {
+		raw[rawPosition++] = 0; // PNG filter: None
+		Com_Memcpy( raw + rawPosition,
+			rgba + static_cast<size_t>( row ) * rowBytes, rowBytes );
+		rawPosition += rowBytes;
+	}
+
+	size_t compressedPosition = 0;
+	compressed[compressedPosition++] = 0x78;
+	compressed[compressedPosition++] = 0x01;
+	for ( size_t copied = 0; copied < rawBytes; ) {
+		const size_t remaining = rawBytes - copied;
+		const uint16_t blockBytes = static_cast<uint16_t>(
+			remaining > 65535u ? 65535u : remaining );
+		const uint16_t inverse = static_cast<uint16_t>( ~blockBytes );
+		compressed[compressedPosition++] = remaining <= 65535u ? 0x01 : 0x00;
+		compressed[compressedPosition++] = static_cast<byte>( blockBytes );
+		compressed[compressedPosition++] = static_cast<byte>( blockBytes >> 8 );
+		compressed[compressedPosition++] = static_cast<byte>( inverse );
+		compressed[compressedPosition++] = static_cast<byte>( inverse >> 8 );
+		Com_Memcpy( compressed + compressedPosition, raw + copied, blockBytes );
+		compressedPosition += blockBytes;
+		copied += blockBytes;
+	}
+	CL_WebUI_PngWriteU32( compressed + compressedPosition,
+		CL_WebUI_PngAdler32( raw, rawBytes ) );
+	compressedPosition += 4;
+
+	CL_WebUI_PngWriteU32( header, width );
+	CL_WebUI_PngWriteU32( header + 4, height );
+	header[8] = 8;
+	header[9] = 6; // RGBA
+	Com_Memcpy( png, signature, sizeof( signature ) );
+	byte *output = png + sizeof( signature );
+	output = CL_WebUI_PngWriteChunk( output, ihdrType, header, sizeof( header ) );
+	output = CL_WebUI_PngWriteChunk( output, idatType, compressed,
+		static_cast<uint32_t>( compressedPosition ) );
+	output = CL_WebUI_PngWriteChunk( output, iendType, nullptr, 0 );
+
+	Z_Free( compressed );
+	Z_Free( raw );
+	if ( static_cast<size_t>( output - png ) != pngBytes ) {
+		Z_Free( png );
+		return qfalse;
+	}
+	*outBuffer = png;
+	*outLength = static_cast<int>( pngBytes );
+	return qtrue;
+}
+
+static qboolean CL_WebUI_ParseSteamAvatarPath( const char *path,
+	uint64_t *steamId, uint32_t *avatarSize ) {
+	struct Prefix {
+		const char *text;
+		uint32_t size;
+	};
+	static const Prefix prefixes[] = {
+		{ "asset://steam/avatar/small/", FNQL_STEAM_AVATAR_SMALL },
+		{ "asset://steam/avatar/medium/", FNQL_STEAM_AVATAR_MEDIUM },
+		{ "asset://steam/avatar/large/", FNQL_STEAM_AVATAR_LARGE },
+		{ "steam://avatar/small/", FNQL_STEAM_AVATAR_SMALL },
+		{ "steam://avatar/medium/", FNQL_STEAM_AVATAR_MEDIUM },
+		{ "steam://avatar/large/", FNQL_STEAM_AVATAR_LARGE },
+		{ "asset://steam/avatar/", FNQL_STEAM_AVATAR_LARGE },
+		{ "steam://avatar/", FNQL_STEAM_AVATAR_LARGE }
+	};
+	if ( !path || !steamId || !avatarSize ) {
+		return qfalse;
+	}
+	for ( const Prefix &prefix : prefixes ) {
+		const size_t prefixLength = strlen( prefix.text );
+		if ( Q_stricmpn( path, prefix.text, static_cast<int>( prefixLength ) ) ) {
+			continue;
+		}
+		char identity[32];
+		const char *source = path + prefixLength;
+		size_t length = 0;
+		while ( source[length] && source[length] != '?' && source[length] != '#'
+			&& length + 1u < sizeof( identity ) ) {
+			identity[length] = source[length];
+			++length;
+		}
+		identity[length] = '\0';
+		if ( source[length] && source[length] != '?' && source[length] != '#' ) {
+			return qfalse;
+		}
+		if ( CL_Steam_ParseIdentity( identity, steamId ) ) {
+			*avatarSize = prefix.size;
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+static qboolean CL_WebUI_RequestSteamAvatarPng( const char *path,
+	void **outBuffer, int *outLength ) {
+	uint64_t steamId = 0;
+	uint32_t avatarSize = FNQL_STEAM_AVATAR_LARGE;
+	uint32_t width = 0;
+	uint32_t height = 0;
+	uint32_t required = 0;
+	if ( !CL_WebUI_ParseSteamAvatarPath( path, &steamId, &avatarSize )
+		|| !FNQL_Steam_Available( FNQL_STEAM_CAP_AVATARS ) ) {
+		return qfalse;
+	}
+
+	const fnqlSteamResult_t query = FNQL_Steam_GetAvatarRGBA( steamId,
+		avatarSize, nullptr, 0, &width, &height, &required );
+	const uint64_t expected = static_cast<uint64_t>( width )
+		* static_cast<uint64_t>( height ) * 4ull;
+	if ( query != FNQL_STEAM_RESULT_BUFFER_TOO_SMALL || !width || !height
+		|| expected != required || required > 4u * 1024u * 1024u ) {
+		return qfalse;
+	}
+
+	byte *rgba = static_cast<byte *>( Z_Malloc( required ) );
+	if ( !rgba ) {
+		return qfalse;
+	}
+	const fnqlSteamResult_t loaded = FNQL_Steam_GetAvatarRGBA( steamId,
+		avatarSize, rgba, required, &width, &height, &required );
+	const qboolean encoded = loaded == FNQL_STEAM_RESULT_OK
+		? CL_WebUI_EncodeAvatarPng( rgba, width, height, outBuffer, outLength )
+		: qfalse;
+	Z_Free( rgba );
+	return encoded;
+}
+
 static bool CL_WebUI_BackendRequestResource( void *, std::string_view virtualPath,
 	fnql::webui::ResourceBuffer *resource ) noexcept {
 	char path[MAX_STRING_CHARS];
@@ -6302,8 +6573,11 @@ static bool CL_WebUI_BackendRequestResource( void *, std::string_view virtualPat
 
 	Com_Memcpy( path, virtualPath.data(), virtualPath.size() );
 	path[virtualPath.size()] = '\0';
-	if ( !CL_LauncherRequestData( path, &buffer, &length )
-		|| !buffer || length < 0 || length > CL_WEB_MAX_RESOURCE_BYTES ) {
+	if ( !CL_WebUI_RequestSteamAvatarPng( path, &buffer, &length )
+		&& !CL_LauncherRequestData( path, &buffer, &length ) ) {
+		return false;
+	}
+	if ( !buffer || length <= 0 || length > CL_WEB_MAX_RESOURCE_BYTES ) {
 		if ( buffer ) {
 			Z_Free( buffer );
 		}
@@ -6327,12 +6601,13 @@ static void CL_WebUI_BackendReleaseResource( void *,
 	*resource = {};
 }
 
-qboolean CL_Awesomium_Startup( const char *runtimePath, const char *basePath, const char *playerName, unsigned int appId, unsigned int steamIdLow, unsigned int steamIdHigh, int width, int height, const char *initialConfigJson, const char *initialMapJson, const char *initialFactoryJson ) {
+qboolean CL_Awesomium_Startup( const char *runtimePath, const char *basePath, const char *retailPath, const char *playerName, unsigned int appId, unsigned int steamIdLow, unsigned int steamIdHigh, int width, int height, const char *initialConfigJson, const char *initialMapJson, const char *initialFactoryJson ) {
 	fnql::webui::StartupParameters parameters;
 	char *startupScript;
 	qboolean started;
 	parameters.runtimePath = runtimePath ? runtimePath : "";
 	parameters.basePath = basePath ? basePath : "";
+	parameters.retailPath = retailPath ? retailPath : "";
 	parameters.playerName = playerName ? playerName : "";
 	parameters.appId = appId;
 	parameters.identityLow = steamIdLow;

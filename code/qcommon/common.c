@@ -2608,6 +2608,7 @@ static const char *Sys_EventName( sysEventType_t evType ) {
 		"SE_KEY",
 		"SE_CHAR",
 		"SE_MOUSE",
+		"SE_MOUSE_ABSOLUTE",
 		"SE_JOYSTICK_AXIS",
 		"SE_CONSOLE"
 	};
@@ -2645,6 +2646,16 @@ void Sys_QueEvent( int evTime, sysEventType_t evType, int value, int value2, int
 	if ( evType == SE_MOUSE && lastEvent->evType == SE_MOUSE && eventHead != eventTail ) {
 		lastEvent->evValue += value;
 		lastEvent->evValue2 += value2;
+		lastEvent->evTime = evTime;
+		return;
+	}
+	// Absolute menu/browser positions cannot be summed like relative gameplay
+	// deltas. Retain only the newest consecutive position, matching the latest
+	// system cursor sample without growing the queue.
+	if ( evType == SE_MOUSE_ABSOLUTE && lastEvent->evType == SE_MOUSE_ABSOLUTE
+		&& eventHead != eventTail ) {
+		lastEvent->evValue = value;
+		lastEvent->evValue2 = value2;
 		lastEvent->evTime = evTime;
 		return;
 	}
@@ -2901,6 +2912,7 @@ int Com_EventLoop( void ) {
 			CL_CharEvent( ev.evValue );
 			break;
 		case SE_MOUSE:
+		case SE_MOUSE_ABSOLUTE:
 			CL_MouseEvent( ev.evValue, ev.evValue2 /*, ev.evTime*/ );
 			break;
 		case SE_JOYSTICK_AXIS:

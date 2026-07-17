@@ -369,7 +369,7 @@
           <ul>
             <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/DISPLAY.md">Display Guide</a> for renderer choice, video modes, render scaling, texture picmip, HDR, anti-aliasing, bloom, soft particles, dynamic lighting, shadow maps, and cel shading.</li>
             <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/VISUALS.md">Visuals Guide</a> for player highlighting and other presentation controls.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/ASPECT_CORRECTION.md">Aspect Correction Guide</a> for HUD, menu, and cinematic layout options.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/ASPECT_CORRECTION.md">Aspect Handling Guide</a> for menu and cinematic layout options.</li>
             <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/AUDIO.md">Audio Guide</a> for backend selection, devices, HRTF, fallback behavior, and troubleshooting.</li>
             <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/CONSOLE.md">Console Guide</a> for console layout, scaling, completion, and interaction.</li>
             <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/SCREENSHOTS.md">Screenshot Guide</a> for capture commands, naming, metadata sidecars, watermarks, and cube-map export.</li>

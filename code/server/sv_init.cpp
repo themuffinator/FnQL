@@ -23,6 +23,24 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "server.h"
 
 #include <array>
+#include <cstring>
+
+namespace {
+
+struct QLCvarConfigstringChannel {
+	int cvarFlag;
+	int configstring;
+	const char *label;
+};
+
+constexpr std::array<QLCvarConfigstringChannel, 4> kQLCvarConfigstringChannels{{
+	{ CVAR_QL_PMOVE_SETTINGS, CS_QL_PMOVE_SETTINGS, "pmove settings" },
+	{ CVAR_QL_ARMOR_TIERED, CS_QL_ARMOR_TIERED, "tiered armor" },
+	{ CVAR_QL_WEAPON_RELOAD, CS_QL_WEAPON_RELOAD, "weapon reload" },
+	{ CVAR_QL_PLAYER_APPEARANCE, CS_QL_PLAYER_APPEARANCE, "player appearance" },
+}};
+
+}
 
 /*
 ===============
@@ -139,6 +157,34 @@ void SV_SetConfigstring (int index, const char *val) {
 			}
 
 			SV_SendConfigstring(&client, index);
+		}
+	}
+}
+
+/*
+================
+SV_UpdateQLCvarConfigstrings
+
+Retail Quake Live groups native qagame cvars by four public flag bits and
+publishes each group as an info string owned by the engine. Native cgame reads
+these exact configstrings during bootstrap and whenever a flagged cvar changes.
+================
+*/
+void SV_UpdateQLCvarConfigstrings( qboolean force ) {
+	for ( const QLCvarConfigstringChannel &channel : kQLCvarConfigstringChannels ) {
+		if ( !force && !( cvar_modifiedFlags & channel.cvarFlag ) ) {
+			continue;
+		}
+
+		qboolean truncated = qfalse;
+		const char *info = Cvar_InfoString( channel.cvarFlag, &truncated );
+		SV_SetConfigstring( channel.configstring, info );
+		cvar_modifiedFlags &= ~channel.cvarFlag;
+
+		if ( truncated ) {
+			Com_Printf( S_COLOR_YELLOW
+				"WARNING: truncated Quake Live %s configstring 0x%X\n",
+				channel.label, channel.configstring );
 		}
 	}
 }
@@ -388,13 +434,11 @@ static void SV_ClearServer( void ) {
 		SV_ZFree( sv.configstrings[index] );
 	}
 
-	if ( !sv_levelTimeReset->integer ) {
-		const int preservedTime = sv.time;
-		sv = {};
-		sv.time = preservedTime;
-	} else {
-		sv = {};
-	}
+	const int preservedTime = sv_levelTimeReset->integer ? 0 : sv.time;
+	// Do not use aggregate assignment for these large persistent blocks.  MSVC's
+	// debug codegen materializes a complete temporary on the caller's stack.
+	std::memset( &sv, 0, sizeof( sv ) );
+	sv.time = preservedTime;
 }
 
 
@@ -673,6 +717,9 @@ void SV_SpawnServer( const char *mapname, qboolean killBots ) {
 
 	SV_SetConfigstring( CS_SERVERINFO, Cvar_InfoString( CVAR_SERVERINFO, nullptr ) );
 	cvar_modifiedFlags &= ~CVAR_SERVERINFO;
+
+	// Retail native cgame prediction consumes these engine-owned cvar groups.
+	SV_UpdateQLCvarConfigstrings( qtrue );
 
 	// any media configstring setting now should issue a warning
 	// and any configstring changes should be reliably transmitted
@@ -955,7 +1002,9 @@ void SV_Shutdown( const char *finalmsg ) {
 	// Retail restores factory-backed cvars after GAME_SHUTDOWN, level clearing,
 	// and client destruction, but before the server-static state is zeroed.
 	SV_FactoryShutdown();
-	svs = {};
+	// Keep shutdown safe on the small Win32 game thread stack.  An aggregate
+	// assignment here creates a temporary larger than 512 KiB in debug builds.
+	std::memset( &svs, 0, sizeof( svs ) );
 	sv.time = 0;
 
 	Cvar_Set( "sv_running", "0" );

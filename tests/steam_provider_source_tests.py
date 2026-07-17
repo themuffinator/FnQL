@@ -83,6 +83,20 @@ class SteamProviderSourceTests(unittest.TestCase):
         self.assertIn("FnqlHandshakeMarker", server)
         self.assertIn("fnqlExtension = false", parser)
 
+    def test_loopback_listen_server_consumes_the_same_bound_ticket(self) -> None:
+        server = (ROOT / "code/server/sv_client.cpp").read_text(encoding="utf-8")
+        self.assertIn("pendingRetailAuth.Consume", server)
+        self.assertIn("if ( cl_proto == QL_RETAIL_PROTOCOL_VERSION )", server)
+        self.assertNotIn(
+            "cl_proto == QL_RETAIL_PROTOCOL_VERSION && !NET_IsLocalAddress( from )",
+            server,
+        )
+        self.assertIn("localLoopback = from && from->type == NA_LOOPBACK", server)
+        self.assertIn("FNQL_Steam_GetStatus( &localStatus )", server)
+        self.assertIn("A signed-in Steam identity is required for local play.", server)
+        self.assertIn("platformAuthTicketSession = true", server)
+        self.assertIn("if ( client->platformAuthTicketSession", server)
+
     def test_engine_lifecycle_pumps_and_stops_provider_once(self) -> None:
         source = (ROOT / "code/qcommon/common.c").read_text(encoding="utf-8")
         self.assertIn("FNQL_Steam_Init( com_dedicated->integer", source)
@@ -297,6 +311,8 @@ class SteamProviderSourceTests(unittest.TestCase):
         self.assertIn("(*RegisterShaderFromRGBA)", public)
         self.assertIn("required > 4u * 1024u * 1024u", client)
         self.assertIn("CL_ClearAvatarImageHandles", client)
+        self.assertIn("CL_WebUI_EncodeAvatarPng", client)
+        self.assertIn('"asset://steam/avatar/"', client)
         for path in (
             "code/renderer/tr_init.c",
             "code/renderer2/tr_init.c",
@@ -322,7 +338,8 @@ class SteamProviderSourceTests(unittest.TestCase):
         self.assertIn("[switch]$WithSteam", script)
         self.assertIn("FNQL_STEAM_REPO", script)
         self.assertIn("Invoke-FnQLSteamBuild", script)
-        self.assertIn("meson: build Win32 debug + Steam", tasks)
+        self.assertIn("meson: build Win32 debug (Steam)", tasks)
+        self.assertIn("-WithSteam", tasks)
         self.assertNotIn("FnQL-Steam", meson)
         self.assertNotIn("steam_api.dll", meson)
 

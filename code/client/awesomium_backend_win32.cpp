@@ -55,6 +55,7 @@ public:
 		status_ = {};
 		lastErrorCode_ = BackendError::None;
 		lastError_[0] = '\0';
+		hostServices_ = parameters.hostServices;
 
 		try {
 			if ( !SelectRuntimePaths( parameters ) ) {
@@ -145,6 +146,7 @@ public:
 				"retail Awesomium objects are not live" );
 		}
 		imports_.webCoreUpdate( core_ );
+		RetryPendingResources();
 		const BackendStatus current = Status();
 		status_ = current;
 		if ( current.crashed ) {
@@ -318,6 +320,9 @@ private:
 	using SessionVoid = void (__stdcall *)( void * );
 	using AddDataSource = void (__stdcall *)( void *, const wchar_t *, void * );
 	using NewDataPakSource = void *(__stdcall *)( const wchar_t * );
+	using DataSourceDirectorConnect = void (__stdcall *)( void *, void * );
+	using DataSourceSendResponse = void (__stdcall *)( void *, int, int,
+		std::uint8_t *, const wchar_t * );
 	using CreateView = void *(__stdcall *)( void *, int, int, void *, int );
 	using ViewVoid = void (__stdcall *)( void * );
 	using ViewSetBool = void (__stdcall *)( void *, bool );
@@ -366,6 +371,9 @@ private:
 		UpcastFactory bitmapSurfaceFactoryUpcast = nullptr;
 		SetSurfaceFactory webCoreSetSurfaceFactory = nullptr;
 		NewDataPakSource newDataPakSource = nullptr;
+		NewObject newDataSource = nullptr;
+		DataSourceDirectorConnect dataSourceDirectorConnect = nullptr;
+		DataSourceSendResponse dataSourceSendResponse = nullptr;
 		AddDataSource webSessionAddDataSource = nullptr;
 		SessionVoid webSessionRelease = nullptr;
 		SessionVoid webSessionClearCache = nullptr;
@@ -446,6 +454,9 @@ private:
 		FNQL_AWE_IMPORT( bitmapSurfaceFactoryUpcast, "_Awe_BitmapSurfaceFactory_Upcast@4" );
 		FNQL_AWE_IMPORT( webCoreSetSurfaceFactory, "_Awe_WebCore_set_surface_factory@8" );
 		FNQL_AWE_IMPORT( newDataPakSource, "_Awe_new_DataPakSource@4" );
+		FNQL_AWE_IMPORT( newDataSource, "_Awe_new_DataSource@0" );
+		FNQL_AWE_IMPORT( dataSourceDirectorConnect, "_Awe_DataSource_director_connect@8" );
+		FNQL_AWE_IMPORT( dataSourceSendResponse, "_Awe_DataSource_SendResponse@20" );
 		FNQL_AWE_IMPORT( webSessionAddDataSource, "_Awe_WebSession_AddDataSource@12" );
 		FNQL_AWE_IMPORT( webSessionRelease, "_Awe_WebSession_Release@4" );
 		FNQL_AWE_IMPORT( webSessionClearCache, "_Awe_WebSession_ClearCache@4" );
@@ -556,6 +567,23 @@ private:
 		}
 		imports_.webSessionAddDataSource( session_, L"QL", dataPakSource_ );
 
+		// Retail installs a second, lower-case source host for
+		// asset://steam/avatar/<steamid>. Keep the Awesomium object and callback
+		// boundary here while the engine-owned HostServices callback supplies the
+		// external Steam pixels as a bounded PNG resource.
+		if ( hostServices_.CanRequestResources() ) {
+			steamDataSource_ = imports_.newDataSource();
+			if ( !steamDataSource_ ) {
+				Fail( BackendError::ResourceUnavailable,
+					"could not create the retail Steam avatar data source" );
+				return false;
+			}
+			activeBackend_ = this;
+			imports_.dataSourceDirectorConnect( steamDataSource_,
+				reinterpret_cast<void *>( &OnSteamResourceRequest ) );
+			imports_.webSessionAddDataSource( session_, L"steam", steamDataSource_ );
+		}
+
 		view_ = imports_.webCoreCreateView(
 			core_, parameters.initialSurface.width, parameters.initialSurface.height,
 			session_, 0 );
@@ -571,6 +599,10 @@ private:
 	}
 
 	void ShutdownRuntimeObjects() noexcept {
+		if ( activeBackend_ == this ) {
+			activeBackend_ = nullptr;
+		}
+		pendingResources_.fill( {} );
 		if ( view_ && imports_.webViewDestroy ) {
 			imports_.webViewDestroy( view_ );
 		}
@@ -580,6 +612,7 @@ private:
 		}
 		session_ = nullptr;
 		dataPakSource_ = nullptr; // owned by the released WebSession
+		steamDataSource_ = nullptr; // owned by the released WebSession
 		if ( core_ && imports_.webCoreShutdown ) {
 			imports_.webCoreShutdown();
 		}
@@ -593,12 +626,120 @@ private:
 			imports_.deleteWebConfig( config_ );
 		}
 		config_ = nullptr;
+		hostServices_ = {};
+	}
+
+	struct PendingResource {
+		int requestId = 0;
+		unsigned int attempts = 0;
+		bool active = false;
+		std::array<char, 4096> path{};
+	};
+
+	static void __stdcall OnSteamResourceRequest( int requestId, void *,
+		const wchar_t *path ) noexcept {
+		if ( activeBackend_ ) {
+			activeBackend_->HandleSteamResourceRequest( requestId, path );
+		}
+	}
+
+	void HandleSteamResourceRequest( int requestId, const wchar_t *widePath ) noexcept {
+		std::array<char, 4096> utf8{};
+		if ( requestId <= 0 || !widePath || !widePath[0] ) {
+			return;
+		}
+
+		const int converted = WideCharToMultiByte( CP_UTF8, 0, widePath, -1,
+			utf8.data(), static_cast<int>( utf8.size() ), nullptr, nullptr );
+		if ( converted <= 0 ) {
+			return;
+		}
+
+		const char *path = utf8.data();
+		while ( *path == '/' || *path == '\\' ) {
+			++path;
+		}
+		if ( _strnicmp( path, "asset://steam/", 14 ) == 0 ) {
+			path += 14;
+		} else if ( _strnicmp( path, "steam://", 8 ) == 0 ) {
+			path += 8;
+		}
+		if ( _strnicmp( path, "avatar/", 7 ) != 0 ) {
+			return;
+		}
+
+		std::array<char, 4096> virtualPath{};
+		const int written = std::snprintf( virtualPath.data(), virtualPath.size(),
+			"asset://steam/%s", path );
+		if ( written <= 0 || static_cast<std::size_t>( written ) >= virtualPath.size() ) {
+			return;
+		}
+		if ( !TrySendResource( requestId, virtualPath.data() ) ) {
+			QueuePendingResource( requestId, virtualPath.data() );
+		}
+	}
+
+	bool TrySendResource( int requestId, const char *path ) noexcept {
+		ResourceBuffer resource{};
+		if ( !steamDataSource_ || !hostServices_.CanRequestResources()
+			|| !hostServices_.requestResource( hostServices_.context, path, &resource ) ) {
+			return false;
+		}
+
+		const bool valid = resource.bytes && resource.size > 0
+			&& resource.size <= static_cast<std::size_t>(
+				( std::numeric_limits<int>::max )() );
+		if ( valid ) {
+			imports_.dataSourceSendResponse( steamDataSource_, requestId,
+				static_cast<int>( resource.size ),
+				const_cast<std::uint8_t *>( resource.bytes ), L"image/png" );
+		}
+		hostServices_.releaseResource( hostServices_.context, &resource );
+		return valid;
+	}
+
+	void QueuePendingResource( int requestId, const char *path ) noexcept {
+		PendingResource *freeSlot = nullptr;
+		for ( PendingResource &pending : pendingResources_ ) {
+			if ( pending.active && pending.requestId == requestId ) {
+				freeSlot = &pending;
+				break;
+			}
+			if ( !pending.active && !freeSlot ) {
+				freeSlot = &pending;
+			}
+		}
+		if ( !freeSlot ) {
+			return;
+		}
+		freeSlot->requestId = requestId;
+		freeSlot->attempts = 0;
+		freeSlot->active = true;
+		std::snprintf( freeSlot->path.data(), freeSlot->path.size(), "%s", path );
+	}
+
+	void RetryPendingResources() noexcept {
+		for ( PendingResource &pending : pendingResources_ ) {
+			if ( !pending.active ) {
+				continue;
+			}
+			++pending.attempts;
+			if ( pending.attempts % 5u != 0u ) {
+				continue;
+			}
+			if ( TrySendResource( pending.requestId, pending.path.data() ) ) {
+				pending = {};
+			}
+		}
 	}
 
 	bool SelectRuntimePaths( const StartupParameters &parameters ) noexcept {
 		const std::wstring home = ToWide( parameters.runtimePath );
 		const std::wstring base = ToWide( parameters.basePath );
-		std::array<std::wstring, 3> roots{ base, home, ExecutableDirectory() };
+		const std::wstring retail = ToWide( parameters.retailPath );
+		std::array<std::wstring, 4> roots{
+			base, retail, home, ExecutableDirectory()
+		};
 
 		assetRoot_.clear();
 		profileRoot_.clear();
@@ -788,7 +929,10 @@ private:
 	void *bitmapFactory_ = nullptr;
 	void *session_ = nullptr;
 	void *dataPakSource_ = nullptr;
+	void *steamDataSource_ = nullptr;
 	void *view_ = nullptr;
+	HostServices hostServices_{};
+	std::array<PendingResource, 64> pendingResources_{};
 	BackendStatus status_{};
 	BackendError lastErrorCode_ = BackendError::None;
 	std::array<char, kBackendDiagnosticCapacity> lastError_{};
@@ -798,7 +942,10 @@ private:
 	std::wstring dllPath_{};
 	std::wstring childProcessPath_{};
 	std::wstring webPakPath_{};
+	static RetailAwesomiumBackend *activeBackend_;
 };
+
+RetailAwesomiumBackend *RetailAwesomiumBackend::activeBackend_ = nullptr;
 
 RetailAwesomiumBackend &PlatformBackend() noexcept {
 	static RetailAwesomiumBackend backend;

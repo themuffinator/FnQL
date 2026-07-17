@@ -443,6 +443,14 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
         self.assertIn("QL_UI_PackFloatBits64( width, height )", cl_ui)
         self.assertNotIn("QL_UI_MeasureFallbackText", cl_ui)
 
+    def test_ui_native_glconfig_uses_retail_layout(self) -> None:
+        client_h = read_repo_file("code/client/client.h")
+        cl_ui = read_repo_file("code/client/cl_ui.cpp")
+
+        self.assertIn("void\tCL_CopyRetailGlconfig( void *glconfig );", client_h)
+        self.assertIn("CL_CopyRetailGlconfig( glconfig );", cl_ui)
+        self.assertIn("generic UI syscall", cl_ui)
+
     def test_ui_item_download_info_import_uses_workshop_progress_then_steam_fallback(self) -> None:
         client_h = read_repo_file("code/client/client.h")
         cl_main = read_repo_file("code/client/cl_main.cpp")

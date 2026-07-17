@@ -1735,7 +1735,6 @@ extern cvar_t	*r_ignore;				// used for debugging anything
 
 extern cvar_t	*r_znear;				// near Z clip plane
 extern cvar_t	*r_zproj;				// z distance of projection plane
-extern cvar_t	*r_fovCorrection;		// auto-correct 4:3-authored scene FOV for viewport aspect
 extern cvar_t	*r_stereoSeparation;			// separation of cameras for stereo rendering
 
 extern cvar_t	*r_measureOverdraw;		// enables stencil buffer overdraw measurement
@@ -1876,6 +1875,7 @@ extern	cvar_t	*r_ignoreGLErrors;
 
 extern	cvar_t	*r_overBrightBits;
 extern	cvar_t	*r_mapOverBrightBits;
+extern	cvar_t	*r_mapOverBrightCap;
 
 extern	cvar_t	*r_debugSurface;
 extern	cvar_t	*r_simpleMipMaps;
@@ -1954,7 +1954,6 @@ int R_CullPointAndRadius( const vec3_t origin, float radius );
 int R_CullLocalPointAndRadius( const vec3_t origin, float radius );
 
 void R_SetupProjection(viewParms_t *dest, float zProj, float zFar, qboolean computeFrustum);
-void R_ApplyViewportFovCorrection( int viewportWidth, int viewportHeight, qboolean usePhysicalAspect, float *fovX, float *fovY );
 void R_RotateForEntity( const trRefEntity_t *ent, const viewParms_t *viewParms, orientationr_t *or );
 
 /*

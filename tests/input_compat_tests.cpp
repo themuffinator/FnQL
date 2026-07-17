@@ -1,9 +1,16 @@
-#include "../code/client/input_compat.hpp"
-
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
 #include <limits>
+
+// Match the include order used by Windows input sources when an external
+// header has already supplied the legacy min/max macros.
+#define min(a, b) fnql_test_min_macro( a, b )
+#define max(a, b) fnql_test_max_macro( a, b )
+#include "../code/client/input_compat.hpp"
+#undef max
+#undef min
 
 namespace {
 

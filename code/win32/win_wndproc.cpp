@@ -548,6 +548,12 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 				SetCursor( browserCursor );
 				return TRUE;
 			}
+			if ( Key_GetCatcher() & ( KEYCATCH_UI | KEYCATCH_CGAME ) ) {
+				// Retail retains the normal Win32 arrow while native UI or
+				// cgame overlays own absolute mouse input.
+				SetCursor( LoadCursor( NULL, IDC_ARROW ) );
+				return TRUE;
+			}
 		}
 		break;
 
@@ -900,6 +906,31 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 				case WM_MBUTTONDOWN: CL_WebView_OnMouseButtonEvent( K_MOUSE3, qtrue ); break;
 				case WM_MBUTTONUP: CL_WebView_OnMouseButtonEvent( K_MOUSE3, qfalse ); break;
 				default: break;
+			}
+			return 0;
+		}
+		if ( Key_GetCatcher() & ( KEYCATCH_UI | KEYCATCH_CGAME ) ) {
+			const int x = (int)(short)LOWORD( lParam );
+			const int y = (int)(short)HIWORD( lParam );
+			int key = 0;
+			qboolean down = qfalse;
+
+			if ( uMsg == WM_MOUSEMOVE ) {
+				Sys_QueEvent( g_wv.sysMsgTime, SE_MOUSE_ABSOLUTE, x, y, 0, NULL );
+				return 0;
+			}
+
+			switch ( uMsg ) {
+				case WM_LBUTTONDOWN: key = K_MOUSE1; down = qtrue; break;
+				case WM_LBUTTONUP: key = K_MOUSE1; break;
+				case WM_RBUTTONDOWN: key = K_MOUSE2; down = qtrue; break;
+				case WM_RBUTTONUP: key = K_MOUSE2; break;
+				case WM_MBUTTONDOWN: key = K_MOUSE3; down = qtrue; break;
+				case WM_MBUTTONUP: key = K_MOUSE3; break;
+				default: break;
+			}
+			if ( key ) {
+				Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, key, down, 0, NULL );
 			}
 			return 0;
 		}

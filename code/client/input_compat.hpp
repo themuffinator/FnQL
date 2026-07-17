@@ -61,11 +61,11 @@ struct RetailMouseMotion {
 	}
 
 	const double expanded = value;
-	if ( expanded >= static_cast<double>( std::numeric_limits<int>::max() ) - 0.5 ) {
-		return std::numeric_limits<int>::max();
+	if ( expanded >= static_cast<double>( ( std::numeric_limits<int>::max )() ) - 0.5 ) {
+		return ( std::numeric_limits<int>::max )();
 	}
-	if ( expanded <= static_cast<double>( std::numeric_limits<int>::min() ) + 0.5 ) {
-		return std::numeric_limits<int>::min();
+	if ( expanded <= static_cast<double>( ( std::numeric_limits<int>::min )() ) + 0.5 ) {
+		return ( std::numeric_limits<int>::min )();
 	}
 	return expanded < 0.0 ? static_cast<int>( expanded - 0.5 )
 	                      : static_cast<int>( expanded + 0.5 );
@@ -109,18 +109,18 @@ constexpr float kRetailCpiAxisMultiplier = 45.45454545454546f;
 
 	const float acceleration = FiniteOr( parameters.acceleration, 0.0f );
 	if ( acceleration != 0.0f ) {
-		const int frameMilliseconds = std::max( parameters.frameMilliseconds, 1 );
+		const int frameMilliseconds = ( std::max )( parameters.frameMilliseconds, 1 );
 		result.rate = std::hypot( result.x, result.y ) /
 			static_cast<float>( frameMilliseconds );
 		if ( result.cpiEnabled ) {
 			result.rate *= kRetailCpiRateMultiplier;
 		}
 
-		const float offset = std::max( FiniteOr( parameters.accelerationOffset, 0.0f ), 0.0f );
+		const float offset = ( std::max )( FiniteOr( parameters.accelerationOffset, 0.0f ), 0.0f );
 		const float rateAboveOffset = result.rate - offset;
 		if ( rateAboveOffset > 0.0f ) {
 			result.accelerationBase = std::fabs( acceleration ) * rateAboveOffset;
-			result.accelerationExponent = std::max(
+			result.accelerationExponent = ( std::max )(
 				FiniteOr( parameters.accelerationPower, 2.0f ) - 1.0f, 0.0f );
 
 			const float gain = std::pow(
@@ -188,7 +188,7 @@ public:
 		}
 
 		history_[next_] = unfiltered;
-		count_ = std::min( count_ + 1, static_cast<std::size_t>( sampleLimit_ ) );
+		count_ = ( std::min )( count_ + 1, static_cast<std::size_t>( sampleLimit_ ) );
 		raw_ = unfiltered;
 
 		ViewAngles sum{};
@@ -257,12 +257,12 @@ private:
 		return 0;
 	}
 
-	exponent = std::max( FiniteOr( exponent, 1.0f ), 0.0f );
+	exponent = ( std::max )( FiniteOr( exponent, 1.0f ), 0.0f );
 	float accelerated = std::pow( static_cast<float>( std::abs( linear ) ), exponent );
 	if ( !std::isfinite( accelerated ) ) {
 		return 0;
 	}
-	accelerated = std::min( accelerated, 32767.0f );
+	accelerated = ( std::min )( accelerated, 32767.0f );
 	if ( linear < 0 ) {
 		accelerated = -accelerated;
 	}

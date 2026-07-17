@@ -105,6 +105,7 @@ static cvar_t		*cl_graphheight;
 static cvar_t		*cl_graphscale;
 static cvar_t		*cl_graphshift;
 static cvar_t		*r_debugFontAtlas;
+static qhandle_t	scr_connectBackground;
 
 /*
 ================
@@ -193,6 +194,51 @@ static void SCR_DrawLegacyBorders( void ) {
 		re.DrawStretchPic( 0, 0, cls.glconfig.vidWidth, cls.biasY, 0, 0, 0, 0, cls.whiteShader );
 		re.DrawStretchPic( 0, cls.glconfig.vidHeight - cls.biasY, cls.glconfig.vidWidth, cls.biasY, 0, 0, 0, 0, cls.whiteShader );
 	}
+}
+
+/*
+=======================
+SCR_DrawNonGameBackdrop
+
+The renderer does not implicitly clear the colour buffer at BeginFrame.  A
+native non-game screen may draw only in the legacy 4:3 area, so it must begin
+with a complete black frame rather than retain the previous browser or game
+image outside that area.
+=======================
+*/
+static void SCR_DrawNonGameBackdrop( void ) {
+	ScopedRenderColor scopedColor( g_color_table[ ColorIndex( COLOR_BLACK ) ] );
+	re.DrawStretchPic( 0, 0, cls.glconfig.vidWidth, cls.glconfig.vidHeight,
+		0, 0, 0, 0, cls.whiteShader );
+}
+
+
+/*
+=======================
+SCR_DrawRetailConnectBackdrop
+
+Retail ui/connect.menu uses ui/assets/backscreen_smoke with a 1920x1080
+backgroundSize crop. Draw the same asset underneath the native connect export
+so the screen remains correct if the retail UI's menu stack is unavailable
+during a browser-to-game transition.
+=======================
+*/
+static void SCR_DrawRetailConnectBackdrop( void ) {
+	constexpr float sourceWidth = 1920.0f;
+	constexpr float sourceHeight = 1080.0f;
+	const float screenWidth = static_cast<float>( cls.glconfig.vidWidth );
+	const float screenHeight = static_cast<float>( cls.glconfig.vidHeight );
+	float s0;
+
+	if ( !scr_connectBackground || screenWidth <= 0.0f || screenHeight <= 0.0f ) {
+		return;
+	}
+
+	s0 = ( sourceWidth - screenWidth * ( sourceHeight / screenHeight ) )
+		/ sourceWidth * 0.5f;
+	ScopedRenderColor scopedColor( nullptr );
+	re.DrawStretchPic( 0.0f, 0.0f, screenWidth, screenHeight,
+		s0, 0.0f, 1.0f - s0, 1.0f, scr_connectBackground );
 }
 
 /*
@@ -864,6 +910,7 @@ void SCR_Init( void ) {
 	cl_graphscale = Cvar_Get ("graphscale", "1", CVAR_CHEAT);
 	cl_graphshift = Cvar_Get ("graphshift", "0", CVAR_CHEAT);
 	r_debugFontAtlas = Cvar_Get( "r_debugFontAtlas", "0", CVAR_TEMP );
+	scr_connectBackground = re.RegisterShaderNoMip( "ui/assets/backscreen_smoke" );
 
 	scr_initialized = true;
 }
@@ -930,11 +977,14 @@ static void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 	bool browserPendingSurface;
 	bool browserDrawableSurface;
 	bool browserSuppressUiRefresh;
+	bool uiMenuVisible;
+	bool drawConnectScreen;
 	float menuDepthOfFieldAmount;
 
 	re.BeginFrame( stereoFrame );
 
 	uiFullscreen = uivm && VM_Call( uivm, 0, UI_IS_FULLSCREEN );
+	uiMenuVisible = CL_UIMenusAreVisible();
 	uiVisible = ( Key_GetCatcher() & KEYCATCH_UI ) && uivm;
 	browserOverlayRequested = ( Key_GetCatcher() & KEYCATCH_BROWSER )
 		|| Cvar_VariableIntegerValue( "web_browserActive" )
@@ -952,16 +1002,35 @@ static void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 		uiFullscreen = true;
 	}
 
-	// wide aspect ratio screens need to have the sides cleared
-	// unless they are displaying game renderings
-	if ( uiFullscreen || cls.state < CA_LOADING || ( cl_cinematicAspect && cl_cinematicAspect->integer && cls.state == CA_CINEMATIC ) ) {
+	// Loading and live gameplay are always drawn by cgame plus the native UI
+	// overlays.  A fullscreen main menu must not retain ownership after its
+	// browser surface and key catcher have been released.
+	if ( uiFullscreen && ( cls.state == CA_LOADING || cls.state == CA_PRIMED || cls.state == CA_ACTIVE ) ) {
+		uiFullscreen = false;
+	}
+	if ( uiFullscreen && !browserOverlayRequested
+		&& !( Key_GetCatcher() & KEYCATCH_UI ) ) {
+		uiFullscreen = false;
+	}
+
+	// The retail connection dialog owns the whole frame while establishing a
+	// connection.  Unlike a main menu, fullscreen must not suppress its draw
+	// syscall or the non-game backdrop would be presented by itself.
+	drawConnectScreen = cls.state == CA_CONNECTING || cls.state == CA_CHALLENGING
+		|| cls.state == CA_CONNECTED;
+
+	if ( cls.state != CA_ACTIVE ) {
+		// BeginFrame does not clear the colour buffer.  Replace every previous
+		// gameplay or browser frame before drawing a 4:3 native status screen.
+		SCR_DrawNonGameBackdrop();
+	} else if ( uiFullscreen ) {
 		ScopedRenderColor scopedColor( g_color_table[ ColorIndex( COLOR_BLACK ) ] );
 		SCR_DrawLegacyBorders();
 	}
 
 	// if the menu is going to cover the entire screen, we
 	// don't need to render anything under it
-	if ( uivm && !uiFullscreen ) {
+	if ( uivm && ( !uiFullscreen || drawConnectScreen ) ) {
 		switch( cls.state ) {
 		default:
 			Com_Error( ERR_FATAL, "SCR_DrawScreenField: bad cls.state" );
@@ -970,14 +1039,19 @@ static void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 			SCR_DrawCinematic();
 			break;
 		case CA_DISCONNECTED:
-			// force menu up
-			S_StopAllSounds();
-			VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_MAIN );
+			// Do not reset an existing native or browser menu every frame: doing
+			// so restarts its background music on every key event.
+			if ( !uiMenuVisible && !( Key_GetCatcher() & KEYCATCH_UI )
+				&& !browserOverlayRequested ) {
+				S_StopAllSounds();
+				VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_MAIN );
+			}
 			break;
 		case CA_CONNECTING:
 		case CA_CHALLENGING:
 		case CA_CONNECTED:
 			// connecting clients will only show the connection dialog
+			SCR_DrawRetailConnectBackdrop();
 			// refresh to update the time
 			VM_Call( uivm, 1, UI_REFRESH, cls.realtime );
 			VM_Call( uivm, 1, UI_DRAW_CONNECT_SCREEN, qfalse );
@@ -1059,10 +1133,10 @@ void SCR_UpdateScreen( void ) {
 		framecount = cls.framecount;
 	}
 
-	if ( ++recursive > 2 ) {
+	if ( recursive >= 2 ) {
 		Com_Error( ERR_FATAL, "SCR_UpdateScreen: recursively called" );
 	}
-	recursive = 1;
+	++recursive;
 
 	// If there is no VM, there are also no rendering commands issued. Stop the renderer in
 	// that case.
@@ -1085,5 +1159,5 @@ void SCR_UpdateScreen( void ) {
 		}
 	}
 
-	recursive = 0;
+	--recursive;
 }

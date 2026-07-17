@@ -33,6 +33,7 @@ int SteamAuthenticatedClient( uint64_t steamId ) {
 	for ( int index = 0; index < sv_maxclients->integer; ++index ) {
 		const client_t &client = svs.clients[index];
 		if ( client.state == CS_ACTIVE && client.platformAuthSession
+			&& client.platformAuthTicketSession
 			&& client.platformAuthValidated
 			&& client.platformSteamIdValue == steamId ) return index;
 	}
@@ -407,6 +408,7 @@ void SV_SteamP2PFrame( void ) {
 		for ( int index = 0; index < sv_maxclients->integer; ++index ) {
 			const client_t &client = svs.clients[index];
 			if ( client.state != CS_ACTIVE || !client.platformAuthSession
+				|| !client.platformAuthTicketSession
 				|| !client.platformAuthValidated || !client.platformSteamIdValue ) continue;
 			(void)FNQL_Steam_SendP2PPacket( FNQL_STEAM_ROLE_GAME_SERVER,
 				client.platformSteamIdValue, QL_STEAM_KEEPALIVE,
@@ -447,6 +449,7 @@ void SV_SteamP2PFrame( void ) {
 		for ( int recipient = 0; recipient < sv_maxclients->integer; ++recipient ) {
 			const client_t &client = svs.clients[recipient];
 			if ( client.state != CS_ACTIVE || !client.platformAuthSession
+				|| !client.platformAuthTicketSession
 				|| !client.platformAuthValidated || !client.platformSteamIdValue
 				|| SV_GameShouldSuppressVoiceToClient( sender, recipient ) ) continue;
 			(void)FNQL_Steam_SendP2PPacket( FNQL_STEAM_ROLE_GAME_SERVER,

@@ -33,6 +33,7 @@ extern "C" {
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -143,13 +144,13 @@ typedef char qlRetailGlconfigSizeCheck[( sizeof( qlRetailGlconfig_t ) == 0x2c44 
 
 /*
 ====================
-CL_GetRetailGlconfig
+CL_CopyRetailGlconfig
 
 Retail Quake Live exposes multitextureAvailable before vidWidth and omits the
 engine-local smpActive tail retained by the shared renderer glconfig_t.
 ====================
 */
-static void CL_GetRetailGlconfig( void *glconfig ) {
+void CL_CopyRetailGlconfig( void *glconfig ) {
 	qlRetailGlconfig_t retailConfig;
 
 	if ( !glconfig ) {
@@ -702,6 +703,84 @@ static qboolean CL_GetSnapshot( int snapshotNumber, snapshot_t *snapshot ) {
 }
 
 
+namespace {
+
+constexpr int kRetailPlayerStateBytes = 0x250;
+constexpr int kRetailSnapshotEntityCount = 0x180;
+
+// Retail cgamex86.dll consumes a larger native snapshot packet than the
+// inherited VM snapshot_t. Keep this layout at the native import boundary so
+// bytecode modules continue to receive their original ABI.
+struct RetailNativeSnapshot {
+	int snapFlags;
+	int ping;
+	int serverTime;
+	byte areamask[MAX_MAP_AREA_BYTES];
+	byte playerState[kRetailPlayerStateBytes];
+	int numEntities;
+	entityState_t entities[kRetailSnapshotEntityCount];
+	int numServerCommands;
+	int serverCommandSequence;
+};
+
+static_assert( offsetof( RetailNativeSnapshot, playerState ) == 0x2c,
+	"retail snapshot playerState offset changed" );
+static_assert( offsetof( RetailNativeSnapshot, numEntities ) == 0x27c,
+	"retail snapshot entity-count offset changed" );
+static_assert( offsetof( RetailNativeSnapshot, entities ) == 0x280,
+	"retail snapshot entity-array offset changed" );
+static_assert( sizeof( entityState_t ) == 0xec,
+	"retail entityState ABI changed" );
+static_assert( sizeof( playerState_t ) <= kRetailPlayerStateBytes,
+	"playerState no longer fits the retail native snapshot" );
+static_assert( sizeof( RetailNativeSnapshot ) == 0x16488,
+	"retail native snapshot size changed" );
+
+static qboolean CL_GetRetailNativeSnapshot( int snapshotNumber, void *destination ) {
+	if ( !destination ) {
+		return qfalse;
+	}
+	if ( snapshotNumber > cl.snap.messageNum ) {
+		Com_Error( ERR_DROP,
+			"CL_GetRetailNativeSnapshot: snapshotNumber (%i) > current snapshot (%i)",
+			snapshotNumber, cl.snap.messageNum );
+	}
+	if ( cl.snap.messageNum - snapshotNumber >= PACKET_BACKUP ) {
+		return qfalse;
+	}
+
+	const clSnapshot_t &source = cl.snapshots[snapshotNumber & PACKET_MASK];
+	if ( !source.valid ||
+		cl.parseEntitiesNum - source.parseEntitiesNum >= MAX_PARSE_ENTITIES ) {
+		return qfalse;
+	}
+
+	auto &snapshot = *static_cast<RetailNativeSnapshot *>( destination );
+	std::memset( &snapshot, 0, sizeof( snapshot ) );
+	snapshot.snapFlags = source.snapFlags;
+	snapshot.ping = source.ping;
+	snapshot.serverTime = source.serverTime;
+	std::memcpy( snapshot.areamask, source.areamask, sizeof( snapshot.areamask ) );
+	std::memcpy( snapshot.playerState, &source.ps, sizeof( source.ps ) );
+
+	const int entityCount = std::min( source.numEntities,
+		kRetailSnapshotEntityCount );
+	if ( entityCount != source.numEntities ) {
+		Com_DPrintf( "CL_GetRetailNativeSnapshot: truncated %i entities to %i\n",
+			source.numEntities, entityCount );
+	}
+	snapshot.numEntities = entityCount;
+	for ( int i = 0; i < entityCount; ++i ) {
+		snapshot.entities[i] = cl.parseEntities[
+			( source.parseEntitiesNum + i ) & ( MAX_PARSE_ENTITIES - 1 ) ];
+	}
+	snapshot.serverCommandSequence = source.serverCommandNum;
+	return qtrue;
+}
+
+} // namespace
+
+
 /*
 =====================
 CL_SetUserCmdValue
@@ -937,7 +1016,6 @@ void CL_ShutdownCGame( void ) {
 
 	Key_SetCatcher( Key_GetCatcher( ) & ~KEYCATCH_CGAME );
 	cls.cgameStarted = qfalse;
-	CL_HudResetCGame();
 	CL_ClearEnemyHighlightState();
 
 	if ( !cgvm ) {
@@ -1204,17 +1282,9 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		return skin;
 	}
 	case CG_R_REGISTERSHADER:
-	{
-		qhandle_t shader = re.RegisterShader( VMA(1) );
-		CL_HudRegisterShaderName( shader, VMA(1) );
-		return shader;
-	}
+		return re.RegisterShader( VMA(1) );
 	case CG_R_REGISTERSHADERNOMIP:
-	{
-		qhandle_t shader = re.RegisterShaderNoMip( VMA(1) );
-		CL_HudRegisterShaderName( shader, VMA(1) );
-		return shader;
-	}
+		return re.RegisterShaderNoMip( VMA(1) );
 	case CG_R_REGISTERFONT:
 		re.RegisterFont( VMA(1), args[2], VMA(3));
 		return 0;
@@ -1242,26 +1312,11 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 	case CG_R_RENDERSCENE: {
 		const refdef_t *refdef = VMA(1);
 		refdef_t adjustedRefdef;
-		bool useAdjustedRefdef = false;
-
-		if ( refdef && ( refdef->rdflags & RDF_NOWORLDMODEL ) != 0 ) {
-			adjustedRefdef = *refdef;
-			refdef = &adjustedRefdef;
-			useAdjustedRefdef = true;
-			adjustedRefdef.rdflags |= RDF_NOFOVCORRECTION;
-
-			if ( ( cl_hudAspect && cl_hudAspect->integer > 0 ) || ( cl_hudDump && cl_hudDump->integer > 0 ) ) {
-				CL_HudAdjustRefdef( &adjustedRefdef );
-			}
-		}
 
 		if ( refdef && cl_captureActive && cl_captureActive->integer &&
 			r_levelshotHideViewWeapon && r_levelshotHideViewWeapon->integer ) {
-			if ( !useAdjustedRefdef ) {
-				adjustedRefdef = *refdef;
-				refdef = &adjustedRefdef;
-				useAdjustedRefdef = true;
-			}
+			adjustedRefdef = *refdef;
+			refdef = &adjustedRefdef;
 
 			adjustedRefdef.rdflags |= RDF_NOFIRSTPERSON;
 		}
@@ -1274,7 +1329,7 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		re.SetColor( VMA(1) );
 		return 0;
 	case CG_R_DRAWSTRETCHPIC:
-		CL_HudDrawStretchPic( VMF(1), VMF(2), VMF(3), VMF(4), VMF(5), VMF(6), VMF(7), VMF(8), args[9] );
+		re.DrawStretchPic( VMF(1), VMF(2), VMF(3), VMF(4), VMF(5), VMF(6), VMF(7), VMF(8), args[9] );
 		return 0;
 	case CG_R_MODELBOUNDS:
 		re.ModelBounds( args[1], VMA(2), VMA(3) );
@@ -1310,8 +1365,8 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 	case CG_KEY_GETCATCHER:
 		return Key_GetCatcher();
 	case CG_KEY_SETCATCHER:
-		// Don't allow the cgame module to close the console
-		Key_SetCatcher( args[1] | ( Key_GetCatcher( ) & KEYCATCH_CONSOLE ) );
+		// Console and browser ownership are controlled by their host subsystems.
+		Key_SetCatcher( args[1] | ( Key_GetCatcher( ) & ( KEYCATCH_CONSOLE | KEYCATCH_BROWSER ) ) );
 		return 0;
 	case CG_KEY_GETKEY:
 		return Key_GetKey( VMA(1) );
@@ -1533,8 +1588,13 @@ static intptr_t CG_Import_Dispatch( intptr_t *args ) {
 	const intptr_t arg = args[0];
 
 	if ( arg == CG_GETGLCONFIG ) {
-		CL_GetRetailGlconfig( reinterpret_cast<void *>( args[1] ) );
+		CL_CopyRetailGlconfig( reinterpret_cast<void *>( args[1] ) );
 		return 0;
+	}
+
+	if ( arg == CG_GETSNAPSHOT ) {
+		return CL_GetRetailNativeSnapshot( static_cast<int>( args[1] ),
+			reinterpret_cast<void *>( args[2] ) );
 	}
 
 	if ( arg == CG_SETUSERCMDVALUE ) {
@@ -2159,7 +2219,6 @@ void CL_InitCGame( void ) {
 
 	// allow vertex lighting for in-game elements
 	re.VertexLighting( qtrue );
-	CL_HudResetCGame();
 
 	// load the dll or bytecode
 	interpret = static_cast<vmInterpret_t>( Cvar_VariableIntegerValue( "vm_cgame" ) );
@@ -2242,9 +2301,7 @@ CL_CGameRendering
 =====================
 */
 void CL_CGameRendering( stereoFrame_t stereo ) {
-	CL_HudBeginFrame();
 	VM_Call( cgvm, 3, CG_DRAW_ACTIVE_FRAME, cl.serverTime, stereo, clc.demoplaying );
-	CL_HudEndFrame();
 #ifdef DEBUG
 	VM_Debug( 0 );
 #endif

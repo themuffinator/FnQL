@@ -231,7 +231,6 @@ static const unsigned pak_checksums[] = {
 #define IDPAKHEADER			0x4b434150u
 
 #define FNQL_ROOT_ARCHIVE_NAME			"FnQL-pkg.fnz"
-#define FNQL_ROOT_ARCHIVE_HUD_SCRIPT	"fnql-hud.json"
 #define FNQL_ROOT_ARCHIVE_RENDERER_SHADER "scripts/fnql.shader"
 #define FNQL_ROOT_ARCHIVE_WEAPON_SOUNDS	"sound/fnql-weapon-sounds.sndshd"
 #define FNQL_ROOT_ARCHIVE_MAX_PATHS		8
@@ -2860,8 +2859,7 @@ static qboolean FS_RootArchiveAllowsAudioZoneSidecar( const char *qpath )
 static qboolean FS_RootArchiveAllowsFile( const char *qpath )
 {
 	return qpath != NULL &&
-		( !FS_FilenameCompare( qpath, FNQL_ROOT_ARCHIVE_HUD_SCRIPT ) ||
-			!FS_FilenameCompare( qpath, FNQL_ROOT_ARCHIVE_RENDERER_SHADER ) ||
+		( !FS_FilenameCompare( qpath, FNQL_ROOT_ARCHIVE_RENDERER_SHADER ) ||
 			!FS_FilenameCompare( qpath, FNQL_ROOT_ARCHIVE_WEAPON_SOUNDS ) ||
 			FS_RootArchiveAllowsAudioZoneSidecar( qpath ) );
 }
@@ -3029,7 +3027,7 @@ static int FS_RootArchiveBuildArchivePaths(
 FS_ReadFileFromRootArchive
 
 Read compatibility-safe source-port assets from a fixed archive next to the executable.
-Restricted to explicitly owned HUD, renderer, audio-zone, and sound-shader sidecars so it doesn't widen the general data search path.
+Restricted to explicitly owned renderer, audio-zone, and sound-shader sidecars so it doesn't widen the general data search path.
 =================
 */
 static int FS_ReadFileFromRootArchive( const char *qpath, void **buffer )

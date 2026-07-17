@@ -1,6 +1,6 @@
 # Visuals Guide
 
-FnQL keeps retail Quake III visuals as the baseline, then adds a few optional engine-side presentation controls on top. This guide covers the current player highlight controls and points to the more focused guides for renderer display effects, aspect correction, and console presentation.
+FnQL keeps retail Quake Live visuals as the baseline, then adds a few optional engine-side presentation controls on top. This guide covers the current player highlight controls and points to the more focused guides for renderer display effects, menu/cinematic aspect handling, and console presentation.
 
 ## Cel Shading
 
@@ -122,5 +122,5 @@ The old `cl_enemyHighlight*` names have been replaced by `cl_playerHighlight*`.
 ## Related Guides
 
 - [Display Guide](DISPLAY.md) for renderer display effects such as cel shading, HDR, bloom, and render scaling.
-- [Aspect Correction Guide](ASPECT_CORRECTION.md) for HUD, menu, and cinematic layout.
+- [Aspect Handling Guide](ASPECT_CORRECTION.md) for menu and cinematic layout.
 - [Console Guide](CONSOLE.md) for console scaling, interaction, and appearance.

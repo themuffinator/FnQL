@@ -40,6 +40,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 typedef struct {
 	int			oldButtonState;
+	int			oldCursorX;
+	int			oldCursorY;
+	qboolean	cursorPositionValid;
 
 	qboolean	mouseActive;
 	qboolean	mouseInitialized;
@@ -147,6 +150,36 @@ IN_MouseActive
 qboolean IN_MouseActive( void )
 {
 	return ( s_wmv.mouseActive && in_nograb->integer == 0 ) ? qtrue : qfalse;
+}
+
+
+/*
+================
+IN_WindowMouse
+
+Retail UI and cgame overlays consume absolute client coordinates. Poll while a
+key catcher owns the pointer so entering the join menu always delivers an
+initial position even when Windows emits no WM_MOUSEMOVE transition.
+================
+*/
+static void IN_WindowMouse( void )
+{
+	POINT position;
+
+	if ( !g_wv.hWnd || !GetCursorPos( &position )
+		|| !ScreenToClient( g_wv.hWnd, &position ) ) {
+		return;
+	}
+	if ( s_wmv.cursorPositionValid
+		&& position.x == s_wmv.oldCursorX
+		&& position.y == s_wmv.oldCursorY ) {
+		return;
+	}
+
+	s_wmv.cursorPositionValid = qtrue;
+	s_wmv.oldCursorX = position.x;
+	s_wmv.oldCursorY = position.y;
+	Sys_QueEvent( Sys_Milliseconds(), SE_MOUSE_ABSOLUTE, position.x, position.y, 0, NULL );
 }
 
 
@@ -1302,10 +1335,12 @@ void IN_Frame( void ) {
 		return;
 	}
 
-	if ( Key_GetCatcher() & KEYCATCH_BROWSER ) {
+	if ( Key_GetCatcher() & ( KEYCATCH_BROWSER | KEYCATCH_UI | KEYCATCH_CGAME ) ) {
 		IN_DeactivateMouse();
+		IN_WindowMouse();
 		return;
 	}
+	s_wmv.cursorPositionValid = qfalse;
 
 	if ( !gw_active || gw_minimized || ( in_nograb->integer && !( Key_GetCatcher() & KEYCATCH_CONSOLE ) ) ) {
 		IN_DeactivateMouse();

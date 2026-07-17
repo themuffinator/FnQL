@@ -1128,9 +1128,6 @@ void RE_RenderScene( const refdef_t *fd ) {
 	tr.refdef.height = fd->height;
 	tr.refdef.fov_x = fd->fov_x;
 	tr.refdef.fov_y = fd->fov_y;
-	if ( ( fd->rdflags & RDF_NOFOVCORRECTION ) == 0 ) {
-		R_ApplyViewportFovCorrection( tr.refdef.width, tr.refdef.height, qtrue, &tr.refdef.fov_x, &tr.refdef.fov_y );
-	}
 
 	VectorCopy( fd->vieworg, tr.refdef.vieworg );
 	VectorCopy( fd->viewaxis[0], tr.refdef.viewaxis[0] );

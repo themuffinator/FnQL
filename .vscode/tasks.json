@@ -23,7 +23,7 @@
       "problemMatcher": []
     },
     {
-      "label": "meson: build",
+      "label": "meson: build (Steam)",
       "type": "shell",
       "command": "powershell",
       "args": [
@@ -40,7 +40,8 @@
         "both",
         "-Renderers",
         "opengl,glx,vulkan,opengl2",
-        "-Archive"
+        "-Archive",
+        "-WithSteam"
       ],
       "problemMatcher": [
         "$gcc",
@@ -52,34 +53,7 @@
       }
     },
     {
-      "label": "meson: build Win32 debug",
-      "type": "shell",
-      "command": "powershell",
-      "args": [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "${workspaceFolder}\\.vscode\\build-release.ps1",
-        "-Configuration",
-        "Debug",
-        "-Platform",
-        "Win32",
-        "-BuildDir",
-        "meson\\build\\win32-debug",
-        "-Target",
-        "both",
-        "-Renderers",
-        "opengl,glx,vulkan,opengl2",
-        "-Archive"
-      ],
-      "problemMatcher": [
-        "$gcc",
-        "$msCompile"
-      ]
-    },
-    {
-      "label": "meson: build Win32 debug + Steam",
+      "label": "meson: build Win32 debug (Steam)",
       "type": "shell",
       "command": "powershell",
       "args": [
@@ -107,7 +81,7 @@
       ]
     },
     {
-      "label": "meson: build x64",
+      "label": "meson: build x64 (Steam)",
       "type": "shell",
       "command": "powershell",
       "args": [
@@ -124,7 +98,8 @@
         "both",
         "-Renderers",
         "opengl,glx,vulkan,opengl2",
-        "-Archive"
+        "-Archive",
+        "-WithSteam"
       ],
       "problemMatcher": [
         "$gcc",
@@ -142,7 +117,7 @@
         "--print-errorlogs"
       ],
       "dependsOn": [
-        "meson: build"
+        "meson: build (Steam)"
       ],
       "problemMatcher": []
     },
@@ -150,7 +125,7 @@
       "label": "Release: Build FnQL Full",
       "dependsOrder": "sequence",
       "dependsOn": [
-        "meson: build"
+        "meson: build (Steam)"
       ],
       "problemMatcher": []
     },
@@ -172,7 +147,7 @@
         "glx-parity"
       ],
       "dependsOn": [
-        "meson: build x64"
+        "meson: build x64 (Steam)"
       ],
       "problemMatcher": []
     }

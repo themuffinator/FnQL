@@ -436,12 +436,26 @@ class CGameNativeBridgeSourceTests(unittest.TestCase):
 
         self.assertIn("} qlRetailGlconfig_t;", cl_cgame)
         self.assertIn("qlRetailGlconfigSizeCheck[( sizeof( qlRetailGlconfig_t ) == 0x2c44 ) ? 1 : -1 ]", cl_cgame)
-        self.assertIn("static void CL_GetRetailGlconfig( void *glconfig )", cl_cgame)
+        self.assertIn("void CL_CopyRetailGlconfig( void *glconfig )", cl_cgame)
         self.assertIn("retailConfig.maxActiveTextures = cls.glconfig.numTextureUnits;", cl_cgame)
         self.assertIn("retailConfig.multitextureAvailable = ( cls.glconfig.numTextureUnits > 1 ) ? qtrue : qfalse;", cl_cgame)
         self.assertIn("Com_Memcpy( glconfig, &retailConfig, sizeof( retailConfig ) );", cl_cgame)
         self.assertIn("VM_CHECKBOUNDS( cgvm, args[1], sizeof( glconfig_t ) );\n\t\tCL_GetGlconfig( VMA(1) );", cl_cgame)
-        self.assertIn("CL_GetRetailGlconfig( reinterpret_cast<void *>( args[1] ) );", cl_cgame)
+        self.assertIn("CL_CopyRetailGlconfig( reinterpret_cast<void *>( args[1] ) );", cl_cgame)
+
+    def test_native_getsnapshot_uses_the_retail_entity_window_and_offsets(self) -> None:
+        cl_cgame = read_repo_file("code/client/cl_cgame.cpp")
+
+        self.assertIn("constexpr int kRetailPlayerStateBytes = 0x250;", cl_cgame)
+        self.assertIn("constexpr int kRetailSnapshotEntityCount = 0x180;", cl_cgame)
+        self.assertIn("offsetof( RetailNativeSnapshot, playerState ) == 0x2c", cl_cgame)
+        self.assertIn("offsetof( RetailNativeSnapshot, numEntities ) == 0x27c", cl_cgame)
+        self.assertIn("offsetof( RetailNativeSnapshot, entities ) == 0x280", cl_cgame)
+        self.assertIn("sizeof( RetailNativeSnapshot ) == 0x16488", cl_cgame)
+        self.assertIn("static qboolean CL_GetRetailNativeSnapshot", cl_cgame)
+        self.assertIn("if ( arg == CG_GETSNAPSHOT )", cl_cgame)
+        self.assertIn("return CL_GetRetailNativeSnapshot", cl_cgame)
+        self.assertIn("case CG_GETSNAPSHOT:\n\t\treturn CL_GetSnapshot", cl_cgame)
 
     def test_snapshot_structs_and_deltas_use_ql_native_layout(self) -> None:
         q_shared = read_repo_file("code/qcommon/q_shared.h")

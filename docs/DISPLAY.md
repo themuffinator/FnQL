@@ -2,7 +2,7 @@
 
 FnQL splits display settings across three layers: how the window or fullscreen mode is created, how the scene is rendered internally, and which post-processing controls are applied to the final image. This guide covers renderer choice, video mode selection, framebuffer-based rendering, anti-aliasing, bloom, soft particles, and the related scene presentation controls.
 
-For HUD, menu, and cinematic layout on widescreen displays, use the separate [Aspect Correction Guide](ASPECT_CORRECTION.md). For screenshot output and capture-specific options, use the [Screenshot Guide](SCREENSHOTS.md).
+For menu and cinematic layout on widescreen displays, use the separate [Aspect Handling Guide](ASPECT_CORRECTION.md). Retail cgame owns HUD projection and world FOV. For screenshot output and capture-specific options, use the [Screenshot Guide](SCREENSHOTS.md).
 
 ## Renderer Choice
 
@@ -171,10 +171,9 @@ These settings affect the rendered scene itself rather than the window mode.
 - `r_colorGradeAdaptWhitePoint`: Target white point in Kelvin. Default is `6504`.
 - `r_colorGradeLUT`: Optional 3D LUT atlas image for `r_colorGrade 2` or `3`. The atlas layout is width `N*N`, height `N`, with blue slices arranged horizontally.
 - `r_colorGradeLUTScale`: Scene-linear RGB range represented by the LUT. Default `4.0` maps `0..4` into the LUT domain.
-- `r_fovCorrection`: Auto-corrects classic `4:3` scene FOV values for the current viewport aspect. This is for world rendering, not HUD layout.
 - `r_greyscale`: Full-frame desaturation. Requires `r_fbo 1`.
 
-Use [ASPECT_CORRECTION.md](ASPECT_CORRECTION.md) for HUD, menu, and cinematic layout. That guide is intentionally separate because those settings solve a different problem than scene FOV, render scaling, or bloom.
+Use [ASPECT_CORRECTION.md](ASPECT_CORRECTION.md) for menu and cinematic layout. Native QL cgame geometry and world FOV are passed through without an engine-side post-correction.
 
 ## Soft Particles
 
@@ -528,7 +527,6 @@ Settings that are usually safe to tune live:
 
 - `r_swapInterval`
 - `r_gamma`
-- `r_fovCorrection`
 - `r_greyscale`
 - `r_bloom_threshold`
 - `r_bloom_threshold_mode`

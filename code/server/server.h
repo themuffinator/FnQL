@@ -181,7 +181,8 @@ typedef struct client_s {
 	char			name[MAX_NAME_LENGTH];			// extracted from userinfo, high bits masked
 	char			platformSteamId[SV_PLATFORM_STEAM_ID_SIZE];	// server-owned QL SteamID
 	uint64_t		platformSteamIdValue;				// parsed provider identity
-	qboolean		platformAuthSession;				// provider auth session is active
+	qboolean		platformAuthSession;				// connection identity has passed the server auth gate
+	qboolean		platformAuthTicketSession;			// provider BeginAuthSession succeeded; EndAuthSession is required
 	qboolean		platformAuthValidated;			// provider delivered a successful auth result
 	uint32_t		platformAuthStartedTime;			// wrap-safe timeout origin for pending auth
 
@@ -400,6 +401,7 @@ qboolean Zmq_RconActive( void );
 void SV_SetConfigstring( int index, const char *val );
 void SV_GetConfigstring( int index, char *buffer, int bufferSize );
 void SV_UpdateConfigstrings( client_t *client );
+void SV_UpdateQLCvarConfigstrings( qboolean force );
 
 void SV_SetUserinfo( int index, const char *val );
 void SV_GetUserinfo( int index, char *buffer, int bufferSize );

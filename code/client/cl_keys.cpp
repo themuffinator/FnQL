@@ -677,6 +677,43 @@ static void CL_DispatchBrowserKeyEvent( int key, qboolean down ) {
 
 /*
 =============
+CL_ShouldOpenJoinMenu
+
+The local team is authoritative only after a valid active snapshot.  A
+spectator uses the retail team menu as the join screen; every other state
+continues through the ordinary in-game menu.
+=============
+*/
+static qboolean CL_ShouldOpenJoinMenu( void ) {
+	if ( cls.state != CA_ACTIVE || clc.demoplaying || !cl.snap.valid ) {
+		return qfalse;
+	}
+
+	return ( cl.snap.ps.persistant[PERS_TEAM] == TEAM_SPECTATOR ) ? qtrue : qfalse;
+}
+
+
+/*
+=============
+CL_ActivateNativeMenu
+
+Activates a menu owned by the retail UI module and transfers input to it.
+=============
+*/
+static void CL_ActivateNativeMenu( uiMenuCommand_t menu ) {
+	// Browser capture has priority over native UI input. Retail releases it
+	// before opening an in-game menu so the UI receives absolute mouse motion
+	// and can draw its own cursor.
+	CL_WebHost_HideForGameTransition();
+
+	VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, menu );
+	Key_SetCatcher( ( Key_GetCatcher() & ~( KEYCATCH_CGAME | KEYCATCH_BROWSER ) )
+		| KEYCATCH_UI );
+}
+
+
+/*
+=============
 CL_ToggleMenuInternal
 
 Routes Quake Live-style menu toggles through the same path as the hard-coded
@@ -684,6 +721,8 @@ Escape key, optionally synthesizing a release event for command-triggered use.
 =============
 */
 static void CL_ToggleMenuInternal( int key, qboolean sendKeyUp, unsigned time ) {
+	const qboolean openJoinMenu = CL_ShouldOpenJoinMenu();
+
 #ifdef USE_CURL
 	if ( Com_DL_InProgress( &download ) && download.mapAutoDownload ) {
 		Com_DL_Cleanup( &download );
@@ -698,12 +737,30 @@ static void CL_ToggleMenuInternal( int key, qboolean sendKeyUp, unsigned time ) 
 	}
 
 	if ( Key_GetCatcher() & KEYCATCH_BROWSER ) {
-		return;
+		// The disconnected WebUI owns Escape itself. Once a game is active,
+		// retail transfers Escape to the native in-game/join menu. This also
+		// recovers if a late WebUI callback re-arms browser input after the
+		// connection transition has already hidden its surface.
+		if ( cls.state != CA_ACTIVE || clc.demoplaying ) {
+			return;
+		}
+		CL_WebHost_HideForGameTransition();
 	}
 
 	if ( Key_GetCatcher( ) & KEYCATCH_MESSAGE ) {
 		// clear message mode
 		Message_Key( K_ESCAPE );
+		return;
+	}
+
+	// Retail's large JOIN MATCH overlay is the cgame HUD root
+	// "joingame_menu". The UI module's packaged team menu is a different,
+	// legacy asset, so cgame must retain both the event state and input.
+	if ( openJoinMenu && cgvm ) {
+		CL_WebHost_HideForGameTransition();
+		VM_Call( cgvm, 1, CG_EVENT_HANDLING, CGAME_EVENT_TEAMMENU );
+		Key_SetCatcher( ( Key_GetCatcher() & ~( KEYCATCH_UI | KEYCATCH_BROWSER ) )
+			| KEYCATCH_CGAME );
 		return;
 	}
 
@@ -713,7 +770,10 @@ static void CL_ToggleMenuInternal( int key, qboolean sendKeyUp, unsigned time ) 
 		if ( cgvm ) {
 			VM_Call( cgvm, 1, CG_EVENT_HANDLING, CGAME_EVENT_NONE );
 		}
-		return;
+
+		if ( !openJoinMenu ) {
+			return;
+		}
 	}
 
 	if ( !( Key_GetCatcher( ) & KEYCATCH_UI ) ) {
@@ -722,7 +782,7 @@ static void CL_ToggleMenuInternal( int key, qboolean sendKeyUp, unsigned time ) 
 		}
 
 		if ( cls.state == CA_ACTIVE && !clc.demoplaying ) {
-			VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_INGAME );
+			CL_ActivateNativeMenu( UIMENU_INGAME );
 		}
 		else if ( cls.state != CA_DISCONNECTED ) {
 #if 0
@@ -737,7 +797,7 @@ static void CL_ToggleMenuInternal( int key, qboolean sendKeyUp, unsigned time ) 
 				CL_FlushMemory();
 			}
 #endif
-			VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_MAIN );
+			CL_ActivateNativeMenu( UIMENU_MAIN );
 		}
 		return;
 	}

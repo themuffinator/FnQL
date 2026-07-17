@@ -358,6 +358,10 @@ find_package(Python3 COMPONENTS Interpreter)
 IF(Python3_Interpreter_FOUND)
 	add_test(NAME fnql_ql_services_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/ql_services_source_tests.py")
+	add_test(NAME fnql_ql_cvar_configstring_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/ql_cvar_configstring_source_tests.py")
+	add_test(NAME fnql_join_menu_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/join_menu_source_tests.py")
 	add_test(NAME fnql_ql_demo_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/ql_demo_source_tests.py")
 	add_test(NAME fnql_workshop_source
@@ -366,6 +370,8 @@ IF(Python3_Interpreter_FOUND)
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/cvar_factory_snapshot_tests.py")
 	add_test(NAME fnql_factory_runtime_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/factory_runtime_source_tests.py")
+	add_test(NAME fnql_map_overbright_cap_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/map_overbright_cap_source_tests.py")
 	add_test(NAME fnql_retail_factory_probe
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/retail_factory_probe_tests.py" --meson)
 	set_tests_properties(fnql_retail_factory_probe PROPERTIES SKIP_RETURN_CODE 77)
@@ -446,6 +452,9 @@ IF(UNIX)
 	ENDIF()
 ELSEIF(WIN32)
 	SET(EXE_TYPE WIN32)
+	# Prevent Windows headers from exporting legacy min/max macros into shared
+	# client headers that use the C++ standard-library overloads.
+	ADD_COMPILE_DEFINITIONS(NOMINMAX)
 	IF(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 		ADD_COMPILE_DEFINITIONS(_CRT_SECURE_NO_WARNINGS) # v3.12+
 	ELSEIF(MSVC)

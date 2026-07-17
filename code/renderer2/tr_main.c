@@ -43,50 +43,6 @@ refimport_t	ri;
 // point at this for their sorting surface
 static surfaceType_t	entitySurface = SF_ENTITY;
 
-#define R_BASE_VIEWPORT_ASPECT ( 4.0f / 3.0f )
-
-void R_ApplyViewportFovCorrection( int viewportWidth, int viewportHeight, qboolean usePhysicalAspect, float *fovX, float *fovY )
-{
-	float viewportAspect;
-	float renderAspect;
-	float tanHalfBaseFovY;
-
-	if ( fovX == NULL || fovY == NULL ) {
-		return;
-	}
-
-	if ( viewportWidth <= 0 || viewportHeight <= 0 ) {
-		return;
-	}
-
-	if ( r_fovCorrection == NULL || r_fovCorrection->integer == 0 ) {
-		return;
-	}
-
-	if ( *fovX <= 0.0f || *fovX >= 179.0f ) {
-		return;
-	}
-
-	viewportAspect = (float)viewportWidth / (float)viewportHeight;
-
-	if ( usePhysicalAspect && glConfig.vidWidth > 0 && glConfig.vidHeight > 0 && glConfig.windowAspect > 0.0f ) {
-		renderAspect = (float)glConfig.vidWidth / (float)glConfig.vidHeight;
-		if ( renderAspect > 0.0f ) {
-			viewportAspect *= glConfig.windowAspect / renderAspect;
-		}
-	}
-
-	if ( fabsf( viewportAspect - R_BASE_VIEWPORT_ASPECT ) < 0.001f ) {
-		return;
-	}
-
-	// Quake 3 authored gameplay FOV against a 4:3 view. Preserve that vertical
-	// framing, then expand or contract the horizontal FOV to fit the viewport.
-	tanHalfBaseFovY = tanf( *fovX * M_PI / 360.0f ) / R_BASE_VIEWPORT_ASPECT;
-
-	*fovX = atanf( tanHalfBaseFovY * viewportAspect ) * 360.0f / M_PI;
-	*fovY = atanf( tanHalfBaseFovY ) * 360.0f / M_PI;
-}
 #if 0
 /*
 ================
@@ -2299,7 +2255,6 @@ void R_RenderSunShadowMaps(const refdef_t *fd, int level)
 	splitBias = r_shadowCascadeZBias->value;
 	fovX = fd->fov_x;
 	fovY = fd->fov_y;
-	R_ApplyViewportFovCorrection( fd->width, fd->height, qtrue, &fovX, &fovY );
 
 	switch(level)
 	{

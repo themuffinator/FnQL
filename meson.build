@@ -250,7 +250,6 @@ client_src = [
   'code/client/cl_cgame.cpp',
   'code/client/cl_cin.cpp',
   'code/client/cl_console.cpp',
-  'code/client/cl_hud.cpp',
   'code/client/cl_input.cpp',
   'code/client/cl_jpeg.cpp',
   'code/client/cl_keys.cpp',
@@ -487,8 +486,7 @@ endif
 freetype_dep = dependency('freetype2',
   required: get_option('build-client'),
   fallback: 'freetype2',
-  default_options: [
-    'default_library=static',
+  default_options: quiet_fallback_defaults + [
     'brotli=disabled',
     'bzip2=disabled',
     'harfbuzz=disabled',
@@ -949,7 +947,6 @@ foreach map_name : standard_audio_zone_maps
   standard_audio_zone_sidecars += files('pkg/baseq3/maps/' + map_name + '.azb')
 endforeach
 root_package_assets = standard_audio_zone_sidecars + files(
-  'pkg/baseq3/fnql-hud.json',
   'pkg/baseq3/scripts/fnql.shader',
   'pkg/baseq3/sound/fnql-weapon-sounds.sndshd',
   'pkg/missionpack/sound/fnql-weapon-sounds.sndshd',
@@ -1044,6 +1041,9 @@ ql_font_text_tests = executable('fnql_ql_font_text_tests',
 test('fnql_ql_font_text', ql_font_text_tests)
 test('fnql_ql_font_source', python,
   args: files('tests/ql_font_source_tests.py'),
+)
+test('fnql_map_overbright_cap_source', python,
+  args: files('tests/map_overbright_cap_source_tests.py'),
 )
 
 netchan_safety_tests = executable('fnql_netchan_safety_tests',
@@ -1155,6 +1155,12 @@ ql_bsp_contract_tests = executable('fnql_ql_bsp_contract_tests',
 test('fnql_ql_bsp_contract', ql_bsp_contract_tests)
 test('fnql_ql_services_source', python,
   args: files('tests/ql_services_source_tests.py'),
+)
+test('fnql_ql_cvar_configstring_source', python,
+  args: files('tests/ql_cvar_configstring_source_tests.py'),
+)
+test('fnql_join_menu_source', python,
+  args: files('tests/join_menu_source_tests.py'),
 )
 test('fnql_cvar_factory_snapshot_source', python,
   args: files('tests/cvar_factory_snapshot_tests.py'),

@@ -86,10 +86,12 @@ Ninja. You can build through Meson from a Visual Studio developer prompt:
 
 `meson install -C meson/build-msvc --destdir dist`
 
-VS Code's default build and the launch configurations labelled
-`Retail QL / Win32` initialize the matching MSVC environment automatically and
-use `meson/build/win32` (Release) or `meson/build/win32-debug` (Debug). The x64
-tasks and launch entries are retained explicitly as engine-only checks.
+VS Code's default Steam build and the launch configurations labelled
+`Retail QL / Win32` both use `meson/build/win32` (Release), so a manual launch
+cannot accidentally run an older Debug binary. The separate
+`meson: build Win32 debug (Steam)` task remains available for source-level
+debugging. The x64 tasks and launch entries are retained explicitly as
+engine-only checks.
 
 Alternatively, open `code/win32/msvc2017/fnql.sln`. Its single maintained
 project delegates the selected Debug/Release and Win32/x64/ARM64 configuration

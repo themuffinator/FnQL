@@ -51,7 +51,6 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 // refdef flags
 #define RDF_NOWORLDMODEL	0x0001		// used for player configuration screen
-#define RDF_NOFOVCORRECTION	0x0002		// keep authored FOV values without viewport-aspect correction
 #define RDF_HYPERSPACE		0x0004		// teleportation effect
 #define RDF_NOFIRSTPERSON	0x0008		// suppress first-person-only entities such as the view weapon
 

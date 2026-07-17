@@ -1420,6 +1420,7 @@ void SV_Frame( int msec, int realMsec ) {
 		SV_SetConfigstring( CS_SYSTEMINFO, Cvar_InfoString_Big( CVAR_SYSTEMINFO, nullptr ) );
 		cvar_modifiedFlags &= ~CVAR_SYSTEMINFO;
 	}
+	SV_UpdateQLCvarConfigstrings( qfalse );
 
 	if ( com_speeds->integer ) {
 		startTime = Sys_Milliseconds();

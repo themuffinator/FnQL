@@ -144,7 +144,7 @@ class FactoryRuntimeSourceTests(unittest.TestCase):
             "SV_ClearServer();",
             "SV_ZFree( svs.clients );",
             "SV_FactoryShutdown();",
-            "svs = {};",
+            "std::memset( &svs, 0, sizeof( svs ) );",
         )
         positions = [shutdown.index(marker) for marker in lifecycle]
         self.assertEqual(positions, sorted(positions))
