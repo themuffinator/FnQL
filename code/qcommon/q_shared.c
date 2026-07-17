@@ -1714,7 +1714,8 @@ int QDECL Com_sprintf( char *dest, int size, const char *fmt, ...)
 {
 	int		len;
 	va_list	argptr;
-	char	bigbuffer[32000];	// big, but small enough to fit in PPC stack
+	char	localBuffer[32000];
+	char	*buffer;
 
 	if ( !dest ) 
 	{
@@ -1724,14 +1725,35 @@ int QDECL Com_sprintf( char *dest, int size, const char *fmt, ...)
 #endif
 		return 0;
 	}
+	if ( size <= 0 )
+	{
+		Com_Error( ERR_FATAL, "Com_sprintf: invalid size %i", size );
+		return 0;
+	}
+
+	/* Preserve the historical overlap-safe behavior without the old fixed-size,
+	 * unbounded vsprintf buffer. Existing-size calls stay on the local buffer;
+	 * large WebUI and service payloads use a destination-sized allocation. */
+	buffer = size <= (int)sizeof( localBuffer )
+		? localBuffer : (char *)malloc( (size_t)size );
+	if ( !buffer )
+	{
+		Com_Error( ERR_FATAL, "Com_sprintf: allocation failed for %i bytes", size );
+		return 0;
+	}
 
 	va_start( argptr, fmt );
-	len = vsprintf( bigbuffer, fmt, argptr );
+	len = Q_vsnprintf( buffer, (size_t)size, fmt, argptr );
 	va_end( argptr );
 
-	if ( len >= sizeof( bigbuffer ) || len < 0 ) 
+	if ( len < 0 )
 	{
-		Com_Error( ERR_FATAL, "Com_sprintf: overflowed bigbuffer" );
+		dest[0] = '\0';
+		if ( buffer != localBuffer )
+		{
+			free( buffer );
+		}
+		Com_Error( ERR_FATAL, "Com_sprintf: formatting failed" );
 #if	defined(_DEBUG) && defined(_WIN32)
 		DebugBreak();
 #endif
@@ -1744,13 +1766,20 @@ int QDECL Com_sprintf( char *dest, int size, const char *fmt, ...)
 #if	defined(_DEBUG) && defined(_WIN32)
 		DebugBreak();
 #endif
-		len = size - 1;
+		memcpy( dest, buffer, (size_t)size );
+		dest[size - 1] = '\0';
+		if ( buffer != localBuffer )
+		{
+			free( buffer );
+		}
+		return size - 1;
 	}
 
-	//Q_strncpyz( dest, bigbuffer, size );
-	//strncpy( dest, bigbuffer, len );
-	memcpy( dest, bigbuffer, len );
-	dest[ len ] = '\0';
+	memcpy( dest, buffer, (size_t)len + 1 );
+	if ( buffer != localBuffer )
+	{
+		free( buffer );
+	}
 
 	return len;
 }

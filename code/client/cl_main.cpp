@@ -3344,6 +3344,14 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 	const char *s;
 	const char *c;
 	int challenge = 0;
+	auto rejectConnectionAttempt = []( const char *message ) {
+		Q_strncpyz( clc.serverMessage, message, sizeof( clc.serverMessage ) );
+		Com_Printf( "%s\n", message );
+		CL_ClearSteamChallengeTicket();
+		clc.connectPacketCount = 0;
+		clc.connectTime = 0;
+		cls.state = CA_DISCONNECTED;
+	};
 
 	MSG_BeginReadingOOB( msg );
 	MSG_ReadLong( msg );	// skip the -1
@@ -3395,13 +3403,15 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 
 		if ( steamChallengeTicket.sentFnqlExtension &&
 			Q_stricmp( Cmd_Argv( 4 ), fnql::protocol::FnqlHandshakeMarker.data() ) ) {
-			Com_Printf( "Authenticated challenge response is not from an FnQL host. Connection refused.\n" );
+			rejectConnectionAttempt(
+				"Authenticated challenge response is not from an FnQL host. Connection refused." );
 			return false;
 		}
 
 		if ( serverProtocol == QL_RETAIL_PROTOCOL_VERSION &&
 			Q_stricmp( Cmd_Argv( 4 ), fnql::protocol::FnqlHandshakeMarker.data() ) ) {
-			Com_Printf( "Protocol 91 server is not an FnQL host. Connection refused.\n" );
+			rejectConnectionAttempt(
+				"Protocol 91 server is not an FnQL host. Connection refused." );
 			return false;
 		}
 
@@ -3568,6 +3578,12 @@ static bool CL_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 			s = MSG_ReadString( msg );
 			Q_strncpyz( clc.serverMessage, s, sizeof( clc.serverMessage ) );
 			Com_Printf( "%s", s );
+			if ( fromserver && cls.state == CA_CHALLENGING && clc.compat &&
+				com_protocol->integer == QL_RETAIL_PROTOCOL_VERSION &&
+				strstr( s, "Server uses protocol version 91" ) ) {
+				rejectConnectionAttempt(
+					"Protocol 91 server is not an FnQL host. Connection refused." );
+			}
 		}
 		return fromserver;
 	}

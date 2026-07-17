@@ -103,6 +103,9 @@ class QLServicesSourceTests(unittest.TestCase):
         self.assertIn("fnql::protocol::FnqlHandshakeMarker.data()", source)
         self.assertIn("contract->family != fnql::protocol::Family::QuakeLive", client)
         self.assertIn("Protocol 91 server is not an FnQL host", client)
+        self.assertIn("auto rejectConnectionAttempt", client)
+        self.assertIn("cls.state = CA_DISCONNECTED;", client)
+        self.assertIn('strstr( s, "Server uses protocol version 91" )', client)
 
     def test_protocol_91_is_the_canonical_runtime_default(self) -> None:
         header = (ROOT / "code/qcommon/qcommon.h").read_text(encoding="utf-8")

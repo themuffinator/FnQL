@@ -27,7 +27,7 @@ def function_body(source: str, name: str) -> str:
 
 
 class LaunchAndTransitionSourceTests(unittest.TestCase):
-    def test_vscode_launches_force_steam_without_prelaunch_tasks(self) -> None:
+    def test_vscode_launches_force_steam_and_build_matching_target(self) -> None:
         launch = json.loads(read_source(".vscode/launch.json"))
 
         self.assertTrue(launch["configurations"])
@@ -35,12 +35,22 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
             args = configuration["args"]
             steam_index = args.index("com_steamIntegration")
             self.assertEqual(args[steam_index + 1], "1", configuration["name"])
-            self.assertNotIn("preLaunchTask", configuration, configuration["name"])
+            expected_task = (
+                "meson: build (Steam)"
+                if "Win32" in configuration["name"]
+                else "meson: build x64 (Steam)"
+            )
+            self.assertEqual(
+                configuration.get("preLaunchTask"), expected_task, configuration["name"]
+            )
             self.assertNotIn("disabled", configuration["name"].lower())
 
             if "Retail QL / Win32" in configuration["name"]:
                 self.assertIn("meson\\build\\win32\\", configuration["program"])
                 self.assertNotIn("win32-debug", configuration["program"])
+                if "Dedicated" not in configuration["name"]:
+                    webui_index = args.index("cl_webuiEnable")
+                    self.assertEqual(args[webui_index + 1], "1", configuration["name"])
 
     def test_vscode_build_tasks_stage_the_steam_provider(self) -> None:
         tasks = json.loads(read_source(".vscode/tasks.json"))["tasks"]

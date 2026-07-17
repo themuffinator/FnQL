@@ -513,7 +513,8 @@ private:
 		const std::wstring logPath = JoinPath( profileRoot_, L"awesomium.log" );
 		const std::wstring userScript = ToWide( parameters.startupScript );
 		imports_.configAssetProtocol( config_, L"asset" );
-		imports_.configChildProcessPath( config_, childProcessPath_.c_str() );
+		// Retail leaves child_process_path at its default. SelectRuntimePaths has
+		// already validated the companion helper without changing that behavior.
 		imports_.configLogPath( config_, logPath.c_str() );
 		wchar_t verboseLogging[8]{};
 		const DWORD verboseLoggingLength = GetEnvironmentVariableW(

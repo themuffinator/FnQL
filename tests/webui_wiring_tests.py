@@ -442,6 +442,17 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("qz_instance.ready", source)
         self.assertIn("CL_WebView_PublishEvent( \"web.object.ready\", NULL );", source)
         self.assertIn("CL_WebHost_SyncNativeSnapshots( qtrue );", source)
+        inject_start = source.index(
+            "static qboolean CL_WebHost_InjectStartupBridge",
+            source.index("static void CL_WebHost_BuildStartupBridgeRetryScript"),
+        )
+        inject = source[
+            inject_start : source.index("static void CL_WebHost_EnsureStartupBridge", inject_start)
+        ]
+        self.assertLess(
+            inject.index("CL_WebHost_SyncNativeSnapshots( qtrue );"),
+            inject.index('CL_WebView_PublishEvent( "web.object.ready", NULL );'),
+        )
         self.assertIn("cl_webui.startupBridgeInjected = qfalse;", source)
 
     def test_webui_native_file_and_cursor_requests_are_bounded(self) -> None:
@@ -820,7 +831,10 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("JSON.parse('", source)
         self.assertIn("CL_WebHost_InvalidateDocumentSnapshots();\n\tCL_Awesomium_Reload", source)
         self.assertIn("!CL_WebHost_HasLiveView() || CL_Awesomium_IsLoading()", source)
-        self.assertIn("startupScript = CL_WebHost_AllocateStartupBridgeScript( NULL );", source)
+        self.assertIn(
+            "startupScript = CL_WebHost_AllocateStartupBridgeScript( preloadConfigJson,",
+            source,
+        )
 
     def test_webui_native_friend_list_uses_client_identity_snapshot(self) -> None:
         source = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
@@ -839,8 +853,37 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn('\\"steamId\\"', source)
         self.assertIn('\\"muted\\"', source)
         self.assertIn('!Q_stricmp( kind, "friends" )', source)
-        self.assertIn("CL_WebHost_BuildFriendListJson( friendJson, sizeof( friendJson ) );", source)
+        self.assertIn("#define CL_WEB_FRIEND_JSON_LENGTH 262144", source)
+        self.assertIn("CL_WebHost_BuildFriendListJson( friendJson, CL_WEB_FRIEND_JSON_LENGTH );", source)
         self.assertIn("CL_WebHost_UpdateBrowserFriendList( friendJson );", source)
+        self.assertIn('{ "qzSteamId",', source)
+        self.assertIn('{ "qzPlayerNameLength",', source)
+        self.assertIn('{ "qzFriendCount",', source)
+        self.assertIn('{ "steamAvatarImages",', source)
+
+    def test_webui_startup_preload_is_bounded_and_snapshots_follow_document_load(self) -> None:
+        source = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
+        client_header = (ROOT / "code" / "client" / "client.h").read_text(encoding="utf-8")
+
+        self.assertIn("const char *initialFriendJson", source)
+        self.assertIn("const char *initialFriendJson", client_header)
+        self.assertIn("CL_WebHost_BuildFriendListJson( friendJson, CL_WEB_FRIEND_JSON_LENGTH );", source)
+        self.assertIn("#define CL_WEB_AWESOMIUM_PRELOAD_MAX_LENGTH 16384", source)
+        self.assertIn("char preloadConfigJson[1024];", source)
+        self.assertIn(
+            "CL_WebHost_AllocateStartupBridgeScript( preloadConfigJson,\n\t\tNULL, NULL )",
+            source,
+        )
+        self.assertIn(
+            "strlen( startupScript ) >= CL_WEB_AWESOMIUM_PRELOAD_MAX_LENGTH",
+            source,
+        )
+        self.assertIn("CL_WebHost_InjectStartupBridge once the document is live", source)
+        self.assertIn("CL_WebHost_SyncNativeSnapshots( qtrue );", source)
+        self.assertIn("window.__qlr_set_native_config", source)
+        self.assertIn("window.__qlr_set_friend_list", source)
+        self.assertIn("configExpression", source)
+        self.assertIn("friendExpression", source)
 
     def test_webui_native_config_snapshot_seeds_qz_cache(self) -> None:
         source = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")

@@ -217,34 +217,34 @@ subscription enumeration, item state, install metadata, byte progress,
 download, subscribe, unsubscribe, and bounded callback/event delivery for AppID
 `282440`. FnQL starts the Steam GameServer before its initial Workshop snapshot
 and revalidates the provider's dynamic status after that start and callback
-pumping, which permits a provider to acquire and expose a GameServer-owned UGC
-interface at the correct time. The current sibling nevertheless obtains UGC
-only from the Steam *client* interface. Consequently it requires a running
-Steam client with an active user that owns Quake Live; a GameServer-only role
-does not by itself provide UGC. In
-particular, do not assume that a headless dedicated process can perform live
-Workshop enumeration or downloads merely because its Steam GameServer lane
-initialized. It can still mount and publish content registered through a
-supported provider context, but absent that context the engine fails honestly
-to ordinary filesystem and pak behavior.
+pumping. Provider version 0.3.0 uses the Steam client UGC owner for client and
+listen-server sessions, then mirrors retail's dedicated-server split by
+acquiring `SteamGameServerUGC` only after successful GameServer startup.
+Dedicated install/download callbacks and all-UGC call results use the
+GameServer callback lane. Shutdown cancels any owned query, unregisters those
+callbacks, clears UGC from the dynamic capability mask, and only then releases
+the GameServer interfaces. A missing or null optional GameServer UGC export
+leaves a GameServer-only process without UGC instead of initializing a hidden
+client lane; ordinary filesystem and pak fallback remains available.
 
-Observed evidence is narrower than the desired provider implementation: the
-legitimate retail Windows `steam_api.dll` exports both `SteamUGC` and
-`SteamGameServerUGC`, and the QLSRP ownership mapping selects the latter for a
-dedicated process after GameServer initialization. FnQL therefore treats
-GameServer-owned UGC as a provider responsibility, not as a reason to initialize
-the Steam client in an unattended server. Such a provider must acquire the
-GameServer interface only after GameServer startup, register install/download
-callbacks with GameServer ownership, pump them through the GameServer callback
-lane, publish the resulting UGC bit through dynamic provider status, and clear
-that bit before releasing the interface during GameServer shutdown. The
-provider-info mask describes what is usable immediately after startup; each
-successful status snapshot is runtime-authoritative and may add or remove UGC
-as role ownership changes. FnQL validates the complete UGC function table before
-exposing either mask. Client-owned UGC remains the listen/client path; a
-GameServer-only provider must not silently initialize the client lane. This is
-an implementation contract inferred from the two evidence sources; a live
-unattended retail download remains the promotion gate.
+The legitimate retail Windows `steam_api.dll` exports both `SteamUGC` and
+`SteamGameServerUGC`; a read-only audit of the user's local retail
+redistributable reconfirmed both exports on 2026-07-17. The QLSRP ownership
+mapping selects the latter for a dedicated process after GameServer
+initialization. FnQL's provider and
+fake-runtime regression now implement and exercise that inferred ownership
+contract, including dynamic add/remove of the UGC capabilities and distinct
+callback ownership. The provider-info mask still describes only what is usable
+immediately after startup; each successful status snapshot is
+runtime-authoritative as role ownership changes. FnQL validates the complete
+UGC function table before exposing either mask. A live unattended retail
+enumeration/download has not yet been performed, so that remains the promotion
+gate rather than an observed success claim.
+
+The same read-only export audit found all 142 flat symbols currently resolved
+by provider 0.3.0 in the retail x86 redistributable. This proves symbol
+availability only; it did not initialize Steam, log on a GameServer, enumerate
+account content, or call a live service.
 
 The legitimate retail Windows redistributable is x86, so Win32 remains the
 validated retail provider lane. Linux, macOS, Windows x64, and unattended
@@ -254,6 +254,16 @@ install folders, account data, or retail assets are recorded in this document
 or repository.
 
 ## Implemented service surface
+
+The versioned capability matrix has 25 independently gated entries. Provider
+version 0.3.0 implements and fake-runtime tests all 25 on the
+retail-compatible Win32 lane, for **100% ABI capability completion**. The final
+entry, `FNQL_STEAM_CAP_RETAIL_JSON`, is architecture-gated: Windows x64 and
+portable builds keep it clear and return an explicit unsupported result while
+retaining the deterministic engine fallback. This percentage measures the
+implemented retail-Win32 provider surface; it does not turn the remaining
+logged-in retail, unattended Workshop, or cross-platform live probes into
+completed evidence.
 
 The first ABI covers client identity and subscription state, overlay URLs and
 users, rich presence, Steam callbacks, friends lobbies, lobby chat and invites,
@@ -418,10 +428,24 @@ observed Quake Live table: all 88 mapped fields are integer descriptors. They
 are deliberately not substituted into the active integer update lane.
 
 Retail qagame passes report/event data as an opaque `Json::Value` owned by its
-MSVC/JsonCpp runtime. FnQL never dereferences that foreign C++ object. JSON side
-effects require an optional provider-side serializer compiled for the matching
-ABI; without one, the engine logs the unavailable capability and safely defers
-those side effects.
+VC10/JsonCpp runtime. The executable and qagame import `MSVCP100`/`MSVCR100`,
+and the committed retail corpus shows a 16-byte tagged value backed by a
+16-byte VC10 tree object with 48-byte nodes. Provider 0.3.0 independently
+implements a read-only Win32 view of that observed layout instead of compiling
+against or invoking the foreign C++ ABI. It copies input through checked
+process-memory reads, validates every tag, pointer, tree relation, node count,
+depth, cycle, string termination, and UTF-8 sequence, and writes compact JSON
+only into the caller's bounded buffer. It never mutates or frees retail-owned
+storage. Malformed input, inaccessible pages, overflow, and short output all
+clear the destination and fail closed.
+
+The adapter advertises `FNQL_STEAM_CAP_RETAIL_JSON` only in a 32-bit Windows
+provider. Windows x64, Linux, and other architectures expose the function as an
+explicit unsupported operation without claiming the capability. FnQL then
+uses its existing safe deferral path. Fake-runtime fixtures exercise nested and
+sparse containers, all scalar kinds, escaping and UTF-8, unreadable pointers,
+unknown tags, cycles, and output exhaustion; the engine independently validates
+the completed document before applying stats or publication side effects.
 
 The retail Windows Quake Live redistributable is x86. Win32 is therefore the
 retail-compatible provider lane. The sibling also compiles x64 to keep the ABI

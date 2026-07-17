@@ -106,6 +106,7 @@ class WebUiBackendSourceTests(unittest.TestCase):
 
         self.assertIn("#define CL_WEB_BOOTSTRAP_WIDTH 1280", source)
         self.assertIn("#define CL_WEB_BOOTSTRAP_HEIGHT 720", source)
+        self.assertIn("#define CL_WEB_AWESOMIUM_PRELOAD_MAX_LENGTH 16384", source)
         self.assertIn("static char *CL_WebHost_AllocateStartupBridgeScript", source)
         self.assertIn(
             "const size_t required = static_cast<size_t>( CL_WEB_STARTUP_SCRIPT_LENGTH ) +",
@@ -117,7 +118,15 @@ class WebUiBackendSourceTests(unittest.TestCase):
         )
         self.assertIn("Z_Malloc( static_cast<int>( required ) )", source)
         self.assertIn(
-            "CL_WebHost_BuildStartupBridgeScript( script, required, factoryJson );",
+            "CL_WebHost_BuildStartupBridgeScript( script, required, configJson,",
+            source,
+        )
+        self.assertIn(
+            "CL_WebHost_AllocateStartupBridgeScript( preloadConfigJson,\n\t\tNULL, NULL )",
+            source,
+        )
+        self.assertIn(
+            "strlen( startupScript ) >= CL_WEB_AWESOMIUM_PRELOAD_MAX_LENGTH",
             source,
         )
         self.assertIn(
@@ -132,6 +141,20 @@ class WebUiBackendSourceTests(unittest.TestCase):
         ]
         self.assertIn("CL_WebHost_OpenRequestedURL", bootstrap)
         self.assertNotIn("cls.glconfig.vidWidth <= 0", bootstrap)
+
+    def test_large_social_snapshots_do_not_use_the_legacy_fixed_formatter(self) -> None:
+        webui = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(
+            encoding="utf-8"
+        )
+        shared = (ROOT / "code" / "qcommon" / "q_shared.c").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("#define CL_WEB_FRIEND_JSON_LENGTH 262144", webui)
+        self.assertIn("Q_vsnprintf( buffer, (size_t)size, fmt, argptr )", shared)
+        self.assertIn("malloc( (size_t)size )", shared)
+        self.assertNotIn("char\tbigbuffer[32000]", shared)
+        self.assertNotIn("vsprintf( bigbuffer", shared)
 
     def test_legacy_stop_refresh_cannot_abort_the_live_document(self) -> None:
         source = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(

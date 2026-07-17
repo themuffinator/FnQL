@@ -757,7 +757,7 @@ void CL_AdvertisementBridge_GetLabelList1Entry( int index, char *buffer, int buf
 int CL_AdvertisementBridge_GetLabelList2Count( void );
 void CL_AdvertisementBridge_GetLabelList2Entry( int index, char *buffer, int bufferSize );
 qboolean CL_Awesomium_RequestResource( const char *virtualPath, void **outBuffer, int *outLength );
-qboolean CL_Awesomium_Startup( const char *runtimePath, const char *basePath, const char *retailPath, const char *playerName, unsigned int appId, unsigned int steamIdLow, unsigned int steamIdHigh, int width, int height, const char *initialConfigJson, const char *initialMapJson, const char *initialFactoryJson );
+qboolean CL_Awesomium_Startup( const char *runtimePath, const char *basePath, const char *retailPath, const char *playerName, unsigned int appId, unsigned int steamIdLow, unsigned int steamIdHigh, int width, int height, const char *initialConfigJson, const char *initialMapJson, const char *initialFactoryJson, const char *initialFriendJson );
 qboolean CL_Awesomium_OpenURL( const char *url );
 void CL_Awesomium_Update( void );
 qboolean CL_Awesomium_Resize( int width, int height );

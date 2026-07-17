@@ -159,8 +159,10 @@ def main() -> int:
         require(server_log, "Stopped server demo recording:", "server")
         reject(client_log, "ERROR: VM_Create", "client")
         if steam_provider is not None:
-            require(client_log, "Steam provider FnQL-Steam 0.1.0 active", "client")
-            require(server_log, "Steam provider FnQL-Steam 0.1.0 active", "server")
+            require(client_log, "Steam provider FnQL-Steam ", "client")
+            require(client_log, " active (capabilities ", "client")
+            require(server_log, "Steam provider FnQL-Steam ", "server")
+            require(server_log, " active (capabilities ", "server")
             require(server_log, "Platform authentication validated client", "server")
         if args.expect_steam_fixture:
             require(server_log, "Steam GameServer identity published in configstring 714", "server")

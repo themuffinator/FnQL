@@ -70,10 +70,12 @@ BackendHost &ClientBackendHost() noexcept {
 #define CL_WEB_CONFIG_SYNC_FRAMES 300
 #define CL_WEB_CONFIG_JSON_LENGTH 8192
 #define CL_WEB_CONFIG_ITEM_LENGTH 1536
+#define CL_WEB_FRIEND_JSON_LENGTH 262144
 #define CL_WEB_CATALOG_JSON_LENGTH 65536
 #define CL_WEB_CATALOG_FILE_LIST_LENGTH 32768
 #define CL_WEB_CATALOG_SYNC_CHUNK_CHARS 8192
 #define CL_WEB_STARTUP_SCRIPT_LENGTH 65536
+#define CL_WEB_AWESOMIUM_PRELOAD_MAX_LENGTH 16384
 #define CL_WEB_SERVER_LOCAL_REFRESH_WAIT_MSEC 1000
 #define CL_WEB_SERVER_REMOTE_REFRESH_WAIT_MSEC 5000
 #define CL_WEB_SERVER_REFRESH_TIMEOUT_MSEC 15000
@@ -784,6 +786,7 @@ static qboolean CL_WebUI_EnsureBackendStarted( void ) {
 	unsigned int identityLow = 0u;
 	unsigned int identityHigh = 0u;
 	char *configJson;
+	char *friendJson;
 	char *mapJson;
 	char *factoryJson;
 	qboolean started;
@@ -817,11 +820,15 @@ static qboolean CL_WebUI_EnsureBackendStarted( void ) {
 	}
 
 	configJson = static_cast<char *>( Z_Malloc( CL_WEB_CONFIG_JSON_LENGTH ) );
+	friendJson = static_cast<char *>( Z_Malloc( CL_WEB_FRIEND_JSON_LENGTH ) );
 	mapJson = static_cast<char *>( Z_Malloc( CL_WEB_CATALOG_JSON_LENGTH ) );
 	factoryJson = CL_WebHost_AllocateFactoryListJson();
-	if ( !configJson || !mapJson || !factoryJson ) {
+	if ( !configJson || !friendJson || !mapJson || !factoryJson ) {
 		if ( configJson ) {
 			Z_Free( configJson );
+		}
+		if ( friendJson ) {
+			Z_Free( friendJson );
 		}
 		if ( mapJson ) {
 			Z_Free( mapJson );
@@ -835,8 +842,10 @@ static qboolean CL_WebUI_EnsureBackendStarted( void ) {
 	}
 
 	configJson[0] = '\0';
+	friendJson[0] = '\0';
 	mapJson[0] = '\0';
 	CL_WebHost_BuildConfigJson( configJson, CL_WEB_CONFIG_JSON_LENGTH );
+	CL_WebHost_BuildFriendListJson( friendJson, CL_WEB_FRIEND_JSON_LENGTH );
 	CL_WebHost_BuildMapListJson( mapJson, CL_WEB_CATALOG_JSON_LENGTH );
 	started = CL_Awesomium_Startup(
 		runtimePath,
@@ -850,9 +859,11 @@ static qboolean CL_WebUI_EnsureBackendStarted( void ) {
 		initialHeight,
 		configJson,
 		mapJson,
-		factoryJson );
+		factoryJson,
+		friendJson );
 	Z_Free( factoryJson );
 	Z_Free( mapJson );
+	Z_Free( friendJson );
 	Z_Free( configJson );
 
 	if ( !started ) {
@@ -1425,6 +1436,10 @@ static void CL_Web_Status_f( void ) {
 		{ "app", "(function(){return document.getElementById('app')?1:0;})()" },
 		{ "bridge", "(function(){return window.__qlr_qz_instance_script_complete?1:0;})()" },
 		{ "qz", "(function(){return window.qz_instance?1:0;})()" },
+		{ "qzSteamId", "(function(){return window.qz_instance&&String(window.qz_instance.steamId||'0')!=='0'?1:0;})()" },
+		{ "qzPlayerNameLength", "(function(){return window.qz_instance?String(window.qz_instance.playerName||'').length:-1;})()" },
+		{ "qzFriendCount", "(function(){try{var f=window.qz_instance&&window.qz_instance.GetFriendList?window.qz_instance.GetFriendList():null;return f&&typeof f.length!=='undefined'?f.length:-1;}catch(e){return -2;}})()" },
+		{ "steamAvatarImages", "(function(){var n=0,a=document.images;for(var i=0;i<a.length;i++){if(String(a[i].src||'').indexOf('asset://steam/avatar/')===0){n++;}}return n;})()" },
 		{ "mainHook", "(function(){return typeof window.main_hook_v2==='function'?1:0;})()" }
 	};
 
@@ -1491,9 +1506,9 @@ static void CL_Steam_AvatarTest_f( void ) {
 }
 
 static void CL_Steam_FriendsTest_f( void ) {
-	char *snapshot = static_cast<char *>( Z_Malloc( CL_WEB_CONFIG_JSON_LENGTH ) );
+	char *snapshot = static_cast<char *>( Z_Malloc( CL_WEB_FRIEND_JSON_LENGTH ) );
 	if ( !snapshot ) return;
-	CL_WebHost_BuildFriendListJson( snapshot, CL_WEB_CONFIG_JSON_LENGTH );
+	CL_WebHost_BuildFriendListJson( snapshot, CL_WEB_FRIEND_JSON_LENGTH );
 	Com_Printf( "Steam friends snapshot: %s\n", snapshot );
 	Z_Free( snapshot );
 }
@@ -2039,7 +2054,7 @@ static std::string CL_WebHost_JsonParseExpression( const char *json ) {
 }
 
 static void CL_WebHost_BuildStartupBridgeScript( char *buffer, size_t bufferSize,
-		const char *factoryJson ) {
+		const char *configJson, const char *factoryJson, const char *friendJson ) {
 	if ( !buffer || bufferSize == 0 ) {
 		return;
 	}
@@ -2112,30 +2127,52 @@ static void CL_WebHost_BuildStartupBridgeScript( char *buffer, size_t bufferSize
 		(int)bufferSize
 	);
 
-	// Seed the bridge before retail document scripts call GetFactoryList. Parse
-	// JSON as data so special keys such as __proto__ remain ordinary own keys.
-	static const char prefix[] = "(function(){if(window.__qlr_set_native_factories){window.__qlr_set_native_factories(";
+	// Retail document components synchronously read qz identity, factories, and
+	// friends while mounting. Seed all three as data before those scripts run;
+	// later snapshot synchronization remains authoritative for live changes.
+	static const char configPrefix[] = "(function(){if(window.__qlr_set_native_config){window.__qlr_set_native_config(";
+	static const char factoryPrefix[] = "(function(){if(window.__qlr_set_native_factories){window.__qlr_set_native_factories(";
+	static const char friendPrefix[] = "(function(){if(window.__qlr_set_friend_list){window.__qlr_set_friend_list(";
 	static const char suffix[] = ");}})();";
-	const std::string expression = CL_WebHost_JsonParseExpression( factoryJson );
-	const size_t required = strlen( buffer ) + strlen( prefix ) +
-		expression.size() + strlen( suffix ) + 1;
+	const std::string configExpression = CL_WebHost_JsonParseExpression( configJson );
+	const std::string factoryExpression = CL_WebHost_JsonParseExpression( factoryJson );
+	const std::string friendExpression = CL_WebHost_JsonParseExpression(
+		friendJson && friendJson[0] ? friendJson : "[]" );
+	const qboolean hasFactory = factoryJson && factoryJson[0] ? qtrue : qfalse;
+	const size_t required = strlen( buffer ) + strlen( configPrefix ) +
+		configExpression.size() + strlen( suffix ) + strlen( friendPrefix ) +
+		friendExpression.size() + strlen( suffix ) +
+		( hasFactory ? strlen( factoryPrefix ) + factoryExpression.size() + strlen( suffix ) : 0u ) + 1;
 	if ( required <= bufferSize ) {
-		Q_strcat( buffer, (int)bufferSize, prefix );
-		Q_strcat( buffer, (int)bufferSize, expression.c_str() );
+		Q_strcat( buffer, (int)bufferSize, configPrefix );
+		Q_strcat( buffer, (int)bufferSize, configExpression.c_str() );
+		Q_strcat( buffer, (int)bufferSize, suffix );
+		if ( hasFactory ) {
+			Q_strcat( buffer, (int)bufferSize, factoryPrefix );
+			Q_strcat( buffer, (int)bufferSize, factoryExpression.c_str() );
+			Q_strcat( buffer, (int)bufferSize, suffix );
+		}
+		Q_strcat( buffer, (int)bufferSize, friendPrefix );
+		Q_strcat( buffer, (int)bufferSize, friendExpression.c_str() );
 		Q_strcat( buffer, (int)bufferSize, suffix );
 	}
 }
 
-static char *CL_WebHost_AllocateStartupBridgeScript( const char *factoryJson ) {
-	const std::string expression = CL_WebHost_JsonParseExpression( factoryJson );
+static char *CL_WebHost_AllocateStartupBridgeScript( const char *configJson,
+		const char *factoryJson, const char *friendJson ) {
+	const std::string configExpression = CL_WebHost_JsonParseExpression( configJson );
+	const std::string factoryExpression = CL_WebHost_JsonParseExpression( factoryJson );
+	const std::string friendExpression = CL_WebHost_JsonParseExpression(
+		friendJson && friendJson[0] ? friendJson : "[]" );
 	const size_t required = static_cast<size_t>( CL_WEB_STARTUP_SCRIPT_LENGTH ) +
-		expression.size() + 256u;
+		configExpression.size() + factoryExpression.size() + friendExpression.size() + 512u;
 	if ( required > static_cast<size_t>( ( std::numeric_limits<int>::max )() ) ) {
 		return NULL;
 	}
 	char *script = static_cast<char *>( Z_Malloc( static_cast<int>( required ) ) );
 	if ( script ) {
-		CL_WebHost_BuildStartupBridgeScript( script, required, factoryJson );
+		CL_WebHost_BuildStartupBridgeScript( script, required, configJson,
+			factoryJson, friendJson );
 	}
 	return script;
 }
@@ -2161,11 +2198,20 @@ static qboolean CL_WebHost_InjectStartupBridge( qboolean retryOnly ) {
 		CL_WebHost_BuildStartupBridgeRetryScript(
 			retryScript, sizeof( retryScript ) );
 	} else {
+		char configJson[CL_WEB_CONFIG_JSON_LENGTH];
 		char *factoryJson = CL_WebHost_AllocateFactoryListJson();
-		script = factoryJson
-			? CL_WebHost_AllocateStartupBridgeScript( factoryJson ) : NULL;
+		char *friendJson = static_cast<char *>( Z_Malloc( CL_WEB_FRIEND_JSON_LENGTH ) );
+		CL_WebHost_BuildConfigJson( configJson, sizeof( configJson ) );
+		if ( friendJson ) {
+			CL_WebHost_BuildFriendListJson( friendJson, CL_WEB_FRIEND_JSON_LENGTH );
+		}
+		script = factoryJson && friendJson
+			? CL_WebHost_AllocateStartupBridgeScript( configJson, factoryJson, friendJson ) : NULL;
 		if ( factoryJson ) {
 			Z_Free( factoryJson );
+		}
+		if ( friendJson ) {
+			Z_Free( friendJson );
 		}
 		if ( !script ) {
 			CL_WebUI_SetLastError( "WebUI bridge reinjection allocation failed.",
@@ -2184,10 +2230,10 @@ static qboolean CL_WebHost_InjectStartupBridge( qboolean retryOnly ) {
 
 	if ( !retryOnly ) {
 		cl_webui.startupBridgeInjected = qtrue;
-		CL_WebView_ReplayRetainedEvents();
-		CL_WebView_PublishEvent( "web.object.ready", NULL );
 		CL_WebHost_UpdateBrowserNativeState();
 		CL_WebHost_SyncNativeSnapshots( qtrue );
+		CL_WebView_ReplayRetainedEvents();
+		CL_WebView_PublishEvent( "web.object.ready", NULL );
 	}
 	cl_webui.nextBridgeRetryFrame = cl_webui.frameSequence + CL_WEB_BRIDGE_RETRY_FRAMES;
 	return qtrue;
@@ -3278,10 +3324,12 @@ static void CL_WebHost_SyncNativeSnapshots( qboolean force ) {
 	}
 
 	{
-		char friendJson[CL_WEB_CONFIG_JSON_LENGTH];
-
-		CL_WebHost_BuildFriendListJson( friendJson, sizeof( friendJson ) );
-		CL_WebHost_UpdateBrowserFriendList( friendJson );
+		char *friendJson = static_cast<char *>( Z_Malloc( CL_WEB_FRIEND_JSON_LENGTH ) );
+		if ( friendJson ) {
+			CL_WebHost_BuildFriendListJson( friendJson, CL_WEB_FRIEND_JSON_LENGTH );
+			CL_WebHost_UpdateBrowserFriendList( friendJson );
+			Z_Free( friendJson );
+		}
 	}
 }
 
@@ -5845,10 +5893,12 @@ static void CL_WebHost_ProcessNativeJavascriptRequest( const char *request ) {
 	}
 
 	if ( !Q_stricmp( kind, "friends" ) ) {
-		char friendJson[CL_WEB_CONFIG_JSON_LENGTH];
-
-		CL_WebHost_BuildFriendListJson( friendJson, sizeof( friendJson ) );
-		CL_WebHost_UpdateBrowserFriendList( friendJson );
+		char *friendJson = static_cast<char *>( Z_Malloc( CL_WEB_FRIEND_JSON_LENGTH ) );
+		if ( friendJson ) {
+			CL_WebHost_BuildFriendListJson( friendJson, CL_WEB_FRIEND_JSON_LENGTH );
+			CL_WebHost_UpdateBrowserFriendList( friendJson );
+			Z_Free( friendJson );
+		}
 		return;
 	}
 
@@ -6601,10 +6651,14 @@ static void CL_WebUI_BackendReleaseResource( void *,
 	*resource = {};
 }
 
-qboolean CL_Awesomium_Startup( const char *runtimePath, const char *basePath, const char *retailPath, const char *playerName, unsigned int appId, unsigned int steamIdLow, unsigned int steamIdHigh, int width, int height, const char *initialConfigJson, const char *initialMapJson, const char *initialFactoryJson ) {
+qboolean CL_Awesomium_Startup( const char *runtimePath, const char *basePath, const char *retailPath, const char *playerName, unsigned int appId, unsigned int steamIdLow, unsigned int steamIdHigh, int width, int height, const char *initialConfigJson, const char *initialMapJson, const char *initialFactoryJson, const char *initialFriendJson ) {
 	fnql::webui::StartupParameters parameters;
+	char escapedPlayerName[MAX_CVAR_VALUE_STRING * 2];
+	char preloadConfigJson[1024];
 	char *startupScript;
 	qboolean started;
+	const uint64_t steamId = ( static_cast<uint64_t>( steamIdHigh ) << 32 )
+		| static_cast<uint64_t>( steamIdLow );
 	parameters.runtimePath = runtimePath ? runtimePath : "";
 	parameters.basePath = basePath ? basePath : "";
 	parameters.retailPath = retailPath ? retailPath : "";
@@ -6620,14 +6674,28 @@ qboolean CL_Awesomium_Startup( const char *runtimePath, const char *basePath, co
 	parameters.initialFactoryJson = initialFactoryJson ? initialFactoryJson : "";
 
 	// Awesomium forwards this WebConfig script to its helper at process launch.
-	// Keep it bounded; the potentially large retail factory catalog is delivered
-	// after the document is live through the normal snapshot synchronization.
-	startupScript = CL_WebHost_AllocateStartupBridgeScript( NULL );
-	if ( !startupScript ) {
+	// Windows limits that command line to 32767 UTF-16 code units. Only seed the
+	// identity fields synchronously; config, catalog, and friend snapshots are
+	// delivered by CL_WebHost_InjectStartupBridge once the document is live.
+	CL_WebUI_JsonEscape( playerName ? playerName : "", escapedPlayerName,
+		sizeof( escapedPlayerName ) );
+	Com_sprintf( preloadConfigJson, sizeof( preloadConfigJson ),
+		"{\"appId\":%u,\"steamId\":\"%llu\",\"playerName\":\"%s\","
+		"\"playerProfile\":{\"id\":\"%llu\",\"name\":\"%s\"}}",
+		appId, static_cast<unsigned long long>( steamId ), escapedPlayerName,
+		static_cast<unsigned long long>( steamId ), escapedPlayerName );
+	startupScript = CL_WebHost_AllocateStartupBridgeScript( preloadConfigJson,
+		NULL, NULL );
+	if ( !startupScript
+		|| strlen( startupScript ) >= CL_WEB_AWESOMIUM_PRELOAD_MAX_LENGTH ) {
+		if ( startupScript ) {
+			Z_Free( startupScript );
+		}
 		return CL_WebUI_RecordBackendResult( fnql::webui::BackendResult::Failure(
 			fnql::webui::BackendError::ResourceUnavailable,
-			"WebUI startup script allocation failed" ) );
+			"WebUI startup preload exceeds the bounded Awesomium command line budget" ) );
 	}
+	(void)initialFriendJson;
 	parameters.startupScript = startupScript;
 	started = CL_WebUI_RecordBackendResult(
 		fnql::webui::ClientBackendHost().Start( parameters ) );

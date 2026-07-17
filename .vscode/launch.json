@@ -6,8 +6,9 @@
       "type": "cppvsdbg",
       "request": "launch",
       "program": "${workspaceFolder}\\meson\\build\\win32\\fnql.exe",
-      "args": ["+set", "r_fullscreen", "0", "+set", "cl_renderer", "opengl", "+set", "com_steamIntegration", "1"],
+      "args": ["+set", "r_fullscreen", "0", "+set", "cl_renderer", "opengl", "+set", "com_steamIntegration", "1", "+set", "cl_webuiEnable", "1"],
       "cwd": "${workspaceFolder}\\meson\\build\\win32",
+      "preLaunchTask": "meson: build (Steam)",
       "stopAtEntry": false,
       "console": "internalConsole"
     },
@@ -16,8 +17,9 @@
       "type": "cppvsdbg",
       "request": "launch",
       "program": "${workspaceFolder}\\meson\\build\\win32\\fnql.exe",
-      "args": ["+set", "r_fullscreen", "0", "+set", "cl_renderer", "opengl2", "+set", "com_steamIntegration", "1"],
+      "args": ["+set", "r_fullscreen", "0", "+set", "cl_renderer", "opengl2", "+set", "com_steamIntegration", "1", "+set", "cl_webuiEnable", "1"],
       "cwd": "${workspaceFolder}\\meson\\build\\win32",
+      "preLaunchTask": "meson: build (Steam)",
       "stopAtEntry": false,
       "console": "internalConsole"
     },
@@ -26,8 +28,9 @@
       "type": "cppvsdbg",
       "request": "launch",
       "program": "${workspaceFolder}\\meson\\build\\win32\\fnql.exe",
-      "args": ["+set", "r_fullscreen", "0", "+set", "cl_renderer", "glx", "+set", "com_steamIntegration", "1"],
+      "args": ["+set", "r_fullscreen", "0", "+set", "cl_renderer", "glx", "+set", "com_steamIntegration", "1", "+set", "cl_webuiEnable", "1"],
       "cwd": "${workspaceFolder}\\meson\\build\\win32",
+      "preLaunchTask": "meson: build (Steam)",
       "stopAtEntry": false,
       "console": "internalConsole"
     },
@@ -36,8 +39,9 @@
       "type": "cppvsdbg",
       "request": "launch",
       "program": "${workspaceFolder}\\meson\\build\\win32\\fnql.exe",
-      "args": ["+set", "r_fullscreen", "0", "+set", "cl_renderer", "vulkan", "+set", "com_steamIntegration", "1"],
+      "args": ["+set", "r_fullscreen", "0", "+set", "cl_renderer", "vulkan", "+set", "com_steamIntegration", "1", "+set", "cl_webuiEnable", "1"],
       "cwd": "${workspaceFolder}\\meson\\build\\win32",
+      "preLaunchTask": "meson: build (Steam)",
       "stopAtEntry": false,
       "console": "internalConsole"
     },
@@ -48,6 +52,7 @@
       "program": "${workspaceFolder}\\meson\\build\\win32\\fnql.ded.exe",
       "args": ["+set", "com_steamIntegration", "1"],
       "cwd": "${workspaceFolder}\\meson\\build\\win32",
+      "preLaunchTask": "meson: build (Steam)",
       "stopAtEntry": false,
       "console": "internalConsole"
     },
@@ -58,6 +63,7 @@
       "program": "${workspaceFolder}\\meson\\build\\fnql.x64.exe",
       "args": ["+set", "r_fullscreen", "0", "+set", "cl_renderer", "opengl", "+set", "com_steamIntegration", "1"],
       "cwd": "${workspaceFolder}\\meson\\build",
+      "preLaunchTask": "meson: build x64 (Steam)",
       "stopAtEntry": false,
       "console": "internalConsole"
     },
@@ -68,6 +74,7 @@
       "program": "${workspaceFolder}\\meson\\build\\fnql.ded.x64.exe",
       "args": ["+set", "com_steamIntegration", "1"],
       "cwd": "${workspaceFolder}\\meson\\build",
+      "preLaunchTask": "meson: build x64 (Steam)",
       "stopAtEntry": false,
       "console": "internalConsole"
     }

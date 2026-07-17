@@ -22,6 +22,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "q_shared.h"
 #include "qcommon.h"
+#include "net_address.hpp"
 #include "netchan_safety.hpp"
 
 #include <algorithm>
@@ -953,7 +954,18 @@ int NET_StringToAdr( const char *s, netadr_t *a, netadrtype_t family )
 		search = base;
 	}
 
-	if(!Sys_StringToAdr(search, a, family))
+	const fnql::net::PackedIpv4Host packedHost =
+		fnql::net::ParsePackedIpv4Host( search );
+	if ( packedHost.valid && ( family == NA_UNSPEC || family == NA_IP ) )
+	{
+		Com_Memset( a, 0, sizeof( *a ) );
+		a->type = NA_IP;
+		a->ipv._4[0] = static_cast<byte>( packedHost.value >> 24u );
+		a->ipv._4[1] = static_cast<byte>( packedHost.value >> 16u );
+		a->ipv._4[2] = static_cast<byte>( packedHost.value >> 8u );
+		a->ipv._4[3] = static_cast<byte>( packedHost.value );
+	}
+	else if(!Sys_StringToAdr(search, a, family))
 	{
 		a->type = NA_BAD;
 		return 0;
