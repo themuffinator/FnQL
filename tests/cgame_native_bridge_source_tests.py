@@ -495,11 +495,10 @@ class CGameNativeBridgeSourceTests(unittest.TestCase):
         cl_main = read_repo_file("code/client/cl_main.cpp")
         tr_cmds = read_repo_file("code/renderer/tr_cmds.c")
         vk_cmds = read_repo_file("code/renderervk/tr_cmds.c")
-        renderer2_cmds = read_repo_file("code/renderer2/tr_cmds.c")
 
         self.assertIn("SetClientMessageRendererNodeCount", tr_public)
         self.assertIn("rimp.SetClientMessageRendererNodeCount = CL_SetRetailClientMessageRendererNodeCount;", cl_main)
-        for source in (tr_cmds, vk_cmds, renderer2_cmds):
+        for source in (tr_cmds, vk_cmds):
             self.assertIn("ri.SetClientMessageRendererNodeCount( tr.pc.c_leafs );", source)
 
     def test_cgame_native_text_imports_use_shared_scaled_text_bridge(self) -> None:

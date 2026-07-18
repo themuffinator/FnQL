@@ -59,7 +59,7 @@ class GlobalFogSourceTests(unittest.TestCase):
             load_call = bsp.rindex("R_LoadGlobalFogForWorld();")
             self.assertLess(world_assignment, load_call)
 
-    def test_cvars_default_off_and_leave_renderer2_unchanged(self) -> None:
+    def test_cvars_default_off(self) -> None:
         registration = (
             'ri.Cvar_Get( "r_globalFog", "0", CVAR_ARCHIVE_ND | CVAR_LATCH )'
         )
@@ -71,13 +71,6 @@ class GlobalFogSourceTests(unittest.TestCase):
             self.assertIn('ri.Cvar_Get( "r_globalFogStrength", "1.0", CVAR_ARCHIVE_ND )', init)
             self.assertIn('ri.Cvar_CheckRange( r_globalFogStrength, "0", "1", CV_FLOAT );', init)
             self.assertIn("globalFog_t\tglobalFog;", local)
-
-        for relative_path in (
-            "code/renderer2/tr_init.c",
-            "code/renderer2/tr_local.h",
-            "code/renderer2/tr_bsp.c",
-        ):
-            self.assertNotIn("globalFog", read(relative_path))
 
     def test_root_archive_allowlist_is_narrow_and_preserves_normal_fallback(self) -> None:
         files = read("code/qcommon/files.c")
@@ -166,7 +159,6 @@ class GlobalFogSourceTests(unittest.TestCase):
             "r_globalFog",
             "r_globalFogStrength",
             "FnQL-pkg.fnz",
-            "renderer2",
             "16 KiB",
         ):
             self.assertIn(expected, fog)

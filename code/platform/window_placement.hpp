@@ -42,10 +42,10 @@ constexpr std::int64_t NonNegative( int value ) {
 }
 
 constexpr int SaturateToInt( std::int64_t value ) {
-	return value < std::numeric_limits<int>::min()
-		? std::numeric_limits<int>::min()
-		: value > std::numeric_limits<int>::max()
-			? std::numeric_limits<int>::max()
+	return value < ( std::numeric_limits<int>::min )()
+		? ( std::numeric_limits<int>::min )()
+		: value > ( std::numeric_limits<int>::max )()
+			? ( std::numeric_limits<int>::max )()
 			: static_cast<int>( value );
 }
 

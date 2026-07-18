@@ -26,8 +26,11 @@ extern "C" {
 }
 
 #include "client_cpp.h"
+#include "canvas_geometry.hpp"
+#include "client_cvar_compat.hpp"
 #include "demo_stream.hpp"
 #include "retail_challenge.hpp"
+#include "window_resize.hpp"
 #include "../qcommon/protocol_contract.hpp"
 #include "../qcommon/netchan_safety.hpp"
 #include "../platform/fnql_steam.h"
@@ -167,13 +170,19 @@ cvar_t	*rconAddress;
 
 cvar_t	*cl_timeout;
 cvar_t	*cl_autoNudge;
+cvar_t	*cl_autoTimeNudge;
 cvar_t	*cl_timeNudge;
 cvar_t	*cl_showTimeDelta;
 
 cvar_t	*cl_shownet;
 cvar_t	*cl_autoRecordDemo;
 cvar_t	*cl_freezeDemo;
+cvar_t	*cl_quitOnDemoCompleted;
+cvar_t	*cl_allowConsoleChat;
+cvar_t	*cl_demoRecordMessage;
 cvar_t	*cl_drawRecording;
+static int cl_demoRecordMessageModificationCount;
+static int cl_drawRecordingModificationCount;
 cvar_t	*cl_menuAspect;
 cvar_t	*cl_menuDepthOfField;
 cvar_t	*cl_menuDepthOfFieldTime;
@@ -193,12 +202,17 @@ cvar_t	*r_levelshotHideViewWeapon;
 
 cvar_t	*cl_aviFrameRate;
 cvar_t	*cl_aviMotionJpeg;
+cvar_t	*cl_avidemo;
+cvar_t	*cl_avidemo_latch;
+cvar_t	*cl_avidemo_mintime;
+cvar_t	*cl_avidemo_maxtime;
 cvar_t	*cl_forceavidemo;
 cvar_t	*cl_aviPipeFormat;
 
 cvar_t	*cl_activeAction;
 
 cvar_t	*cl_motdString;
+static cvar_t *cl_platform;
 
 cvar_t	*cl_allowDownload;
 #ifdef USE_CURL
@@ -234,6 +248,26 @@ cvar_t *r_modeFullscreen;
 cvar_t *r_customwidth;
 cvar_t *r_customheight;
 cvar_t *r_customPixelAspect;
+
+// Retail Quake Live renderer/video compatibility controls and status.
+static cvar_t *r_aspectRatio;
+static cvar_t *r_windowedMode;
+static cvar_t *r_windowedWidth;
+static cvar_t *r_windowedHeight;
+static cvar_t *r_stereo;
+static cvar_t *r_noFastRestart;
+static cvar_t *r_ext_gamma_control;
+static cvar_t *r_gl_vendor;
+static cvar_t *r_gl_renderer;
+static cvar_t *r_gl_reserved;
+static cvar_t *r_lastValidRenderer;
+static cvar_t *r_qlRetailVideoBridge;
+static bool retailVideoCvarsInitialized;
+static int retailWindowedModeModificationCount;
+static int retailWindowedWidthModificationCount;
+static int retailWindowedHeightModificationCount;
+static int retailStereoModificationCount;
+static int retailGammaModificationCount;
 
 cvar_t *r_colorbits;
 // these also shared with renderers:
@@ -946,6 +980,30 @@ CLIENT SIDE DEMO PLAYBACK
 =======================================================================
 */
 
+int CL_DemoRecordMessageMode( void ) {
+	if ( !cl_demoRecordMessage ) {
+		return cl_drawRecording ? cl_drawRecording->integer : 0;
+	}
+	if ( !cl_drawRecording ) {
+		return cl_demoRecordMessage->integer;
+	}
+
+	const bool retailChanged = cl_demoRecordMessage->modificationCount !=
+		cl_demoRecordMessageModificationCount;
+	const bool legacyChanged = cl_drawRecording->modificationCount !=
+		cl_drawRecordingModificationCount;
+	if ( retailChanged ) {
+		Cvar_SetIntegerValue( "cl_drawRecording", cl_demoRecordMessage->integer );
+	} else if ( legacyChanged ) {
+		Cvar_SetIntegerValue( "cl_demoRecordMessage", cl_drawRecording->integer );
+	}
+
+	cl_demoRecordMessageModificationCount =
+		cl_demoRecordMessage->modificationCount;
+	cl_drawRecordingModificationCount = cl_drawRecording->modificationCount;
+	return cl_demoRecordMessage->integer;
+}
+
 /*
 =================
 CL_DemoCompleted
@@ -964,6 +1022,9 @@ static void CL_DemoCompleted( void ) {
 
 	CL_Disconnect( qtrue );
 	CL_NextDemo();
+	if ( cl_quitOnDemoCompleted && cl_quitOnDemoCompleted->integer ) {
+		Cbuf_AddText( "quit\n" );
+	}
 }
 
 
@@ -2082,7 +2143,6 @@ in anyway.
 static void CL_RequestAuthorization( void ) {
 	std::array<char, 64> nums;
 	int		i, j, l;
-	cvar_t	*fs;
 
 	if ( !cls.authorizeServer.port ) {
 		Com_Printf( "Resolving %s\n", AUTHORIZE_SERVER_NAME );
@@ -2118,9 +2178,11 @@ static void CL_RequestAuthorization( void ) {
 	}
 	nums[j] = 0;
 
-	fs = Cvar_Get( "cl_anonymous", "0", CVAR_INIT | CVAR_SYSTEMINFO );
-
-	NET_OutOfBandPrint(NS_CLIENT, &cls.authorizeServer, "getKeyAuthorize %i %s", fs->integer, nums.data() );
+	// The legacy Quake III authorizer may read the retail userinfo cvar, but it
+	// must not add Q3's INIT/SYSTEMINFO flags and make it write protected.
+	NET_OutOfBandPrint( NS_CLIENT, &cls.authorizeServer,
+		"getKeyAuthorize %i %s",
+		Cvar_VariableIntegerValue( "cl_anonymous" ), nums.data() );
 }
 #endif
 
@@ -2444,12 +2506,11 @@ we also have to reload the UI and CGame because the renderer
 doesn't know what graphics to reload
 =================
 */
-static int cl_windowResizeDeadline;
-static int cl_windowResizeWidth;
-static int cl_windowResizeHeight;
-static qboolean cl_windowResizePreserveWindow;
+static fnql::client::WindowResizeScheduler cl_windowResize;
 static qboolean cl_windowResizeRestart;
 static qboolean cl_windowModeChange;
+
+static void CL_Vid_Restart( refShutdownCode_t shutdownCode );
 
 
 /*
@@ -2467,14 +2528,23 @@ void CL_NotifyWindowResize( int width, int height, qboolean preserveWindow ) {
 		return;
 	}
 
-	cl_windowResizeWidth = width;
-	cl_windowResizeHeight = height;
-	if ( !cl_windowResizeDeadline ) {
-		cl_windowResizePreserveWindow = preserveWindow;
-	} else if ( !preserveWindow ) {
-		cl_windowResizePreserveWindow = qfalse;
+	cl_windowResize.Notify( static_cast<std::uint32_t>( Sys_Milliseconds() ),
+		width, height, preserveWindow != qfalse );
+}
+
+
+void CL_CompleteWindowResize( void ) {
+	if ( !cl_windowModeChange && !cl_windowResizeRestart ) {
+		cl_windowResize.Complete(
+			static_cast<std::uint32_t>( Sys_Milliseconds() ) );
 	}
-	cl_windowResizeDeadline = Sys_Milliseconds() + 250;
+}
+
+
+void CL_CancelWindowResize( void ) {
+	if ( !cl_windowModeChange && !cl_windowResizeRestart ) {
+		cl_windowResize.Reset();
+	}
 }
 
 
@@ -2484,24 +2554,58 @@ qboolean CL_IsWindowResizeRestart( void ) {
 
 
 static void CL_CheckWindowResize( void ) {
-	if ( !cl_windowResizeDeadline || Sys_Milliseconds() < cl_windowResizeDeadline ) {
+	fnql::client::WindowResizeRequest request;
+
+	// A minimized native surface can report zero or transient dimensions and
+	// may not be drawable at all. Retain the latest valid request until restore,
+	// whose geometry event will update it before this check runs again.
+	if ( gw_minimized || !cl_windowResize.ConsumeIfReady(
+		static_cast<std::uint32_t>( Sys_Milliseconds() ), &request ) ) {
 		return;
 	}
 
-	cl_windowResizeDeadline = 0;
-	Cvar_SetIntegerValue( "r_customWidth", cl_windowResizeWidth );
-	Cvar_SetIntegerValue( "r_customHeight", cl_windowResizeHeight );
+	Cvar_SetIntegerValue( "r_customWidth", request.width );
+	Cvar_SetIntegerValue( "r_customHeight", request.height );
 	Cvar_Set( "r_mode", "-1" );
+	Cvar_Set2( "r_windowedMode", "-1", qtrue );
+	Cvar_Set2( "r_windowedWidth", va( "%d", request.width ), qtrue );
+	Cvar_Set2( "r_windowedHeight", va( "%d", request.height ), qtrue );
+	retailWindowedModeModificationCount = r_windowedMode->modificationCount;
+	retailWindowedWidthModificationCount = r_windowedWidth->modificationCount;
+	retailWindowedHeightModificationCount = r_windowedHeight->modificationCount;
 
-	if ( cl_windowResizePreserveWindow ) {
-		Cbuf_AddText( "vid_restart fast window_resize\n" );
-	} else {
-		Cbuf_AddText( "vid_restart window_resize\n" );
+	// Run synchronously at the beginning of CL_Frame. This is the same safe
+	// boundary used by console vid_restart, but avoids leaving a stale command
+	// in the buffer if another mode change or shutdown happens first.
+	cl_windowResizeRestart = qtrue;
+	CL_Vid_Restart( request.preserveWindow ? REF_KEEP_WINDOW : REF_DESTROY_WINDOW );
+	cl_windowResizeRestart = qfalse;
+}
+
+
+static void CL_UpdateRetailVideoBridgeOwnership( void ) {
+	if ( !retailVideoCvarsInitialized || !r_qlRetailVideoBridge ) {
+		return;
+	}
+
+	if ( r_windowedMode->modificationCount != retailWindowedModeModificationCount
+		|| r_windowedWidth->modificationCount != retailWindowedWidthModificationCount
+		|| r_windowedHeight->modificationCount != retailWindowedHeightModificationCount
+		|| r_stereo->modificationCount != retailStereoModificationCount
+		|| r_ext_gamma_control->modificationCount != retailGammaModificationCount ) {
+		Cvar_Set2( "r_qlRetailVideoBridge", "1", qtrue );
+		retailWindowedModeModificationCount = r_windowedMode->modificationCount;
+		retailWindowedWidthModificationCount = r_windowedWidth->modificationCount;
+		retailWindowedHeightModificationCount = r_windowedHeight->modificationCount;
+		retailStereoModificationCount = r_stereo->modificationCount;
+		retailGammaModificationCount = r_ext_gamma_control->modificationCount;
 	}
 }
 
 
 static void CL_Vid_Restart( refShutdownCode_t shutdownCode ) {
+	// Any explicit or automatic restart supersedes an older pending resize.
+	cl_windowResize.Reset();
 
 	// Settings may have changed so stop recording now
 	if ( CL_VideoRecording() )
@@ -2559,15 +2663,10 @@ Wrapper for CL_Vid_Restart
 =================
 */
 static void CL_Vid_Restart_f( void ) {
-	const qboolean windowResize =
-		( !Q_stricmp( Cmd_Argv( 1 ), "window_resize" ) ||
-		  !Q_stricmp( Cmd_Argv( 2 ), "window_resize" ) ) ? qtrue : qfalse;
-
-	if ( Q_stricmp( Cmd_Argv( 1 ), "keep_window" ) == 0 || Q_stricmp( Cmd_Argv( 1 ), "fast" ) == 0 ) {
+	if ( ( Q_stricmp( Cmd_Argv( 1 ), "keep_window" ) == 0 || Q_stricmp( Cmd_Argv( 1 ), "fast" ) == 0 )
+		&& ( !r_noFastRestart || !r_noFastRestart->integer ) ) {
 		// fast path: keep window
-		cl_windowResizeRestart = windowResize;
 		CL_Vid_Restart( REF_KEEP_WINDOW );
-		cl_windowResizeRestart = qfalse;
 	} else {
 		if ( cls.lastVidRestart ) {
 			if ( abs( cls.lastVidRestart - Sys_Milliseconds() ) < 500 ) {
@@ -2575,9 +2674,7 @@ static void CL_Vid_Restart_f( void ) {
 				return;
 			}
 		}
-		cl_windowResizeRestart = windowResize;
 		CL_Vid_Restart( REF_DESTROY_WINDOW );
-		cl_windowResizeRestart = qfalse;
 	}
 }
 
@@ -2602,6 +2699,7 @@ static void CL_RendererSwitch_f( void ) {
 
 	if ( Cmd_Argc() < 2 || Cmd_Argc() > 3 ) {
 		Com_Printf( "usage: renderer_switch <renderer> [fast|keep_window|full]\n" );
+		Com_Printf( "renderers: glx, vk, rtx\n" );
 		Com_Printf( "current renderer: %s\n", cl_renderer->string );
 		return;
 	}
@@ -3822,7 +3920,8 @@ CL_NoDelay
 */
 qboolean CL_NoDelay( void )
 {
-	if ( CL_VideoRecording() || ( com_timedemo->integer && clc.demofile != FS_INVALID_HANDLE ) )
+	if ( CL_VideoRecording() || ( cl_avidemo && cl_avidemo->integer > 0 ) ||
+		( com_timedemo->integer && clc.demofile != FS_INVALID_HANDLE ) )
 		return qtrue;
 
 	return qfalse;
@@ -3883,6 +3982,7 @@ void CL_Frame( int msec, int realMsec ) {
 		return;
 	}
 
+	CL_UpdateRetailVideoBridgeOwnership();
 	CL_CheckWindowResize();
 
 	// save the msec before checking pause
@@ -3919,6 +4019,42 @@ void CL_Frame( int msec, int realMsec ) {
 		// catcher was temporarily yielded during a renderer or browser transition.
 		S_StopAllSounds();
 		VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_MAIN );
+	}
+
+	// Retail cl_avidemo is a deterministic screenshot-sequence path. It stays
+	// independent of FnQL's AVI/video-pipe recorder so both interfaces retain
+	// their established ownership and output formats.
+	if ( cl_avidemo && cl_avidemo_latch && cl_avidemo_mintime &&
+		cl_avidemo_maxtime ) {
+		fnql::client::cvars::AvidemoInputs avidemoInputs;
+		avidemoInputs.activeFramesPerSecond = cl_avidemo->integer;
+		avidemoInputs.latchedFramesPerSecond = cl_avidemo_latch->integer;
+		avidemoInputs.minimumServerTime = cl_avidemo_mintime->integer;
+		avidemoInputs.maximumServerTime = cl_avidemo_maxtime->integer;
+		avidemoInputs.serverTime = cl.serverTime;
+		avidemoInputs.frameMilliseconds = gameMsec;
+		avidemoInputs.timeScale = com_timescale->value;
+		avidemoInputs.canCapture = cls.state == CA_ACTIVE ||
+			( cl_forceavidemo && cl_forceavidemo->integer );
+
+		const fnql::client::cvars::AvidemoPlan avidemoPlan =
+			fnql::client::cvars::PlanAvidemoFrame( avidemoInputs );
+		if ( avidemoPlan.clearLatch ) {
+			Cvar_SetIntegerValue( "cl_avidemo",
+				avidemoPlan.activeFramesPerSecond );
+			Cvar_Set( "cl_avidemo_latch", "0" );
+		}
+		if ( avidemoPlan.disconnect ) {
+			CL_Disconnect_f();
+			return;
+		}
+		if ( avidemoPlan.captureScreenshot ) {
+			Cbuf_ExecuteText( EXEC_NOW, "screenshot silent\n" );
+		}
+		if ( avidemoPlan.timingActive ) {
+			gameMsec = avidemoPlan.frameMilliseconds;
+			audioMsec = gameMsec;
+		}
 	}
 
 	// if recording an avi, lock to a fixed fps
@@ -4127,6 +4263,39 @@ static void CL_InitRenderer( void ) {
 	re.BeginRegistration( &cls.glconfig );
 	cl_windowModeChange = qfalse;
 
+	// Publish the renderer/platform state under the retail QL names consumed by
+	// the UI and cgame. These are status updates, so bypass ROM/latched policy.
+	const int retailAspectRatio = cls.glconfig.vidHeight > 0
+		? ( static_cast<float>( cls.glconfig.vidWidth ) / cls.glconfig.vidHeight >= 1.77777779f ? 1
+			: static_cast<float>( cls.glconfig.vidWidth ) / cls.glconfig.vidHeight >= 1.60000002f ? 2
+			: static_cast<float>( cls.glconfig.vidWidth ) / cls.glconfig.vidHeight < 1.33333337f ? 3 : 0 )
+		: 0;
+	Cvar_Set2( "r_aspectRatio", va( "%d", retailAspectRatio ), qtrue );
+	Cvar_Set2( "r_gl_vendor", cls.glconfig.vendor_string, qtrue );
+	Cvar_Set2( "r_gl_renderer", cls.glconfig.renderer_string, qtrue );
+	Cvar_Set2( "r_gl_reserved", Cvar_VariableIntegerValue( "r_qlOcclusionQueries" ) ? "1" : "0", qtrue );
+	if ( cls.glconfig.renderer_string[0] ) {
+		Cvar_Set2( "r_lastValidRenderer", cls.glconfig.renderer_string, qtrue );
+	}
+	if ( !r_fullscreen->integer ) {
+		Cvar_Set2( "r_windowedMode", r_mode->string, qtrue );
+		// SDL custom modes are expressed in logical window units, while the
+		// renderer publishes drawable pixels on HiDPI displays. Preserve the
+		// requested custom extent so a later restart does not scale it twice.
+		if ( r_mode->integer == -1 && r_customwidth && r_customheight ) {
+			Cvar_Set2( "r_windowedWidth", r_customwidth->string, qtrue );
+			Cvar_Set2( "r_windowedHeight", r_customheight->string, qtrue );
+		} else {
+			Cvar_Set2( "r_windowedWidth", va( "%d", cls.glconfig.vidWidth ), qtrue );
+			Cvar_Set2( "r_windowedHeight", va( "%d", cls.glconfig.vidHeight ), qtrue );
+		}
+	}
+	Cvar_Set2( "r_stereo", Cvar_VariableIntegerValue( "r_stereoEnabled" ) ? "1" : "0", qtrue );
+	retailWindowedModeModificationCount = r_windowedMode->modificationCount;
+	retailWindowedWidthModificationCount = r_windowedWidth->modificationCount;
+	retailWindowedHeightModificationCount = r_windowedHeight->modificationCount;
+	retailStereoModificationCount = r_stereo->modificationCount;
+
 	// load character sets
 	cls.charSetShader = re.RegisterShader( "gfx/2d/bigchars" );
 	cls.recordShader = re.RegisterShaderNoMip( "icons/record" );
@@ -4137,20 +4306,19 @@ static void CL_InitRenderer( void ) {
 	cls.consoleShader = re.RegisterShader( "fnql/console" );
 	cls.cursorShader = re.RegisterShaderNoMip( "menu/art/3_cursor2" );
 
-	Con_CheckResize();
+	// Rebuild every client-owned canvas from the renderer's actual drawable
+	// dimensions. This must precede console reflow: centred console extents use
+	// these biases and otherwise retain the alignment from the previous size.
+	const fnql::client::CanvasGeometry canvas =
+		fnql::client::CalculateCanvasGeometry(
+			cls.glconfig.vidWidth, cls.glconfig.vidHeight );
+	cls.scale = canvas.scale;
+	cls.biasX = canvas.biasX;
+	cls.biasY = canvas.biasY;
 
-	// for 640x480 virtualized screen
-	cls.biasY = 0;
-	cls.biasX = 0;
-	if ( cls.glconfig.vidWidth * 480 > cls.glconfig.vidHeight * 640 ) {
-		// wide screen, scale by height
-		cls.scale = cls.glconfig.vidHeight * (1.0/480.0);
-		cls.biasX = 0.5 * ( cls.glconfig.vidWidth - ( cls.glconfig.vidHeight * (640.0/480.0) ) );
-	} else {
-		// no wide screen, scale by width
-		cls.scale = cls.glconfig.vidWidth * (1.0/640.0);
-		cls.biasY = 0.5 * ( cls.glconfig.vidHeight - ( cls.glconfig.vidWidth * (480.0/640) ) );
-	}
+	Con_CheckResize();
+	CL_AdvertisementBridge_UpdateViewParameters();
+	CL_WebHost_RefreshSurfaceSize();
 
 	SCR_Init();
 }
@@ -4723,18 +4891,76 @@ static void CL_ModeList_f( void )
 
 #ifdef USE_RENDERER_DLOPEN
 static bool isValidRenderer( const char *s ) {
-	while ( *s ) {
-		if ( !((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || (*s >= '1' && *s <= '9')) )
-			return false;
-		++s;
-	}
-	return true;
+	return s && ( strcmp( s, "glx" ) == 0 || strcmp( s, "vk" ) == 0 || strcmp( s, "rtx" ) == 0 );
 }
 #endif
 
 
 static void CL_InitGLimp_Cvars( void )
 {
+	const bool hadRetailVideoBridgeMarker = !retailVideoCvarsInitialized
+		&& Cvar_VariableString( "r_qlRetailVideoBridge" )[0];
+	const bool hadRetailVideoConfig = !retailVideoCvarsInitialized
+		&& !hadRetailVideoBridgeMarker
+		&& ( Cvar_VariableString( "r_windowedMode" )[0]
+			|| Cvar_VariableString( "r_windowedWidth" )[0]
+			|| Cvar_VariableString( "r_windowedHeight" )[0]
+			|| Cvar_VariableString( "r_stereo" )[0]
+			|| Cvar_VariableString( "r_ext_gamma_control" )[0] );
+	bool useRetailVideoConfig;
+
+	r_aspectRatio = Cvar_Get( "r_aspectRatio", "0", CVAR_ARCHIVE | CVAR_LATCH | CVAR_CLOUD );
+	Cvar_CheckRange( r_aspectRatio, "0", "3", CV_INTEGER );
+	Cvar_SetDescription( r_aspectRatio, "Retail aspect preset published from the active drawable: 0 standard/auto, 1 16:9+, 2 16:10, 3 narrower than 4:3." );
+	r_windowedMode = Cvar_Get( "r_windowedMode", "12", CVAR_ARCHIVE | CVAR_LATCH | CVAR_PROTECTED | CVAR_CLOUD );
+	Cvar_SetDescription( r_windowedMode, "Retail windowed video mode; -1 uses r_windowedWidth and r_windowedHeight." );
+	r_windowedWidth = Cvar_Get( "r_windowedWidth", "1600", CVAR_ARCHIVE | CVAR_LATCH );
+	Cvar_SetDescription( r_windowedWidth, "Retail custom window width used by r_windowedMode -1." );
+	r_windowedHeight = Cvar_Get( "r_windowedHeight", "1024", CVAR_ARCHIVE | CVAR_LATCH );
+	Cvar_SetDescription( r_windowedHeight, "Retail custom window height used by r_windowedMode -1." );
+	r_stereo = Cvar_Get( "r_stereo", "0", CVAR_ARCHIVE | CVAR_LATCH );
+	Cvar_CheckRange( r_stereo, "0", "1", CV_INTEGER );
+	Cvar_SetDescription( r_stereo, "Retail stereo pixel-format selector, bridged to r_stereoEnabled." );
+	r_noFastRestart = Cvar_Get( "r_noFastRestart", "0", CVAR_ARCHIVE );
+	Cvar_CheckRange( r_noFastRestart, "0", "1", CV_INTEGER );
+	Cvar_SetDescription( r_noFastRestart, "Force vid_restart fast/keep_window to perform a complete video restart." );
+	r_ext_gamma_control = Cvar_Get( "r_ext_gamma_control", "1", CVAR_ARCHIVE | CVAR_LATCH | CVAR_CLOUD );
+	Cvar_SetDescription( r_ext_gamma_control, "Permit platform hardware gamma control; bridged to r_ignoreHWGamma." );
+	r_gl_vendor = Cvar_Get( "r_gl_vendor", "", CVAR_ROM | CVAR_PROTECTED );
+	Cvar_SetDescription( r_gl_vendor, "Active renderer vendor string." );
+	r_gl_renderer = Cvar_Get( "r_gl_renderer", "", CVAR_ROM | CVAR_PROTECTED );
+	Cvar_SetDescription( r_gl_renderer, "Active renderer device string." );
+	r_gl_reserved = Cvar_Get( "r_gl_reserved", "0", CVAR_ROM | CVAR_PROTECTED );
+	Cvar_SetDescription( r_gl_reserved, "Retail occlusion-query status; zero when no common renderer capability is published." );
+	r_lastValidRenderer = Cvar_Get( "r_lastValidRenderer", "", CVAR_ARCHIVE );
+	Cvar_SetDescription( r_lastValidRenderer, "Last renderer device string that initialized successfully." );
+	r_qlRetailVideoBridge = Cvar_Get( "r_qlRetailVideoBridge", "0", CVAR_ARCHIVE | CVAR_PROTECTED );
+	Cvar_SetDescription( r_qlRetailVideoBridge, "Internal ownership marker for retail video compatibility controls." );
+
+	useRetailVideoConfig = hadRetailVideoConfig || r_qlRetailVideoBridge->integer
+		|| ( retailVideoCvarsInitialized
+			&& ( r_windowedMode->modificationCount != retailWindowedModeModificationCount
+				|| r_windowedWidth->modificationCount != retailWindowedWidthModificationCount
+				|| r_windowedHeight->modificationCount != retailWindowedHeightModificationCount
+				|| r_stereo->modificationCount != retailStereoModificationCount
+				|| r_ext_gamma_control->modificationCount != retailGammaModificationCount ) );
+	if ( useRetailVideoConfig ) {
+		Cvar_Set2( "r_qlRetailVideoBridge", "1", qtrue );
+		Cvar_Set( "r_mode", r_windowedMode->string );
+		if ( r_windowedMode->integer == -1 ) {
+			Cvar_Set( "r_customWidth", r_windowedWidth->string );
+			Cvar_Set( "r_customHeight", r_windowedHeight->string );
+		}
+		Cvar_Set( "r_stereoEnabled", r_stereo->string );
+		Cvar_Set( "r_ignoreHWGamma", r_ext_gamma_control->integer ? "0" : "1" );
+	}
+	retailVideoCvarsInitialized = true;
+	retailWindowedModeModificationCount = r_windowedMode->modificationCount;
+	retailWindowedWidthModificationCount = r_windowedWidth->modificationCount;
+	retailWindowedHeightModificationCount = r_windowedHeight->modificationCount;
+	retailStereoModificationCount = r_stereo->modificationCount;
+	retailGammaModificationCount = r_ext_gamma_control->modificationCount;
+
 	// shared with GLimp
 	r_allowSoftwareGL = Cvar_Get( "r_allowSoftwareGL", "0", CVAR_LATCH );
 	Cvar_SetDescription( r_allowSoftwareGL, "Toggle the use of the default software OpenGL driver supplied by the Operating System." );
@@ -4796,9 +5022,9 @@ static void CL_InitGLimp_Cvars( void )
 #ifdef RENDERER_DEFAULT
 	cl_renderer = Cvar_Get( "cl_renderer", XSTRING( RENDERER_DEFAULT ), CVAR_ARCHIVE | CVAR_LATCH );
 #else
-	cl_renderer = Cvar_Get( "cl_renderer", "vulkan", CVAR_ARCHIVE | CVAR_LATCH );
+	cl_renderer = Cvar_Get( "cl_renderer", "glx", CVAR_ARCHIVE | CVAR_LATCH );
 #endif
-	Cvar_SetDescription( cl_renderer, "Sets your desired renderer, requires \\vid_restart." );
+	Cvar_SetDescription( cl_renderer, "Selects glx, vk, or rtx; requires \\vid_restart." );
 
 	if ( !isValidRenderer( cl_renderer->string ) ) {
 		Cvar_ForceReset( "cl_renderer" );
@@ -4817,6 +5043,9 @@ void CL_Init( void ) {
 	cvar_t *cv;
 
 	Com_Printf( "----- Client Initialization -----\n" );
+	cl_windowResize.Reset();
+	cl_windowResizeRestart = qfalse;
+	cl_windowModeChange = qfalse;
 
 	Con_Init();
 
@@ -4837,16 +5066,25 @@ void CL_Init( void ) {
 	cl_motd = Cvar_Get( "cl_motd", "1", 0 );
 	Cvar_SetDescription( cl_motd, "Toggle the display of the 'Message of the day'. When Quake 3 Arena starts a map up, it sends the GL_RENDERER string to the Message Of The Day server at id. This responds back with a message of the day to the client." );
 
-	cl_timeout = Cvar_Get( "cl_timeout", "200", 0 );
+	// Retail Quake Live uses a 40 second connection timeout. Existing user-set
+	// values remain valid, while new profiles receive the retail reset value.
+	cl_timeout = Cvar_Get( "cl_timeout", "40", 0 );
 	Cvar_CheckRange( cl_timeout, "5", nullptr, CV_INTEGER );
 	Cvar_SetDescription( cl_timeout, "Duration of receiving nothing from server for client to decide it must be disconnected (in seconds)." );
 
 	cl_autoNudge = Cvar_Get( "cl_autoNudge", "0", CVAR_TEMP );
 	Cvar_CheckRange( cl_autoNudge, "0", "1", CV_FLOAT );
-	Cvar_SetDescription( cl_autoNudge, "Automatic time nudge that uses your average ping as the time nudge, values:\n  0 - use fixed \\cl_timeNudge\n (0..1] - factor of median average ping to use as timenudge\n" );
-	cl_timeNudge = Cvar_Get( "cl_timeNudge", "0", CVAR_TEMP );
-	Cvar_CheckRange( cl_timeNudge, "-30", "30", CV_INTEGER );
-	Cvar_SetDescription( cl_timeNudge, "Allows more or less latency to be added in the interest of better smoothness or better responsiveness." );
+	Cvar_SetDescription( cl_autoNudge, "FnQL fractional median-ping auto nudge; zero yields ownership to retail cl_autoTimeNudge/cl_timeNudge." );
+	cl_autoTimeNudge = Cvar_Get( "cl_autoTimeNudge", "0",
+		CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_VM_CREATED );
+	Cvar_CheckRange( cl_autoTimeNudge, "0", "1", CV_INTEGER );
+	Cvar_SetDescription( cl_autoTimeNudge, "Retail Quake Live automatic half-ping time nudge selector." );
+	cl_timeNudge = Cvar_Get( "cl_timeNudge", "0",
+		CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_VM_CREATED );
+	Cvar_CheckRange( cl_timeNudge, "-20", "0", CV_INTEGER );
+	Cvar_SetDescription( cl_timeNudge, "Retail client interpolation nudge in milliseconds, bounded to -20 through 0." );
+	Cvar_SetDescription( Cvar_Get( "cg_spectating", "0", CVAR_ROM ),
+		"Read-only retail cgame timing bridge; spectators do not apply client time nudge." );
 
 	cl_shownet = Cvar_Get ("cl_shownet", "0", CVAR_TEMP );
 	Cvar_SetDescription( cl_shownet, "Toggle the display of current network status." );
@@ -4861,8 +5099,31 @@ void CL_Init( void ) {
 	Cvar_SetDescription( cl_autoRecordDemo, "Auto-record demos when starting or joining a game." );
 	cl_freezeDemo = Cvar_Get( "cl_freezeDemo", "0", CVAR_TEMP );
 	Cvar_SetDescription( cl_freezeDemo, "Hold demo simulation time while preserving client input and UI frame timing." );
-	cl_drawRecording = Cvar_Get("cl_drawRecording", "1", CVAR_ARCHIVE);
-	Cvar_SetDescription( cl_drawRecording, "Demo recording indicator: hidden (0), detailed (1), or compact REC icon (2)." );
+	cl_quitOnDemoCompleted = Cvar_Get( "cl_quitOnDemoCompleted", "0", 0 );
+	Cvar_SetDescription( cl_quitOnDemoCompleted, "Quit FnQL after demo playback and any queued next-demo action complete." );
+	cl_allowConsoleChat = Cvar_Get( "cl_allowConsoleChat", "0",
+		CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_CLOUD );
+	Cvar_SetDescription( cl_allowConsoleChat, "Allow bare console text to be sent as chat; slash-prefixed text always remains a command." );
+
+	const bool hadRetailRecordCvar =
+		( Cvar_Flags( "cl_demoRecordMessage" ) & CVAR_NONEXISTENT ) == 0;
+	const bool hadLegacyRecordCvar =
+		( Cvar_Flags( "cl_drawRecording" ) & CVAR_NONEXISTENT ) == 0;
+	cl_demoRecordMessage = Cvar_Get( "cl_demoRecordMessage", "2",
+		CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_CLOUD );
+	cl_drawRecording = Cvar_Get( "cl_drawRecording", "2", CVAR_ARCHIVE );
+	Cvar_CheckRange( cl_demoRecordMessage, "0", "2", CV_INTEGER );
+	Cvar_CheckRange( cl_drawRecording, "0", "2", CV_INTEGER );
+	if ( !hadRetailRecordCvar && hadLegacyRecordCvar ) {
+		Cvar_SetIntegerValue( "cl_demoRecordMessage", cl_drawRecording->integer );
+	} else {
+		Cvar_SetIntegerValue( "cl_drawRecording", cl_demoRecordMessage->integer );
+	}
+	cl_demoRecordMessageModificationCount =
+		cl_demoRecordMessage->modificationCount;
+	cl_drawRecordingModificationCount = cl_drawRecording->modificationCount;
+	Cvar_SetDescription( cl_demoRecordMessage, "Retail demo recording indicator: hidden (0), detailed (1), or compact REC icon (2)." );
+	Cvar_SetDescription( cl_drawRecording, "FnQL compatibility alias for cl_demoRecordMessage." );
 	cl_menuAspect = Cvar_Get( "cl_menuAspect", "1", CVAR_ARCHIVE );
 	Cvar_CheckRange( cl_menuAspect, "0", "1", CV_INTEGER );
 	Cvar_SetDescription( cl_menuAspect,
@@ -4930,8 +5191,16 @@ void CL_Init( void ) {
 	Cvar_SetDescription( cl_aviFrameRate, "The framerate used for capturing video." );
 	cl_aviMotionJpeg = Cvar_Get ("cl_aviMotionJpeg", "1", CVAR_ARCHIVE);
 	Cvar_SetDescription( cl_aviMotionJpeg, "Enable/disable the MJPEG codec for avi output." );
+	cl_avidemo = Cvar_Get( "cl_avidemo", "0", 0 );
+	Cvar_SetDescription( cl_avidemo, "Retail screenshot-sequence capture rate in frames per second; zero disables capture." );
+	cl_avidemo_latch = Cvar_Get( "cl_avidemo_latch", "0", 0 );
+	Cvar_SetDescription( cl_avidemo_latch, "Deferred retail screenshot-sequence rate, activated after cl_avidemo_mintime." );
+	cl_avidemo_mintime = Cvar_Get( "cl_avidemo_mintime", "0", 0 );
+	Cvar_SetDescription( cl_avidemo_mintime, "Demo server time at which retail screenshot-sequence capture may begin; zero starts immediately." );
+	cl_avidemo_maxtime = Cvar_Get( "cl_avidemo_maxtime", "0", 0 );
+	Cvar_SetDescription( cl_avidemo_maxtime, "Demo server time after which retail screenshot-sequence capture disconnects; zero disables the limit." );
 	cl_forceavidemo = Cvar_Get ("cl_forceavidemo", "0", 0);
-	Cvar_SetDescription( cl_forceavidemo, "Forces all demo recording into a sequence of screenshots in TGA format." );
+	Cvar_SetDescription( cl_forceavidemo, "Allow avidemo/video frame capture outside an active gameplay state." );
 
 	cl_aviPipeFormat = Cvar_Get( "cl_aviPipeFormat",
 		"-preset medium -crf 23 -c:v libx264 -flags +cgop -pix_fmt yuvj420p "
@@ -4975,10 +5244,23 @@ void CL_Init( void ) {
 
 	cl_motdString = Cvar_Get( "cl_motdString", "", CVAR_ROM );
 	Cvar_SetDescription( cl_motdString, "Message of the day string from id's master server, it is a read only variable." );
+	cl_platform = Cvar_Get( "cl_platform", "1", CVAR_ROM );
+	Cvar_SetDescription( cl_platform, "Retail platform marker (1 identifies the Steam Quake Live client contract)." );
 
 	cv = Cvar_Get( "cl_maxPing", "800", CVAR_ARCHIVE_ND );
 	Cvar_CheckRange( cv, "100", "999", CV_INTEGER );
 	Cvar_SetDescription( cv, "Specify the maximum allowed ping to a server." );
+
+	Cvar_SetDescription( Cvar_Get( "cl_downloadName", "", CVAR_TEMP ),
+		"Current retail-compatible direct or Workshop download display name." );
+	Cvar_SetDescription( Cvar_Get( "cl_downloadTime", "0", CVAR_TEMP ),
+		"Client real-time timestamp at which the current download began." );
+	Cvar_SetDescription( Cvar_Get( "cl_downloadItem", "", CVAR_TEMP ),
+		"Current Workshop item identifier, empty when no item download is active." );
+	Cvar_SetDescription( Cvar_Get( "cl_downloadCount", "0", CVAR_TEMP ),
+		"Downloaded byte count published for retained UI progress consumers." );
+	Cvar_SetDescription( Cvar_Get( "cl_downloadSize", "0", CVAR_TEMP ),
+		"Total download byte count published for retained UI progress consumers." );
 
 	cl_lanForcePackets = Cvar_Get( "cl_lanForcePackets", "1", CVAR_ARCHIVE_ND );
 	Cvar_SetDescription( cl_lanForcePackets, "Bypass \\cl_maxpackets for LAN games, send packets every frame." );
@@ -5100,6 +5382,9 @@ void CL_Shutdown( const char *finalmsg, qboolean quit ) {
 		return;
 
 	Com_Printf( "----- Client Shutdown (%s) -----\n", finalmsg );
+	cl_windowResize.Reset();
+	cl_windowResizeRestart = qfalse;
+	cl_windowModeChange = qfalse;
 
 	if ( recursive ) {
 		Com_Printf( "WARNING: Recursive CL_Shutdown()\n" );

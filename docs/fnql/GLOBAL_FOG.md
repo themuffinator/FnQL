@@ -11,10 +11,9 @@ Set `r_globalFog 1` and restart the renderer with `vid_restart` to enable
 sidecar discovery and the fog compositor. `r_globalFogStrength` is a live
 multiplier in the range 0 through 1; its default is 1.
 
-The OpenGL-lineage renderer (including the GLx path) and Vulkan renderer
-implement the effect. `renderer2` remains available and safely ignores global
-fog sidecars. A missing sidecar, malformed input, unavailable depth texture,
-or failure to compile the optional OpenGL/Vulkan fog shader disables only this
+The GLx, VK, and RTX renderers implement the effect. A missing sidecar,
+malformed input, unavailable depth texture, or failure to compile an optional
+fog shader disables only this
 effect. The map and renderer continue without global fog.
 
 ## File lookup

@@ -545,8 +545,8 @@ static void FillCloudBox( void )
 		{
 			MIN_T = -HALF_SKY_SUBDIVISIONS;
 
-			// still don't want to draw the bottom, even if fullClouds
-			if ( i == 5 )
+			// Retail QL exposes the bottom sky/cloud face as a profile option.
+			if ( i == 5 && !qlRendererCvars.drawSkyFloor->integer )
 				continue;
 		}
 		else

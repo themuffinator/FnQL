@@ -22,6 +22,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // sv_game.cpp -- interface to the game dll
 
 #include "server.h"
+#include "server_cvar_compat.hpp"
 
 #include "../botlib/botlib.h"
 #define JSON_IMPLEMENTATION
@@ -34,10 +35,93 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <cstdio>
+#include <limits>
+#include <string>
 #include <type_traits>
 
 botlib_export_t	*botlib_export;
+
+namespace {
+
+std::string serverEntityOverride;
+
+std::string CurrentEntityMapName()
+{
+	std::array<char, MAX_QPATH> mapName{};
+	const char *configured = sv_mapname ? sv_mapname->string
+		: Cvar_VariableString( "mapname" );
+	const char *baseName = configured;
+	for ( const char *cursor = configured; cursor && *cursor; ++cursor ) {
+		if ( *cursor == '/' || *cursor == '\\' ) baseName = cursor + 1;
+	}
+	Q_strncpyz( mapName.data(), baseName,
+		static_cast<int>( mapName.size() ) );
+	COM_StripExtension( mapName.data(), mapName.data(),
+		static_cast<int>( mapName.size() ) );
+	return mapName.data();
+}
+
+const char *SelectServerEntityString()
+{
+	serverEntityOverride.clear();
+	const char *selected = CM_EntityString();
+	if ( !selected ) selected = "";
+	const std::string mapName = CurrentEntityMapName();
+
+	if ( sv_altEntDir && sv_altEntDir->string[0] ) {
+		const auto overridePath = fnql::server::cvars::BuildEntityFilePath(
+			sv_altEntDir->string, mapName, MAX_QPATH );
+		if ( !overridePath ) {
+			Com_Printf( S_COLOR_YELLOW
+				"Rejected unsafe or overlong sv_altEntDir entity path for map %s.\n",
+				mapName.c_str() );
+		}
+		else {
+			void *fileData = nullptr;
+			const int fileLength = FS_ReadFile( overridePath->c_str(), &fileData );
+			if ( fileLength >= 0 && fileData ) {
+				const char *bytes = static_cast<const char *>( fileData );
+				if ( std::memchr( bytes, '\0', static_cast<std::size_t>( fileLength ) ) ) {
+					Com_Printf( S_COLOR_YELLOW
+						"Ignored %s because its entity text contains an embedded NUL.\n",
+						overridePath->c_str() );
+				}
+				else {
+					serverEntityOverride.assign( bytes,
+						static_cast<std::size_t>( fileLength ) );
+					selected = serverEntityOverride.c_str();
+					Com_Printf( "Loaded entity override %s (%d bytes).\n",
+						overridePath->c_str(), fileLength );
+				}
+				FS_FreeFile( fileData );
+			}
+			else {
+				Com_DPrintf( "No entity override found at %s; using BSP entities.\n",
+					overridePath->c_str() );
+			}
+		}
+	}
+
+	if ( sv_dumpEntities && sv_dumpEntities->integer ) {
+		const auto dumpPath = fnql::server::cvars::BuildEntityFilePath(
+			"ents", mapName, MAX_QPATH );
+		if ( dumpPath ) {
+			const std::size_t length = std::strlen( selected );
+			if ( length <= static_cast<std::size_t>(
+				( std::numeric_limits<int>::max )() ) ) {
+				FS_WriteFile( dumpPath->c_str(), selected, static_cast<int>( length ) );
+				Com_Printf( "Dumped server entities to %s (%zu bytes).\n",
+					dumpPath->c_str(), length );
+			}
+		}
+	}
+
+	return selected;
+}
+
+} // namespace
 
 // these functions must be used instead of pointer arithmetic, because
 // the game allocates gentities with private information after the server shared part
@@ -2354,12 +2438,14 @@ Called every time a map changes
 */
 void SV_ShutdownGameProgs( void ) {
 	if ( !gvm ) {
+		serverEntityOverride.clear();
 		SV_ResetGameCvarRegistration();
 		return;
 	}
 	VM_Call( gvm, 1, GAME_SHUTDOWN, qfalse );
 	VM_Free( gvm );
 	gvm = nullptr;
+	serverEntityOverride.clear();
 	SV_ResetGameCvarRegistration();
 	FS_VM_CloseFiles( H_QAGAME );
 }
@@ -2417,7 +2503,7 @@ Called for both a full init and a restart
 */
 static void SV_InitGameVM( bool restart ) {
 	// start the entity parsing at the beginning
-	sv.entityParsePoint = CM_EntityString();
+	sv.entityParsePoint = SelectServerEntityString();
 
 	// clear all gentity pointers that might still be set from
 	// a previous level

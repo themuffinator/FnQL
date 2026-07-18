@@ -727,6 +727,7 @@ extern "C" void S_PaintChannels( int endtime ) {
 				paintbuffer[i-s_paintedtime].right += s_rawsamples[s].right;
 			}
 		}
+		S_PaintVoiceSamples( s_paintedtime, end, paintbuffer.data() );
 
 		// paint in the channels.
 		ch = s_channels;

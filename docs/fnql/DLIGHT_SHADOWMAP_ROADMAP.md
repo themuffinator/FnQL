@@ -238,7 +238,7 @@ Representative runtime scene:
 - Map: `q3dm6`.
 - Category: `surfacelight-large-planar`.
 - Vulkan baseline key:
-  `vk-modern-dlight-shadows-surfacelight-large-planar-q3dm6-vulkan`.
+  `vk-modern-dlight-shadows-surfacelight-large-planar-q3dm6-vk`.
 - GLx baseline key:
   `rc-parity-dlight-shadows-surfacelight-large-planar-q3dm6-glx`.
 
@@ -308,7 +308,7 @@ Representative runtime scene:
 - Static sidecar: generated `maps/q3dm6.lights.json` containing
   `combined-sidecar-spot`.
 - Vulkan baseline key:
-  `vk-modern-dlight-shadows-combined-shadow-atlas-q3dm6-vulkan`.
+  `vk-modern-dlight-shadows-combined-shadow-atlas-q3dm6-vk`.
 - GLx baseline key:
   `rc-parity-dlight-shadows-combined-shadow-atlas-q3dm6-glx`.
 
@@ -379,7 +379,7 @@ Representative runtime scenes:
 - Scene id: `csm-fallback-zero-cascade`; map: `q3dm17`; reason:
   `zero-cascade`.
 - Vulkan baseline key example:
-  `vk-modern-dlight-shadows-csm-fallback-no-world-q3dm17-vulkan`.
+  `vk-modern-dlight-shadows-csm-fallback-no-world-q3dm17-vk`.
 - GLx baseline key example:
   `rc-parity-dlight-shadows-csm-fallback-no-world-q3dm17-glx`.
 
@@ -512,7 +512,7 @@ until disabled.
 under `.tmp/dlight-shadow-tests/`:
 
 ```powershell
-python scripts/dlight_shadow_test.py --renderer vulkan --dry-run
+python scripts/dlight_shadow_test.py --renderer vk --dry-run
 python scripts/dlight_shadow_test.py --renderer glx --exe .tmp\clean-rebuild\fnql.x64.exe --renderdoc
 ```
 

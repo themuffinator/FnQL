@@ -66,6 +66,7 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertIn("LICENSE", destinations)
         self.assertIn("README.html", destinations)
         self.assertIn("docs/fnql/TECHNICAL.md", destinations)
+        self.assertIn("docs/fnql/RTX_RENDERER.md", destinations)
         self.assertIn("docs/GLX.md", destinations)
         self.assertNotIn("docs/fnql/GLX_PROMOTION.md", destinations)
         self.assertNotIn("docs/fnql/GLX_ROLLBACK_PACKAGE.md", destinations)
@@ -202,6 +203,7 @@ class ReleasePackagingTests(unittest.TestCase):
             root = Path(tmp)
 
             release.copy_docs(root)
+            release.build_fnql_webpak(root)
             archive_path = release.build_root_archive(root)
 
             verify_release_layout.verify_release_layout(root)
@@ -214,6 +216,7 @@ class ReleasePackagingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
 
+            release.build_fnql_webpak(root)
             release.build_root_archive(root)
 
             with self.assertRaisesRegex(FileNotFoundError, "missing required release files"):
@@ -231,6 +234,7 @@ class ReleasePackagingTests(unittest.TestCase):
                 encoding="utf-8",
             )
             release.copy_docs(stage_root)
+            release.build_fnql_webpak(stage_root)
             release.build_root_archive(stage_root)
             archive_path = Path(
                 shutil.make_archive(str(root / "fnql-root"), "zip", root_dir=stage_root)
@@ -244,6 +248,7 @@ class ReleasePackagingTests(unittest.TestCase):
                 root_archive_names = set(root_archive.namelist())
 
         self.assertIn(release.ROOT_ARCHIVE_NAME, names)
+        self.assertIn(release.FNQL_WEBPAK_NAME, names)
         self.assertIn("missionpack/vm/cgame.qvm", names)
         self.assertNotIn("baseq3/maps/q3dm1.azb", names)
         self.assertIn("baseq3/maps/q3dm1.azb", root_archive_names)
@@ -258,6 +263,7 @@ class ReleasePackagingTests(unittest.TestCase):
             stage_root = root / "stage"
             stage_root.mkdir()
             (stage_root / "fnql.x64.exe").write_text("binary", encoding="utf-8")
+            release.build_fnql_webpak(stage_root)
             release.build_root_archive(stage_root)
             archive_path = Path(
                 shutil.make_archive(str(root / "fnql-missing-docs"), "zip", root_dir=stage_root)
@@ -265,6 +271,28 @@ class ReleasePackagingTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "missing required release files"):
                 release.validate_release_archive_contents(archive_path)
+
+    def test_release_layout_rejects_renderer_modules_outside_public_three(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "fnql.x64.exe").write_text("binary", encoding="utf-8")
+            (root / "fnql_opengl_x86_64.dll").write_text(
+                "old renderer", encoding="utf-8"
+            )
+
+            with self.assertRaisesRegex(ValueError, "only glx, vk, and rtx"):
+                release.validate_stage_tree(root)
+
+    def test_release_layout_accepts_the_public_renderer_modules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "fnql.x64.exe").write_text("binary", encoding="utf-8")
+            for renderer in ("glx", "vk", "rtx"):
+                (root / f"fnql_{renderer}_x86_64.dll").write_text(
+                    renderer, encoding="utf-8"
+                )
+
+            release.validate_stage_tree(root)
 
     def test_copy_release_artifact_contents_rejects_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

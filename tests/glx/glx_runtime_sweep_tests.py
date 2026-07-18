@@ -1589,7 +1589,7 @@ def projected_dlight_shader_parity_manifest(
                         "projectedDlightShaderParityRole": (
                             glx_runtime_sweep.GLX_PROJECTED_DLIGHT_SHADER_PARITY_LEGACY_ROLE
                         ),
-                        "legacyFallbackBaseline": "opengl-projected-light",
+                        "legacyFallbackBaseline": "compat-projected-light",
                         "skipExternalBaseline": True,
                     },
                     {
@@ -1610,7 +1610,7 @@ def projected_dlight_shader_parity_manifest(
                         "projectedDlightShaderParityRole": (
                             glx_runtime_sweep.GLX_PROJECTED_DLIGHT_SHADER_PARITY_CANDIDATE_ROLE
                         ),
-                        "legacyFallbackBaseline": "opengl-projected-light",
+                        "legacyFallbackBaseline": "compat-projected-light",
                         "legacyFallbackCaptureName": "projected-dlight-shader-q3dm1-legacy",
                         "baselineSourceName": "projected-dlight-shader-q3dm1-legacy",
                         "baselineSourceRole": (
@@ -1650,7 +1650,7 @@ def projected_dlight_shader_parity_manifest(
                         "projectedDlightShaderParityRole": (
                             glx_runtime_sweep.GLX_PROJECTED_DLIGHT_SHADER_PARITY_LEGACY_ROLE
                         ),
-                        "legacyFallbackBaseline": "opengl-projected-light",
+                        "legacyFallbackBaseline": "compat-projected-light",
                         "skipExternalBaseline": True,
                     },
                     {
@@ -1672,7 +1672,7 @@ def projected_dlight_shader_parity_manifest(
                         "projectedDlightShaderParityRole": (
                             glx_runtime_sweep.GLX_PROJECTED_DLIGHT_SHADER_PARITY_CANDIDATE_ROLE
                         ),
-                        "legacyFallbackBaseline": "opengl-projected-light",
+                        "legacyFallbackBaseline": "compat-projected-light",
                         "legacyFallbackCaptureName": "projected-dlight-shader-demo1-legacy",
                         "baselineSourceName": "projected-dlight-shader-demo1-legacy",
                         "baselineSourceRole": (
@@ -2109,58 +2109,6 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         self.assertIn("SceneColorSpace::SceneLinear", glx_ir)
         self.assertIn("ToneMapOperator::AcesFitted", glx_ir)
         self.assertIn("Aces = AcesFitted", glx_ir)
-
-    def test_renderer2_auto_exposure_has_time_constant_mode_and_legacy_parity(self) -> None:
-        source = (ROOT / "code" / "renderer2" / "tr_postprocess.c").read_text(encoding="utf-8")
-        header = (ROOT / "code" / "renderer2" / "tr_postprocess.h").read_text(encoding="utf-8")
-        display_doc = (ROOT / "docs" / "DISPLAY.md").read_text(encoding="utf-8")
-        audit_doc = COLORSPACE_AUDIT_PATH.read_text(encoding="utf-8")
-
-        legacy_start = source.index("static void RB_CalculateAutoExposureTargetLegacy")
-        robust_start = source.index("static void RB_CalculateAutoExposureTargetRobust")
-        histogram_start = source.index("static void RB_CalculateAutoExposureTargetHistogramPercentile")
-        robust_end = source.index("static void RB_CalculateAutoExposureTargetHistogramPercentile", robust_start)
-        histogram_end = source.index("static void RB_BlendAutoExposureTarget", histogram_start)
-        legacy_body = source[legacy_start:robust_start]
-        robust_body = source[robust_start:robust_end]
-        histogram_body = source[histogram_start:histogram_end]
-
-        self.assertIn("AUTO_EXPOSURE_MODE_TIME_CONSTANT = 1", header)
-        self.assertIn("AUTO_EXPOSURE_MODE_LEGACY = 2", header)
-        self.assertIn("AUTO_EXPOSURE_MODE_HISTOGRAM_PERCENTILE = 3", header)
-        self.assertIn("RB_AutoExposureHistogramPercentileAvailable", source)
-        self.assertIn("RB_TimeConstantAutoExposureAlpha", source)
-        self.assertIn("ri.Milliseconds()", source)
-        self.assertIn("AUTO_EXPOSURE_MAX_DELTA_SECONDS", source)
-        self.assertIn("Q_exp2f((-deltaSeconds * AUTO_EXPOSURE_EXP2_E) / tauSeconds)", source)
-        self.assertIn("RB_SanitizeToneMapInputs();", source)
-        self.assertIn("RB_CameraExposureScale(autoExposureEnabled)", source)
-        self.assertIn("FBO_FastBlit", legacy_body)
-        self.assertIn("&tr.calclevels4xShader[1]", robust_body)
-        self.assertNotIn("FBO_FastBlit", robust_body)
-        self.assertIn("&tr.calclevels4xShader[2]", histogram_body)
-        self.assertIn("AUTO_EXPOSURE_MODE_HISTOGRAM_PERCENTILE", source)
-        self.assertIn("`r_autoExposure`: Automatic exposure", display_doc)
-        self.assertIn("`1`: Time-constant adaptation.", display_doc)
-        self.assertIn("`2`: Legacy parity mode", display_doc)
-        self.assertIn("`3`: Modern-tier histogram percentile reduction", display_doc)
-        self.assertIn("elapsed-time time-constant adaptation", audit_doc)
-        self.assertIn("histogram percentile reduction", audit_doc)
-
-    def test_renderer2_auto_exposure_has_percentile_reduction_shader(self) -> None:
-        shader = (ROOT / "code" / "renderer2" / "glsl" / "calclevels4x_fp.glsl").read_text(encoding="utf-8")
-        glsl = (ROOT / "code" / "renderer2" / "tr_glsl.c").read_text(encoding="utf-8")
-        local = (ROOT / "code" / "renderer2" / "tr_local.h").read_text(encoding="utf-8")
-
-        self.assertIn("#ifdef HISTOGRAM_PERCENTILE", shader)
-        self.assertIn("SortPercentileSamples", shader)
-        self.assertIn("ReducePercentileChannel(0, 1)", shader)
-        self.assertIn("ReducePercentileChannel(1, 8)", shader)
-        self.assertIn("ReducePercentileChannel(2, 14)", shader)
-        self.assertIn("GetHistogramPercentileValues", shader)
-        self.assertIn("calclevels4xShader[3]", local)
-        self.assertIn("for (i = 0; i < 3; i++)", glsl)
-        self.assertIn("#define HISTOGRAM_PERCENTILE", glsl)
 
     def test_glx_auto_exposure_has_tiered_histogram_percentile_path(self) -> None:
         color_math = (ROOT / "code" / "rendererglx" / "glx_color_math.h").read_text(encoding="utf-8")
@@ -5935,7 +5883,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         )
         self.assertTrue(legacy_shot["skipExternalBaseline"])
         self.assertTrue(glx_shot["projectedDlightShaderParity"])
-        self.assertEqual(glx_shot["legacyFallbackBaseline"], "opengl-projected-light")
+        self.assertEqual(glx_shot["legacyFallbackBaseline"], "compat-projected-light")
         self.assertEqual(glx_shot["legacyFallbackCaptureName"], legacy_shot["name"])
         self.assertEqual(glx_shot["baselineSourceName"], legacy_shot["name"])
         self.assertIn("projected-dlight-legacy-fallback", glx_shot["baselineKey"])
@@ -7069,8 +7017,8 @@ class GlxPromotionTests(unittest.TestCase):
 
         self.assertEqual(report["status"], "blocked")
         self.assertFalse(report["policyViolation"])
-        self.assertEqual(report["sourcePolicy"]["makeDefault"], "opengl")
-        self.assertEqual(report["sourcePolicy"]["mesonDefault"], "opengl")
+        self.assertEqual(report["sourcePolicy"]["makeDefault"], "glx")
+        self.assertEqual(report["sourcePolicy"]["mesonDefault"], "glx")
         self.assertEqual(report["sourcePolicy"]["makeUseGlxDefault"], "1")
         self.assertEqual(report["sourcePolicy"]["mesonUseGlxDefault"], "glx")
         checks = {check["name"]: check for check in report["checks"]}

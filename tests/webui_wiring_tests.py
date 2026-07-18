@@ -1077,8 +1077,8 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertNotIn("CL_Awesomium_InjectMouseDown( key );", mouse_button)
         self.assertNotIn("CL_Awesomium_InjectMouseUp( key );", mouse_button)
 
-    def test_webui_game_bridge_notifies_screenshots_from_both_renderers(self) -> None:
-        for renderer in ("renderer", "renderervk"):
+    def test_webui_game_bridge_notifies_screenshots_from_supported_renderers(self) -> None:
+        for renderer in ("renderer", "renderervk", "rendererrtx"):
             with self.subTest(renderer=renderer):
                 source = (ROOT / "code" / renderer / "tr_init.c").read_text(encoding="utf-8")
                 self.assertIn("if ( ri.PublishGameScreenshot && checkname[0] )", source)
@@ -1103,10 +1103,10 @@ class WebUiWiringTests(unittest.TestCase):
         tr_public = (ROOT / "code" / "renderercommon" / "tr_public.h").read_text(encoding="utf-8")
         renderer_scene = (ROOT / "code" / "renderer" / "tr_scene.c").read_text(encoding="utf-8")
         renderer_init = (ROOT / "code" / "renderer" / "tr_init.c").read_text(encoding="utf-8")
-        renderer2_scene = (ROOT / "code" / "renderer2" / "tr_scene.c").read_text(encoding="utf-8")
-        renderer2_init = (ROOT / "code" / "renderer2" / "tr_init.c").read_text(encoding="utf-8")
         vk_scene = (ROOT / "code" / "renderervk" / "tr_scene.c").read_text(encoding="utf-8")
         vk_init = (ROOT / "code" / "renderervk" / "tr_init.c").read_text(encoding="utf-8")
+        rtx_scene = (ROOT / "code" / "rendererrtx" / "tr_scene.c").read_text(encoding="utf-8")
+        rtx_init = (ROOT / "code" / "rendererrtx" / "tr_init.c").read_text(encoding="utf-8")
 
         for prototype in (
             "qhandle_t CL_AdvertisementBridge_SetupAdvertCellShader",
@@ -1151,8 +1151,8 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("rimp.AdvertisementBridge_GetLabelList2Entry = CL_AdvertisementBridge_GetLabelList2Entry;", client)
         for scene, init in (
             (renderer_scene, renderer_init),
-            (renderer2_scene, renderer2_init),
             (vk_scene, vk_init),
+            (rtx_scene, rtx_init),
         ):
             with self.subTest(renderer="advertisement-loading-view"):
                 self.assertIn("void AdvertisementBridge_UpdateLoadingViewParameters( void )", scene)
@@ -1166,7 +1166,7 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("QLBSP_ReadAdvertisementLump", ql_bsp)
         self.assertIn("QLBSP_ParseAdvertisementModel", ql_bsp)
 
-        for renderer in ("renderer", "renderer2", "renderervk"):
+        for renderer in ("renderer", "renderervk", "rendererrtx"):
             with self.subTest(renderer=renderer):
                 tr_local = (ROOT / "code" / renderer / "tr_local.h").read_text(encoding="utf-8")
                 tr_bsp = (ROOT / "code" / renderer / "tr_bsp.c").read_text(encoding="utf-8")
@@ -1216,7 +1216,7 @@ class WebUiWiringTests(unittest.TestCase):
 
                 self.assertIn("R_AddWorldSurfaces ();\n\n\tR_UpdateAdvertisements();", tr_main)
 
-                if renderer == "renderervk":
+                if renderer in ("renderervk", "rendererrtx"):
                     self.assertNotIn("R_QueueAdvertisementQueryCmd();", tr_main)
                     continue
 

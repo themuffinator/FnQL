@@ -10,14 +10,14 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE_VERSION = 1
-RENDERERS = ("glx", "vulkan")
+RENDERERS = ("glx", "vk")
 EXPECTED_RUNTIME_GATES = {
     "glx": "rc-parity",
-    "vulkan": "vk-modern",
+    "vk": "vk-modern",
 }
 SOURCE_DEFAULT_PATHS = {
     "glx": ROOT / "code" / "renderer" / "tr_init.c",
-    "vulkan": ROOT / "code" / "renderervk" / "tr_init.c",
+    "vk": ROOT / "code" / "renderervk" / "tr_init.c",
 }
 DLIGHT_SHADOW_DEFAULT_RE = re.compile(
     r'ri\.Cvar_Get\s*\(\s*"r_dlightShadows"\s*,\s*"(?P<default>[01])"',
@@ -60,7 +60,7 @@ REQUIRED_RENDERDOC_CHECKS = {
         "lightingSamplesAtlas",
         "filterKernelMatches",
     ),
-    "vulkan": (
+    "vk": (
         "resourceLifetime",
         "depthAtlasImageUsage",
         "layoutTransitions",
@@ -194,7 +194,7 @@ def passed_variants(record: object) -> set[str]:
 
 
 def shader_failures(renderer: str, record: object) -> list[str]:
-    if renderer != "vulkan":
+    if renderer != "vk":
         return []
     variants = passed_variants(record)
     missing = [variant for variant in VULKAN_SHADER_VARIANTS if variant not in variants]
@@ -806,15 +806,15 @@ def template_manifest() -> dict[str, Any]:
         "version": GATE_VERSION,
         "build": {
             "glx": {"status": "passed", "command": "meson compile ... fnql_glx_x86_64"},
-            "vulkan": {"status": "passed", "command": "meson compile ... fnql_vulkan_x86_64"},
+            "vk": {"status": "passed", "command": "meson compile ... fnql_vk_x86_64"},
         },
         "shaders": {
             "glx": {"status": "passed", "notes": "GLx program validation passed."},
-            "vulkan": {"status": "passed", "variants": list(VULKAN_SHADER_VARIANTS)},
+            "vk": {"status": "passed", "variants": list(VULKAN_SHADER_VARIANTS)},
         },
         "runtimeSweeps": {
             "glx": ".tmp/runtime-sweeps/glx/manifest.json",
-            "vulkan": ".tmp/vk-runtime-sweeps/vulkan/manifest.json",
+            "vk": ".tmp/vk-runtime-sweeps/vk/manifest.json",
         },
         "renderdoc": {
             renderer: {

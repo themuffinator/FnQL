@@ -21,6 +21,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 #include "tr_local.h"
 #include "tr_glx_compat.h"
+#include "../renderercommon/tr_ql_ad_debug.h"
 
 #ifdef USE_LEGACY_DLIGHTS
 static void R_GLXRecordProjectedDlights( const dlight_t *dlights, int count )
@@ -900,6 +901,8 @@ void R_UpdateAdvertisements( void ) {
 		advertisement->queryListIndex = r_numAdvertisementQueryEntries;
 		r_numAdvertisementQueryEntries++;
 	}
+
+	R_QLDebugAdvertisements();
 }
 
 /*

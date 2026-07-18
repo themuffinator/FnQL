@@ -28,7 +28,13 @@ class VisualStudioMesonBridgeTests(unittest.TestCase):
         self.assertIn('find_spec("mesonbuild.mesonmain")', driver)
         self.assertIn('shutil.which("cl")', driver)
         self.assertIn('"-Dstrict-warnings=true"', driver)
-        self.assertIn('"-Drenderers=opengl,opengl2,vulkan,glx"', driver)
+        self.assertIn(
+            'DEFAULT_RENDERERS = ("glx", "vk", "rtx")',
+            driver,
+        )
+        self.assertIn("SUPPORTED_RENDERERS = DEFAULT_RENDERERS", driver)
+        self.assertIn('f"-Drenderers={\',\'.join(renderers)}"', driver)
+        self.assertIn('os.environ.get("FNQL_MESON_RENDERERS"', driver)
         self.assertNotIn("code/libjpeg", driver)
         self.assertNotIn("code/libogg", driver)
 
@@ -38,10 +44,9 @@ class VisualStudioMesonBridgeTests(unittest.TestCase):
             "botlib.vcxproj",
             "fnql.vcxproj",
             "fnql-ded.vcxproj",
-            "renderer.vcxproj",
-            "renderer2.vcxproj",
             "rendererglx.vcxproj",
             "renderervk.vcxproj",
+            "rendererrtx.vcxproj",
         )
 
         for name in component_projects:

@@ -9,12 +9,12 @@ param(
 	[ValidateSet('client', 'dedicated', 'both')]
 	[string]$Target = 'both',
 
-	[ValidateSet('all', 'opengl', 'renderer2', 'opengl2', 'vulkan', 'glx')]
+	[ValidateSet('all', 'glx', 'vk', 'rtx')]
 	[string]$Renderer = 'all',
 
-	[string]$Renderers = $(if ($env:FNQL_MESON_RENDERERS) { $env:FNQL_MESON_RENDERERS } elseif ($env:FNQ3_MESON_RENDERERS) { $env:FNQ3_MESON_RENDERERS } else { 'opengl,glx,vulkan,opengl2' }),
-	[ValidateSet('opengl', 'opengl2', 'vulkan', 'glx')]
-	[string]$RendererDefault = $(if ($env:FNQL_MESON_RENDERER_DEFAULT) { $env:FNQL_MESON_RENDERER_DEFAULT } elseif ($env:FNQ3_MESON_RENDERER_DEFAULT) { $env:FNQ3_MESON_RENDERER_DEFAULT } else { 'opengl' }),
+	[string]$Renderers = $(if ($env:FNQL_MESON_RENDERERS) { $env:FNQL_MESON_RENDERERS } elseif ($env:FNQ3_MESON_RENDERERS) { $env:FNQ3_MESON_RENDERERS } else { 'glx,vk,rtx' }),
+	[ValidateSet('glx', 'vk', 'rtx')]
+	[string]$RendererDefault = $(if ($env:FNQL_MESON_RENDERER_DEFAULT) { $env:FNQL_MESON_RENDERER_DEFAULT } elseif ($env:FNQ3_MESON_RENDERER_DEFAULT) { $env:FNQ3_MESON_RENDERER_DEFAULT } else { 'glx' }),
 	[string]$BuildDir = $(if ($env:FNQL_MESON_BUILD_DIR) { $env:FNQL_MESON_BUILD_DIR } elseif ($env:FNQ3_MESON_BUILD_DIR) { $env:FNQ3_MESON_BUILD_DIR } else { 'meson\build' }),
 	[switch]$SetupOnly,
 	[switch]$RunTests,
@@ -101,18 +101,10 @@ function Import-MsvcEnvironment {
 	}
 }
 
-function Convert-RendererName {
-	param([string]$SelectedRenderer)
-
-	switch ($SelectedRenderer) {
-		'renderer2' { return 'opengl2' }
-		default { return $SelectedRenderer }
-	}
-}
-
 function Resolve-RendererList {
 	param(
 		[string]$SelectedRenderer,
+		[string]$SelectedDefault,
 		[string]$RendererCsv,
 		[bool]$RendererCsvWasProvided
 	)
@@ -120,17 +112,16 @@ function Resolve-RendererList {
 	if ($RendererCsvWasProvided -or $SelectedRenderer -eq 'all') {
 		$items = $RendererCsv -split ','
 	} else {
-		$requested = Convert-RendererName -SelectedRenderer $SelectedRenderer
-		$items = @('opengl', $requested)
+		$items = @($SelectedDefault, $SelectedRenderer)
 	}
 
 	$result = New-Object System.Collections.Generic.List[string]
 	foreach ($item in $items) {
-		$rendererName = Convert-RendererName -SelectedRenderer ($item.Trim())
+		$rendererName = $item.Trim()
 		if (-not $rendererName) {
 			continue
 		}
-		if ($rendererName -notin @('opengl', 'glx', 'vulkan', 'opengl2')) {
+		if ($rendererName -notin @('glx', 'vk', 'rtx')) {
 			throw "Unsupported renderer module: $rendererName"
 		}
 		if (-not $result.Contains($rendererName)) {
@@ -289,6 +280,7 @@ if ([System.IO.Path]::GetFileName($RootArchiveName) -ne $RootArchiveName -or
 $buildType = Convert-BuildType -SelectedConfiguration $Configuration
 $rendererCsv = Resolve-RendererList `
 	-SelectedRenderer $Renderer `
+	-SelectedDefault $RendererDefault `
 	-RendererCsv $Renderers `
 	-RendererCsvWasProvided ($PSBoundParameters.ContainsKey('Renderers'))
 $mesonOverride = if ($env:FNQL_MESON) { $env:FNQL_MESON } else { $env:FNQ3_MESON }

@@ -49,6 +49,11 @@ class WebUiBackendSourceTests(unittest.TestCase):
         self.assertIn("GetProcAddress( module_, name )", adapter)
         self.assertIn("_Awe_WebCore_Initialize@4", adapter)
         self.assertIn("newDataPakSource( webPakPath_.c_str() )", adapter)
+        self.assertIn("OnQlResourceRequest", adapter)
+        self.assertIn("qlDataSource_ = imports_.newDataSource()", adapter)
+        self.assertIn('webSessionAddDataSource( session_, L"QL", qlDataSource_ )', adapter)
+        self.assertIn('"asset://ql/%s"', adapter)
+        self.assertIn("ResourceMimeType", adapter)
         self.assertIn("FNQL_WEBUI_VERBOSE_LOG", adapter)
         self.assertIn("if ( module_ )", adapter)
         self.assertIn("webPakPath_.clear();", adapter)
@@ -86,7 +91,7 @@ class WebUiBackendSourceTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("DrawWebUISurface", public_renderer)
 
-        for renderer in ("renderer", "renderer2", "renderervk"):
+        for renderer in ("renderer", "renderervk", "rendererrtx"):
             with self.subTest(renderer=renderer):
                 backend = (
                     ROOT / "code" / renderer / "tr_backend.c"

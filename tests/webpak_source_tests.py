@@ -45,9 +45,22 @@ class WebPakSourceTests(unittest.TestCase):
         self.assertIn("nextResourceId > UINT16_MAX", source)
         self.assertIn("CL_WebDataPak_FindEntryIndex( dataPak, (uint16_t)nextResourceId )", source)
         self.assertIn("std::sort( dataPak->paths", source)
-        self.assertIn("std::lower_bound( cl_webDataPak.paths", source)
+        self.assertIn("std::lower_bound( dataPak->paths", source)
         self.assertIn("cl_webPakVersion", source)
         self.assertIn("cl_webPakResourceCount", source)
+
+    def test_sparse_fnql_overlay_precedes_external_retail_pack(self) -> None:
+        source = (ROOT / "code" / "client" / "cl_webpak.cpp").read_text(encoding="utf-8")
+
+        self.assertIn('"fnql-web.pak"', source)
+        self.assertIn("cl_fnqlWebDataPak", source)
+        overlay_fetch = source.index("CL_WebDataPak_Fetch( &cl_fnqlWebDataPak")
+        retail_fetch = source.index("CL_WebDataPak_Fetch( &cl_webDataPak", overlay_fetch)
+        loose_fetch = source.index("CL_WebPak_ReadLooseFallback", retail_fetch)
+        self.assertLess(overlay_fetch, retail_fetch)
+        self.assertLess(retail_fetch, loose_fetch)
+        self.assertIn("fnql-overlay-retail-fallback", source)
+        self.assertIn("cl_fnqlWebPakLoaded", source)
 
     def test_launcher_requests_strip_protocol_and_reject_unsafe_paths(self) -> None:
         source = (ROOT / "code" / "client" / "cl_webpak.cpp").read_text(encoding="utf-8")

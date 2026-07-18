@@ -140,8 +140,8 @@ static SoundShaderSettings SoundShaderSettingsFromDecl( const ParsedSoundShader 
 	const float shakePunch = 1.0f + ClampFloat( decl.shakes, 0.0f, 1.0f ) * 0.08f;
 	settings.enabled = true;
 	settings.gainScale = ClampFloat( decl.volumeScale * shakePunch, 0.25f, 2.0f );
-	settings.referenceScale = ClampFloat( decl.minDistance / kOpenALReferenceDistance, 0.5f, 2.0f );
-	settings.rangeScale = ClampFloat( decl.maxDistance / kOpenALMaxDistance, 0.5f, 2.0f );
+	settings.referenceScale = ClampFloat( decl.minDistance / kOpenALReferenceDistance, kMinSoundShaderDistanceScale, kMaxSoundShaderReferenceScale );
+	settings.rangeScale = ClampFloat( decl.maxDistance / kOpenALMaxDistance, kMinSoundShaderDistanceScale, kMaxSoundShaderRangeScale );
 	settings.rangeScale = ( std::max )( settings.referenceScale, settings.rangeScale );
 	settings.wetScale = ClampFloat( decl.wetScale, 0.0f, 2.0f );
 	settings.pitchScale = ClampFloat( decl.pitchScale, 0.85f, 1.15f );
@@ -589,7 +589,9 @@ public:
 	SoundSample *sample = nullptr;
 	Vec3f origin;
 	Vec3f velocity;
+	VoiceRouteCache routeCache;
 	float volumeScale = 1.0f;
+	bool liquidBoundary = false;
 	float occlusion = 0.0f;
 	float occlusionTarget = 0.0f;
 	int lastOcclusionSmoothTime = 0;
@@ -611,12 +613,19 @@ public:
 	float debugSendToneLF = 1.0f;
 	float debugSendToneHF = 1.0f;
 
-	void Release( OpenALDevice &device ) {
+	// Returns the OpenAL source and filters to the pool while keeping the
+	// logical voice alive. Used to virtualize loops that are out of range.
+	void ReleaseSource( OpenALDevice &device ) {
 		if ( source != 0 ) {
 			device.ReleaseVoiceSource( source );
 			source = 0;
 		}
 		device.DestroyVoiceFilters( directFilter, sendFilter );
+		routeCache = VoiceRouteCache();
+	}
+
+	void Release( OpenALDevice &device ) {
+		ReleaseSource( device );
 		active = false;
 		fixedOrigin = false;
 		looping = false;
@@ -631,6 +640,7 @@ public:
 		origin = Vec3f();
 		velocity = Vec3f();
 		volumeScale = 1.0f;
+		liquidBoundary = false;
 		occlusion = 0.0f;
 		occlusionTarget = 0.0f;
 		lastOcclusionSmoothTime = 0;
@@ -817,6 +827,9 @@ static VoiceToneSettings BuildVoiceToneSettings( const SoundVoice &voice, const 
 		break;
 	case SoundToneClass::Weapon:
 		directLF = ( std::min )( directLF, 0.98f );
+		// Preserve the transient crack of gunfire against the ambient
+		// environment HF cut; occlusion and underwater still shape it below.
+		shapedDirectHF = ( std::max )( shapedDirectHF, 0.97f );
 		break;
 	default:
 		break;
@@ -889,8 +902,8 @@ static SpatialParams ComputeSpatialParams( const float *origin, const float *lis
 	float sourceVec[3];
 	float rotated[3];
 
-	referenceScale = ClampFloat( referenceScale, 0.5f, 2.0f );
-	rangeScale = ClampFloat( rangeScale, 0.5f, 2.0f );
+	referenceScale = ClampFloat( referenceScale, kMinSoundShaderDistanceScale, kMaxSoundShaderReferenceScale );
+	rangeScale = ClampFloat( rangeScale, kMinSoundShaderDistanceScale, kMaxSoundShaderRangeScale );
 	VectorSubtract( origin, listenerOrigin, sourceVec );
 
 	float dist = VectorNormalize( sourceVec );
@@ -1008,6 +1021,7 @@ public:
 	void Reset( OpenALDevice *device );
 	void StopAllSounds();
 	void ClearSoundBuffer();
+	void ClearLoopingSoundsFrame();
 	void ClearLoopingSounds( qboolean killall );
 	void StopLoopingSound( int entityNum );
 	void AddLoopingSound( int entityNum, const float *origin, const float *velocity, sfxHandle_t handle, SoundSample *sample, qboolean realLoop );
@@ -1052,6 +1066,7 @@ private:
 	int environmentTransitionStartTime_ = 0;
 	int environmentTransitionEndTime_ = 0;
 	int lastListenerUpdateTime_ = 0;
+	bool loopFrameClearPending_ = false;
 	float listenerAxis_[3][3] = {
 		{ 1.0f, 0.0f, 0.0f },
 		{ 0.0f, 1.0f, 0.0f },
@@ -1074,6 +1089,7 @@ void Q3SoundWorld::Reset( OpenALDevice *device ) {
 	environmentTransitionStartTime_ = 0;
 	environmentTransitionEndTime_ = 0;
 	lastListenerUpdateTime_ = 0;
+	loopFrameClearPending_ = false;
 	for ( int i = 0; i < 3; ++i ) {
 		for ( int j = 0; j < 3; ++j ) {
 			listenerAxis_[i][j] = ( i == j ) ? 1.0f : 0.0f;
@@ -1096,6 +1112,7 @@ void Q3SoundWorld::Reset( OpenALDevice *device ) {
 }
 
 void Q3SoundWorld::StopAllSounds() {
+	loopFrameClearPending_ = false;
 	for ( SoundVoice &voice : oneShots_ ) {
 		voice.Release( *device_ );
 	}
@@ -1107,6 +1124,15 @@ void Q3SoundWorld::StopAllSounds() {
 
 void Q3SoundWorld::ClearSoundBuffer() {
 	StopAllSounds();
+}
+
+void Q3SoundWorld::ClearLoopingSoundsFrame() {
+	loopFrameClearPending_ = true;
+	for ( SoundVoice &voice : loopVoices_ ) {
+		if ( voice.active ) {
+			voice.refreshedThisFrame = qfalse;
+		}
+	}
 }
 
 void Q3SoundWorld::ClearLoopingSounds( qboolean killall ) {
@@ -1177,15 +1203,38 @@ SoundVoice *Q3SoundWorld::FindFreeOneShot() {
 	return nullptr;
 }
 
+static float EstimateVoiceAudibility( const SoundVoice &voice ) {
+	// Inverse-model estimate of what the mix actually hears, so eviction
+	// steals the least audible voice instead of merely the oldest one.
+	const float distance = ( std::max )( voice.debugDistance, kOpenALReferenceDistance );
+	return voice.debugGain * voice.debugDryGain * ( kOpenALReferenceDistance / distance );
+}
+
 SoundVoice *Q3SoundWorld::FindEvictionCandidate() {
 	SoundVoice *chosen = nullptr;
+	float chosenAudibility = 0.0f;
+
+	auto isBetterCandidate = [&]( const SoundVoice &voice ) {
+		if ( chosen == nullptr ) {
+			return true;
+		}
+		const float audibility = EstimateVoiceAudibility( voice );
+		if ( audibility < chosenAudibility - 0.01f ) {
+			return true;
+		}
+		if ( audibility > chosenAudibility + 0.01f ) {
+			return false;
+		}
+		return voice.allocTime < chosen->allocTime;
+	};
 
 	for ( SoundVoice &voice : oneShots_ ) {
 		if ( !voice.active || voice.entnum == listenerNumber_ || voice.entchannel == CHAN_ANNOUNCER ) {
 			continue;
 		}
-		if ( chosen == nullptr || voice.allocTime < chosen->allocTime ) {
+		if ( isBetterCandidate( voice ) ) {
 			chosen = &voice;
+			chosenAudibility = EstimateVoiceAudibility( voice );
 		}
 	}
 
@@ -1197,8 +1246,9 @@ SoundVoice *Q3SoundWorld::FindEvictionCandidate() {
 		if ( !voice.active ) {
 			continue;
 		}
-		if ( chosen == nullptr || voice.allocTime < chosen->allocTime ) {
+		if ( isBetterCandidate( voice ) ) {
 			chosen = &voice;
+			chosenAudibility = EstimateVoiceAudibility( voice );
 		}
 	}
 
@@ -1243,6 +1293,17 @@ void Q3SoundWorld::StartSound( int entityNum, int entchannel, sfxHandle_t handle
 
 	if ( inPlay > allowed ) {
 		return;
+	}
+
+	// Never spend a voice on a one-shot the legacy mixer would render silent.
+	if ( !IsLocalOnlyChannel( entchannel ) && entityNum != listenerNumber_ && lastListenerUpdateTime_ > 0 ) {
+		const float *soundOrigin = ( origin != nullptr ) ? origin : entityOrigins_[entityNum].Data();
+		const SoundShaderSettings &shader = sample->Shader();
+		const float rangeScale = shader.enabled ? shader.rangeScale : kDefaultSoundShaderScale;
+		if ( DistanceBetweenPoints( soundOrigin, listenerOrigin_.Data() ) >
+			AudibilityHorizonDistance( rangeScale ) * kOneShotCullMargin ) {
+			return;
+		}
 	}
 
 	SoundVoice *voice = FindFreeOneShot();
@@ -1308,10 +1369,11 @@ void Q3SoundWorld::UpdateEntityPosition( int entityNum, const float *origin ) {
 void Q3SoundWorld::Respatialize( int entityNum, const float *origin, float axis[3][3] ) {
 	const int now = Com_Milliseconds();
 	float velocity[3];
+	int elapsedMs = 0;
 
 	VectorClear( velocity );
 	if ( origin != nullptr && lastListenerUpdateTime_ > 0 ) {
-		const int elapsedMs = now - lastListenerUpdateTime_;
+		elapsedMs = now - lastListenerUpdateTime_;
 		if ( elapsedMs > 0 && elapsedMs <= 500 ) {
 			float delta[3];
 			VectorSubtract( origin, listenerOrigin_.Data(), delta );
@@ -1321,7 +1383,7 @@ void Q3SoundWorld::Respatialize( int entityNum, const float *origin, float axis[
 
 	listenerNumber_ = entityNum;
 	listenerOrigin_.Set( origin );
-	listenerVelocity_.Set( velocity );
+	UpdateSmoothedListenerVelocity( listenerVelocity_, velocity, elapsedMs );
 	lastListenerUpdateTime_ = now;
 	for ( int i = 0; i < 3; ++i ) {
 		if ( axis != nullptr ) {
@@ -1439,14 +1501,22 @@ void Q3SoundWorld::UpdateVoiceEnvironment( SoundVoice &voice, const float *voice
 	}
 
 	if ( voice.sample == nullptr || !OcclusionEnabled() || !CollisionWorldReady() ) {
+		voice.liquidBoundary = false;
 		ResetVoiceOcclusion( voice, 0.0f, now );
 		voice.nextEnvironmentUpdateTime = now + kVoiceEnvironmentIntervalMs;
 		return;
 	}
 
-	SetVoiceOcclusionTarget( voice,
-		ClampFloat( ComputeOcclusionFactor( listenerOrigin_.Data(), voiceOrigin ) * environment_.occlusionMultiplier, 0.0f, 1.0f ),
-		now );
+	float measured = ClampFloat( ComputeOcclusionFactor( listenerOrigin_.Data(), voiceOrigin ) * environment_.occlusionMultiplier, 0.0f, 1.0f );
+
+	// A water surface between the source and the listener muffles the sound
+	// even when nothing solid blocks the path.
+	voice.liquidBoundary = ( PointInLiquid( voiceOrigin ) != ( environment_.underwater == qtrue ) );
+	if ( voice.liquidBoundary ) {
+		measured = ( std::max )( measured, kLiquidBoundaryOcclusionFloor );
+	}
+
+	SetVoiceOcclusionTarget( voice, measured, now );
 	voice.nextEnvironmentUpdateTime = now + kVoiceEnvironmentIntervalMs;
 }
 
@@ -1467,6 +1537,8 @@ void Q3SoundWorld::ApplyVoice( SoundVoice &voice, qboolean softMuted ) {
 		!listenerAttached && !localOnly );
 	const bool monoWorldSource = ( voice.sample->Channels() == 1 && !listenerAttached && !localOnly );
 	const bool positionalSource = monoWorldSource || spatializedStereoWorldSource;
+	const bool pvsCulled = positionalSource && s_pvs != nullptr && s_pvs->integer &&
+		!S_OriginInPVS( listenerOrigin_.Data(), voiceOrigin );
 	const bool directStereoSource = stereoSample && !encodedSoundField && !spatializedStereoWorldSource;
 	const bool useOpenALDistance = positionalSource && device_->UsesOpenALDistanceAttenuation();
 	const SoundShaderSettings &shader = voice.sample->Shader();
@@ -1484,6 +1556,7 @@ void Q3SoundWorld::ApplyVoice( SoundVoice &voice, qboolean softMuted ) {
 	}
 
 	float gain = useOpenALDistance ? 1.0f : spatial.gain;
+	float horizonGain = 1.0f;
 	float directGain = 1.0f;
 	float directToneHF = environment_.directHF;
 	float wetGain = 0.0f;
@@ -1498,11 +1571,14 @@ void Q3SoundWorld::ApplyVoice( SoundVoice &voice, qboolean softMuted ) {
 
 	if ( !localOnly ) {
 		const float distance = listenerAttached ? 0.0f : DistanceBetweenPoints( voiceOrigin, listenerOrigin_.Data() );
-		if ( listenerAttached ) {
+		if ( listenerAttached || pvsCulled ) {
 			ResetVoiceOcclusion( voice, 0.0f, now );
 		} else {
 			UpdateVoiceEnvironment( voice, voiceOrigin );
 			SmoothVoiceOcclusion( voice, now );
+			if ( positionalSource ) {
+				horizonGain = HorizonGain( distance, rangeScale );
+			}
 		}
 		occlusion = voice.occlusion;
 		const float distanceMix = ClampFloat( distance / 512.0f, 0.0f, 1.0f );
@@ -1514,13 +1590,11 @@ void Q3SoundWorld::ApplyVoice( SoundVoice &voice, qboolean softMuted ) {
 		ResetVoiceOcclusion( voice, 0.0f, now );
 	}
 
-	if ( softMuted ) {
+	if ( softMuted || pvsCulled ) {
 		gain = 0.0f;
 		wetGain = 0.0f;
-	} else if ( voice.doppler ) {
-		pitch = ComputeDopplerPitch( listenerOrigin_.Data(), voiceOrigin, sourceVelocity );
 	}
-	gain = ClampFloat( gain * gainScale * voice.volumeScale, 0.0f, 2.0f );
+	gain = ClampFloat( gain * gainScale * horizonGain * voice.volumeScale, 0.0f, 2.0f );
 	pitch = ClampFloat( pitch * pitchScale, 0.5f, 2.0f );
 
 	const VoiceToneSettings toneSettings = BuildVoiceToneSettings( voice, environment_, listenerAttached, localOnly, stereoSample, positionalSource, occlusion, directToneHF, wetGain, wetGainHF );
@@ -1549,7 +1623,11 @@ void Q3SoundWorld::ApplyVoice( SoundVoice &voice, qboolean softMuted ) {
 		device_->AL().alSourcei( voice.source, AL_SOURCE_RELATIVE, AL_FALSE );
 		device_->ConfigureSourceDistance( voice.source, true, referenceScale, rangeScale );
 		device_->AL().alSource3f( voice.source, AL_POSITION, voiceOrigin[0], voiceOrigin[1], voiceOrigin[2] );
-		device_->AL().alSource3f( voice.source, AL_VELOCITY, sourceVelocity[0], sourceVelocity[1], sourceVelocity[2] );
+		if ( voice.doppler ) {
+			device_->AL().alSource3f( voice.source, AL_VELOCITY, sourceVelocity[0], sourceVelocity[1], sourceVelocity[2] );
+		} else {
+			device_->AL().alSource3f( voice.source, AL_VELOCITY, 0.0f, 0.0f, 0.0f );
+		}
 	} else {
 		device_->SetSourceSpatialize( voice.source, false );
 		device_->SetSourceDirectChannels( voice.source, directStereoSource );
@@ -1559,7 +1637,7 @@ void Q3SoundWorld::ApplyVoice( SoundVoice &voice, qboolean softMuted ) {
 		device_->AL().alSource3f( voice.source, AL_VELOCITY, 0.0f, 0.0f, 0.0f );
 	}
 
-	device_->ApplyVoiceRouting( voice.source, voice.directFilter, voice.sendFilter, gain, directGain, toneSettings.directTone, toneSettings.sendTone );
+	device_->ApplyVoiceRouting( voice.source, voice.directFilter, voice.sendFilter, gain, directGain, toneSettings.directTone, toneSettings.sendTone, voice.routeCache );
 
 	if ( voice.looping ) {
 		ALint state = 0;
@@ -1637,6 +1715,7 @@ qboolean Q3SoundWorld::GetSpatialDebugInfo( spatialAudioDebugInfo_t *info, const
 	const SoundVoice *selected;
 	int activeOneShots = 0;
 	int activeLoops = 0;
+	int virtualLoops = 0;
 	std::array<char, 64> environmentSummary;
 	std::array<char, 128> zoneSummary;
 
@@ -1655,6 +1734,9 @@ qboolean Q3SoundWorld::GetSpatialDebugInfo( spatialAudioDebugInfo_t *info, const
 	for ( const SoundVoice &voice : loopVoices_ ) {
 		if ( voice.active ) {
 			++activeLoops;
+			if ( voice.source == 0 ) {
+				++virtualLoops;
+			}
 		}
 	}
 
@@ -1666,8 +1748,8 @@ qboolean Q3SoundWorld::GetSpatialDebugInfo( spatialAudioDebugInfo_t *info, const
 		device.CurrentReverbName(),
 		environmentSummary.data() );
 	Com_sprintf( info->lines[info->lineCount++], S_SPATIAL_DEBUG_LINE_CHARS,
-		"listener:%d voices shot:%d loop:%d zone:%s",
-		listenerNumber_, activeOneShots, activeLoops,
+		"listener:%d voices shot:%d loop:%d virt:%d zone:%s",
+		listenerNumber_, activeOneShots, activeLoops, virtualLoops,
 		zoneSummary.data() );
 	if ( overlayMode > 1 ) {
 		Com_sprintf( info->lines[info->lineCount++], S_SPATIAL_DEBUG_LINE_CHARS,
@@ -1827,7 +1909,7 @@ void Q3SoundWorld::DumpSpatialDebug( const OpenALDevice &device, int preferredEn
 		if ( !voice.active ) {
 			continue;
 		}
-		Com_Printf( "loop ent=%d mode=%s tone=%s/%s sample=%s dist=%.1f occ=%.2f target=%.2f gain=%.2f pan=%.2f pitch=%.2f transient=%d refreshed=%d\n",
+		Com_Printf( "loop ent=%d mode=%s tone=%s/%s sample=%s dist=%.1f occ=%.2f target=%.2f gain=%.2f pan=%.2f pitch=%.2f liquid=%d virtual=%d transient=%d refreshed=%d\n",
 			voice.entnum,
 			VoiceRouteName( voice ),
 			voice.debugToneClass,
@@ -1839,6 +1921,8 @@ void Q3SoundWorld::DumpSpatialDebug( const OpenALDevice &device, int preferredEn
 			voice.debugGain,
 			voice.debugPan,
 			voice.debugPitch,
+			voice.liquidBoundary ? 1 : 0,
+			( voice.source == 0 ) ? 1 : 0,
 			voice.killWhenUnrefreshed ? 1 : 0,
 			voice.refreshedThisFrame ? 1 : 0 );
 	}
@@ -1898,11 +1982,29 @@ void Q3SoundWorld::Update( qboolean softMuted ) {
 		if ( !voice.active ) {
 			continue;
 		}
-		if ( voice.killWhenUnrefreshed && !voice.refreshedThisFrame ) {
+		if ( ( voice.killWhenUnrefreshed || loopFrameClearPending_ ) && !voice.refreshedThisFrame ) {
 			voice.Release( *device_ );
 			voice.kind = VoiceKind::Loop;
 			continue;
 		}
+
+		// Loops beyond the audibility horizon are kept as virtual voices: the
+		// logical state stays, but the OpenAL source and filters go back to
+		// the pool so audible sounds never starve. They resume seamlessly
+		// when the listener comes back into range.
+		if ( voice.sample != nullptr && voice.entnum != listenerNumber_ ) {
+			const float *voiceOrigin = voice.fixedOrigin ? voice.origin.Data() : entityOrigins_[voice.entnum].Data();
+			const SoundShaderSettings &shader = voice.sample->Shader();
+			const float rangeScale = shader.enabled ? shader.rangeScale : kDefaultSoundShaderScale;
+			if ( DistanceBetweenPoints( voiceOrigin, listenerOrigin_.Data() ) >= AudibilityHorizonDistance( rangeScale ) ) {
+				if ( voice.source != 0 ) {
+					voice.ReleaseSource( *device_ );
+				}
+				voice.refreshedThisFrame = voice.killWhenUnrefreshed ? qfalse : qtrue;
+				continue;
+			}
+		}
+
 		if ( voice.source == 0 ) {
 			voice.source = AllocateVoiceSourceForLoop();
 			if ( voice.source == 0 ) {
@@ -1915,4 +2017,5 @@ void Q3SoundWorld::Update( qboolean softMuted ) {
 		ApplyVoice( voice, softMuted );
 		voice.refreshedThisFrame = voice.killWhenUnrefreshed ? qfalse : qtrue;
 	}
+	loopFrameClearPending_ = false;
 }

@@ -33,7 +33,8 @@ public:
 	X(alListener3f) \
 	X(alListenerfv) \
 	X(alDistanceModel) \
-	X(alDopplerFactor)
+	X(alDopplerFactor) \
+	X(alSpeedOfSound)
 
 #define FNQL_ALC_SYMBOLS(X) \
 	X(alcOpenDevice) \
@@ -68,6 +69,7 @@ bool OpenALLoader::Load() {
 	if ( binaryPath != nullptr && binaryPath[0] != '\0' ) {
 		const std::string binaryDir = binaryPath;
 		candidateLibraries.push_back( binaryDir + "\\OpenAL32.dll" );
+		candidateLibraries.push_back( binaryDir + "\\soft_oal.dll" );
 #if defined(_M_ARM64)
 		// No bundled ARM64 OpenAL runtime is staged currently.
 #elif defined(_WIN64)
@@ -76,6 +78,11 @@ bool OpenALLoader::Load() {
 		candidateLibraries.push_back( binaryDir + "\\..\\..\\..\\openal\\windows\\x86\\OpenAL32.dll" );
 #endif
 	}
+	// Prefer a discoverable OpenAL Soft runtime (its conventional install name
+	// is soft_oal.dll) before the legacy Creative router that ships as the
+	// system OpenAL32.dll on most Windows installs. The router's "Generic
+	// Software" driver has no HRTF and only a subset of EFX.
+	candidateLibraries.push_back( "soft_oal.dll" );
 	candidateLibraries.push_back( "OpenAL32.dll" );
 #elif defined(__APPLE__)
 	const char *candidateLibraries[] = {
@@ -234,7 +241,6 @@ static void PrintHrtfSpecifierList( const std::vector<std::string> &specifiers, 
 			specifiers[i].c_str() );
 	}
 }
-
 static std::vector<std::string> EnumerateHrtfSpecifiers( const OpenALLoader &loader, ALCdevice *device, LPALCGETSTRINGISOFT alcGetStringiSOFT, ALCint &hrtfCount ) {
 	std::vector<std::string> specifiers;
 	hrtfCount = 0;
@@ -354,6 +360,21 @@ static void PrintOpenALHrtfListForRequestedDevice() {
 
 class StreamBufferPool;
 
+struct VoiceRouteCache {
+	bool valid = false;
+	float routedGain = -1.0f;
+	float maxGain = -1.0f;
+	AudioFilterSettings directTone;
+	AudioFilterSettings sendTone;
+};
+
+static bool FilterSettingsNearlyEqual( const AudioFilterSettings &a, const AudioFilterSettings &b ) {
+	return a.kind == b.kind &&
+		std::fabs( a.gain - b.gain ) <= 0.002f &&
+		std::fabs( a.gainLF - b.gainLF ) <= 0.002f &&
+		std::fabs( a.gainHF - b.gainHF ) <= 0.002f;
+}
+
 class OpenALDevice {
 public:
 	bool Init();
@@ -380,6 +401,12 @@ public:
 	bool HasReverb() const { return reverbEnabled_; }
 	int MaxAuxiliarySends() const { return maxAuxSends_; }
 	const char *CurrentReverbName() const { return currentReverbName_.c_str(); }
+	const char *ReverbEffectName() const {
+		if ( !reverbEnabled_ ) {
+			return "disabled";
+		}
+		return reverbIsEax_ ? "eaxreverb" : "reverb";
+	}
 	const ModernOpenALCapabilities &Capabilities() const { return capabilities_; }
 	const std::string &ContextAttributeMode() const { return contextAttributeMode_; }
 	bool ContextUsedFallback() const { return contextUsedFallback_; }
@@ -391,6 +418,7 @@ public:
 	bool DeviceConnected() const;
 	bool RecoverDevice( bool force );
 	void SetMasterGain( float gain );
+	void ApplyDopplerState();
 	void UpdateListener( const float *origin, const float *velocity, const float axis[3][3] ) const;
 	void SetSourceSpatialize( ALuint source, bool spatialize ) const;
 	void SetSourceDirectChannels( ALuint source, bool directChannels ) const;
@@ -408,7 +436,7 @@ public:
 	StreamBufferPool &BufferPool();
 	bool CreateVoiceFilters( ALuint &directFilter, ALuint &sendFilter );
 	void DestroyVoiceFilters( ALuint &directFilter, ALuint &sendFilter );
-	void ApplyVoiceRouting( ALuint source, ALuint directFilter, ALuint sendFilter, float sourceGain, float directGain, const AudioFilterSettings &directTone, const AudioFilterSettings &sendTone ) const;
+	void ApplyVoiceRouting( ALuint source, ALuint directFilter, ALuint sendFilter, float sourceGain, float directGain, const AudioFilterSettings &directTone, const AudioFilterSettings &sendTone, VoiceRouteCache &cache ) const;
 	void UpdateReverb( const EnvironmentState &environment );
 
 private:
@@ -452,7 +480,14 @@ private:
 	bool contextUsedFallback_ = false;
 	bool efxAvailable_ = false;
 	bool filterAvailable_ = false;
+	bool filterLowPassSupported_ = false;
+	bool filterHighPassSupported_ = false;
+	bool filterBandPassSupported_ = false;
 	bool reverbEnabled_ = false;
+	bool reverbIsEax_ = false;
+	float appliedMasterGain_ = -1.0f;
+	float appliedDopplerFactor_ = -1.0f;
+	float appliedDopplerSpeed_ = -1.0f;
 	ModernOpenALCapabilities capabilities_;
 	int maxAuxSends_ = 0;
 	ALuint auxEffectSlot_ = 0;
@@ -1240,11 +1275,19 @@ void OpenALDevice::PrintCapabilityMatrix() const {
 	Com_Printf( "  AL_SOFT_source_latency: %s (alGetSourcedvSOFT %s)\n",
 		AvailableUnavailable( caps.sourceLatency ),
 		LoadedMissing( caps.alGetSourcedvSOFT ) );
-	Com_Printf( "  EFX: %s (filters %s, reverb send %s, aux sends %d)\n",
+	Com_Printf( "  EFX: %s (filters %s, reverb send %s, effect %s, aux sends %d)\n",
 		AvailableUnavailable( efxAvailable_ ),
 		AvailableUnavailable( filterAvailable_ ),
 		reverbEnabled_ ? "enabled" : "disabled",
+		ReverbEffectName(),
 		maxAuxSends_ );
+	if ( filterAvailable_ ) {
+		Com_Printf( "    filter types: lowpass %s, highpass %s, bandpass %s%s\n",
+			YesNo( filterLowPassSupported_ ),
+			YesNo( filterHighPassSupported_ ),
+			YesNo( filterBandPassSupported_ ),
+			( filterHighPassSupported_ && filterBandPassSupported_ ) ? "" : " (unsupported kinds degrade to lowpass)" );
+	}
 	Com_Printf( "  AL_SOFT_events: %s (event control %s, callback %s)\n",
 		AvailableUnavailable( caps.sourceEvents ),
 		LoadedMissing( caps.alEventControlSOFT ),
@@ -1345,7 +1388,11 @@ void OpenALDevice::ResetSource( ALuint source ) const {
 bool OpenALDevice::InitEFX() {
 	efxAvailable_ = false;
 	filterAvailable_ = false;
+	filterLowPassSupported_ = false;
+	filterHighPassSupported_ = false;
+	filterBandPassSupported_ = false;
 	reverbEnabled_ = false;
+	reverbIsEax_ = false;
 	maxAuxSends_ = 0;
 	auxEffectSlot_ = 0;
 	reverbEffect_ = 0;
@@ -1380,6 +1427,28 @@ bool OpenALDevice::InitEFX() {
 	efxAvailable_ = true;
 	filterAvailable_ = ( alGenFilters_ != nullptr && alDeleteFilters_ != nullptr && alFilteri_ != nullptr && alFilterf_ != nullptr );
 
+	// Legacy runtimes (the Creative router's "Generic Software" driver) accept
+	// only a subset of EFX filter types; probe once so tone shaping can
+	// degrade gracefully instead of silently losing its filters.
+	if ( filterAvailable_ ) {
+		ALuint probeFilter = 0;
+		loader_.alGetError();
+		alGenFilters_( 1, &probeFilter );
+		if ( loader_.alGetError() == AL_NO_ERROR && probeFilter != 0 ) {
+			const auto filterTypeSupported = [&]( ALint type ) {
+				loader_.alGetError();
+				alFilteri_( probeFilter, AL_FILTER_TYPE, type );
+				return loader_.alGetError() == AL_NO_ERROR;
+			};
+			filterLowPassSupported_ = filterTypeSupported( AL_FILTER_LOWPASS );
+			filterHighPassSupported_ = filterTypeSupported( AL_FILTER_HIGHPASS );
+			filterBandPassSupported_ = filterTypeSupported( AL_FILTER_BANDPASS );
+			alDeleteFilters_( 1, &probeFilter );
+			loader_.alGetError();
+		}
+		filterAvailable_ = filterLowPassSupported_ || filterHighPassSupported_ || filterBandPassSupported_;
+	}
+
 	if ( alGenEffects_ == nullptr || alDeleteEffects_ == nullptr || alEffecti_ == nullptr || alEffectf_ == nullptr ||
 		alGenAuxiliaryEffectSlots_ == nullptr || alDeleteAuxiliaryEffectSlots_ == nullptr || alAuxiliaryEffectSloti_ == nullptr ) {
 		return true;
@@ -1396,11 +1465,18 @@ bool OpenALDevice::InitEFX() {
 		return true;
 	}
 
-	alEffecti_( reverbEffect_, AL_EFFECT_TYPE, AL_EFFECT_REVERB );
-	if ( loader_.alGetError() != AL_NO_ERROR ) {
-		alDeleteEffects_( 1, &reverbEffect_ );
-		reverbEffect_ = 0;
-		return true;
+	// Prefer the extended reverb model: it adds LF decay control, echo, and
+	// modulation (the underwater warble) on OpenAL Soft and other EFX runtimes
+	// that accept it. Fall back to the basic reverb effect otherwise.
+	alEffecti_( reverbEffect_, AL_EFFECT_TYPE, AL_EFFECT_EAXREVERB );
+	reverbIsEax_ = ( loader_.alGetError() == AL_NO_ERROR );
+	if ( !reverbIsEax_ ) {
+		alEffecti_( reverbEffect_, AL_EFFECT_TYPE, AL_EFFECT_REVERB );
+		if ( loader_.alGetError() != AL_NO_ERROR ) {
+			alDeleteEffects_( 1, &reverbEffect_ );
+			reverbEffect_ = 0;
+			return true;
+		}
 	}
 
 	alGenAuxiliaryEffectSlots_( 1, &auxEffectSlot_ );
@@ -1440,7 +1516,11 @@ void OpenALDevice::ShutdownEFX() {
 	reverbEffect_ = 0;
 	efxAvailable_ = false;
 	filterAvailable_ = false;
+	filterLowPassSupported_ = false;
+	filterHighPassSupported_ = false;
+	filterBandPassSupported_ = false;
 	reverbEnabled_ = false;
+	reverbIsEax_ = false;
 	maxAuxSends_ = 0;
 	activeReverbPreset_ = -1;
 	activeReverbTargetPreset_ = -1;
@@ -1487,23 +1567,55 @@ bool OpenALDevice::ConfigureFilter( ALuint filter, const AudioFilterSettings &se
 		return false;
 	}
 
+	// Degrade unsupported filter kinds to a low-pass approximation so legacy
+	// runtimes keep the gain and high cut instead of losing the filter.
+	AudioFilterSettings effective = settings;
+	switch ( effective.kind ) {
+	case AudioFilterKind::BandPass:
+		if ( !filterBandPassSupported_ ) {
+			if ( !filterLowPassSupported_ ) {
+				return false;
+			}
+			effective = LowPassFilter( effective.gain, effective.gainHF );
+		}
+		break;
+	case AudioFilterKind::HighPass:
+		if ( !filterHighPassSupported_ ) {
+			if ( !filterLowPassSupported_ ) {
+				return false;
+			}
+			effective = LowPassFilter( effective.gain, 1.0f );
+			if ( !FilterHasAudibleEffect( effective ) ) {
+				return false;
+			}
+		}
+		break;
+	case AudioFilterKind::LowPass:
+		if ( !filterLowPassSupported_ ) {
+			return false;
+		}
+		break;
+	default:
+		return false;
+	}
+
 	loader_.alGetError();
-	switch ( settings.kind ) {
+	switch ( effective.kind ) {
 	case AudioFilterKind::LowPass:
 		alFilteri_( filter, AL_FILTER_TYPE, AL_FILTER_LOWPASS );
-		alFilterf_( filter, AL_LOWPASS_GAIN, ClampFloat( settings.gain, 0.0f, 1.0f ) );
-		alFilterf_( filter, AL_LOWPASS_GAINHF, ClampFloat( settings.gainHF, 0.0f, 1.0f ) );
+		alFilterf_( filter, AL_LOWPASS_GAIN, ClampFloat( effective.gain, 0.0f, 1.0f ) );
+		alFilterf_( filter, AL_LOWPASS_GAINHF, ClampFloat( effective.gainHF, 0.0f, 1.0f ) );
 		break;
 	case AudioFilterKind::HighPass:
 		alFilteri_( filter, AL_FILTER_TYPE, AL_FILTER_HIGHPASS );
-		alFilterf_( filter, AL_HIGHPASS_GAIN, ClampFloat( settings.gain, 0.0f, 1.0f ) );
-		alFilterf_( filter, AL_HIGHPASS_GAINLF, ClampFloat( settings.gainLF, 0.0f, 1.0f ) );
+		alFilterf_( filter, AL_HIGHPASS_GAIN, ClampFloat( effective.gain, 0.0f, 1.0f ) );
+		alFilterf_( filter, AL_HIGHPASS_GAINLF, ClampFloat( effective.gainLF, 0.0f, 1.0f ) );
 		break;
 	case AudioFilterKind::BandPass:
 		alFilteri_( filter, AL_FILTER_TYPE, AL_FILTER_BANDPASS );
-		alFilterf_( filter, AL_BANDPASS_GAIN, ClampFloat( settings.gain, 0.0f, 1.0f ) );
-		alFilterf_( filter, AL_BANDPASS_GAINLF, ClampFloat( settings.gainLF, 0.0f, 1.0f ) );
-		alFilterf_( filter, AL_BANDPASS_GAINHF, ClampFloat( settings.gainHF, 0.0f, 1.0f ) );
+		alFilterf_( filter, AL_BANDPASS_GAIN, ClampFloat( effective.gain, 0.0f, 1.0f ) );
+		alFilterf_( filter, AL_BANDPASS_GAINLF, ClampFloat( effective.gainLF, 0.0f, 1.0f ) );
+		alFilterf_( filter, AL_BANDPASS_GAINHF, ClampFloat( effective.gainHF, 0.0f, 1.0f ) );
 		break;
 	default:
 		return false;
@@ -1532,35 +1644,54 @@ void OpenALDevice::DestroyVoiceFilters( ALuint &directFilter, ALuint &sendFilter
 	DestroyFilter( sendFilter );
 }
 
-void OpenALDevice::ApplyVoiceRouting( ALuint source, ALuint directFilter, ALuint sendFilter, float sourceGain, float directGain, const AudioFilterSettings &directTone, const AudioFilterSettings &sendTone ) const {
+void OpenALDevice::ApplyVoiceRouting( ALuint source, ALuint directFilter, ALuint sendFilter, float sourceGain, float directGain, const AudioFilterSettings &directTone, const AudioFilterSettings &sendTone, VoiceRouteCache &cache ) const {
 	sourceGain = ClampFloat( sourceGain, 0.0f, 2.0f );
 	directGain = ClampFloat( directGain, 0.0f, 1.0f );
 	const float routedGain = ClampFloat( sourceGain * directGain, 0.0f, 2.0f );
 	const float maxGain = ClampFloat( ( std::max )( routedGain, 1.0f ), 1.0f, 2.0f );
-	loader_.alSourcef( source, AL_MAX_GAIN, maxGain );
 
-	if ( !efxAvailable_ ) {
-		loader_.alSourcef( source, AL_GAIN, routedGain );
+	// Sources snapshot filter parameters when a filter is attached, so tone
+	// changes need a reconfigure and reattach. In the common steady state the
+	// tones are unchanged frame to frame and only the gains need refreshing.
+	if ( cache.valid && FilterSettingsNearlyEqual( cache.directTone, directTone ) &&
+		FilterSettingsNearlyEqual( cache.sendTone, sendTone ) ) {
+		if ( std::fabs( cache.maxGain - maxGain ) > 0.0005f ) {
+			loader_.alSourcef( source, AL_MAX_GAIN, maxGain );
+			cache.maxGain = maxGain;
+		}
+		if ( std::fabs( cache.routedGain - routedGain ) > 0.0005f ) {
+			loader_.alSourcef( source, AL_GAIN, routedGain );
+			cache.routedGain = routedGain;
+		}
 		return;
 	}
 
-	if ( FilterHasAudibleEffect( directTone ) && ConfigureFilter( directFilter, directTone ) ) {
-		loader_.alSourcei( source, AL_DIRECT_FILTER, directFilter );
-		loader_.alSourcef( source, AL_GAIN, routedGain );
-	} else {
-		loader_.alSourcei( source, AL_DIRECT_FILTER, AL_FILTER_NULL );
-		loader_.alSourcef( source, AL_GAIN, routedGain );
+	loader_.alSourcef( source, AL_MAX_GAIN, maxGain );
+	loader_.alSourcef( source, AL_GAIN, routedGain );
+
+	if ( efxAvailable_ ) {
+		if ( FilterHasAudibleEffect( directTone ) && ConfigureFilter( directFilter, directTone ) ) {
+			loader_.alSourcei( source, AL_DIRECT_FILTER, directFilter );
+		} else {
+			loader_.alSourcei( source, AL_DIRECT_FILTER, AL_FILTER_NULL );
+		}
+
+		if ( reverbEnabled_ && sendTone.kind != AudioFilterKind::None && sendTone.gain > 0.001f && auxEffectSlot_ != 0 ) {
+			if ( FilterHasAudibleEffect( sendTone ) && ConfigureFilter( sendFilter, sendTone ) ) {
+				loader_.alSource3i( source, AL_AUXILIARY_SEND_FILTER, auxEffectSlot_, 0, sendFilter );
+			} else {
+				loader_.alSource3i( source, AL_AUXILIARY_SEND_FILTER, auxEffectSlot_, 0, AL_FILTER_NULL );
+			}
+		} else {
+			loader_.alSource3i( source, AL_AUXILIARY_SEND_FILTER, AL_EFFECTSLOT_NULL, 0, AL_FILTER_NULL );
+		}
 	}
 
-	if ( reverbEnabled_ && sendTone.kind != AudioFilterKind::None && sendTone.gain > 0.001f && auxEffectSlot_ != 0 ) {
-		if ( FilterHasAudibleEffect( sendTone ) && ConfigureFilter( sendFilter, sendTone ) ) {
-			loader_.alSource3i( source, AL_AUXILIARY_SEND_FILTER, auxEffectSlot_, 0, sendFilter );
-		} else {
-			loader_.alSource3i( source, AL_AUXILIARY_SEND_FILTER, auxEffectSlot_, 0, AL_FILTER_NULL );
-		}
-	} else {
-		loader_.alSource3i( source, AL_AUXILIARY_SEND_FILTER, AL_EFFECTSLOT_NULL, 0, AL_FILTER_NULL );
-	}
+	cache.valid = true;
+	cache.routedGain = routedGain;
+	cache.maxGain = maxGain;
+	cache.directTone = directTone;
+	cache.sendTone = sendTone;
 }
 
 void OpenALDevice::SetMasterGain( float gain ) {
@@ -1568,7 +1699,32 @@ void OpenALDevice::SetMasterGain( float gain ) {
 		return;
 	}
 
-	loader_.alListenerf( AL_GAIN, ClampFloat( gain, 0.0f, 1.0f ) );
+	gain = ClampFloat( gain, 0.0f, 2.0f );
+	if ( gain == appliedMasterGain_ ) {
+		return;
+	}
+	loader_.alListenerf( AL_GAIN, gain );
+	appliedMasterGain_ = gain;
+}
+
+void OpenALDevice::ApplyDopplerState() {
+	if ( !loader_.Ready() || context_ == nullptr ) {
+		return;
+	}
+
+	const bool enabled = ( s_doppler == nullptr || s_doppler->integer != 0 );
+	const float factor = enabled ? ClampFloat( ( s_alDopplerFactor != nullptr ) ? s_alDopplerFactor->value : 1.0f, 0.0f, 10.0f ) : 0.0f;
+	const float speed = ClampFloat( ( s_alDopplerSpeed != nullptr ) ? s_alDopplerSpeed->value : 6000.0f, 1000.0f, 20000.0f );
+	if ( factor == appliedDopplerFactor_ && speed == appliedDopplerSpeed_ ) {
+		return;
+	}
+
+	loader_.alGetError();
+	loader_.alDopplerFactor( factor );
+	loader_.alSpeedOfSound( speed );
+	loader_.alGetError();
+	appliedDopplerFactor_ = factor;
+	appliedDopplerSpeed_ = speed;
 }
 
 void OpenALDevice::UpdateListener( const float *origin, const float *velocity, const float axis[3][3] ) const {
@@ -1624,8 +1780,8 @@ void OpenALDevice::ConfigureSourceDistance( ALuint source, bool worldDistance, f
 	}
 
 	if ( worldDistance && UsesOpenALDistanceAttenuation() ) {
-		referenceScale = ClampFloat( referenceScale, 0.5f, 2.0f );
-		rangeScale = ClampFloat( rangeScale, 0.5f, 2.0f );
+		referenceScale = ClampFloat( referenceScale, kMinSoundShaderDistanceScale, kMaxSoundShaderReferenceScale );
+		rangeScale = ClampFloat( rangeScale, kMinSoundShaderDistanceScale, kMaxSoundShaderRangeScale );
 		const float referenceDistance = kOpenALReferenceDistance * referenceScale;
 		const float maxDistance = ( std::max )( kOpenALMaxDistance * rangeScale, referenceDistance + 1.0f );
 		loader_.alSourcef( source, AL_REFERENCE_DISTANCE, referenceDistance );
@@ -1635,6 +1791,11 @@ void OpenALDevice::ConfigureSourceDistance( ALuint source, bool worldDistance, f
 		loader_.alSourcef( source, AL_REFERENCE_DISTANCE, 1.0f );
 		loader_.alSourcef( source, AL_MAX_DISTANCE, kOpenALMaxDistance );
 		loader_.alSourcef( source, AL_ROLLOFF_FACTOR, 0.0f );
+	}
+	if ( efxAvailable_ ) {
+		const float airAbsorption = worldDistance ?
+			ClampFloat( ( s_alAirAbsorption != nullptr ) ? s_alAirAbsorption->value : 0.0f, 0.0f, 10.0f ) : 0.0f;
+		loader_.alSourcef( source, AL_AIR_ABSORPTION_FACTOR, airAbsorption );
 	}
 	loader_.alGetError();
 }
@@ -1705,19 +1866,43 @@ void OpenALDevice::UpdateReverb( const EnvironmentState &environment ) {
 
 	const ReverbPreset &from = kReverbPresets[environment.presetIndex];
 	const ReverbPreset &to = kReverbPresets[environment.targetPresetIndex];
-	alEffectf_( reverbEffect_, AL_REVERB_DENSITY, LerpFloat( from.density, to.density, blend ) );
-	alEffectf_( reverbEffect_, AL_REVERB_DIFFUSION, LerpFloat( from.diffusion, to.diffusion, blend ) );
-	alEffectf_( reverbEffect_, AL_REVERB_GAIN, LerpFloat( from.gain, to.gain, blend ) );
-	alEffectf_( reverbEffect_, AL_REVERB_GAINHF, LerpFloat( from.gainHF, to.gainHF, blend ) );
-	alEffectf_( reverbEffect_, AL_REVERB_DECAY_TIME, LerpFloat( from.decayTime, to.decayTime, blend ) );
-	alEffectf_( reverbEffect_, AL_REVERB_DECAY_HFRATIO, LerpFloat( from.decayHFRatio, to.decayHFRatio, blend ) );
-	alEffectf_( reverbEffect_, AL_REVERB_REFLECTIONS_GAIN, LerpFloat( from.reflectionsGain, to.reflectionsGain, blend ) );
-	alEffectf_( reverbEffect_, AL_REVERB_REFLECTIONS_DELAY, LerpFloat( from.reflectionsDelay, to.reflectionsDelay, blend ) );
-	alEffectf_( reverbEffect_, AL_REVERB_LATE_REVERB_GAIN, LerpFloat( from.lateReverbGain, to.lateReverbGain, blend ) );
-	alEffectf_( reverbEffect_, AL_REVERB_LATE_REVERB_DELAY, LerpFloat( from.lateReverbDelay, to.lateReverbDelay, blend ) );
-	alEffectf_( reverbEffect_, AL_REVERB_AIR_ABSORPTION_GAINHF, LerpFloat( from.airAbsorptionGainHF, to.airAbsorptionGainHF, blend ) );
-	alEffectf_( reverbEffect_, AL_REVERB_ROOM_ROLLOFF_FACTOR, LerpFloat( from.roomRolloffFactor, to.roomRolloffFactor, blend ) );
-	alEffecti_( reverbEffect_, AL_REVERB_DECAY_HFLIMIT, ( blend < 0.5f ) ? from.decayHFLimit : to.decayHFLimit );
+	if ( reverbIsEax_ ) {
+		alEffectf_( reverbEffect_, AL_EAXREVERB_DENSITY, LerpFloat( from.density, to.density, blend ) );
+		alEffectf_( reverbEffect_, AL_EAXREVERB_DIFFUSION, LerpFloat( from.diffusion, to.diffusion, blend ) );
+		alEffectf_( reverbEffect_, AL_EAXREVERB_GAIN, LerpFloat( from.gain, to.gain, blend ) );
+		alEffectf_( reverbEffect_, AL_EAXREVERB_GAINHF, LerpFloat( from.gainHF, to.gainHF, blend ) );
+		alEffectf_( reverbEffect_, AL_EAXREVERB_GAINLF, LerpFloat( from.gainLF, to.gainLF, blend ) );
+		alEffectf_( reverbEffect_, AL_EAXREVERB_DECAY_TIME, LerpFloat( from.decayTime, to.decayTime, blend ) );
+		alEffectf_( reverbEffect_, AL_EAXREVERB_DECAY_HFRATIO, LerpFloat( from.decayHFRatio, to.decayHFRatio, blend ) );
+		alEffectf_( reverbEffect_, AL_EAXREVERB_DECAY_LFRATIO, LerpFloat( from.decayLFRatio, to.decayLFRatio, blend ) );
+		alEffectf_( reverbEffect_, AL_EAXREVERB_REFLECTIONS_GAIN, LerpFloat( from.reflectionsGain, to.reflectionsGain, blend ) );
+		alEffectf_( reverbEffect_, AL_EAXREVERB_REFLECTIONS_DELAY, LerpFloat( from.reflectionsDelay, to.reflectionsDelay, blend ) );
+		alEffectf_( reverbEffect_, AL_EAXREVERB_LATE_REVERB_GAIN, LerpFloat( from.lateReverbGain, to.lateReverbGain, blend ) );
+		alEffectf_( reverbEffect_, AL_EAXREVERB_LATE_REVERB_DELAY, LerpFloat( from.lateReverbDelay, to.lateReverbDelay, blend ) );
+		alEffectf_( reverbEffect_, AL_EAXREVERB_ECHO_TIME, LerpFloat( from.echoTime, to.echoTime, blend ) );
+		alEffectf_( reverbEffect_, AL_EAXREVERB_ECHO_DEPTH, LerpFloat( from.echoDepth, to.echoDepth, blend ) );
+		alEffectf_( reverbEffect_, AL_EAXREVERB_MODULATION_TIME, LerpFloat( from.modulationTime, to.modulationTime, blend ) );
+		alEffectf_( reverbEffect_, AL_EAXREVERB_MODULATION_DEPTH, LerpFloat( from.modulationDepth, to.modulationDepth, blend ) );
+		alEffectf_( reverbEffect_, AL_EAXREVERB_AIR_ABSORPTION_GAINHF, LerpFloat( from.airAbsorptionGainHF, to.airAbsorptionGainHF, blend ) );
+		alEffectf_( reverbEffect_, AL_EAXREVERB_HFREFERENCE, LerpFloat( from.hfReference, to.hfReference, blend ) );
+		alEffectf_( reverbEffect_, AL_EAXREVERB_LFREFERENCE, LerpFloat( from.lfReference, to.lfReference, blend ) );
+		alEffectf_( reverbEffect_, AL_EAXREVERB_ROOM_ROLLOFF_FACTOR, LerpFloat( from.roomRolloffFactor, to.roomRolloffFactor, blend ) );
+		alEffecti_( reverbEffect_, AL_EAXREVERB_DECAY_HFLIMIT, ( blend < 0.5f ) ? from.decayHFLimit : to.decayHFLimit );
+	} else {
+		alEffectf_( reverbEffect_, AL_REVERB_DENSITY, LerpFloat( from.density, to.density, blend ) );
+		alEffectf_( reverbEffect_, AL_REVERB_DIFFUSION, LerpFloat( from.diffusion, to.diffusion, blend ) );
+		alEffectf_( reverbEffect_, AL_REVERB_GAIN, LerpFloat( from.gain, to.gain, blend ) );
+		alEffectf_( reverbEffect_, AL_REVERB_GAINHF, LerpFloat( from.gainHF, to.gainHF, blend ) );
+		alEffectf_( reverbEffect_, AL_REVERB_DECAY_TIME, LerpFloat( from.decayTime, to.decayTime, blend ) );
+		alEffectf_( reverbEffect_, AL_REVERB_DECAY_HFRATIO, LerpFloat( from.decayHFRatio, to.decayHFRatio, blend ) );
+		alEffectf_( reverbEffect_, AL_REVERB_REFLECTIONS_GAIN, LerpFloat( from.reflectionsGain, to.reflectionsGain, blend ) );
+		alEffectf_( reverbEffect_, AL_REVERB_REFLECTIONS_DELAY, LerpFloat( from.reflectionsDelay, to.reflectionsDelay, blend ) );
+		alEffectf_( reverbEffect_, AL_REVERB_LATE_REVERB_GAIN, LerpFloat( from.lateReverbGain, to.lateReverbGain, blend ) );
+		alEffectf_( reverbEffect_, AL_REVERB_LATE_REVERB_DELAY, LerpFloat( from.lateReverbDelay, to.lateReverbDelay, blend ) );
+		alEffectf_( reverbEffect_, AL_REVERB_AIR_ABSORPTION_GAINHF, LerpFloat( from.airAbsorptionGainHF, to.airAbsorptionGainHF, blend ) );
+		alEffectf_( reverbEffect_, AL_REVERB_ROOM_ROLLOFF_FACTOR, LerpFloat( from.roomRolloffFactor, to.roomRolloffFactor, blend ) );
+		alEffecti_( reverbEffect_, AL_REVERB_DECAY_HFLIMIT, ( blend < 0.5f ) ? from.decayHFLimit : to.decayHFLimit );
+	}
 	alAuxiliaryEffectSloti_( auxEffectSlot_, AL_EFFECTSLOT_EFFECT, reverbEffect_ );
 	loader_.alGetError();
 
@@ -1750,8 +1935,16 @@ void OpenALDevice::RefreshRuntimeStateAfterDeviceReset() {
 	RefreshActiveDeviceName();
 	ApplyDistanceModel();
 	if ( loader_.Ready() && context_ != nullptr ) {
-		loader_.alDopplerFactor( 0.0f );
-		loader_.alListenerf( AL_GAIN, ( s_volume != nullptr ) ? ClampFloat( s_volume->value, 0.0f, 1.0f ) : 1.0f );
+		appliedDopplerFactor_ = -1.0f;
+		appliedDopplerSpeed_ = -1.0f;
+		ApplyDopplerState();
+		appliedMasterGain_ = -1.0f;
+		SetMasterGain( ( s_volume != nullptr ) ? s_volume->value : 1.0f );
+		if ( efxAvailable_ ) {
+			loader_.alGetError();
+			loader_.alListenerf( AL_METERS_PER_UNIT, kMetersPerGameUnit );
+			loader_.alGetError();
+		}
 		UpdateListener( nullptr, nullptr, nullptr );
 	}
 }
@@ -1859,10 +2052,17 @@ bool OpenALDevice::Init() {
 	RefreshActiveDeviceName();
 
 	ApplyDistanceModel();
-	loader_.alDopplerFactor( 0.0f );
-	loader_.alListenerf( AL_GAIN, ( s_volume != nullptr ) ? ClampFloat( s_volume->value, 0.0f, 1.0f ) : 1.0f );
+	ApplyDopplerState();
+	SetMasterGain( ( s_volume != nullptr ) ? s_volume->value : 1.0f );
 	UpdateListener( nullptr, nullptr, nullptr );
 	InitEFX();
+	if ( efxAvailable_ ) {
+		// EFX distance features (per-source air absorption, reverb rolloff)
+		// assume meters; Q3 world units are inches.
+		loader_.alGetError();
+		loader_.alListenerf( AL_METERS_PER_UNIT, kMetersPerGameUnit );
+		loader_.alGetError();
+	}
 
 	if ( !CreateSource( musicSource_ ) || !CreateSource( rawSource_ ) ) {
 		Shutdown();
@@ -1890,6 +2090,16 @@ bool OpenALDevice::Init() {
 	}
 
 	PrintCapabilityMatrix();
+
+	// The legacy Creative router exposes none of the OpenAL Soft extensions
+	// and only part of EFX, which silently strips most of the spatial layer.
+	// Make that state loud so "no reverb/occlusion" is diagnosable.
+	if ( !capabilities_.hrtf && !capabilities_.outputMode && !capabilities_.loopback ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: the active OpenAL runtime (%s / %s) has no OpenAL Soft extensions; HRTF and parts of the spatial filter set are unavailable.\n",
+			loader_.LibraryName().empty() ? "unknown library" : loader_.LibraryName().c_str(),
+			activeDeviceName_.empty() ? "unknown device" : activeDeviceName_.c_str() );
+		Com_Printf( S_COLOR_YELLOW "         Install OpenAL Soft or place its soft_oal.dll (or OpenAL32.dll) next to the executable, then run snd_restart.\n" );
+	}
 
 	return true;
 }
@@ -1939,6 +2149,9 @@ void OpenALDevice::Shutdown() {
 	contextAttributeMode_.clear();
 	usingDefaultFallback_ = false;
 	contextUsedFallback_ = false;
+	appliedMasterGain_ = -1.0f;
+	appliedDopplerFactor_ = -1.0f;
+	appliedDopplerSpeed_ = -1.0f;
 	capabilities_ = ModernOpenALCapabilities();
 
 	loader_.Unload();

@@ -2580,6 +2580,8 @@ R_Register
 */
 static void R_Register( void )
 {
+	R_QLRegisterRendererCvars( QL_CVAR_BACKEND_GLX );
+
 	// make sure all the commands added here are also removed in R_Shutdown
 	ri.Cmd_AddCommand( "imagelist", R_ImageList_f );
 	ri.Cmd_AddCommand( "shaderlist", R_ShaderList_f );
@@ -2684,7 +2686,8 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_stereoSeparation, "Control eye separation. Resulting separation is \\r_zproj divided by this value in standard units." );
 	r_ignoreGLErrors = ri.Cvar_Get( "r_ignoreGLErrors", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_ignoreGLErrors, "Ignore OpenGL errors." );
-	r_teleporterFlash = ri.Cvar_Get( "r_teleporterFlash", "1", CVAR_ARCHIVE );
+	r_teleporterFlash = ri.Cvar_Get( "r_teleporterFlash", "1", CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_CLOUD );
+	ri.Cvar_CheckRange( r_teleporterFlash, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_teleporterFlash, "Show a white screen instead of a black screen when being teleported in hyperspace." );
 	r_fastsky = ri.Cvar_Get( "r_fastsky", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_fastsky, "Draw flat colored skies." );
@@ -3442,6 +3445,7 @@ void R_Init( void ) {
 	R_InitNextFrame();
 
 	InitOpenGL();
+	ri.Cvar_Set( "r_qlOcclusionQueries", qglGenQueriesARB ? "1" : "0" );
 
 	R_InitImages();
 
@@ -3517,12 +3521,10 @@ static void RE_Shutdown( refShutdownCode_t code ) {
 			if ( ri.GLimp_Shutdown ) {
 				ri.GLimp_Shutdown( code == REF_UNLOAD_DLL ? qtrue : qfalse );
 			}
-			Com_Memset( &glConfig, 0, sizeof( glConfig ) );
-		} else {
-			// Keep the native window, but force InitOpenGL() back through
-			// GLimp_Init() so the retained window can adopt new geometry.
-			Com_Memset( &glConfig, 0, sizeof( glConfig ) );
 		}
+		// Keep only the native window on REF_KEEP_WINDOW. Clearing mode
+		// feedback makes platform initialization publish its current drawable.
+		Com_Memset( &glConfig, 0, sizeof( glConfig ) );
 	}
 
 	ri.FreeAll();

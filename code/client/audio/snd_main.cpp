@@ -26,6 +26,7 @@ extern "C" {
 #include "codecs/snd_codec.h"
 #include "snd_local.h"
 #include "snd_public.h"
+#include "../../qcommon/cm_public.h"
 }
 
 #include "../client_cpp.h"
@@ -37,7 +38,10 @@ using fnql::ToQboolean;
 extern "C" {
 cvar_t *s_volume;
 cvar_t *s_musicVolume;
+cvar_t *s_voiceVolume;
+cvar_t *s_voiceStep;
 cvar_t *s_doppler;
+cvar_t *s_pvs;
 cvar_t *s_muteWhenMinimized;
 cvar_t *s_muteWhenUnfocused;
 cvar_t *s_backend;
@@ -71,8 +75,11 @@ static bool S_ValidSoundInterface( const soundInterface_t *s )
 	if( !s->StartLocalSound ) return false;
 	if( !s->StartBackgroundTrack ) return false;
 	if( !s->StopBackgroundTrack ) return false;
+	if( !s->UpdateBackgroundTrack ) return false;
 	if( !s->RawSamples ) return false;
+	if( !s->AddVoiceSamples ) return false;
 	if( !s->StopAllSounds ) return false;
+	if( !s->ClearLoopingSoundsFrame ) return false;
 	if( !s->ClearLoopingSounds ) return false;
 	if( !s->AddLoopingSound ) return false;
 	if( !s->AddRealLoopingSound ) return false;
@@ -167,6 +174,19 @@ extern "C" void S_StopBackgroundTrack( void )
 
 /*
 =================
+S_UpdateBackgroundTrack
+=================
+*/
+extern "C" void S_UpdateBackgroundTrack( void )
+{
+	if ( si.UpdateBackgroundTrack ) {
+		si.UpdateBackgroundTrack();
+	}
+}
+
+
+/*
+=================
 S_RawSamples
 =================
 */
@@ -188,6 +208,19 @@ extern "C" void S_StopAllSounds( void )
 {
 	if( si.StopAllSounds ) {
 		si.StopAllSounds();
+	}
+}
+
+
+/*
+=================
+S_ClearLoopingSoundsFrame
+=================
+*/
+extern "C" void S_ClearLoopingSoundsFrame( void )
+{
+	if ( si.ClearLoopingSoundsFrame ) {
+		si.ClearLoopingSoundsFrame();
 	}
 }
 
@@ -370,6 +403,54 @@ static void S_SoundList( void )
 	}
 }
 
+/*
+=================
+S_AddVoiceSamples
+=================
+*/
+extern "C" void S_AddVoiceSamples( int clientNum, int samples, int rate, const short *data )
+{
+	if ( clientNum < 0 || clientNum >= MAX_CLIENTS || samples <= 0 ||
+		rate < 8000 || rate > 192000 || data == nullptr ) {
+		return;
+	}
+
+	if ( si.AddVoiceSamples ) {
+		si.AddVoiceSamples( clientNum, samples, rate, data );
+	}
+}
+
+/*
+=================
+S_OriginInPVS
+
+Retail s_pvs is fail-open when collision data is unavailable. This preserves
+menu/cinematic audio and custom-map robustness while retaining the opt-in QL
+visibility cull once a valid world is loaded.
+=================
+*/
+extern "C" qboolean S_OriginInPVS( const vec3_t listener, const vec3_t origin )
+{
+	if ( listener == nullptr || origin == nullptr || CM_NumClusters() <= 0 ) {
+		return qtrue;
+	}
+
+	const int listenerCluster = CM_LeafCluster( CM_PointLeafnum( listener ) );
+	const int originCluster = CM_LeafCluster( CM_PointLeafnum( origin ) );
+	const int clusterCount = CM_NumClusters();
+	if ( listenerCluster < 0 || listenerCluster >= clusterCount ||
+		originCluster < 0 || originCluster >= clusterCount ) {
+		return qtrue;
+	}
+
+	const byte *mask = CM_ClusterPVS( listenerCluster );
+	if ( mask == nullptr ) {
+		return qtrue;
+	}
+
+	return ( mask[originCluster >> 3] & ( 1 << ( originCluster & 7 ) ) ) ? qtrue : qfalse;
+}
+
 extern "C" qboolean S_GetSpatialAudioDebugInfo( spatialAudioDebugInfo_t *info )
 {
 	if ( info ) {
@@ -510,14 +591,23 @@ extern "C" void S_Init( void )
 	Com_Printf( "------ Initializing Sound ------\n" );
 
 	s_volume = Cvar_Get( "s_volume", "0.8", CVAR_ARCHIVE );
-	Cvar_CheckRange( s_volume, "0", "1", CV_FLOAT );
+	Cvar_CheckRange( s_volume, "0", "2", CV_FLOAT );
 	Cvar_SetDescription( s_volume, "Sets master volume for all game audio." );
 	s_musicVolume = Cvar_Get( "s_musicVolume", "0.25", CVAR_ARCHIVE );
-	Cvar_CheckRange( s_musicVolume, "0", "1", CV_FLOAT );
+	Cvar_CheckRange( s_musicVolume, "0", "2", CV_FLOAT );
 	Cvar_SetDescription( s_musicVolume, "Sets volume for in-game music only." );
+	s_voiceVolume = Cvar_Get( "s_voiceVolume", "1.0", CVAR_ARCHIVE );
+	Cvar_CheckRange( s_voiceVolume, "0", "2", CV_FLOAT );
+	Cvar_SetDescription( s_voiceVolume, "Sets playback volume for remote Steam voice chat without affecting cinematics or music." );
+	s_voiceStep = Cvar_Get( "s_voiceStep", "0.02", CVAR_ARCHIVE_ND );
+	Cvar_CheckRange( s_voiceStep, "0", "0.25", CV_FLOAT );
+	Cvar_SetDescription( s_voiceStep, "Adds a small prebuffer delay to newly active remote voice lanes to reduce packet-boundary underruns." );
 	s_doppler = Cvar_Get( "s_doppler", "1", CVAR_ARCHIVE_ND );
 	Cvar_CheckRange( s_doppler, "0", "1", CV_INTEGER );
 	Cvar_SetDescription( s_doppler, "Enables doppler effect on moving projectiles." );
+	s_pvs = Cvar_Get( "s_pvs", "0", CVAR_ARCHIVE_ND );
+	Cvar_CheckRange( s_pvs, "0", "1", CV_INTEGER );
+	Cvar_SetDescription( s_pvs, "Optionally culls world sounds outside the listener's BSP visibility set, matching retail QL's compatibility control." );
 	s_muteWhenUnfocused = Cvar_Get( "s_muteWhenUnfocused", "1", CVAR_ARCHIVE );
 	Cvar_CheckRange( s_muteWhenUnfocused, "0", "1", CV_INTEGER );
 	Cvar_SetDescription( s_muteWhenUnfocused, "Mutes all audio while game window is unfocused." );

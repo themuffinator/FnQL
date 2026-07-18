@@ -32,6 +32,31 @@ bool Near( float actual, float expected, float tolerance = 0.0001f )
 
 #define CHECK(expression) Check( ( expression ), #expression, __LINE__ )
 
+void TestRetailGameplayCatcher()
+{
+	constexpr int console = 0x0001;
+	constexpr int ui = 0x0002;
+	constexpr int retailMousePass = 0x0010;
+
+	CHECK( !fnql::input::CatcherBlocksGameplayInput( 0, retailMousePass ) );
+	CHECK( !fnql::input::CatcherBlocksGameplayInput(
+		retailMousePass, retailMousePass ) );
+	CHECK( fnql::input::CatcherBlocksGameplayInput( console, retailMousePass ) );
+	CHECK( fnql::input::CatcherBlocksGameplayInput(
+		console | retailMousePass, retailMousePass ) );
+
+	CHECK( !fnql::input::GameplayCatcherStateChanged(
+		0, retailMousePass, retailMousePass ) );
+	CHECK( !fnql::input::GameplayCatcherStateChanged(
+		retailMousePass, 0, retailMousePass ) );
+	CHECK( !fnql::input::GameplayCatcherStateChanged(
+		ui, ui | retailMousePass, retailMousePass ) );
+	CHECK( fnql::input::GameplayCatcherStateChanged(
+		retailMousePass, ui | retailMousePass, retailMousePass ) );
+	CHECK( fnql::input::GameplayCatcherStateChanged(
+		console, ui, retailMousePass ) );
+}
+
 void TestRetailMouseMotion()
 {
 	fnql::input::RetailMouseParameters parameters;
@@ -161,6 +186,7 @@ void TestUnicodeTranslation()
 
 int main()
 {
+	TestRetailGameplayCatcher();
 	TestRetailMouseMotion();
 	TestRetailViewFilter();
 	TestRetailJoystickMath();

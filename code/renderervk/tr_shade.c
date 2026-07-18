@@ -2191,8 +2191,19 @@ void RB_EndSurface( void ) {
 	}
 #endif
 
+	if ( R_QLSkipBatch( tess.numIndexes ) ) {
+		tess.numIndexes = 0;
+		tess.numVertexes = 0;
+#ifdef USE_VBO
+		tess.vboIndex = 0;
+#endif
+		return;
+	}
+
 	// for debugging of sort order issues, stop rendering after a given sort value
-	if ( r_debugSort->integer && r_debugSort->integer < tess.shader->sort && !backEnd.doneSurfaces ) {
+	if ( r_debugSort->integer && r_debugSort->integer < tess.shader->sort
+		&& qlRendererCvars.debugSortExcept->integer != (int)tess.shader->sort
+		&& !backEnd.doneSurfaces ) {
 #ifdef USE_VBO
 		tess.vboIndex = 0; //VBO_UnBind();
 #endif
@@ -2225,7 +2236,8 @@ void RB_EndSurface( void ) {
 	//
 	// draw debugging stuff
 	//
-	if ( r_showtris->integer ) {
+	if ( r_showtris->integer || ( qlRendererCvars.debugShaderIndex->integer > 0
+		&& qlRendererCvars.debugShaderIndex->integer == tess.shader->index ) ) {
 		DrawTris( input );
 	}
 	if ( r_shownormals->integer ) {

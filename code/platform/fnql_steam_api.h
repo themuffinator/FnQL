@@ -130,7 +130,10 @@ typedef enum fnqlSteamCapability_e {
 	FNQL_STEAM_CAP_GAME_SERVER_METADATA = 1ull << 22,
 	/* Account-level favorite mutation through Steam matchmaking. */
 	FNQL_STEAM_CAP_FAVORITES = 1ull << 23,
-	FNQL_STEAM_CAP_SERVER_DETAILS = 1ull << 24
+	FNQL_STEAM_CAP_SERVER_DETAILS = 1ull << 24,
+	/* The provider consumes game_server_account from the size-tagged server
+	 * configuration and uses it for the native GameServer login path. */
+	FNQL_STEAM_CAP_GAME_SERVER_ACCOUNT = 1ull << 25
 } fnqlSteamCapability_t;
 
 typedef enum fnqlSteamAvatarSize_e {
@@ -379,6 +382,9 @@ typedef struct fnqlSteamGameServerConfig_s {
 	char server_name[FNQL_STEAM_NAME_CAPACITY];
 	char map_name[FNQL_STEAM_NAME_CAPACITY];
 	char game_tags[FNQL_STEAM_TEXT_CAPACITY];
+	/* Optional protected GSLT/account token. Providers compiled against the
+	 * preceding structure size continue to use anonymous GameServer login. */
+	char game_server_account[FNQL_STEAM_NAME_CAPACITY];
 } fnqlSteamGameServerConfig_t;
 
 typedef struct fnqlSteamProvider_s {

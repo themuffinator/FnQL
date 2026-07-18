@@ -55,7 +55,9 @@ public:
 
 	bool Open() {
 #if defined(_WIN32)
-		const char *names[] = { "OpenAL32.dll", "soft_oal.dll" };
+		// Prefer an explicitly staged OpenAL Soft runtime for deterministic
+		// loopback coverage; retain the system OpenAL fallback for smoke checks.
+		const char *names[] = { "soft_oal.dll", "OpenAL32.dll" };
 #elif defined(__APPLE__)
 		const char *names[] = {
 			"libopenal.1.dylib",
@@ -141,8 +143,10 @@ struct OpenALSymbols {
 	decltype(&::alSourcei) alSourcei = nullptr;
 	decltype(&::alSourcef) alSourcef = nullptr;
 	decltype(&::alSource3f) alSource3f = nullptr;
+	decltype(&::alSource3i) alSource3i = nullptr;
 	decltype(&::alSourcePlay) alSourcePlay = nullptr;
 	decltype(&::alSourceStop) alSourceStop = nullptr;
+	decltype(&::alListenerf) alListenerf = nullptr;
 	decltype(&::alListener3f) alListener3f = nullptr;
 	decltype(&::alListenerfv) alListenerfv = nullptr;
 	decltype(&::alDistanceModel) alDistanceModel = nullptr;
@@ -155,6 +159,14 @@ struct OpenALSymbols {
 	LPALDELETEFILTERS alDeleteFilters = nullptr;
 	LPALFILTERI alFilteri = nullptr;
 	LPALFILTERF alFilterf = nullptr;
+
+	LPALGENEFFECTS alGenEffects = nullptr;
+	LPALDELETEEFFECTS alDeleteEffects = nullptr;
+	LPALEFFECTI alEffecti = nullptr;
+	LPALEFFECTF alEffectf = nullptr;
+	LPALGENAUXILIARYEFFECTSLOTS alGenAuxiliaryEffectSlots = nullptr;
+	LPALDELETEAUXILIARYEFFECTSLOTS alDeleteAuxiliaryEffectSlots = nullptr;
+	LPALAUXILIARYEFFECTSLOTI alAuxiliaryEffectSloti = nullptr;
 };
 
 template<typename T>
@@ -210,8 +222,10 @@ bool LoadBaseSymbols( const DynamicLibrary &library, OpenALSymbols &al ) {
 	ok = LoadSymbol( library, al.alSourcei, "alSourcei" ) && ok;
 	ok = LoadSymbol( library, al.alSourcef, "alSourcef" ) && ok;
 	ok = LoadSymbol( library, al.alSource3f, "alSource3f" ) && ok;
+	ok = LoadSymbol( library, al.alSource3i, "alSource3i" ) && ok;
 	ok = LoadSymbol( library, al.alSourcePlay, "alSourcePlay" ) && ok;
 	ok = LoadSymbol( library, al.alSourceStop, "alSourceStop" ) && ok;
+	ok = LoadSymbol( library, al.alListenerf, "alListenerf" ) && ok;
 	ok = LoadSymbol( library, al.alListener3f, "alListener3f" ) && ok;
 	ok = LoadSymbol( library, al.alListenerfv, "alListenerfv" ) && ok;
 	ok = LoadSymbol( library, al.alDistanceModel, "alDistanceModel" ) && ok;
@@ -904,6 +918,249 @@ void FilterMatrixTest( const OpenALSymbols &al, ALCdevice *device, bool efxAvail
 	runner.Check( bandMid > bandLow * 1.35 && bandMid > bandHigh * 1.35, "band-pass preset favors mid band", "band-pass filter did not favor mid frequencies" );
 }
 
+void EaxReverbTest( const OpenALSymbols &al, ALCdevice *device, bool efxAvailable, TestRunner &runner ) {
+	if ( !efxAvailable || al.alGenEffects == nullptr || al.alDeleteEffects == nullptr ||
+		al.alEffecti == nullptr || al.alEffectf == nullptr ||
+		al.alGenAuxiliaryEffectSlots == nullptr || al.alDeleteAuxiliaryEffectSlots == nullptr ||
+		al.alAuxiliaryEffectSloti == nullptr || al.alGenFilters == nullptr ) {
+		runner.Skip( "EAXREVERB wet path renders", "ALC_EXT_EFX effect functions unavailable" );
+		return;
+	}
+
+	ALuint effect = 0;
+	al.alGetError();
+	al.alGenEffects( 1, &effect );
+	if ( al.alGetError() != AL_NO_ERROR || effect == 0 ) {
+		runner.Check( false, "EAXREVERB wet path renders", "could not create EFX effect object" );
+		return;
+	}
+
+	al.alEffecti( effect, AL_EFFECT_TYPE, AL_EFFECT_EAXREVERB );
+	if ( al.alGetError() != AL_NO_ERROR ) {
+		runner.Skip( "EAXREVERB wet path renders", "AL_EFFECT_EAXREVERB not accepted by this runtime" );
+		al.alDeleteEffects( 1, &effect );
+		return;
+	}
+
+	// Underwater-style extended parameters: modulation depth is the EAXREVERB
+	// feature the basic reverb effect cannot express.
+	al.alEffectf( effect, AL_EAXREVERB_GAIN, 0.32f );
+	al.alEffectf( effect, AL_EAXREVERB_DECAY_TIME, 1.49f );
+	al.alEffectf( effect, AL_EAXREVERB_LATE_REVERB_GAIN, 1.5f );
+	al.alEffectf( effect, AL_EAXREVERB_MODULATION_TIME, 1.18f );
+	al.alEffectf( effect, AL_EAXREVERB_MODULATION_DEPTH, 0.35f );
+	al.alEffectf( effect, AL_EAXREVERB_DECAY_LFRATIO, 1.1f );
+	const bool paramsAccepted = ( al.alGetError() == AL_NO_ERROR );
+	runner.Check( paramsAccepted, "EAXREVERB extended parameters accepted", "EAXREVERB parameter set raised an AL error" );
+
+	ALuint slot = 0;
+	al.alGenAuxiliaryEffectSlots( 1, &slot );
+	if ( al.alGetError() != AL_NO_ERROR || slot == 0 ) {
+		runner.Check( false, "EAXREVERB wet path renders", "could not create auxiliary effect slot" );
+		al.alDeleteEffects( 1, &effect );
+		return;
+	}
+	al.alAuxiliaryEffectSloti( slot, AL_EFFECTSLOT_EFFECT, static_cast<ALint>( effect ) );
+	if ( al.alGetError() != AL_NO_ERROR ) {
+		runner.Check( false, "EAXREVERB wet path renders", "could not attach EAXREVERB to effect slot" );
+		al.alDeleteAuxiliaryEffectSlots( 1, &slot );
+		al.alDeleteEffects( 1, &effect );
+		return;
+	}
+
+	// Mute the direct path so any rendered energy comes from the reverb send.
+	std::vector<short> pcm = MakeMonoTone( 440.0f );
+	std::vector<float> rendered( static_cast<size_t>( kRenderFrames ) * 2u, 0.0f );
+	ALuint buffer = 0;
+	ALuint source = 0;
+	ALuint muteFilter = 0;
+
+	al.alGenBuffers( 1, &buffer );
+	al.alBufferData( buffer, AL_FORMAT_MONO16, pcm.data(), static_cast<ALsizei>( pcm.size() * sizeof( short ) ), kSampleRate );
+	al.alGenSources( 1, &source );
+	al.alGenFilters( 1, &muteFilter );
+	al.alFilteri( muteFilter, AL_FILTER_TYPE, AL_FILTER_LOWPASS );
+	al.alFilterf( muteFilter, AL_LOWPASS_GAIN, 0.0f );
+	al.alFilterf( muteFilter, AL_LOWPASS_GAINHF, 1.0f );
+	al.alSourcei( source, AL_BUFFER, static_cast<ALint>( buffer ) );
+	al.alSourcei( source, AL_SOURCE_RELATIVE, AL_TRUE );
+	al.alSourcef( source, AL_GAIN, 0.85f );
+	al.alSource3f( source, AL_POSITION, 0.0f, 0.0f, -1.0f );
+	al.alSourcei( source, AL_DIRECT_FILTER, static_cast<ALint>( muteFilter ) );
+	al.alSource3i( source, AL_AUXILIARY_SEND_FILTER, static_cast<ALint>( slot ), 0, AL_FILTER_NULL );
+	if ( CheckAL( al, runner, "EAXREVERB source configuration" ) ) {
+		al.alSourcePlay( source );
+		al.alcRenderSamplesSOFT( device, rendered.data(), kRenderFrames );
+		al.alSourceStop( source );
+		const double wetRms = Rms( rendered, -1 );
+		std::printf( "EAXREVERB wet-only RMS: %.6f\n", wetRms );
+		runner.Check( wetRms > 0.001, "EAXREVERB wet path renders", "reverb send produced no audible output" );
+	}
+
+	al.alSourcei( source, AL_DIRECT_FILTER, AL_FILTER_NULL );
+	al.alSource3i( source, AL_AUXILIARY_SEND_FILTER, AL_EFFECTSLOT_NULL, 0, AL_FILTER_NULL );
+	al.alDeleteSources( 1, &source );
+	al.alDeleteBuffers( 1, &buffer );
+	al.alDeleteFilters( 1, &muteFilter );
+	al.alAuxiliaryEffectSloti( slot, AL_EFFECTSLOT_EFFECT, AL_EFFECT_NULL );
+	al.alDeleteAuxiliaryEffectSlots( 1, &slot );
+	al.alDeleteEffects( 1, &effect );
+	CheckAL( al, runner, "EAXREVERB cleanup" );
+}
+
+// Renders the wet-only output of a hall-style reverb driven through a send
+// filter at the given gain, mirroring how the game backend routes its wet
+// level. Returns 0.0 on setup failure.
+double RenderWetOnlyReverb( const OpenALSymbols &al, ALCdevice *device, float sendFilterGain, TestRunner &runner ) {
+	ALuint effect = 0;
+	al.alGetError();
+	al.alGenEffects( 1, &effect );
+	if ( al.alGetError() != AL_NO_ERROR || effect == 0 ) {
+		return 0.0;
+	}
+	al.alEffecti( effect, AL_EFFECT_TYPE, AL_EFFECT_EAXREVERB );
+	if ( al.alGetError() != AL_NO_ERROR ) {
+		al.alEffecti( effect, AL_EFFECT_TYPE, AL_EFFECT_REVERB );
+	}
+	al.alEffectf( effect, AL_EAXREVERB_GAIN, 0.35f );
+	al.alEffectf( effect, AL_EAXREVERB_DECAY_TIME, 3.1f );
+	al.alEffectf( effect, AL_EAXREVERB_LATE_REVERB_GAIN, 1.55f );
+	al.alGetError();
+
+	ALuint slot = 0;
+	al.alGenAuxiliaryEffectSlots( 1, &slot );
+	if ( al.alGetError() != AL_NO_ERROR || slot == 0 ) {
+		al.alDeleteEffects( 1, &effect );
+		return 0.0;
+	}
+	al.alAuxiliaryEffectSloti( slot, AL_EFFECTSLOT_EFFECT, static_cast<ALint>( effect ) );
+
+	std::vector<short> pcm = MakeMonoTone( 440.0f );
+	std::vector<float> rendered( static_cast<size_t>( kRenderFrames ) * 2u, 0.0f );
+	ALuint buffer = 0;
+	ALuint source = 0;
+	ALuint muteFilter = 0;
+	ALuint sendFilter = 0;
+
+	al.alGenBuffers( 1, &buffer );
+	al.alBufferData( buffer, AL_FORMAT_MONO16, pcm.data(), static_cast<ALsizei>( pcm.size() * sizeof( short ) ), kSampleRate );
+	al.alGenSources( 1, &source );
+	al.alGenFilters( 1, &muteFilter );
+	al.alFilteri( muteFilter, AL_FILTER_TYPE, AL_FILTER_LOWPASS );
+	al.alFilterf( muteFilter, AL_LOWPASS_GAIN, 0.0f );
+	al.alFilterf( muteFilter, AL_LOWPASS_GAINHF, 1.0f );
+	al.alGenFilters( 1, &sendFilter );
+	al.alFilteri( sendFilter, AL_FILTER_TYPE, AL_FILTER_LOWPASS );
+	al.alFilterf( sendFilter, AL_LOWPASS_GAIN, sendFilterGain );
+	al.alFilterf( sendFilter, AL_LOWPASS_GAINHF, 0.9f );
+	al.alSourcei( source, AL_BUFFER, static_cast<ALint>( buffer ) );
+	al.alSourcei( source, AL_SOURCE_RELATIVE, AL_TRUE );
+	al.alSourcef( source, AL_GAIN, 1.0f );
+	al.alSource3f( source, AL_POSITION, 0.0f, 0.0f, -1.0f );
+	al.alSourcei( source, AL_DIRECT_FILTER, static_cast<ALint>( muteFilter ) );
+	al.alSource3i( source, AL_AUXILIARY_SEND_FILTER, static_cast<ALint>( slot ), 0, static_cast<ALint>( sendFilter ) );
+
+	double rms = 0.0;
+	if ( CheckAL( al, runner, "calibrated wet source configuration" ) ) {
+		al.alSourcePlay( source );
+		al.alcRenderSamplesSOFT( device, rendered.data(), kRenderFrames );
+		al.alSourceStop( source );
+		rms = Rms( rendered, -1 );
+	}
+
+	al.alSourcei( source, AL_DIRECT_FILTER, AL_FILTER_NULL );
+	al.alSource3i( source, AL_AUXILIARY_SEND_FILTER, AL_EFFECTSLOT_NULL, 0, AL_FILTER_NULL );
+	al.alDeleteSources( 1, &source );
+	al.alDeleteBuffers( 1, &buffer );
+	al.alDeleteFilters( 1, &muteFilter );
+	al.alDeleteFilters( 1, &sendFilter );
+	al.alAuxiliaryEffectSloti( slot, AL_EFFECTSLOT_EFFECT, AL_EFFECT_NULL );
+	al.alDeleteAuxiliaryEffectSlots( 1, &slot );
+	al.alDeleteEffects( 1, &effect );
+	al.alGetError();
+
+	return rms;
+}
+
+void CalibratedReverbSendTest( const OpenALSymbols &al, ALCdevice *device, bool efxAvailable, TestRunner &runner ) {
+	if ( !efxAvailable || al.alGenEffects == nullptr || al.alGenAuxiliaryEffectSlots == nullptr ||
+		al.alGenFilters == nullptr ) {
+		runner.Skip( "calibrated wet send is audible", "ALC_EXT_EFX effect functions unavailable" );
+		return;
+	}
+
+	// 0.30 mirrors the quietest common case (near-field source in the hall
+	// preset); 0.55 mirrors the same preset at range.
+	const double nearWet = RenderWetOnlyReverb( al, device, 0.30f, runner );
+	const double farWet = RenderWetOnlyReverb( al, device, 0.55f, runner );
+	std::printf( "calibrated wet RMS: send 0.30 %.6f, send 0.55 %.6f\n", nearWet, farWet );
+	runner.Check( nearWet > 0.004, "calibrated wet send is audible", "near-field reverb send rendered too quietly" );
+	runner.Check( farWet > nearWet * 1.4, "wet send grows with distance mix", "distance-level send did not raise the wet level" );
+}
+
+double RenderAirAbsorptionTone( const OpenALSymbols &al, ALCdevice *device, float absorptionFactor, TestRunner &runner ) {
+	std::vector<short> pcm = MakeMonoTone( 8000.0f );
+	std::vector<float> rendered( static_cast<size_t>( kRenderFrames ) * 2u, 0.0f );
+	ALuint buffer = 0;
+	ALuint source = 0;
+
+	al.alGetError();
+	al.alGenBuffers( 1, &buffer );
+	al.alBufferData( buffer, AL_FORMAT_MONO16, pcm.data(), static_cast<ALsizei>( pcm.size() * sizeof( short ) ), kSampleRate );
+	al.alGenSources( 1, &source );
+	al.alDistanceModel( AL_INVERSE_DISTANCE_CLAMPED );
+	al.alSourcei( source, AL_BUFFER, static_cast<ALint>( buffer ) );
+	al.alSourcei( source, AL_SOURCE_RELATIVE, AL_FALSE );
+	al.alSourcef( source, AL_GAIN, 1.0f );
+	al.alSourcef( source, AL_REFERENCE_DISTANCE, 500.0f );
+	al.alSourcef( source, AL_MAX_DISTANCE, 8000.0f );
+	al.alSourcef( source, AL_ROLLOFF_FACTOR, 1.0f );
+	al.alSourcef( source, AL_AIR_ABSORPTION_FACTOR, absorptionFactor );
+	al.alSource3f( source, AL_POSITION, 0.0f, 0.0f, -2000.0f );
+	if ( !CheckAL( al, runner, "air absorption source configuration" ) ) {
+		if ( source != 0 ) {
+			al.alDeleteSources( 1, &source );
+		}
+		if ( buffer != 0 ) {
+			al.alDeleteBuffers( 1, &buffer );
+		}
+		return 0.0;
+	}
+
+	al.alSourcePlay( source );
+	al.alcRenderSamplesSOFT( device, rendered.data(), kRenderFrames );
+	al.alSourceStop( source );
+	al.alDeleteSources( 1, &source );
+	al.alDeleteBuffers( 1, &buffer );
+	CheckAL( al, runner, "air absorption render cleanup" );
+
+	return Rms( rendered, -1 );
+}
+
+void AirAbsorptionTest( const OpenALSymbols &al, ALCdevice *device, bool efxAvailable, TestRunner &runner ) {
+	if ( !efxAvailable ) {
+		runner.Skip( "meters-per-unit calibration accepted", "ALC_EXT_EFX unavailable" );
+		runner.Skip( "air absorption darkens distant highs", "ALC_EXT_EFX unavailable" );
+		return;
+	}
+
+	// Same calibration the game backend uses: Q3 world units are inches.
+	al.alGetError();
+	al.alListenerf( AL_METERS_PER_UNIT, 0.0254f );
+	runner.Check( al.alGetError() == AL_NO_ERROR, "meters-per-unit calibration accepted",
+		"AL_METERS_PER_UNIT listener property raised an AL error" );
+
+	const double clearRms = RenderAirAbsorptionTone( al, device, 0.0f, runner );
+	const double absorbedRms = RenderAirAbsorptionTone( al, device, 5.0f, runner );
+	std::printf( "air absorption RMS: factor 0 %.6f, factor 5 %.6f\n", clearRms, absorbedRms );
+	runner.Check( clearRms > 0.002, "air absorption baseline output", "distant reference tone rendered too quietly" );
+	runner.Check( absorbedRms < clearRms * 0.6, "air absorption darkens distant highs",
+		"air absorption did not attenuate a distant high tone" );
+
+	al.alListenerf( AL_METERS_PER_UNIT, 1.0f );
+	al.alGetError();
+}
+
 } // namespace
 
 int main() {
@@ -1011,6 +1268,13 @@ int main() {
 		al.alDeleteFilters = LoadExtension<LPALDELETEFILTERS>( library, al, device, "alDeleteFilters" );
 		al.alFilteri = LoadExtension<LPALFILTERI>( library, al, device, "alFilteri" );
 		al.alFilterf = LoadExtension<LPALFILTERF>( library, al, device, "alFilterf" );
+		al.alGenEffects = LoadExtension<LPALGENEFFECTS>( library, al, device, "alGenEffects" );
+		al.alDeleteEffects = LoadExtension<LPALDELETEEFFECTS>( library, al, device, "alDeleteEffects" );
+		al.alEffecti = LoadExtension<LPALEFFECTI>( library, al, device, "alEffecti" );
+		al.alEffectf = LoadExtension<LPALEFFECTF>( library, al, device, "alEffectf" );
+		al.alGenAuxiliaryEffectSlots = LoadExtension<LPALGENAUXILIARYEFFECTSLOTS>( library, al, device, "alGenAuxiliaryEffectSlots" );
+		al.alDeleteAuxiliaryEffectSlots = LoadExtension<LPALDELETEAUXILIARYEFFECTSLOTS>( library, al, device, "alDeleteAuxiliaryEffectSlots" );
+		al.alAuxiliaryEffectSloti = LoadExtension<LPALAUXILIARYEFFECTSLOTI>( library, al, device, "alAuxiliaryEffectSloti" );
 	}
 
 	RenderSilenceTest( al, device, runner );
@@ -1020,6 +1284,9 @@ int main() {
 	MultiChannelBufferTest( al, device, multiChannelFormatsAvailable, directChannelsAvailable, directChannelsRemixAvailable, runner );
 	EncodedSoundFieldBufferTest( al, uhjAvailable, bFormatAvailable, runner );
 	FilterMatrixTest( al, device, efxAvailable, runner );
+	EaxReverbTest( al, device, efxAvailable, runner );
+	CalibratedReverbSendTest( al, device, efxAvailable, runner );
+	AirAbsorptionTest( al, device, efxAvailable, runner );
 
 	DestroyLoopbackContext( al, context );
 	HrtfModeSwitchTest( al, device, hrtfAvailable, runner );

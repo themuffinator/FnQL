@@ -15,14 +15,14 @@ option('renderer-dlopen',
 
 option('renderers',
   type: 'array',
-  choices: ['opengl', 'glx', 'vulkan', 'opengl2'],
-  value: ['opengl', 'glx', 'vulkan'],
+  choices: ['glx', 'vk', 'rtx'],
+  value: ['glx', 'vk', 'rtx'],
   description: 'Renderer modules to build when renderer-dlopen is enabled')
 
 option('renderer-default',
   type: 'combo',
-  choices: ['opengl', 'glx', 'vulkan', 'opengl2'],
-  value: 'opengl',
+  choices: ['glx', 'vk', 'rtx'],
+  value: 'glx',
   description: 'Default cl_renderer value, or the linked renderer for static renderer builds')
 
 option('sdl',

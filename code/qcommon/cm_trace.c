@@ -821,10 +821,22 @@ the cylinder extends halfheight above and below the origin
 ================
 */
 static void CM_TraceThroughVerticalCylinder( traceWork_t *tw, const vec3_t origin, float radius, float halfheight, const vec3_t start, const vec3_t end ) {
+	static cvar_t *cylinderScale;
 	float length, scale, fraction, l1, l2;
 	//float a;
 	float b, c, d, sqrtd;
 	vec3_t v1, dir, start2d, end2d, org2d, intersection;
+
+	if ( !cylinderScale ) {
+		cylinderScale = Cvar_Get( "sv_cylinderScale", "1.1f", 0 );
+	}
+	/* SV_Init bounds this operator-facing value. Retain a local finite-range
+	 * fallback because collision can also be entered during early tooling. */
+	if ( cylinderScale->value >= 0.0f && cylinderScale->value <= 16.0f ) {
+		radius *= cylinderScale->value;
+	} else {
+		radius *= 1.1f;
+	}
 
 	// 2d coordinates
 	VectorSet(start2d, start[0], start[1], 0);

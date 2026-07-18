@@ -35,18 +35,24 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
             args = configuration["args"]
             steam_index = args.index("com_steamIntegration")
             self.assertEqual(args[steam_index + 1], "1", configuration["name"])
-            expected_task = (
-                "meson: build (Steam)"
-                if "Win32" in configuration["name"]
-                else "meson: build x64 (Steam)"
-            )
+            if configuration["name"].startswith("RTX "):
+                expected_task = "meson: build RTX (Steam)"
+            elif "Win32" in configuration["name"]:
+                expected_task = "meson: build (Steam)"
+            else:
+                expected_task = "meson: build x64 (Steam)"
             self.assertEqual(
                 configuration.get("preLaunchTask"), expected_task, configuration["name"]
             )
             self.assertNotIn("disabled", configuration["name"].lower())
 
             if "Retail QL / Win32" in configuration["name"]:
-                self.assertIn("meson\\build\\win32\\", configuration["program"])
+                expected_build_dir = (
+                    "meson\\build\\win32-rtx\\"
+                    if configuration["name"].startswith("RTX ")
+                    else "meson\\build\\win32\\"
+                )
+                self.assertIn(expected_build_dir, configuration["program"])
                 self.assertNotIn("win32-debug", configuration["program"])
                 if "Dedicated" not in configuration["name"]:
                     webui_index = args.index("cl_webuiEnable")

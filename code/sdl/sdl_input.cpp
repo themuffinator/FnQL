@@ -1241,26 +1241,46 @@ static sdlKeyInfo_t IN_MakeKeyInfo( const SDL_KeyboardEvent *event )
 	return keyinfo;
 }
 
+static void IN_RefreshDrawableIfChanged( int oldPixelWidth, int oldPixelHeight )
+{
+	if ( glw_state.isFullscreen || gw_minimized ||
+		glw_state.pixel_width < 4 || glw_state.pixel_height < 4 ||
+		( oldPixelWidth == glw_state.pixel_width &&
+		oldPixelHeight == glw_state.pixel_height ) ) {
+		return;
+	}
+
+	// A drag can end at the renderer's existing size. Cancel the intermediate
+	// request instead of rebuilding for dimensions that are no longer current.
+	if ( glw_state.config &&
+		glw_state.pixel_width == glw_state.config->vidWidth &&
+		glw_state.pixel_height == glw_state.config->vidHeight ) {
+		CL_CancelWindowResize();
+		return;
+	}
+
+	CL_NotifyWindowResize( glw_state.window_width,
+		glw_state.window_height, qtrue );
+}
+
 static void IN_UpdateWindowGeometry( qboolean savePosition, qboolean notifyResize )
 {
 	const int oldPixelWidth = glw_state.pixel_width;
 	const int oldPixelHeight = glw_state.pixel_height;
+	const SDL_WindowFlags flags = SDL_GetWindowFlags( SDL_window );
 	int x, y;
 
 	GLW_UpdateWindowState();
 
 	if ( savePosition && !gw_minimized && !glw_state.isFullscreen &&
+		!( flags & SDL_WINDOW_MAXIMIZED ) &&
 		SDL_GetWindowPosition( SDL_window, &x, &y ) ) {
 		Cvar_SetIntegerValue( "vid_xpos", x );
 		Cvar_SetIntegerValue( "vid_ypos", y );
 	}
 
-	if ( notifyResize && !glw_state.isFullscreen && oldPixelWidth > 0 &&
-		oldPixelHeight > 0 &&
-		( oldPixelWidth != glw_state.pixel_width ||
-		oldPixelHeight != glw_state.pixel_height ) ) {
-		CL_NotifyWindowResize( glw_state.window_width,
-			glw_state.window_height, qtrue );
+	if ( notifyResize ) {
+		IN_RefreshDrawableIfChanged( oldPixelWidth, oldPixelHeight );
 	}
 }
 
@@ -1275,12 +1295,7 @@ static void IN_HandleDisplayEvent( void )
 		// rearrangement without allowing decorations to become unreachable.
 		GLW_EnsureWindowOnScreen();
 		GLW_UpdateWindowState();
-		if ( oldPixelWidth > 0 && oldPixelHeight > 0 &&
-			( oldPixelWidth != glw_state.pixel_width ||
-			oldPixelHeight != glw_state.pixel_height ) ) {
-			CL_NotifyWindowResize( glw_state.window_width,
-				glw_state.window_height, qtrue );
-		}
+		IN_RefreshDrawableIfChanged( oldPixelWidth, oldPixelHeight );
 	}
 }
 
@@ -1305,6 +1320,12 @@ static void IN_HandleWindowEvent( Uint32 type, const SDL_WindowEvent *window, in
 			break;
 
 		case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+			IN_UpdateWindowGeometry( qfalse, qtrue );
+			if ( gw_active && re.SetColorMappings ) {
+				re.SetColorMappings();
+			}
+			break;
+
 		case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
 		case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
 			IN_UpdateWindowGeometry( qfalse, qfalse );
@@ -1335,7 +1356,7 @@ static void IN_HandleWindowEvent( Uint32 type, const SDL_WindowEvent *window, in
 			if ( gw_active || !glw_state.isFullscreen ) {
 				gw_minimized = qfalse;
 			}
-			GLW_UpdateWindowState();
+			IN_UpdateWindowGeometry( qfalse, qtrue );
 			break;
 
 		case SDL_EVENT_WINDOW_FOCUS_LOST:
@@ -1359,7 +1380,7 @@ static void IN_HandleWindowEvent( Uint32 type, const SDL_WindowEvent *window, in
 			gw_minimized = qfalse;
 			CL_WebHost_NotifyAppActivation( qtrue );
 			mouse_focus = qtrue;
-			GLW_UpdateWindowState();
+			IN_UpdateWindowGeometry( qfalse, qtrue );
 			if ( re.SetColorMappings ) {
 				re.SetColorMappings();
 			}

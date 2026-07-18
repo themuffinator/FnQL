@@ -814,7 +814,8 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 		// change the tess parameters if needed
 		// a "entityMergable" shader is a shader that can have surfaces from separate
 		// entities merged into a single batch, like smoke and blood puff sprites
-		if ( ( (oldSort ^ drawSurf->sort ) & ~QSORT_REFENTITYNUM_MASK ) || !shader->entityMergable ) {
+		if ( ( (oldSort ^ drawSurf->sort ) & ~QSORT_REFENTITYNUM_MASK )
+			|| ( !qlRendererCvars.forceMergeEntities->integer && !shader->entityMergable ) ) {
 			//if ( oldShader != NULL ) {
 				RB_EndSurface();
 			//}
@@ -1102,7 +1103,8 @@ static void RB_RenderLitSurfList( dlight_t* dl ) {
 		// change the tess parameters if needed
 		// a "entityMergable" shader is a shader that can have surfaces from separate
 		// entities merged into a single batch, like smoke and blood puff sprites
-		if ( ( (oldSort ^ litSurf->sort) & ~QSORT_REFENTITYNUM_MASK ) || !shader->entityMergable ) {
+		if ( ( (oldSort ^ litSurf->sort) & ~QSORT_REFENTITYNUM_MASK )
+			|| ( !qlRendererCvars.forceMergeEntities->integer && !shader->entityMergable ) ) {
 			if ( oldShader != NULL ) {
 				RB_EndSurface();
 			}
@@ -4009,15 +4011,20 @@ RB_ClearColor
 static const void *RB_ClearColor( const void *data )
 {
 	const clearColorCommand_t *cmd = data;
+	vec4_t clearColor = { 0.0f, 0.0f, 0.0f, 1.0f };
+
+	if ( r_fastsky->integer ) {
+		R_QLFastSkyColor( clearColor );
+	}
 
 #ifdef USE_VULKAN
 	backEnd.projection2D = qtrue;
-	vk_clear_color( colorBlack );
+	vk_clear_color( clearColor );
 	backEnd.projection2D = qfalse;
 #else
 	qglViewport( 0, 0, glConfig.vidWidth, glConfig.vidHeight );
 	qglScissor( 0, 0, glConfig.vidWidth, glConfig.vidHeight );
-	qglClearColor( 0.0f, 0.0f, 0.0f, 1.0f );
+	qglClearColor( clearColor[0], clearColor[1], clearColor[2], clearColor[3] );
 	qglClear( GL_COLOR_BUFFER_BIT );
 #endif
 

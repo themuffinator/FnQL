@@ -10,33 +10,63 @@ on:
   pull_request:
     paths:
       - '.github/workflows/vulkan-verification.yml'
+      - 'BUILD.md'
+      - 'CMakeLists.txt'
+      - 'Makefile'
+      - 'README.md'
       - 'meson.build'
       - 'meson_options.txt'
       - 'code/renderercommon/**'
+      - 'code/rendererrtx/**'
       - 'code/renderervk/**'
-      - 'docs/fnquake3/TECHNICAL.md'
-      - 'docs/fnquake3/VK_*.md'
+      - 'code/win32/win_glimp.cpp'
+      - 'docs/fnql/RTX_RENDERER.md'
+      - 'docs/fnql/TECHNICAL.md'
+      - 'docs/fnql/VK_*.md'
+      - 'docs/templates/README.md.in'
+      - 'docs/templates/install-readme.html.in'
+      - 'scripts/msvc_meson.py'
+      - 'scripts/release.py'
+      - 'scripts/rtx_runtime_smoke.py'
       - 'scripts/vk_runtime_sweep.py'
       - 'scripts/stringify_shader.py'
+      - 'tests/rtx_*_tests.py'
+      - 'tests/msvc_meson_source_tests.py'
+      - 'tests/platform_port_safety_tests.py'
       - 'tests/vulkan/**'
   push:
     branches:
       - main
     paths:
       - '.github/workflows/vulkan-verification.yml'
+      - 'BUILD.md'
+      - 'CMakeLists.txt'
+      - 'Makefile'
+      - 'README.md'
       - 'meson.build'
       - 'meson_options.txt'
       - 'code/renderercommon/**'
+      - 'code/rendererrtx/**'
       - 'code/renderervk/**'
-      - 'docs/fnquake3/TECHNICAL.md'
-      - 'docs/fnquake3/VK_*.md'
+      - 'code/win32/win_glimp.cpp'
+      - 'docs/fnql/RTX_RENDERER.md'
+      - 'docs/fnql/TECHNICAL.md'
+      - 'docs/fnql/VK_*.md'
+      - 'docs/templates/README.md.in'
+      - 'docs/templates/install-readme.html.in'
+      - 'scripts/msvc_meson.py'
+      - 'scripts/release.py'
+      - 'scripts/rtx_runtime_smoke.py'
       - 'scripts/vk_runtime_sweep.py'
       - 'scripts/stringify_shader.py'
+      - 'tests/rtx_*_tests.py'
+      - 'tests/msvc_meson_source_tests.py'
+      - 'tests/platform_port_safety_tests.py'
       - 'tests/vulkan/**'
   workflow_dispatch:
     inputs:
       run_runtime_sweep:
-        description: Run the selected Vulkan gate on a self-hosted GPU runner with retail assets.
+        description: Run the selected Vulkan-family gate on a self-hosted GPU runner with retail assets.
         required: true
         default: false
         type: boolean
@@ -46,7 +76,7 @@ on:
         default: '["self-hosted","vulkan"]'
         type: string
       runtime_gate:
-        description: Vulkan RC gate to execute on the runtime runner.
+        description: Vulkan-family gate to execute on the runtime runner.
         required: true
         default: vk-smoke
         type: choice
@@ -54,44 +84,90 @@ on:
           - vk-smoke
           - vk-modern
           - vk-hdr
+          - rtx-raster
+          - rtx-native
       runtime_exe:
-        description: Path to the built FnQuake3 client executable on the runtime runner.
+        description: Path to the built FnQL client executable on the runtime runner.
         required: false
         default: ''
         type: string
       runtime_basepath:
-        description: Path containing retail baseq3 assets on the runtime runner.
+        description: Retail asset root; for RTX gates this must be the legitimate Quake Live Steam install.
+        required: false
+        default: ''
+        type: string
+      runtime_map:
+        description: Retail Quake Live map name required by RTX gates.
         required: false
         default: ''
         type: string
 
 jobs:
   vulkan-renderer-build:
-    name: Vulkan Meson renderer build
+    name: Vulkan-family Meson renderer build (${{ matrix.renderer }})
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        renderer:
+          - vk
+          - rtx
     steps:
       - uses: actions/checkout@v6
 
       - name: Install build tools
         run: |
           sudo apt-get -qq update
-          sudo apt-get install -y meson ninja-build gcc g++ libx11-dev libxext-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev mesa-common-dev
+          sudo apt-get install -y meson ninja-build gcc g++ glslang-tools libx11-dev libxext-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev mesa-common-dev
 
-      - name: Configure focused Meson Vulkan build
+      - name: Verify generated RTX shaders
+        if: matrix.renderer == 'rtx'
+        run: python code/rendererrtx/shaders/build_shaders.py --check
+
+      - name: Run RTX source and smoke contracts
+        if: matrix.renderer == 'rtx'
         run: |
-          meson setup .tmp/meson-vk-verification \
+          python tests/rtx_renderer_contract_source_tests.py
+          python tests/rtx_vulkan_safety_source_tests.py
+          python tests/rtx_runtime_smoke_tests.py
+          python tests/rtx_raster_feature_parity_source_tests.py
+          python tests/msvc_meson_source_tests.py
+          python tests/platform_port_safety_tests.py
+
+      - name: Configure focused Meson Vulkan-family build
+        run: |
+          meson setup ".tmp/meson-${{ matrix.renderer }}-verification" \
             --buildtype=debugoptimized \
             -Dsdl=disabled \
             -Dcurl=disabled \
             -Drenderer-dlopen=true \
-            -Drenderers=vulkan \
+            -Drenderers=${{ matrix.renderer }} \
             -Dbuild-client=false \
             -Dbuild-server=false \
             -Daudio-tests=false \
             -Dglx-tests=false
 
-      - name: Build Vulkan renderer
-        run: meson compile -C .tmp/meson-vk-verification fnquake3_vulkan_x86_64
+      - name: Build Vulkan-family renderer
+        run: meson compile -C ".tmp/meson-${{ matrix.renderer }}-verification" "fnql_${{ matrix.renderer }}_x86_64"
+
+      - name: Configure static RTX client build
+        if: matrix.renderer == 'rtx'
+        run: |
+          meson setup .tmp/meson-rtx-static-verification \
+            --buildtype=debugoptimized \
+            -Dsdl=disabled \
+            -Dcurl=disabled \
+            -Drenderer-dlopen=false \
+            -Drenderer-default=rtx \
+            -Drenderers=rtx \
+            -Dbuild-client=true \
+            -Dbuild-server=false \
+            -Daudio-tests=false \
+            -Dglx-tests=false
+
+      - name: Build static RTX client
+        if: matrix.renderer == 'rtx'
+        run: meson compile -C .tmp/meson-rtx-static-verification fnql.x86_64
 
   vulkan-gate-plans:
     name: Vulkan RC gate plans
@@ -112,7 +188,7 @@ jobs:
             python scripts/vk_runtime_sweep.py \
               --gate "$gate" \
               --dry-run \
-              --exe ".tmp/vk-gate-plans/fnquake3" \
+              --exe ".tmp/vk-gate-plans/fnql" \
               --basepath ".tmp/vk-gate-plans/basepath" \
               --output-dir ".tmp/vk-gate-plans" \
               --summary-markdown ".tmp/vk-gate-plans/${gate}.md"
@@ -128,7 +204,7 @@ jobs:
           retention-days: 14
 
   vulkan-runtime-sweep:
-    name: Vulkan runtime sweep
+    name: Vulkan-family runtime sweep
     if: github.event_name == 'workflow_dispatch' && inputs.run_runtime_sweep
     runs-on: ${{ fromJSON(inputs.runtime_runner_labels || '["self-hosted","vulkan"]') }}
     steps:
@@ -137,56 +213,79 @@ jobs:
       - name: Validate runtime inputs
         shell: python
         env:
-          FNQ3_VK_RUNTIME_EXE: ${{ inputs.runtime_exe }}
-          FNQ3_VK_RUNTIME_BASEPATH: ${{ inputs.runtime_basepath }}
+          FNQL_VK_RUNTIME_GATE: ${{ inputs.runtime_gate }}
+          FNQL_VK_RUNTIME_EXE: ${{ inputs.runtime_exe }}
+          FNQL_VK_RUNTIME_BASEPATH: ${{ inputs.runtime_basepath }}
+          FNQL_RTX_RUNTIME_MAP: ${{ inputs.runtime_map }}
         run: |
           import os
           import sys
 
           missing = [
               name
-              for name in ("FNQ3_VK_RUNTIME_EXE", "FNQ3_VK_RUNTIME_BASEPATH")
+              for name in ("FNQL_VK_RUNTIME_EXE", "FNQL_VK_RUNTIME_BASEPATH")
               if not os.environ.get(name)
           ]
+          if os.environ.get("FNQL_VK_RUNTIME_GATE", "").startswith("rtx-") and not os.environ.get("FNQL_RTX_RUNTIME_MAP"):
+              missing.append("FNQL_RTX_RUNTIME_MAP")
           if missing:
               for name in missing:
                   print(f"{name} is required when run_runtime_sweep is true.", file=sys.stderr)
               sys.exit(2)
 
-      - name: Run Vulkan runtime gate
+      - name: Run Vulkan-family runtime gate
         shell: python
         env:
-          FNQ3_VK_RUNTIME_GATE: ${{ inputs.runtime_gate }}
-          FNQ3_VK_RUNTIME_EXE: ${{ inputs.runtime_exe }}
-          FNQ3_VK_RUNTIME_BASEPATH: ${{ inputs.runtime_basepath }}
+          FNQL_VK_RUNTIME_GATE: ${{ inputs.runtime_gate }}
+          FNQL_VK_RUNTIME_EXE: ${{ inputs.runtime_exe }}
+          FNQL_VK_RUNTIME_BASEPATH: ${{ inputs.runtime_basepath }}
+          FNQL_RTX_RUNTIME_MAP: ${{ inputs.runtime_map }}
         run: |
           import os
           import subprocess
           import sys
           from pathlib import Path
 
-          gate = os.environ["FNQ3_VK_RUNTIME_GATE"]
-          output_dir = Path(".tmp") / "vk-runtime-sweeps"
-          summary_path = output_dir / f"{gate}.md"
-          command = [
-              sys.executable,
-              "scripts/vk_runtime_sweep.py",
-              "--gate",
-              gate,
-              "--exe",
-              os.environ["FNQ3_VK_RUNTIME_EXE"],
-              "--basepath",
-              os.environ["FNQ3_VK_RUNTIME_BASEPATH"],
-              "--output-dir",
-              str(output_dir),
-              "--summary-markdown",
-              str(summary_path),
-          ]
+          gate = os.environ["FNQL_VK_RUNTIME_GATE"]
+          if gate.startswith("rtx-"):
+              output_dir = Path(".tmp") / "rtx-runtime-smoke"
+              command = [
+                  sys.executable,
+                  "scripts/rtx_runtime_smoke.py",
+                  "--exe",
+                  os.environ["FNQL_VK_RUNTIME_EXE"],
+                  "--retail-root",
+                  os.environ["FNQL_VK_RUNTIME_BASEPATH"],
+                  "--map",
+                  os.environ["FNQL_RTX_RUNTIME_MAP"],
+                  "--profile",
+                  gate.removeprefix("rtx-"),
+                  "--output-dir",
+                  str(output_dir),
+              ]
+              summary_path = None
+          else:
+              output_dir = Path(".tmp") / "vk-runtime-sweeps"
+              summary_path = output_dir / f"{gate}.md"
+              command = [
+                  sys.executable,
+                  "scripts/vk_runtime_sweep.py",
+                  "--gate",
+                  gate,
+                  "--exe",
+                  os.environ["FNQL_VK_RUNTIME_EXE"],
+                  "--basepath",
+                  os.environ["FNQL_VK_RUNTIME_BASEPATH"],
+                  "--output-dir",
+                  str(output_dir),
+                  "--summary-markdown",
+                  str(summary_path),
+              ]
 
           subprocess.check_call(command)
 
           github_summary = os.environ.get("GITHUB_STEP_SUMMARY")
-          if github_summary:
+          if github_summary and summary_path:
               with open(github_summary, "a", encoding="utf-8") as handle:
                   handle.write(summary_path.read_text(encoding="utf-8"))
 
@@ -194,7 +293,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: vulkan-runtime-sweep-${{ inputs.runtime_gate }}
-          path: .tmp/vk-runtime-sweeps
+          name: vulkan-family-runtime-${{ inputs.runtime_gate }}
+          path: |
+            .tmp/vk-runtime-sweeps
+            .tmp/rtx-runtime-smoke
           if-no-files-found: error
           retention-days: 30

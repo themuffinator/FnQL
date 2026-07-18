@@ -426,6 +426,7 @@ extern	cvar_t	*cl_debugMove;
 extern	cvar_t	*cl_timegraph;
 extern	cvar_t	*cl_shownet;
 extern	cvar_t	*cl_autoNudge;
+extern	cvar_t	*cl_autoTimeNudge;
 extern	cvar_t	*cl_timeNudge;
 extern	cvar_t	*cl_showTimeDelta;
 
@@ -448,6 +449,8 @@ extern	cvar_t	*cl_inGameVideo;
 extern	cvar_t	*cl_lanForcePackets;
 extern	cvar_t	*cl_autoRecordDemo;
 extern	cvar_t	*cl_freezeDemo;
+extern	cvar_t	*cl_allowConsoleChat;
+extern	cvar_t	*cl_demoRecordMessage;
 extern	cvar_t	*cl_drawRecording;
 extern	cvar_t	*cl_menuAspect;
 extern	cvar_t	*cl_menuDepthOfField;
@@ -524,6 +527,7 @@ int CL_ServerStatus( const char *serverAddress, char *serverStatusString, int ma
 
 qboolean CL_CheckPaused( void );
 qboolean CL_NoDelay( void );
+int CL_DemoRecordMessageMode( void );
 
 qboolean CL_GetModeInfo( int *width, int *height, float *windowAspect, int mode, const char *modeFS, int dw, int dh, qboolean fullscreen );
 qboolean CL_CopyClientIdentity( int clientNum, cgameClientIdentity_t *identity );
@@ -699,6 +703,7 @@ void QLWebHost_UnregisterCommands( void );
 void CL_WebHost_Init( void );
 void CL_WebHost_Shutdown( void );
 void CL_WebHost_Frame( void );
+void CL_WebHost_RefreshSurfaceSize( void );
 void CL_WebHost_InvalidateFactoryCatalog( void );
 void CL_WebHost_BootstrapAwesomiumMenu( void );
 qboolean CL_WebHost_HasLiveView( void );
@@ -824,6 +829,8 @@ void	CL_LoadJPG( const char *filename, unsigned char **pic, int *width, int *hei
 // base backend functions
 void	HandleEvents( void );
 void	CL_NotifyWindowResize( int width, int height, qboolean preserveWindow );
+void	CL_CompleteWindowResize( void );
+void	CL_CancelWindowResize( void );
 qboolean CL_IsWindowResizeRestart( void );
 
 // platform-specific

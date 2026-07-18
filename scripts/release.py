@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import io
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -13,6 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from fnql_meta import ROOT, channel_metadata, package_archive_name
+from build_webpak import build_webpak
 from glx_runtime_sweep import (
     GLX_VISUAL_DOSSIER_VERSION,
     release_corpus_manifest,
@@ -38,16 +40,30 @@ DEFAULT_DOCS = [
     (ROOT / "LICENSE", Path("LICENSE")),
     (ROOT / "docs" / "fnql" / "TECHNICAL.md", Path("docs") / "fnql" / "TECHNICAL.md"),
     (
+        ROOT / "docs" / "fnql" / "RTX_RENDERER.md",
+        Path("docs") / "fnql" / "RTX_RENDERER.md",
+    ),
+    (
         ROOT / "docs" / "GLX.md",
         Path("docs") / "GLX.md",
     ),
     (ROOT / ".install" / "README.html", Path("README.html")),
 ]
 
+FNQL_WEBPAK_NAME = "fnql-web.pak"
+FNQL_WEBPAK_SOURCE_ROOT = ROOT / "code" / "client" / "webui"
+
 REQUIRED_RELEASE_ARCHIVE_ENTRIES = [
     ROOT_ARCHIVE_NAME,
+    FNQL_WEBPAK_NAME,
     *(destination.as_posix() for _source, destination in DEFAULT_DOCS),
 ]
+
+PUBLIC_RENDERERS = frozenset({"glx", "vk", "rtx"})
+RENDERER_MODULE_RE = re.compile(
+    r"(?:^|/)fnql_(?P<renderer>[a-z0-9]+)_[^/]+\.(?:dll|so|dylib)$",
+    re.IGNORECASE,
+)
 
 GLX_RELEASE_EVIDENCE_DOCS = {
     "visualDossier": {
@@ -233,6 +249,25 @@ def build_root_archive(stage_root: Path) -> Path:
     return archive_path
 
 
+def build_fnql_webpak(stage_root: Path) -> Path:
+    webpak_path = stage_root / FNQL_WEBPAK_NAME
+    build_webpak(FNQL_WEBPAK_SOURCE_ROOT, webpak_path)
+    return webpak_path
+
+
+def validate_renderer_module_names(names: list[str]) -> None:
+    unsupported = []
+    for name in names:
+        match = RENDERER_MODULE_RE.search(name.replace("\\", "/"))
+        if match and match.group("renderer").lower() not in PUBLIC_RENDERERS:
+            unsupported.append(name)
+    if unsupported:
+        raise ValueError(
+            "release package contains unsupported renderer modules; "
+            "only glx, vk, and rtx are allowed: " + ", ".join(unsupported[:12])
+        )
+
+
 def validate_release_archive_contents(archive_path: Path) -> None:
     with zipfile.ZipFile(archive_path) as archive:
         archived_names = [
@@ -241,6 +276,7 @@ def validate_release_archive_contents(archive_path: Path) -> None:
             if not info.is_dir()
         ]
         validate_archive_member_names(archived_names, archive_name=archive_path.name)
+        validate_renderer_module_names(archived_names)
         archived_name_set = set(archived_names)
         missing_release_entries = [
             name
@@ -268,8 +304,11 @@ def validate_release_archive_contents(archive_path: Path) -> None:
 
 def validate_stage_tree(stage_root: Path) -> None:
     offenders: list[str] = []
+    staged_names: list[str] = []
     for item in sorted(stage_root.rglob("*")):
         relative = item.relative_to(stage_root)
+        if item.is_file():
+            staged_names.append(relative.as_posix())
         if should_skip_artifact_path(relative, is_dir=item.is_dir()):
             offenders.append(relative.as_posix())
     if offenders:
@@ -277,6 +316,7 @@ def validate_stage_tree(stage_root: Path) -> None:
             "release package contains filtered build byproducts: "
             + ", ".join(offenders[:12])
         )
+    validate_renderer_module_names(staged_names)
 
 
 def release_artifact_dirs(artifact_root: Path) -> list[Path]:
@@ -446,6 +486,7 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         stage_root.mkdir(parents=True, exist_ok=True)
         skipped_files = copy_release_artifact_contents(artifact_dir, stage_root)
         copy_docs(stage_root)
+        build_fnql_webpak(stage_root)
         build_root_archive(stage_root)
         validate_stage_tree(stage_root)
 

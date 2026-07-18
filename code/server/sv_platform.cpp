@@ -12,9 +12,12 @@ version.
 */
 
 #include "server.h"
+#include "server_cvar_compat.hpp"
 #include "../platform/fnql_steam.h"
 
 #include <array>
+#include <cstring>
+#include <string>
 
 namespace {
 
@@ -27,6 +30,98 @@ constexpr int QL_STEAM_MAX_VOICE_PACKET = 0x4000;
 constexpr int QL_STEAM_MAX_PACKETS_PER_FRAME = 64;
 constexpr int QL_STEAM_KEEPALIVE_MSEC = 10000;
 constexpr char QL_STEAM_KEEPALIVE[] = "that's a good-ass dog";
+
+fnqlSteamGameServerConfig_t lastGameServerConfig{};
+bool hasLastGameServerConfig = false;
+int lastGameServerConfigRefresh = 0;
+
+void ApplyRetailDefaultHostname()
+{
+	if ( !sv_hostname || Q_stricmp( sv_hostname->string, "noname" ) ) {
+		return;
+	}
+	fnqlSteamStatus_t status{};
+	status.size = sizeof( status );
+	if ( !FNQL_Steam_GetStatus( &status ) || !status.persona_name[0] ) {
+		return;
+	}
+	char hostname[MAX_CVAR_VALUE_STRING];
+	Com_sprintf( hostname, sizeof( hostname ), "%s's Match", status.persona_name );
+	Cvar_Set( sv_hostname->name, hostname );
+}
+
+fnqlSteamGameServerConfig_t BuildSteamGameServerConfig( const char *mapName )
+{
+	fnqlSteamGameServerConfig_t config{};
+	char version[MAX_CVAR_VALUE_STRING];
+	char password[MAX_CVAR_VALUE_STRING];
+	char account[MAX_CVAR_VALUE_STRING];
+	const int gamePort = Cvar_VariableIntegerValue( "net_port" );
+	const bool secure = Cvar_VariableIntegerValue( "sv_steamSecure" ) != 0
+		&& ( !sv_vac || sv_vac->integer != 0 );
+
+	config.size = sizeof( config );
+	config.game_port = gamePort > 0 && gamePort <= 65535
+		? static_cast<uint16_t>( gamePort ) : 0u;
+	config.query_port = 0xffffu;
+	config.server_mode = secure ? 3u : 1u;
+	config.dedicated = com_dedicated->integer ? 1u : 0u;
+	config.max_players = sv_maxclients ? static_cast<uint32_t>(
+		sv_maxclients->integer ) : 0u;
+	Cvar_VariableStringBuffer( "version", version, sizeof( version ) );
+	Cvar_VariableStringBuffer( "sv_privatePassword", password, sizeof( password ) );
+	Cvar_VariableStringBuffer( "sv_setSteamAccount", account, sizeof( account ) );
+	config.password_protected = password[0] ? 1u : 0u;
+	Q_strncpyz( config.version, version, sizeof( config.version ) );
+	Q_strncpyz( config.product, STEAMPATH_APPID, sizeof( config.product ) );
+	Q_strncpyz( config.game_description, "Quake Live", sizeof( config.game_description ) );
+	Q_strncpyz( config.mod_directory, BASEGAME, sizeof( config.mod_directory ) );
+	Q_strncpyz( config.server_name, sv_hostname ? sv_hostname->string : "FnQL Server",
+		sizeof( config.server_name ) );
+	Q_strncpyz( config.map_name, mapName ? mapName : "",
+		sizeof( config.map_name ) );
+
+	fnql::server::cvars::SteamTagInputs tagInputs;
+	tagInputs.gametype = Cvar_VariableIntegerValue( "g_gametype" );
+	tagInputs.cheats = Cvar_VariableIntegerValue( "sv_cheats" ) != 0;
+	tagInputs.instagib = Cvar_VariableIntegerValue( "g_instagib" ) != 0;
+	tagInputs.gravity = Cvar_VariableString( "g_gravity" )[0]
+		? Cvar_VariableValue( "g_gravity" ) : 800.0f;
+	tagInputs.vampiric = Cvar_VariableValue( "g_vampiricDamage" ) > 0.0f;
+	tagInputs.infected = Cvar_VariableIntegerValue( "g_rrInfected" ) != 0;
+	tagInputs.quadhog = Cvar_VariableIntegerValue( "g_quadhog" ) != 0;
+	tagInputs.fnqlKeywords = Cvar_VariableString( "sv_keywords" );
+	tagInputs.retailTags = sv_tags ? sv_tags->string : "";
+	const std::string tags = fnql::server::cvars::BuildSteamGameTags(
+		tagInputs, sizeof( config.game_tags ) );
+	Q_strncpyz( config.game_tags, tags.c_str(), sizeof( config.game_tags ) );
+	Q_strncpyz( config.game_server_account, account,
+		sizeof( config.game_server_account ) );
+	return config;
+}
+
+bool SteamGameServerConfigsEqual( const fnqlSteamGameServerConfig_t &left,
+	const fnqlSteamGameServerConfig_t &right )
+{
+	return left.size == right.size
+		&& left.bind_ip == right.bind_ip
+		&& left.steam_port == right.steam_port
+		&& left.game_port == right.game_port
+		&& left.query_port == right.query_port
+		&& left.server_mode == right.server_mode
+		&& left.dedicated == right.dedicated
+		&& left.password_protected == right.password_protected
+		&& left.max_players == right.max_players
+		&& std::strcmp( left.version, right.version ) == 0
+		&& std::strcmp( left.product, right.product ) == 0
+		&& std::strcmp( left.game_description, right.game_description ) == 0
+		&& std::strcmp( left.mod_directory, right.mod_directory ) == 0
+		&& std::strcmp( left.server_name, right.server_name ) == 0
+		&& std::strcmp( left.map_name, right.map_name ) == 0
+		&& std::strcmp( left.game_tags, right.game_tags ) == 0
+		&& std::strcmp( left.game_server_account,
+			right.game_server_account ) == 0;
+}
 
 int SteamAuthenticatedClient( uint64_t steamId ) {
 	if ( !steamId || !svs.clients || !sv_maxclients ) return -1;
@@ -166,6 +261,17 @@ void SetReadOnlyStatus( const char *name, const char *value, const char *descrip
 	Cvar_SetDescription( cvar, description );
 }
 
+void PublishSteamAccountState( const fnqlSteamGameServerConfig_t &config )
+{
+	const bool hasAccount = config.game_server_account[0] != '\0';
+	const bool accountSupported = FNQL_Steam_Available(
+		FNQL_STEAM_CAP_GAME_SERVER_ACCOUNT );
+	SetReadOnlyStatus( "sv_steamAccountState",
+		hasAccount ? ( accountSupported ? "requested" : "provider-unsupported" )
+			: "anonymous",
+		"Steam GameServer account-token state; FnQL never reports an unsupported login as authenticated." );
+}
+
 } // namespace
 
 void SV_PublishWorkshopReferences( void ) {
@@ -258,42 +364,27 @@ void SV_RefreshPlatformServiceCvars( void ) {
 }
 
 void SV_SteamGameServerStart( const char *mapName ) {
-	fnqlSteamGameServerConfig_t config = {};
-	char version[MAX_CVAR_VALUE_STRING];
-	char password[MAX_CVAR_VALUE_STRING];
-	const int gamePort = Cvar_VariableIntegerValue( "net_port" );
 	cvar_t *secure = Cvar_Get( "sv_steamSecure", "0", CVAR_ARCHIVE | CVAR_LATCH );
 
 	Cvar_CheckRange( secure, "0", "1", CV_INTEGER );
 	Cvar_SetDescription( secure,
 		"Request Steam authenticated-and-secure GameServer mode. The default preserves FnQL's unauthenticated compatibility lane." );
+	ApplyRetailDefaultHostname();
+	const fnqlSteamGameServerConfig_t config = BuildSteamGameServerConfig( mapName );
+	const bool firstPublication = !hasLastGameServerConfig;
+	const bool hasAccount = config.game_server_account[0] != '\0';
+	const bool accountSupported = FNQL_Steam_Available(
+		FNQL_STEAM_CAP_GAME_SERVER_ACCOUNT );
+	PublishSteamAccountState( config );
 	if ( !FNQL_Steam_Available( FNQL_STEAM_CAP_GAME_SERVER )
-		|| gamePort <= 0 || gamePort > 65535 ) {
+		|| config.game_port == 0 ) {
 		return;
 	}
 
-	config.size = sizeof( config );
-	config.game_port = (uint16_t)gamePort;
-	config.query_port = 0xffffu;
-	config.server_mode = secure->integer ? 3u : 1u;
-	config.dedicated = com_dedicated->integer ? 1u : 0u;
-	config.max_players = sv_maxclients ? (uint32_t)sv_maxclients->integer : 0u;
-	Cvar_VariableStringBuffer( "version", version, sizeof( version ) );
-	Cvar_VariableStringBuffer( "sv_privatePassword", password, sizeof( password ) );
-	config.password_protected = password[0] ? 1u : 0u;
-	Q_strncpyz( config.version, version, sizeof( config.version ) );
-	Q_strncpyz( config.product, STEAMPATH_APPID, sizeof( config.product ) );
-	Q_strncpyz( config.game_description, "Quake Live", sizeof( config.game_description ) );
-	Q_strncpyz( config.mod_directory, BASEGAME, sizeof( config.mod_directory ) );
-	Q_strncpyz( config.server_name, sv_hostname ? sv_hostname->string : "FnQL Server",
-		sizeof( config.server_name ) );
-	Q_strncpyz( config.map_name, mapName ? mapName : "",
-		sizeof( config.map_name ) );
-	Q_strncpyz( config.game_tags, Cvar_VariableString( "sv_keywords" ),
-		sizeof( config.game_tags ) );
-
 	const fnqlSteamResult_t result = FNQL_Steam_StartGameServer( &config );
 	if ( result == FNQL_STEAM_RESULT_OK || result == FNQL_STEAM_RESULT_PENDING ) {
+		lastGameServerConfig = config;
+		hasLastGameServerConfig = true;
 		PublishSteamGameServerInfo();
 	}
 	SetReadOnlyStatus( "sv_steamServerState",
@@ -304,10 +395,17 @@ void SV_SteamGameServerStart( const char *mapName ) {
 		Com_Printf( S_COLOR_YELLOW "Steam GameServer startup failed with result %d; legacy master publication remains active.\n",
 			(int)result );
 	}
+	else if ( firstPublication && hasAccount && !accountSupported ) {
+		Com_Printf( S_COLOR_YELLOW
+			"sv_setSteamAccount is configured, but the active provider does not own account login; anonymous provider policy remains in effect.\n" );
+	}
 }
 
 void SV_SteamGameServerStop( void ) {
 	FNQL_Steam_StopGameServer();
+	lastGameServerConfig = {};
+	hasLastGameServerConfig = false;
+	lastGameServerConfigRefresh = 0;
 	if ( Cvar_VariableString( "sv_steamServerState" )[0] ) {
 		Cvar_Set( "sv_steamServerState", "stopped" );
 	}
@@ -360,6 +458,29 @@ static void SV_SteamDrainGameServerPackets( void ) {
 	}
 }
 
+static void SV_SteamRefreshGameServerConfig( void ) {
+	if ( !FNQL_Steam_Available( FNQL_STEAM_CAP_GAME_SERVER )
+		|| !com_sv_running || !com_sv_running->integer
+		|| svs.time - lastGameServerConfigRefresh < 1000 ) return;
+	lastGameServerConfigRefresh = svs.time;
+	ApplyRetailDefaultHostname();
+	const fnqlSteamGameServerConfig_t config = BuildSteamGameServerConfig(
+		Cvar_VariableString( "mapname" ) );
+	PublishSteamAccountState( config );
+	if ( hasLastGameServerConfig
+		&& SteamGameServerConfigsEqual( config, lastGameServerConfig ) ) {
+		return;
+	}
+	const fnqlSteamResult_t result = FNQL_Steam_UpdateGameServer( &config );
+	if ( result == FNQL_STEAM_RESULT_OK || result == FNQL_STEAM_RESULT_PENDING ) {
+		lastGameServerConfig = config;
+		hasLastGameServerConfig = true;
+	} else {
+		Com_DPrintf( "Steam GameServer metadata update failed with result %d.\n",
+			static_cast<int>( result ) );
+	}
+}
+
 static void SV_SteamPublishGameServerMetadata( void ) {
 	static int lastPublished;
 	uint32_t botCount = 0;
@@ -397,6 +518,7 @@ static void SV_SteamPublishGameServerMetadata( void ) {
 
 void SV_SteamP2PFrame( void ) {
 	static int lastKeepalive;
+	SV_SteamRefreshGameServerConfig();
 	SV_SteamDrainGameServerPackets();
 	SV_SteamPublishGameServerMetadata();
 	if ( !FNQL_Steam_Available( FNQL_STEAM_CAP_GAME_SERVER_P2P )

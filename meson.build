@@ -41,6 +41,8 @@ renderer_default = get_option('renderer-default')
 renderer_dlopen = get_option('renderer-dlopen')
 enabled_renderers = get_option('renderers')
 
+# A modular client must always include its default GLx module, even when a
+# developer requests only a Vulkan-family module in an explicit list.
 if renderer_default == 'glx' and 'glx' not in enabled_renderers
   enabled_renderers += 'glx'
 endif
@@ -154,8 +156,8 @@ if not ['x86', 'x86_64', 'aarch64', 'arm', 'ppc64le', 'ppc64'].contains(cpu_fami
   common_cpp_args += ['-DNO_VM_COMPILED']
 endif
 
-use_opengl_api = renderer_dlopen or renderer_default in ['opengl', 'glx', 'opengl2'] or 'opengl' in enabled_renderers or 'glx' in enabled_renderers or 'opengl2' in enabled_renderers
-use_vulkan_api = 'vulkan' in enabled_renderers
+use_opengl_api = renderer_default == 'glx' or 'glx' in enabled_renderers
+use_vulkan_api = renderer_default in ['vk', 'rtx'] or 'vk' in enabled_renderers or 'rtx' in enabled_renderers
 
 if use_opengl_api
   common_c_args += ['-DUSE_OPENGL_API']
@@ -389,81 +391,11 @@ renderer_vk_src = [
   'code/renderervk/vk.c',
 ]
 
-renderer2_src = [
-  'code/renderer2/tr_animation.c',
-  'code/renderer2/tr_backend.c',
-  'code/renderer2/tr_bsp.c',
-  'code/renderer2/tr_cmds.c',
-  'code/renderer2/tr_curve.c',
-  'code/renderer2/tr_dsa.c',
-  'code/renderer2/tr_extensions.c',
-  'code/renderer2/tr_extramath.c',
-  'code/renderer2/tr_fbo.c',
-  'code/renderer2/tr_flares.c',
-  'code/renderer2/tr_glsl.c',
-  'code/renderer2/tr_image_dds.c',
-  'code/renderer2/tr_image.c',
-  'code/renderer2/tr_init.c',
-  'code/renderer2/tr_light.c',
-  'code/renderer2/tr_main.c',
-  'code/renderer2/tr_marks.c',
-  'code/renderer2/tr_mesh.c',
-  'code/renderer2/tr_model_iqm.c',
-  'code/renderer2/tr_model.c',
-  'code/renderer2/tr_postprocess.c',
-  'code/renderer2/tr_scene.c',
-  'code/renderer2/tr_shade_calc.c',
-  'code/renderer2/tr_shade.c',
-  'code/renderer2/tr_shader.c',
-  'code/renderer2/tr_shadows.c',
-  'code/renderer2/tr_sky.c',
-  'code/renderer2/tr_surface.c',
-  'code/renderer2/tr_vbo.c',
-  'code/renderer2/tr_world.c',
-]
-
-renderer2_glsl_files = [
-  'code/renderer2/glsl/bokeh_fp.glsl',
-  'code/renderer2/glsl/bokeh_vp.glsl',
-  'code/renderer2/glsl/calclevels4x_fp.glsl',
-  'code/renderer2/glsl/calclevels4x_vp.glsl',
-  'code/renderer2/glsl/depthblur_fp.glsl',
-  'code/renderer2/glsl/depthblur_vp.glsl',
-  'code/renderer2/glsl/dlight_fp.glsl',
-  'code/renderer2/glsl/dlight_vp.glsl',
-  'code/renderer2/glsl/down4x_fp.glsl',
-  'code/renderer2/glsl/down4x_vp.glsl',
-  'code/renderer2/glsl/fogpass_fp.glsl',
-  'code/renderer2/glsl/fogpass_vp.glsl',
-  'code/renderer2/glsl/gamma_fp.glsl',
-  'code/renderer2/glsl/gamma_vp.glsl',
-  'code/renderer2/glsl/generic_fp.glsl',
-  'code/renderer2/glsl/generic_vp.glsl',
-  'code/renderer2/glsl/lightall_fp.glsl',
-  'code/renderer2/glsl/lightall_vp.glsl',
-  'code/renderer2/glsl/pshadow_fp.glsl',
-  'code/renderer2/glsl/pshadow_vp.glsl',
-  'code/renderer2/glsl/shadowfill_fp.glsl',
-  'code/renderer2/glsl/shadowfill_vp.glsl',
-  'code/renderer2/glsl/shadowmask_fp.glsl',
-  'code/renderer2/glsl/shadowmask_vp.glsl',
-  'code/renderer2/glsl/ssao_fp.glsl',
-  'code/renderer2/glsl/ssao_vp.glsl',
-  'code/renderer2/glsl/texturecolor_fp.glsl',
-  'code/renderer2/glsl/texturecolor_vp.glsl',
-  'code/renderer2/glsl/tonemap_fp.glsl',
-  'code/renderer2/glsl/tonemap_vp.glsl',
-]
-
-renderer2_glsl_src = []
-foreach shader : renderer2_glsl_files
-  shader_name = shader.split('/')[-1].replace('.glsl', '')
-  renderer2_glsl_src += custom_target(
-    'renderer2_' + shader_name,
-    input: shader,
-    output: shader_name + '.c',
-    command: [python, files('scripts/stringify_shader.py'), '@INPUT@', '@OUTPUT@'],
-  )
+# RTX remains a separate renderer while sharing Vulkan's file contract. Keep
+# this derived list so Vulkan-family source drift is visible at configure time.
+renderer_rtx_src = []
+foreach renderer_vk_file : renderer_vk_src
+  renderer_rtx_src += renderer_vk_file.replace('code/renderervk/', 'code/rendererrtx/')
 endforeach
 
 client_deps = []
@@ -755,21 +687,6 @@ if renderer_dlopen
   renderer_c_args = common_c_args + ['-DUSE_RENDERER_DLOPEN']
   renderer_cpp_args = common_cpp_args + ['-DUSE_RENDERER_DLOPEN']
 
-  if 'opengl' in enabled_renderers
-    renderer_targets += shared_library(renderer_prefix + '_opengl_' + renderer_arch,
-      renderer_gl_src + renderer_base_src,
-      include_directories: include_dirs,
-      dependencies: renderer_deps,
-      c_args: renderer_c_args + ['-DRENDERER_CLASSIC'],
-      cpp_args: renderer_cpp_args,
-      link_args: dll_link_args,
-      name_prefix: '',
-      gnu_symbol_visibility: 'hidden',
-      install: true,
-      install_dir: '.',
-    )
-  endif
-
   if 'glx' in enabled_renderers
     renderer_targets += shared_library(renderer_prefix + '_glx_' + renderer_arch,
       renderer_gl_src + renderer_glx_src + renderer_base_src,
@@ -785,8 +702,8 @@ if renderer_dlopen
     )
   endif
 
-  if 'vulkan' in enabled_renderers
-    renderer_targets += shared_library(renderer_prefix + '_vulkan_' + renderer_arch,
+  if 'vk' in enabled_renderers
+    renderer_targets += shared_library(renderer_prefix + '_vk_' + renderer_arch,
       renderer_vk_src + renderer_base_src,
       include_directories: include_dirs,
       dependencies: renderer_deps,
@@ -800,15 +717,12 @@ if renderer_dlopen
     )
   endif
 
-  if 'opengl2' in enabled_renderers
-    # The generated sources intentionally embed complete GLSL programs in one
-    # string literal. Keep this exception local to those renderer sources.
-    renderer2_c_args = renderer_c_args + ['-DRENDERER_OPENGL2'] + cc.get_supported_arguments(['-Wno-overlength-strings'])
-    renderer_targets += shared_library(renderer_prefix + '_opengl2_' + renderer_arch,
-      renderer2_src + renderer2_glsl_src + renderer_base_src,
+  if 'rtx' in enabled_renderers
+    renderer_targets += shared_library(renderer_prefix + '_rtx_' + renderer_arch,
+      renderer_rtx_src + renderer_base_src,
       include_directories: include_dirs,
       dependencies: renderer_deps,
-      c_args: renderer2_c_args,
+      c_args: renderer_c_args + ['-DRENDERER_RTX'],
       cpp_args: renderer_cpp_args,
       link_args: dll_link_args,
       name_prefix: '',
@@ -817,47 +731,53 @@ if renderer_dlopen
       install_dir: '.',
     )
   endif
+
 endif
 
 static_renderer_objects = []
 if not renderer_dlopen
   if renderer_default == 'glx'
+    renderer_glx_static_c_args = common_c_args + [
+      '-DRENDERER_CLASSIC',
+      '-DRENDERER_GLX',
+      '-DRE_DrawScaledText=R_GLX_DrawScaledText',
+      '-DRE_MeasureScaledText=R_GLX_MeasureScaledText',
+    ]
     static_renderer = static_library('renderer_static_glx',
       renderer_gl_src + renderer_glx_src + renderer_common_src,
       include_directories: include_dirs,
       dependencies: renderer_deps,
-      c_args: common_c_args + ['-DRENDERER_CLASSIC', '-DRENDERER_GLX'],
+      c_args: renderer_glx_static_c_args,
       cpp_args: common_cpp_args + ['-DRENDERER_GLX'],
       install: false,
     )
     static_renderer_objects = [static_renderer.extract_all_objects(recursive: false)]
-  elif renderer_default == 'vulkan'
-    static_renderer = static_library('renderer_static_vulkan',
+  elif renderer_default == 'vk'
+    renderer_vk_static_c_args = common_c_args + [
+      '-DRENDERER_VULKAN',
+      '-DRE_DrawScaledText=R_VK_DrawScaledText',
+      '-DRE_MeasureScaledText=R_VK_MeasureScaledText',
+    ]
+    static_renderer = static_library('renderer_static_vk',
       renderer_vk_src + renderer_common_src,
       include_directories: include_dirs,
       dependencies: renderer_deps,
-      c_args: common_c_args + ['-DRENDERER_VULKAN'],
+      c_args: renderer_vk_static_c_args,
       cpp_args: common_cpp_args,
       install: false,
     )
     static_renderer_objects = [static_renderer.extract_all_objects(recursive: false)]
-  elif renderer_default == 'opengl2'
-    renderer2_c_args = common_c_args + ['-DRENDERER_OPENGL2'] + cc.get_supported_arguments(['-Wno-overlength-strings'])
-    static_renderer = static_library('renderer_static_opengl2',
-      renderer2_src + renderer2_glsl_src + renderer_common_src,
+  elif renderer_default == 'rtx'
+    renderer_rtx_static_c_args = common_c_args + [
+      '-DRENDERER_RTX',
+      '-DRE_DrawScaledText=R_RTX_DrawScaledText',
+      '-DRE_MeasureScaledText=R_RTX_MeasureScaledText',
+    ]
+    static_renderer = static_library('renderer_static_rtx',
+      renderer_rtx_src + renderer_common_src,
       include_directories: include_dirs,
       dependencies: renderer_deps,
-      c_args: renderer2_c_args,
-      cpp_args: common_cpp_args,
-      install: false,
-    )
-    static_renderer_objects = [static_renderer.extract_all_objects(recursive: false)]
-  else
-    static_renderer = static_library('renderer_static_opengl',
-      renderer_gl_src + renderer_common_src,
-      include_directories: include_dirs,
-      dependencies: renderer_deps,
-      c_args: common_c_args + ['-DRENDERER_CLASSIC'],
+      c_args: renderer_rtx_static_c_args,
       cpp_args: common_cpp_args,
       install: false,
     )
@@ -982,6 +902,26 @@ custom_target('FnQL-pkg.fnz',
   install_tag: 'runtime',
 )
 
+fnql_webpak_sources = files(
+  'code/client/webui/index.html',
+  'code/client/webui/fnql-settings.js',
+  'code/client/webui/css/fnql-settings.css',
+)
+custom_target('fnql-web.pak',
+  input: fnql_webpak_sources + files('scripts/build_webpak.py'),
+  output: 'fnql-web.pak',
+  command: [
+    python,
+    files('scripts/build_webpak.py'),
+    '--source-root', join_paths(meson.current_source_dir(), 'code/client/webui'),
+    '--output', '@OUTPUT@',
+  ],
+  build_by_default: true,
+  install: true,
+  install_dir: '.',
+  install_tag: 'runtime',
+)
+
 if get_option('audio-tests')
   audio_zone_tests = executable('fnql_audio_zone_tests',
     'tests/audio/audiozone_runtime_tests.cpp',
@@ -1013,6 +953,17 @@ if get_option('audio-tests')
     cpp_args: common_cpp_args,
   )
   test('fnql_audio_occlusion', audio_occlusion_tests)
+
+  audio_voice_queue_tests = executable('fnql_audio_voice_queue_tests',
+    'tests/audio/voice_queue_tests.cpp',
+    include_directories: include_directories('code/client/audio/shared'),
+    cpp_args: common_cpp_args,
+  )
+  test('fnql_audio_voice_queue', audio_voice_queue_tests)
+
+  test('fnql_retail_sound_compat_source', python,
+    args: files('tests/audio/retail_sound_compat_source_tests.py'),
+  )
 
   audio_loopback_tests = executable('fnql_audio_loopback_tests',
     'tests/audio/openal_loopback_tests.cpp',
@@ -1099,6 +1050,24 @@ input_compat_tests = executable('fnql_input_compat_tests',
   cpp_args: common_cpp_args,
 )
 test('fnql_input_compat', input_compat_tests)
+
+client_cvar_compat_tests = executable('fnql_client_cvar_compat_tests',
+  'tests/client_cvar_compat_tests.cpp',
+  cpp_args: common_cpp_args,
+)
+test('fnql_client_cvar_compat', client_cvar_compat_tests)
+test('fnql_client_cvar_compat_source', python,
+  args: files('tests/client_cvar_compat_source_tests.py'),
+)
+
+server_cvar_compat_tests = executable('fnql_server_cvar_compat_tests',
+  'tests/server_cvar_compat_tests.cpp',
+  cpp_args: common_cpp_args,
+)
+test('fnql_server_cvar_compat', server_cvar_compat_tests)
+test('fnql_server_cvar_compat_source', python,
+  args: files('tests/server_cvar_compat_source_tests.py'),
+)
 
 message_codec_tests = executable('fnql_message_codec_tests',
   'tests/message_codec_tests.cpp',
@@ -1209,6 +1178,24 @@ test('fnql_windowed_mouse_source', python,
 test('fnql_platform_port_safety_source', python,
   args: files('tests/platform_port_safety_tests.py'),
 )
+test('fnql_renderer_contract_source', python,
+  args: files('tests/renderer_contract_source_tests.py'),
+)
+test('fnql_renderer_cvar_compat_source', python,
+  args: files('tests/renderer_cvar_compat_source_tests.py'),
+)
+test('fnql_rtx_renderer_contract_source', python,
+  args: files('tests/rtx_renderer_contract_source_tests.py'),
+)
+test('fnql_rtx_raster_feature_parity_source', python,
+  args: files('tests/rtx_raster_feature_parity_source_tests.py'),
+)
+test('fnql_rtx_vulkan_safety_source', python,
+  args: files('tests/rtx_vulkan_safety_source_tests.py'),
+)
+test('fnql_rtx_runtime_smoke_source', python,
+  args: files('tests/rtx_runtime_smoke_tests.py'),
+)
 test('fnql_cvar_factory_snapshot_source', python,
   args: files('tests/cvar_factory_snapshot_tests.py'),
 )
@@ -1231,6 +1218,9 @@ webpak_format_tests = executable('fnql_webpak_format_tests',
   cpp_args: common_cpp_args,
 )
 test('fnql_webpak_format', webpak_format_tests)
+test('fnql_webpak_builder_source', python,
+  args: files('tests/webpak_builder_tests.py'),
+)
 
 webui_backend_tests = executable('fnql_webui_backend_tests',
   'tests/webui_backend_tests.cpp',

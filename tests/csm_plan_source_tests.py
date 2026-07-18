@@ -137,11 +137,13 @@ def main() -> int:
     for label, relative_path in (
         ("OpenGL", "code/renderer/tr_main.c"),
         ("Vulkan", "code/renderervk/tr_main.c"),
+        ("RTX", "code/rendererrtx/tr_main.c"),
     ):
         check_source(label, relative_path, failures)
     for label, relative_path in (
         ("OpenGL", "code/renderer/tr_backend.c"),
         ("Vulkan", "code/renderervk/tr_backend.c"),
+        ("RTX", "code/rendererrtx/tr_backend.c"),
     ):
         check_backend_culling(label, relative_path, failures)
 

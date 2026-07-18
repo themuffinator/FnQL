@@ -164,6 +164,54 @@ static void WIN_RecoverWindowPlacement( HWND hWnd )
 	Cvar_SetIntegerValue( "vid_ypos", rect.top );
 }
 
+
+static void WIN_RefreshWindowPlacementState( HWND hWnd )
+{
+	if ( GetWindowRect( hWnd, &g_wv.winRect ) ) {
+		g_wv.winRectValid = qtrue;
+		UpdateMonitorInfo( &g_wv.winRect );
+	}
+}
+
+
+static void WIN_ApplyMinimumTrackSize( HWND hWnd, MINMAXINFO *info )
+{
+	RECT windowRect;
+	RECT clientRect;
+	int frameWidth;
+	int frameHeight;
+	int clientWidth;
+	int clientHeight;
+	int minimumWidth;
+	int minimumHeight;
+
+	if ( !info || glw_state.cdsFullscreen ||
+		!GetWindowRect( hWnd, &windowRect ) ||
+		!GetClientRect( hWnd, &clientRect ) ) {
+		return;
+	}
+
+	// Deriving the non-client extent from the live HWND automatically follows
+	// its current DPI, theme, and borderless style without hard-coded metrics.
+	clientWidth = clientRect.right - clientRect.left;
+	clientHeight = clientRect.bottom - clientRect.top;
+	if ( clientWidth <= 0 || clientHeight <= 0 ) {
+		return;
+	}
+	frameWidth = ( windowRect.right - windowRect.left ) - clientWidth;
+	frameHeight = ( windowRect.bottom - windowRect.top ) - clientHeight;
+	if ( frameWidth < 0 ) frameWidth = 0;
+	if ( frameHeight < 0 ) frameHeight = 0;
+	minimumWidth = 320 + frameWidth;
+	minimumHeight = 240 + frameHeight;
+	if ( info->ptMinTrackSize.x < minimumWidth ) {
+		info->ptMinTrackSize.x = minimumWidth;
+	}
+	if ( info->ptMinTrackSize.y < minimumHeight ) {
+		info->ptMinTrackSize.y = minimumHeight;
+	}
+}
+
 /*
 ==================
 WinKeyHook
@@ -778,15 +826,14 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 		Com_DPrintf( "WM_DISPLAYCHANGE\n" );
 		if ( !glw_state.cdsFullscreen && ( !r_fullscreen || !r_fullscreen->integer ) ) {
 			WIN_RecoverWindowPlacement( hWnd );
-			GetWindowRect( hWnd, &g_wv.winRect );
-			g_wv.winRectValid = qtrue;
-			UpdateMonitorInfo( &g_wv.winRect );
+			WIN_RefreshWindowPlacementState( hWnd );
 		}
 		break;
 
 	case WM_SETTINGCHANGE:
 		if ( wParam == SPI_SETWORKAREA && !glw_state.cdsFullscreen ) {
 			WIN_RecoverWindowPlacement( hWnd );
+			WIN_RefreshWindowPlacementState( hWnd );
 		}
 		break;
 
@@ -798,9 +845,15 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 				suggested.right - suggested.left,
 				suggested.bottom - suggested.top,
 				SWP_NOACTIVATE | SWP_NOZORDER );
+			WIN_RefreshWindowPlacementState( hWnd );
 			return 0;
 		}
 		break;
+
+	case WM_GETMINMAXINFO:
+		WIN_ApplyMinimumTrackSize( hWnd,
+			reinterpret_cast<MINMAXINFO *>( lParam ) );
+		return 0;
 
 	case WM_DESTROY:
 		Win_RemoveHotkey();
@@ -944,7 +997,7 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 		break;
 
 	case WM_MOVE:
-		if ( !gw_active || gw_minimized || !focused )
+		if ( !gw_active || gw_minimized || !focused || IsZoomed( hWnd ) )
 			break;
 
 		GetWindowRect( hWnd, &g_wv.winRect );
@@ -961,9 +1014,41 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 		}
 		break;
 
+	case WM_EXITSIZEMOVE:
+		if ( !glw_state.cdsFullscreen ) {
+			RECT clientRect;
+			WIN_RecoverWindowPlacement( hWnd );
+			WIN_RefreshWindowPlacementState( hWnd );
+			if ( GetClientRect( hWnd, &clientRect ) ) {
+				const int clientWidth = clientRect.right - clientRect.left;
+				const int clientHeight = clientRect.bottom - clientRect.top;
+				if ( glw_state.config &&
+					clientWidth == glw_state.config->vidWidth &&
+					clientHeight == glw_state.config->vidHeight ) {
+					CL_CancelWindowResize();
+				} else {
+					CL_NotifyWindowResize( clientWidth, clientHeight, qtrue );
+					CL_CompleteWindowResize();
+				}
+			}
+		}
+		break;
+
 	case WM_SIZE:
-		if ( wParam != SIZE_MINIMIZED && !glw_state.cdsFullscreen ) {
-			CL_NotifyWindowResize( LOWORD( lParam ), HIWORD( lParam ), qtrue );
+		gw_minimized = ( wParam == SIZE_MINIMIZED ) ? qtrue : qfalse;
+		if ( !gw_minimized && !glw_state.cdsFullscreen ) {
+			RECT clientRect;
+			if ( GetClientRect( hWnd, &clientRect ) ) {
+				const int clientWidth = clientRect.right - clientRect.left;
+				const int clientHeight = clientRect.bottom - clientRect.top;
+				if ( glw_state.config &&
+					clientWidth == glw_state.config->vidWidth &&
+					clientHeight == glw_state.config->vidHeight ) {
+					CL_CancelWindowResize();
+				} else {
+					CL_NotifyWindowResize( clientWidth, clientHeight, qtrue );
+				}
+			}
 		}
 		if ( gw_active && focused && !gw_minimized ) {
 			GetWindowRect( hWnd, &g_wv.winRect );

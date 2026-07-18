@@ -193,6 +193,9 @@ static void SV_Map_f( void ) {
 		Com_Printf( "Can't find map %s\n", expanded.data() );
 		return;
 	}
+	if ( com_sv_running->integer && SV_HandleQuitOnExitLevel( map ) ) {
+		return;
+	}
 
 	// force latched values to get set
 	Cvar_Get ("g_gametype", "0", CVAR_SERVERINFO | CVAR_USERINFO | CVAR_LATCH );
@@ -287,6 +290,10 @@ static void SV_MapRestart_f( void ) {
 	}
 
 	if ( sv.restartTime != 0 ) {
+		return;
+	}
+
+	if ( SV_HandleQuitOnExitLevel( "map_restart" ) ) {
 		return;
 	}
 

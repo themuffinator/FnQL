@@ -1,0 +1,1008 @@
+#pragma once
+
+#include "../renderercommon/vulkan/vulkan.h"
+#include "tr_common.h"
+
+#define MAX_SWAPCHAIN_IMAGES 8
+#define MIN_SWAPCHAIN_IMAGES_IMM 3
+#define MIN_SWAPCHAIN_IMAGES_FIFO   3
+#define MIN_SWAPCHAIN_IMAGES_FIFO_0 4
+#define MIN_SWAPCHAIN_IMAGES_MAILBOX 3
+
+#define MAX_VK_SAMPLERS 32
+#define MAX_VK_PIPELINES ((1024 + 128)*2)
+
+#define VERTEX_BUFFER_SIZE (4 * 1024 * 1024)	/* by default */
+#define STAGING_BUFFER_SIZE (2 * 1024 * 1024)	/* by default */
+
+#define IMAGE_CHUNK_SIZE (32 * 1024 * 1024)
+#define MAX_IMAGE_CHUNKS 56
+
+#define NUM_COMMAND_BUFFERS 2	// number of command buffers / render semaphores / framebuffer sets
+
+#define USE_REVERSED_DEPTH
+
+#define USE_UPLOAD_QUEUE
+
+#define VK_NUM_BLOOM_PASSES 4
+
+#ifndef _DEBUG
+#define USE_DEDICATED_ALLOCATION
+#endif
+//#define MIN_IMAGE_ALIGN (128*1024)
+#define MAX_ATTACHMENTS_IN_POOL (13+VK_NUM_BLOOM_PASSES*2) // depth + depth snapshot + 3 shadow atlases + main/motion/liquid resolves + msaa + screenmap color/msaa/depth + capture + bloom extract/blur pairs
+
+// Descriptor-slot registry used by the main material pipeline layout.
+// Keep these slots stable so shader/pipeline code can bind descriptors consistently.
+#define VK_DESC_STORAGE      0
+#define VK_DESC_UNIFORM      0
+#define VK_DESC_TEXTURE0     1
+#define VK_DESC_TEXTURE1     2
+#define VK_DESC_TEXTURE2     3
+#define VK_DESC_FOG_COLLAPSE 4
+#define VK_DESC_DEPTH_FADE   VK_DESC_TEXTURE1
+#define VK_DESC_COUNT        5
+
+#define VK_DESC_TEXTURE_BASE VK_DESC_TEXTURE0
+#define VK_DESC_FOG_ONLY     VK_DESC_TEXTURE1
+#define VK_DESC_FOG_DLIGHT   VK_DESC_TEXTURE1
+
+typedef enum {
+	TYPE_COLOR_BLACK,
+	TYPE_COLOR_WHITE,
+	TYPE_COLOR_GREEN,
+	TYPE_COLOR_RED,
+	TYPE_FOG_ONLY,
+	TYPE_DOT,
+	TYPE_LIQUID,
+
+	TYPE_SIGNLE_TEXTURE_LIGHTING,
+	TYPE_SIGNLE_TEXTURE_LIGHTING_LINEAR,
+
+	TYPE_SIGNLE_TEXTURE_DF,
+
+	TYPE_GENERIC_BEGIN, // start of non-env/env shader pairs
+	TYPE_SIGNLE_TEXTURE = TYPE_GENERIC_BEGIN,
+	TYPE_SIGNLE_TEXTURE_ENV,
+
+	TYPE_SIGNLE_TEXTURE_IDENTITY,
+	TYPE_SIGNLE_TEXTURE_IDENTITY_ENV,
+
+	TYPE_SIGNLE_TEXTURE_FIXED_COLOR,
+	TYPE_SIGNLE_TEXTURE_FIXED_COLOR_ENV,
+
+	TYPE_SIGNLE_TEXTURE_ENT_COLOR,
+	TYPE_SIGNLE_TEXTURE_ENT_COLOR_ENV,
+
+	TYPE_MULTI_TEXTURE_ADD2_IDENTITY,
+	TYPE_MULTI_TEXTURE_ADD2_IDENTITY_ENV,
+	TYPE_MULTI_TEXTURE_MUL2_IDENTITY,
+	TYPE_MULTI_TEXTURE_MUL2_IDENTITY_ENV,
+
+	TYPE_MULTI_TEXTURE_ADD2_FIXED_COLOR,
+	TYPE_MULTI_TEXTURE_ADD2_FIXED_COLOR_ENV,
+	TYPE_MULTI_TEXTURE_MUL2_FIXED_COLOR,
+	TYPE_MULTI_TEXTURE_MUL2_FIXED_COLOR_ENV,
+
+	TYPE_MULTI_TEXTURE_MUL2,
+	TYPE_MULTI_TEXTURE_MUL2_ENV,
+	TYPE_MULTI_TEXTURE_ADD2_1_1,
+	TYPE_MULTI_TEXTURE_ADD2_1_1_ENV,
+	TYPE_MULTI_TEXTURE_ADD2,
+	TYPE_MULTI_TEXTURE_ADD2_ENV,
+
+	TYPE_MULTI_TEXTURE_MUL3,
+	TYPE_MULTI_TEXTURE_MUL3_ENV,
+	TYPE_MULTI_TEXTURE_ADD3_1_1,
+	TYPE_MULTI_TEXTURE_ADD3_1_1_ENV,
+	TYPE_MULTI_TEXTURE_ADD3,
+	TYPE_MULTI_TEXTURE_ADD3_ENV,
+
+	TYPE_BLEND2_ADD,
+	TYPE_BLEND2_ADD_ENV,
+	TYPE_BLEND2_MUL,
+	TYPE_BLEND2_MUL_ENV,
+	TYPE_BLEND2_ALPHA,
+	TYPE_BLEND2_ALPHA_ENV,
+	TYPE_BLEND2_ONE_MINUS_ALPHA,
+	TYPE_BLEND2_ONE_MINUS_ALPHA_ENV,
+	TYPE_BLEND2_MIX_ALPHA,
+	TYPE_BLEND2_MIX_ALPHA_ENV,
+
+	TYPE_BLEND2_MIX_ONE_MINUS_ALPHA,
+	TYPE_BLEND2_MIX_ONE_MINUS_ALPHA_ENV,
+
+	TYPE_BLEND2_DST_COLOR_SRC_ALPHA,
+	TYPE_BLEND2_DST_COLOR_SRC_ALPHA_ENV,
+
+	TYPE_BLEND3_ADD,
+	TYPE_BLEND3_ADD_ENV,
+	TYPE_BLEND3_MUL,
+	TYPE_BLEND3_MUL_ENV,
+	TYPE_BLEND3_ALPHA,
+	TYPE_BLEND3_ALPHA_ENV,
+	TYPE_BLEND3_ONE_MINUS_ALPHA,
+	TYPE_BLEND3_ONE_MINUS_ALPHA_ENV,
+	TYPE_BLEND3_MIX_ALPHA,
+	TYPE_BLEND3_MIX_ALPHA_ENV,
+	TYPE_BLEND3_MIX_ONE_MINUS_ALPHA,
+	TYPE_BLEND3_MIX_ONE_MINUS_ALPHA_ENV,
+
+	TYPE_BLEND3_DST_COLOR_SRC_ALPHA,
+	TYPE_BLEND3_DST_COLOR_SRC_ALPHA_ENV,
+
+	TYPE_GENERIC_END = TYPE_BLEND3_MIX_ONE_MINUS_ALPHA_ENV,
+
+	TYPE_CSM_SHADOW = TYPE_BLEND3_DST_COLOR_SRC_ALPHA_ENV + 1
+
+} Vk_Shader_Type;
+
+// used with cg_shadows == 2
+typedef enum {
+	SHADOW_DISABLED,
+	SHADOW_EDGES,
+	SHADOW_FS_QUAD,
+	SHADOW_OUTLINE_MASK,
+	SHADOW_OUTLINE_SHELL,
+	SHADOW_OUTLINE_CLEAR,
+} Vk_Shadow_Phase;
+
+typedef enum {
+	TRIANGLE_LIST = 0,
+	TRIANGLE_STRIP,
+	LINE_LIST,
+	POINT_LIST
+} Vk_Primitive_Topology;
+
+typedef enum {
+	DEPTH_RANGE_NORMAL,		// [0..1]
+	DEPTH_RANGE_ZERO,		// [0..0]
+	DEPTH_RANGE_ONE,		// [1..1]
+	DEPTH_RANGE_WEAPON,		// [0..0.3]
+	DEPTH_RANGE_COUNT
+}  Vk_Depth_Range;
+
+typedef struct {
+	VkSamplerAddressMode address_mode; // clamp/repeat texture addressing mode
+	int gl_mag_filter;		// GL_XXX mag filter
+	int gl_min_filter;		// GL_XXX min filter
+	qboolean max_lod_1_0;	// fixed 1.0 lod
+	qboolean noAnisotropy;
+} Vk_Sampler_Def;
+
+typedef enum {
+	RENDER_PASS_MAIN = 0,
+	RENDER_PASS_SCREENMAP,
+	RENDER_PASS_LIQUID_SNAPSHOT,
+	RENDER_PASS_POST_BLOOM,
+	RENDER_PASS_DLIGHT_SHADOW,
+	RENDER_PASS_SPOT_SHADOW,
+	RENDER_PASS_CSM_SHADOW,
+	RENDER_PASS_COUNT
+} renderPass_t;
+
+typedef struct {
+	Vk_Shader_Type shader_type;
+	unsigned int state_bits; // GLS_XXX flags
+	cullType_t face_culling;
+	qboolean polygon_offset;
+	qboolean mirror;
+	Vk_Shadow_Phase shadow_phase;
+	Vk_Primitive_Topology primitives;
+	int line_width;
+	int fog_stage; // off, fog-in / fog-out
+	int depth_fade;
+	int abs_light;
+	int allow_discard;
+	int acff; // none, rgb, rgba, alpha
+	struct {
+		byte rgb;
+		byte alpha;
+	} color;
+} Vk_Pipeline_Def;
+
+typedef struct VK_Pipeline {
+	Vk_Pipeline_Def def;
+	VkPipeline handle[ RENDER_PASS_COUNT ];
+} VK_Pipeline_t;
+
+// this structure must be in sync with shader uniforms!
+typedef struct vkUniform_s {
+	// light/env parameters:
+	vec4_t eyePos;				// vertex
+	union {
+		struct {
+			vec4_t pos;			// vertex: light origin
+			vec4_t color;		// fragment: rgb + 1/(r*r)
+			vec4_t vector;		// fragment: linear dynamic light
+		} light;
+		struct {
+			vec4_t color[3];	// ent.color[3]
+		} ent;
+	};
+	// fog parameters:
+	vec4_t fogDistanceVector;	// vertex
+	vec4_t fogDepthVector;		// vertex
+	vec4_t fogEyeT;				// vertex
+	vec4_t fogColor;			// fragment
+	vec4_t texFactors;
+	vec4_t depthFadeInfo;
+	vec4_t depthFadeScale;
+	vec4_t depthFadeBias;
+	vec4_t dlightFactors;
+	vec4_t csmModelX;
+	vec4_t csmModelY;
+	vec4_t csmModelZ;
+	vec4_t csmAxisX;
+	vec4_t csmAxisY;
+	vec4_t csmAxisZ;
+	vec4_t csmInvExtents;
+	vec4_t csmSplitAtlas;
+	vec4_t csmShadowColor;
+	vec4_t csmView;
+} vkUniform_t;
+
+#define TESS_XYZ   (1)
+#define TESS_RGBA0 (2)
+#define TESS_RGBA1 (4)
+#define TESS_RGBA2 (8)
+#define TESS_ST0   (16)
+#define TESS_ST1   (32)
+#define TESS_ST2   (64)
+#define TESS_NNN   (128)
+#define TESS_VPOS  (256)  // uniform with eyePos
+#define TESS_ENV   (512)  // mark shader stage with environment mapping
+#define TESS_ENT0  (1024) // uniform with ent.color[0]
+#define TESS_ENT1  (2048) // uniform with ent.color[1]
+#define TESS_ENT2  (4096) // uniform with ent.color[2]
+//
+// Initialization.
+//
+
+// Initializes VK_Instance structure.
+// After calling this function we get fully functional vulkan subsystem.
+void vk_initialize( void );
+
+// Called after initialization or renderer restart
+void vk_init_descriptors( void );
+
+// Shutdown vulkan subsystem by releasing resources acquired by Vk_Instance.
+void vk_shutdown( refShutdownCode_t code );
+
+// Releases vulkan resources allocated during program execution.
+// This effectively puts vulkan subsystem into initial state (the state we have after vk_initialize call).
+void vk_release_resources( refShutdownCode_t code );
+
+void vk_wait_idle( void );
+void vk_queue_wait_idle( void );
+
+//
+// Resources allocation.
+//
+void vk_create_image( image_t *image, int width, int height, int mip_levels );
+void vk_upload_image_data( image_t *image, int x, int y, int width, int height, int miplevels, byte *pixels, int size, qboolean update );
+void vk_update_descriptor_set( image_t *image, qboolean mipmap );
+void vk_destroy_image_resources( VkImage *image, VkImageView *imageView );
+
+uint32_t vk_find_pipeline_ext( uint32_t base, const Vk_Pipeline_Def *def, qboolean use );
+void vk_get_pipeline_def( uint32_t pipeline, Vk_Pipeline_Def *def );
+
+void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_t height );
+void vk_create_pipelines( void );
+qboolean vk_rt_primary_view_eligible( void );
+qboolean vk_rt_trace_frame( void );
+void vk_rt_invalidate( const char *reason );
+void vk_draw_global_fog( void );
+void vk_draw_world_cel_outline( void );
+qboolean vk_capture_liquid_scene( void );
+qboolean vk_liquid_depth_ready( void );
+qboolean vk_depth_fade_supported( void );
+qboolean vk_depth_fade_available( void );
+qboolean vk_depth_fade_ready( void );
+void vk_copy_depth_fade( void );
+void vk_get_liquid_mvp( float *mvp );
+
+//
+// Rendering setup.
+//
+
+void vk_clear_color( const vec4_t color );
+void vk_clear_depth( qboolean clear_stencil );
+void vk_clear_depth_force( qboolean clear_stencil );
+void vk_begin_frame( void );
+void vk_end_frame( void );
+qboolean vk_dlight_shadow_atlas_available( void );
+qboolean vk_dlight_shadow_atlas_ready( void );
+qboolean vk_begin_dlight_shadow_render_pass( void );
+void vk_end_dlight_shadow_render_pass( void );
+int vk_dlight_shadow_atlas_height( void );
+int vk_dlight_shadow_atlas_columns( void );
+uint32_t vk_dlight_shadow_atlas_generation( void );
+qboolean vk_spot_shadow_atlas_available( void );
+qboolean vk_spot_shadow_atlas_ready( void );
+qboolean vk_begin_spot_shadow_render_pass( void );
+void vk_end_spot_shadow_render_pass( void );
+void vk_mark_spot_shadow_atlas_rendered( void );
+int vk_spot_shadow_atlas_width( void );
+int vk_spot_shadow_atlas_height( void );
+int vk_spot_shadow_tile_size( void );
+uint32_t vk_spot_shadow_atlas_generation( void );
+VkDescriptorSet vk_spot_shadow_descriptor( void );
+qboolean vk_csm_shadow_atlas_available( void );
+qboolean vk_csm_shadow_atlas_ready( void );
+qboolean vk_begin_csm_shadow_render_pass( void );
+void vk_end_csm_shadow_render_pass( void );
+void vk_mark_csm_shadow_atlas_rendered( void );
+int vk_csm_shadow_atlas_width( void );
+int vk_csm_shadow_atlas_height( void );
+int vk_csm_shadow_cascade_size( void );
+uint32_t vk_csm_shadow_atlas_generation( void );
+VkDescriptorSet vk_csm_shadow_descriptor( void );
+void vk_present_frame( void );
+
+void vk_end_render_pass( void );
+void vk_begin_main_render_pass( void );
+void vk_begin_main_render_pass_load( void );
+
+void vk_bind_pipeline( uint32_t pipeline );
+void vk_bind_index( void );
+void vk_bind_index_ext( const int numIndexes, const uint32_t*indexes );
+void vk_bind_geometry( uint32_t flags );
+void vk_bind_lighting( int stage, int bundle );
+void vk_draw_geometry( Vk_Depth_Range depth_range, qboolean indexed );
+void vk_draw_dot( uint32_t storage_offset );
+
+void vk_read_pixels( byte* buffer, uint32_t width, uint32_t height ); // screenshots
+qboolean vk_bloom( void );
+qboolean vk_motion_blur( void );
+
+qboolean vk_alloc_vbo( const byte *vbo_data, int vbo_size );
+void vk_update_mvp( const float *m );
+
+uint32_t vk_tess_index( uint32_t numIndexes, const void *src );
+void vk_bind_index_buffer( VkBuffer buffer, uint32_t offset );
+#ifdef USE_VBO
+void vk_draw_indexed( uint32_t indexCount, uint32_t firstIndex );
+#endif
+void vk_reset_descriptor( int index );
+void vk_update_descriptor( int index, VkDescriptorSet descriptor );
+void vk_update_descriptor_offset( int index, uint32_t offset );
+
+void vk_update_post_process_pipelines( void );
+
+const char *vk_format_string( VkFormat format );
+qboolean vk_scene_linear_enabled( void );
+
+void VBO_PrepareQueues( void );
+void VBO_RenderIBOItems( void );
+void VBO_ClearQueue( void );
+
+typedef struct vk_tess_s {
+	VkCommandBuffer command_buffer;
+
+	VkSemaphore image_acquired;
+	uint32_t	swapchain_image_index;
+	qboolean	swapchain_image_acquired;
+#ifdef USE_UPLOAD_QUEUE
+	VkSemaphore rendering_finished2;
+#endif
+	VkFence rendering_finished_fence;
+	qboolean waitForFence;
+
+	VkBuffer vertex_buffer;
+	byte *vertex_buffer_ptr; // pointer to mapped vertex buffer
+	VkDeviceSize vertex_buffer_offset;
+
+	VkDescriptorSet uniform_descriptor;
+	uint32_t		uniform_read_offset;
+	VkDeviceSize	buf_offset[8];
+	VkDeviceSize	vbo_offset[8];
+
+	VkBuffer		curr_index_buffer;
+	uint32_t		curr_index_offset;
+
+	struct {
+		uint32_t		start, end;
+		VkDescriptorSet	current[5]; // 0:uniform, 1:color0, 2:color1, 3:color2, 4:fog
+		uint32_t		offset[1]; // 0 (uniform)
+	} descriptor_set;
+
+	Vk_Depth_Range		depth_range;
+	VkPipeline			last_pipeline;
+
+	uint32_t num_indexes; // value from most recent vk_bind_index() call
+
+	VkRect2D scissor_rect;
+} vk_tess_t;
+
+typedef struct {
+	qboolean swapchain;
+	qboolean memoryRequirements2;
+	qboolean dedicatedAllocation;
+	qboolean debugMarkers;
+	qboolean descriptorIndexing;
+	qboolean bufferDeviceAddress;
+	qboolean timelineSemaphore;
+	qboolean vulkanMemoryModel;
+	qboolean deferredHostOperations;
+	qboolean accelerationStructure;
+	qboolean rayQuery;
+	qboolean rayTracingPipeline;
+	int requestedRtMode;
+	int activeRtMode;
+} rtxVkCapabilityTable_t;
+
+typedef struct {
+	VkBuffer buffer;
+	VkDeviceMemory memory;
+	/* Vulkan may round the allocation up for alignment.  That padding is not
+	 * part of the logical buffer range and must never be used as capacity. */
+	VkDeviceSize capacity;
+	VkDeviceSize allocationSize;
+	VkDeviceAddress address;
+} rtxVkRtBuffer_t;
+
+typedef struct {
+	VkAccelerationStructureKHR handle;
+	rtxVkRtBuffer_t storage;
+	VkDeviceAddress deviceAddress;
+	VkDeviceSize size;
+	qboolean valid;
+	qboolean compacted;
+} rtxVkRtAccelerationStructure_t;
+
+
+// Vk_Instance contains engine-specific vulkan resources that persist entire renderer lifetime.
+// This structure is initialized/deinitialized by vk_initialize/vk_shutdown functions correspondingly.
+typedef struct {
+	VkPhysicalDevice physical_device;
+	VkSurfaceFormatKHR base_format;
+	VkSurfaceFormatKHR present_format;
+
+	uint32_t queue_family_index;
+	uint32_t queue_family_queue_count;
+	VkDevice device;
+	VkQueue queue;
+	VkQueue async_queue;
+	qboolean async_queue_available;
+
+	VkSwapchainKHR swapchain;
+	uint32_t swapchain_image_count;
+	VkImage swapchain_images[MAX_SWAPCHAIN_IMAGES];
+	VkImageView swapchain_image_views[MAX_SWAPCHAIN_IMAGES];
+	VkSemaphore swapchain_rendering_finished[MAX_SWAPCHAIN_IMAGES];
+	//uint32_t swapchain_image_index;
+
+	VkCommandPool command_pool;
+#ifdef USE_UPLOAD_QUEUE
+	VkCommandBuffer staging_command_buffer;
+#endif
+
+	VkDeviceMemory image_memory[ MAX_ATTACHMENTS_IN_POOL ];
+	uint32_t image_memory_count;
+
+	struct {
+		VkRenderPass main;
+		VkRenderPass main_load;
+		VkRenderPass screenmap;
+		VkRenderPass gamma;
+		VkRenderPass capture;
+		VkRenderPass motion_blur;
+		VkRenderPass bloom_extract;
+		VkRenderPass blur[VK_NUM_BLOOM_PASSES*2]; // horizontal-vertical pairs
+		VkRenderPass post_bloom;
+		VkRenderPass global_fog;
+		VkRenderPass liquid_snapshot;
+		VkRenderPass dlight_shadow;
+	} render_pass;
+
+	VkDescriptorPool descriptor_pool;
+	VkDescriptorSetLayout set_layout_sampler;	// combined image sampler
+	VkDescriptorSetLayout set_layout_uniform;	// dynamic uniform buffer
+	VkDescriptorSetLayout set_layout_storage;	// feedback buffer
+
+	VkPipelineLayout pipeline_layout;			// default shaders
+	VkPipelineLayout pipeline_layout_storage;	// flare test shader layout
+	VkPipelineLayout pipeline_layout_post_process;	// post-processing
+	VkPipelineLayout pipeline_layout_blend;		// post-processing
+
+	VkDescriptorSet color_descriptor;
+
+	VkImage color_image;
+	VkImageView color_image_view;
+
+	VkImage motion_blur_image;
+	VkImageView motion_blur_image_view;
+	VkDescriptorSet motion_blur_descriptor;
+
+	VkImage bloom_image[1+VK_NUM_BLOOM_PASSES*2];
+	VkImageView bloom_image_view[1+VK_NUM_BLOOM_PASSES*2];
+
+	VkDescriptorSet bloom_image_descriptor[1+VK_NUM_BLOOM_PASSES*2];
+
+	VkImage depth_image;
+	VkImageView depth_image_view;
+	VkImageView depth_sample_image_view;
+	VkDescriptorSet depth_sample_descriptor;
+	VkImage dlight_shadow_image;
+	VkImageView dlight_shadow_image_view;
+	VkDescriptorSet dlight_shadow_descriptor;
+	qboolean dlight_shadow_rendered;
+	uint32_t dlight_shadow_atlas_width;
+	uint32_t dlight_shadow_atlas_height;
+	uint32_t dlight_shadow_face_size;
+	uint32_t dlight_shadow_atlas_columns;
+	uint32_t dlight_shadow_atlas_rows;
+	uint32_t dlight_shadow_max_lights;
+	uint32_t dlight_shadow_generation;
+	VkImage spot_shadow_image;
+	VkImageView spot_shadow_image_view;
+	VkDescriptorSet spot_shadow_descriptor;
+	qboolean spot_shadow_rendered;
+	uint32_t spot_shadow_atlas_width;
+	uint32_t spot_shadow_atlas_height;
+	uint32_t spot_shadow_tile_size;
+	uint32_t spot_shadow_atlas_columns;
+	uint32_t spot_shadow_atlas_rows;
+	uint32_t spot_shadow_max_lights;
+	uint32_t spot_shadow_generation;
+	VkImage csm_shadow_image;
+	VkImageView csm_shadow_image_view;
+	VkDescriptorSet csm_shadow_descriptor;
+	qboolean csm_shadow_rendered;
+	uint32_t csm_shadow_atlas_width;
+	uint32_t csm_shadow_atlas_height;
+	uint32_t csm_shadow_cascade_size;
+	uint32_t csm_shadow_cascade_count;
+	uint32_t csm_shadow_generation;
+
+	struct {
+		VkImage image;
+		VkImageView image_view;
+		VkDescriptorSet descriptor;
+		qboolean copied;
+	} liquidDepth;
+
+	VkImage msaa_image;
+	VkImageView msaa_image_view;
+
+	// screenMap
+	struct {
+		VkDescriptorSet color_descriptor;
+		VkImage color_image;
+		VkImageView color_image_view;
+
+		VkImage color_image_msaa;
+		VkImageView color_image_view_msaa;
+
+		VkImage depth_image;
+		VkImageView depth_image_view;
+
+	} screenMap;
+
+	struct {
+		VkDescriptorSet source_descriptor;
+		VkDescriptorSet color_descriptor;
+		VkImage color_image;
+		VkImageView color_image_view;
+	} liquidSnapshot;
+
+	struct {
+		VkImage image;
+		VkImageView image_view;
+	} capture;
+
+	struct {
+		VkFramebuffer blur[VK_NUM_BLOOM_PASSES*2];
+		VkFramebuffer bloom_extract;
+		VkFramebuffer main[MAX_SWAPCHAIN_IMAGES];
+		VkFramebuffer gamma[MAX_SWAPCHAIN_IMAGES];
+		VkFramebuffer screenmap;
+		VkFramebuffer capture;
+		VkFramebuffer motion_blur;
+		VkFramebuffer global_fog;
+		VkFramebuffer liquid_snapshot;
+		VkFramebuffer dlight_shadow;
+		VkFramebuffer spot_shadow;
+		VkFramebuffer csm_shadow;
+	} framebuffers;
+
+#ifdef USE_UPLOAD_QUEUE
+	VkSemaphore rendering_finished;	// reference to vk.cmd->rendering_finished2
+	VkSemaphore image_uploaded2;
+	VkSemaphore image_uploaded;		// reference to vk.image_uploaded2
+#endif
+
+	vk_tess_t tess[ NUM_COMMAND_BUFFERS ], *cmd;
+	int cmd_index;
+
+	struct {
+		VkBuffer		buffer;
+		byte			*buffer_ptr;
+		VkDeviceMemory	memory;
+		VkDescriptorSet	descriptor;
+	} storage;
+
+	uint32_t uniform_item_size;
+	uint32_t uniform_alignment;
+	uint32_t storage_alignment;
+
+	struct {
+		VkBuffer vertex_buffer;
+		VkDeviceMemory	buffer_memory;
+	} vbo;
+
+	// host visible memory that holds vertex, index and uniform data
+	VkDeviceMemory geometry_buffer_memory;
+	VkDeviceSize geometry_buffer_size;
+	VkDeviceSize geometry_buffer_size_new;
+
+	// statistics
+	struct {
+		VkDeviceSize vertex_buffer_max;
+		uint32_t push_size;
+		uint32_t push_size_max;
+	} stats;
+
+	//
+	// Shader modules.
+	//
+	struct {
+		struct {
+			VkShaderModule gen[3][2][2][2]; // tx[0,1,2], cl[0,1] env0[0,1] fog[0,1]
+			VkShaderModule ident1[2][2][2]; // tx[0,1], env0[0,1] fog[0,1]
+			VkShaderModule fixed[2][2][2];  // tx[0,1], env0[0,1] fog[0,1]
+			VkShaderModule light[2];        // fog[0,1]
+			VkShaderModule csm_shadow;
+		} vert;
+		struct {
+			VkShaderModule gen0_df;
+			VkShaderModule gen[3][2][2]; // tx[0,1,2] cl[0,1] fog[0,1]
+			VkShaderModule ident1[2][2]; // tx[0,1], fog[0,1]
+			VkShaderModule fixed[2][2];  // tx[0,1], fog[0,1]
+			VkShaderModule ent[1][2];    // tx[0], fog[0,1]
+			VkShaderModule light[2][2];  // linear[0,1] fog[0,1]
+			VkShaderModule csm_shadow;
+		} frag;
+
+		VkShaderModule color_fs;
+		VkShaderModule color_vs;
+
+		VkShaderModule bloom_fs;
+		VkShaderModule blur_fs;
+		VkShaderModule blend_fs;
+		VkShaderModule motion_blur_fs;
+		VkShaderModule world_outline_fs;
+		VkShaderModule global_fog_fs;
+
+		VkShaderModule gamma_fs;
+		VkShaderModule gamma_vs;
+
+		VkShaderModule fog_fs;
+		VkShaderModule fog_vs;
+
+		VkShaderModule dot_fs;
+		VkShaderModule dot_vs;
+
+		VkShaderModule liquid_fs;
+		VkShaderModule liquid_vs;
+		VkShaderModule liquid_copy_fs;
+
+		VkShaderModule rt_rgen;
+		VkShaderModule rt_rmiss;
+		VkShaderModule rt_rmiss_shadow;
+		VkShaderModule rt_rchit;
+		VkShaderModule rt_rahit;
+	} modules;
+
+	VkPipelineCache pipelineCache;
+
+	VK_Pipeline_t pipelines[ MAX_VK_PIPELINES ];
+	uint32_t pipelines_count;
+	uint32_t pipelines_world_base;
+
+	// pipeline statistics
+	int32_t pipeline_create_count;
+
+	//
+	// Standard pipelines.
+	//
+	uint32_t skybox_pipeline;
+
+	// dim 0: 0 - front side, 1 - back size
+	// dim 1: 0 - normal view, 1 - mirror view
+	uint32_t shadow_volume_pipelines[2][2];
+	uint32_t shadow_finish_pipeline;
+
+	// dim 0 is based on fogPass_t: 0 - corresponds to FP_EQUAL, 1 - corresponds to FP_LE.
+	// dim 1 is directly a cullType_t enum value.
+	// dim 2 is a polygon offset value (0 - off, 1 - on).
+	uint32_t fog_pipelines[2][3][2];
+
+	// dim 0 is based on dlight additive flag: 0 - not additive, 1 - additive
+	// dim 1 is directly a cullType_t enum value.
+	// dim 2 is a polygon offset value (0 - off, 1 - on).
+#ifdef USE_LEGACY_DLIGHTS
+	uint32_t dlight_pipelines[2][3][2];
+#endif
+
+	// cullType[3], polygonOffset[2], fogStage[2], absLight[2]
+#ifdef USE_PMLIGHT
+	uint32_t dlight_pipelines_x[3][2][2][2];
+	uint32_t dlight1_pipelines_x[3][2][2][2];
+	uint32_t csm_shadow_pipeline;
+#endif
+
+	// debug visualization pipelines
+	uint32_t tris_debug_pipeline;
+	uint32_t tris_mirror_debug_pipeline;
+	uint32_t tris_debug_green_pipeline;
+	uint32_t tris_mirror_debug_green_pipeline;
+	uint32_t tris_debug_red_pipeline;
+	uint32_t tris_mirror_debug_red_pipeline;
+
+	uint32_t normals_debug_pipeline;
+	uint32_t surface_debug_pipeline_solid;
+	uint32_t surface_debug_pipeline_outline;
+	uint32_t images_debug_pipeline;
+	uint32_t images_debug_pipeline2;
+	uint32_t surface_beam_pipeline;
+	uint32_t surface_axis_pipeline;
+	uint32_t dot_pipeline;
+	uint32_t liquid_pipelines[3][2][2];
+
+	VkPipeline gamma_pipeline;
+	VkPipeline capture_pipeline;
+	VkPipeline bloom_extract_pipeline;
+	VkPipeline blur_pipeline[VK_NUM_BLOOM_PASSES*2]; // horizontal & vertical pairs
+	VkPipeline bloom_blend_pipeline;
+	VkPipeline bloom_blend_cel_pipeline;
+	VkPipeline motion_blur_pipeline;
+	VkPipeline motion_blur_copy_pipeline;
+	VkPipeline world_outline_pipeline;
+	VkPipeline global_fog_pipeline;
+	VkPipeline liquid_snapshot_pipeline;
+
+	struct {
+		qboolean initialized;
+		qboolean enabled;
+		qboolean needsRebuild;
+		qboolean worldGeometryReady;
+		qboolean descriptorsValid;
+		qboolean sbtValid;
+		qboolean dispatchValid;
+		qboolean tlasValid;
+		uint32_t generation;
+		uint32_t lastFrameBuilt;
+		uint32_t activeVisualizer;
+
+		VkDescriptorPool descriptor_pool;
+		VkDescriptorSetLayout descriptor_set_layout;
+		VkPipelineLayout pipeline_layout;
+		VkDescriptorSet descriptor_set[ NUM_COMMAND_BUFFERS ];
+		VkPipeline pipeline;
+
+		rtxVkRtBuffer_t world_vertex_buffer;
+		rtxVkRtBuffer_t world_index_buffer;
+		rtxVkRtBuffer_t world_material_buffer;
+		uint32_t world_vertex_count;
+		uint32_t world_index_count;
+		uint32_t world_material_count;
+		uint32_t world_masked_triangle_count;
+
+		rtxVkRtBuffer_t dynamic_vertex_buffer;
+		rtxVkRtBuffer_t dynamic_index_buffer;
+		rtxVkRtBuffer_t dynamic_material_buffer;
+		uint32_t dynamic_vertex_count;
+		uint32_t dynamic_index_count;
+		uint32_t dynamic_material_count;
+		uint32_t dynamic_entity_count;
+		uint32_t dynamic_effect_count;
+		uint32_t dynamic_masked_triangle_count;
+		rtxVkRtBuffer_t light_buffer[ NUM_COMMAND_BUFFERS ];
+		uint32_t light_count;
+
+		rtxVkRtBuffer_t tlas_instance_buffer;
+		uint32_t tlas_instance_capacity;
+		uint32_t tlas_instance_count;
+
+		rtxVkRtAccelerationStructure_t world_blas;
+		rtxVkRtAccelerationStructure_t dynamic_blas;
+		rtxVkRtAccelerationStructure_t tlas;
+		rtxVkRtBuffer_t scratch_buffer;
+
+		VkQueryPool compaction_query_pool;
+		uint32_t compaction_query_count;
+
+		rtxVkRtBuffer_t sbt_buffer;
+		VkStridedDeviceAddressRegionKHR sbt_raygen;
+		VkStridedDeviceAddressRegionKHR sbt_miss;
+		VkStridedDeviceAddressRegionKHR sbt_hit;
+		VkStridedDeviceAddressRegionKHR sbt_callable;
+
+		VkImage output_image;
+		VkImageView output_view;
+		VkDeviceMemory output_memory;
+		VkImage history_image[2];
+		VkImageView history_view[2];
+		VkDeviceMemory history_memory[2];
+		VkFormat output_format;
+		uint32_t output_width;
+		uint32_t output_height;
+		uint32_t history_read_index;
+		qboolean history_valid;
+		qboolean temporal_reset_pending;
+		qboolean temporal_has_prev_camera;
+		qboolean post_validation_logged;
+		float adaptive_budget_scale;
+		float dynamic_resolution_scale;
+		float dynamic_resolution_target_scale;
+		uint32_t dynamic_scene_signature;
+		int dynamic_last_rebuild_frame;
+		float dynamic_last_rebuild_centroid[3];
+		VkQueryPool timing_query_pool;
+		uint32_t timing_query_count;
+		uint32_t timing_query_stride;
+		float gpu_timestamp_period_ns;
+		float temporal_prev_origin[3];
+		float temporal_prev_forward[3];
+		float temporal_prev_right[3];
+		float temporal_prev_up[3];
+		float temporal_prev_tan_half_fov_x;
+		float temporal_prev_tan_half_fov_y;
+		int temporal_prev_refdef_time;
+		int temporal_prev_rdflags;
+		int temporal_prev_stereo_frame;
+		float temporal_exposure;
+		float dynamic_centroid_current[3];
+		float dynamic_centroid_prev[3];
+		rtxVkRtBuffer_t temporal_params_buffer[ NUM_COMMAND_BUFFERS ];
+
+		VkPhysicalDeviceRayTracingPipelinePropertiesKHR rt_pipeline_props;
+		VkPhysicalDeviceAccelerationStructurePropertiesKHR as_props;
+
+		struct {
+			uint64_t world_build_bytes;
+			uint64_t dynamic_build_bytes;
+			uint64_t tlas_build_bytes;
+			uint64_t compacted_bytes_saved;
+			uint64_t throttled_builds;
+			uint64_t dynamic_rebuild_skips;
+			uint64_t prep_stride_skips;
+			uint64_t dispatch_count;
+			uint64_t skipped_dispatches;
+			uint64_t world_triangles;
+			uint64_t dynamic_triangles;
+			uint64_t masked_triangles;
+			uint64_t active_lights;
+			uint64_t history_resets;
+			uint64_t async_overlap_submits;
+			uint64_t texture_stream_flushes;
+			uint64_t texture_stream_bytes;
+		} stats;
+
+		struct {
+			float cpu_dynamic_ms;
+			float cpu_world_ms;
+			float cpu_tlas_ms;
+			float cpu_temporal_ms;
+			float cpu_dispatch_ms;
+			float cpu_copy_ms;
+			float cpu_frame_ms;
+			float gpu_trace_ms;
+			float gpu_copy_ms;
+			float gpu_frame_ms;
+		} perf;
+	} rt;
+
+	uint32_t frame_count;
+	qboolean active;
+	qboolean wideLines;
+	qboolean samplerAnisotropy;
+	qboolean fragmentStores;
+	qboolean dedicatedAllocation;
+	qboolean debugMarkers;
+	qboolean swapchainColorspace;
+	qboolean hdrMetadata;
+	qboolean hdrDisplayActive;
+	rendererDisplayOutput_t displayOutput;
+	rendererOutputRequest_t outputRequest;
+	rendererOutputBackend_t outputBackend;
+	rtxVkCapabilityTable_t caps;
+
+	float maxAnisotropy;
+	float maxLod;
+
+	VkFormat color_format;
+	VkFormat capture_format;
+	VkFormat depth_format;
+	VkFormat bloom_format;
+
+	VkImageLayout initSwapchainLayout;
+
+	qboolean clearAttachment;		// requires VK_IMAGE_USAGE_TRANSFER_DST_BIT for swapchains
+	qboolean fboActive;
+	qboolean blitEnabled;
+	qboolean msaaActive;
+	qboolean globalFogDepthSampleSupported;
+	qboolean liquidDepthSampleSupported;
+
+	qboolean offscreenRender;
+
+	qboolean windowAdjusted;
+	int		blitX0;
+	int		blitY0;
+	int		blitFilter;
+
+	uint32_t renderWidth;
+	uint32_t renderHeight;
+
+	float renderScaleX;
+	float renderScaleY;
+
+	renderPass_t renderPassIndex;
+
+	uint32_t screenMapWidth;
+	uint32_t screenMapHeight;
+	uint32_t screenMapSamples;
+	uint32_t liquidSnapshotWidth;
+	uint32_t liquidSnapshotHeight;
+
+	uint32_t image_chunk_size;
+
+	uint32_t maxBoundDescriptorSets;
+
+#ifdef USE_UPLOAD_QUEUE
+	VkFence aux_fence;
+	qboolean aux_fence_wait;
+#endif
+
+} Vk_Instance;
+
+typedef struct {
+	VkDeviceMemory memory;
+	VkDeviceSize used;
+} ImageChunk;
+
+// Vk_World contains vulkan resources/state requested by the game code.
+// It is reinitialized on a map change.
+typedef struct {
+	//
+	// Resources.
+	//
+	int num_samplers;
+	Vk_Sampler_Def sampler_defs[MAX_VK_SAMPLERS];
+	VkSampler samplers[MAX_VK_SAMPLERS];
+
+	//
+	// Memory allocations.
+	//
+	int num_image_chunks;
+	ImageChunk image_chunks[MAX_IMAGE_CHUNKS];
+
+	// Host visible memory used to copy image data to device local memory.
+	VkBuffer staging_buffer;
+	VkDeviceMemory staging_buffer_memory;
+	VkDeviceSize staging_buffer_size;
+	byte *staging_buffer_ptr; // pointer to mapped staging buffer
+#ifdef USE_UPLOAD_QUEUE
+	VkDeviceSize staging_buffer_offset;
+#endif
+
+	//
+	// State.
+	//
+
+	// Descriptor sets corresponding to bound texture images.
+	//VkDescriptorSet current_descriptor_sets[ MAX_TEXTURE_UNITS ];
+
+	// This flag is used to decide whether framebuffer's depth attachment should be cleared
+	// with vmCmdClearAttachment (dirty_depth_attachment != 0), or it have just been
+	// cleared by render pass instance clear op (dirty_depth_attachment == 0).
+	int dirty_depth_attachment;
+
+	float modelview_transform[16];
+} Vk_World;
+
+extern Vk_Instance	vk;				// shouldn't be cleared during ref re-init
+extern Vk_World		vk_world;		// this data is cleared during ref re-init

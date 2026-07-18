@@ -13,7 +13,7 @@ The first Vulkan RC evidence should cover:
 - Windows 10 or newer, x64, dynamic renderer build, retail `baseq3` assets.
 - Linux x86_64, Mesa or vendor Vulkan driver, dynamic renderer build, retail `baseq3` assets.
 
-Additional packaged platforms should keep building Vulkan where the project already enables `USE_VULKAN`, but they are not blocking runtime platforms until maintainers add stable GPU runners for them.
+Additional packaged platforms should keep building Vulkan where the project already enables `USE_VK`, but they are not blocking runtime platforms until maintainers add stable GPU runners for them.
 
 ## Canonical Gate Presets
 

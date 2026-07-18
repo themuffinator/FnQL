@@ -696,6 +696,7 @@ SCR_DrawDemoRecording
 */
 static void SCR_DrawDemoRecording( void ) {
 	std::array<char, sizeof( clc.recordNameShort ) + 32> string;
+	const int messageMode = CL_DemoRecordMessageMode();
 	int		pos;
 
 	if ( !clc.demorecording ) {
@@ -705,13 +706,12 @@ static void SCR_DrawDemoRecording( void ) {
 		return;
 	}
 
-	pos = FS_FTell( clc.recordfile );
-
-	if (cl_drawRecording->integer == 1) {
+	if ( messageMode == 1 ) {
+		pos = FS_FTell( clc.recordfile );
 		Com_sprintf( string.data(), static_cast<int>( string.size() ), "RECORDING %s: %ik", clc.recordNameShort, pos / 1024 );
 		SCR_DrawStringExt( static_cast<int>( ( 80 - strlen( string.data() ) ) * 4 ),
 			420, 8, string.data(), g_color_table[ ColorIndex( COLOR_WHITE ) ], qtrue, qfalse );
-	} else if (cl_drawRecording->integer == 2) {
+	} else if ( messageMode == 2 ) {
 		SCR_DrawPic( 1, 470, 11, 11, cls.recordShader );
 		SCR_DrawStringExt( 9, 477, 8, "REC",
 			g_color_table[ ColorIndex( COLOR_WHITE ) ], qtrue, qfalse );

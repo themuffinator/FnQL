@@ -1138,6 +1138,14 @@ void GLimp_Init( glconfig_t *config )
 {
 	rserr_t err;
 
+	// REF_KEEP_WINDOW re-enters platform initialization without calling
+	// GLimp_Shutdown. Tear down window-bound input first so text input,
+	// controllers, and commands are rebound exactly once to the retained (or
+	// replacement fallback) window.
+	if ( SDL_window ) {
+		IN_Shutdown();
+	}
+
 #ifndef _WIN32
 	InitSig();
 #endif
@@ -1376,6 +1384,10 @@ of Vulkan
 void VKimp_Init( glconfig_t *config )
 {
 	rserr_t err;
+
+	if ( SDL_window ) {
+		IN_Shutdown();
+	}
 
 #ifndef _WIN32
 	InitSig();

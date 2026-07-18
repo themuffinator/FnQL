@@ -28,6 +28,7 @@ extern "C" {
 }
 
 #include "client_cpp.h"
+#include "client_cvar_compat.hpp"
 #include "ql_font_bridge.hpp"
 
 #include <algorithm>
@@ -2179,7 +2180,7 @@ static void QDECL QL_CG_trap_S_StartLocalSoundVolume( sfxHandle_t sfx, int chann
 }
 
 static void QDECL QL_CG_trap_S_ClearLoopingSoundsFrame( void ) {
-	S_ClearLoopingSounds( qfalse );
+	S_ClearLoopingSoundsFrame();
 }
 
 static void QDECL QL_CG_trap_S_ClearLoopingSoundsKillAll( void ) {
@@ -2898,12 +2899,20 @@ Returns either auto-nudge or cl_timeNudge value.
 ==================
 */
 static int CL_TimeNudge( void ) {
-	float autoNudge = cl_autoNudge->value;
-
-	if ( autoNudge != 0.0f )
-		return static_cast<int>( (CL_AvgPing() * autoNudge) + 0.5f ) * -1;
-	else
-		return cl_timeNudge->integer;
+	static int previousRetailAutomatic;
+	fnql::client::cvars::TimeNudgeInputs inputs;
+	inputs.spectating = Cvar_VariableIntegerValue( "cg_spectating" ) != 0;
+	inputs.localServer = Sys_IsLANAddress( &clc.serverAddress ) != qfalse;
+	inputs.retailAutomatic = cl_autoTimeNudge &&
+		cl_autoTimeNudge->integer != 0;
+	inputs.snapshotPing = cl.snap.ping;
+	inputs.manual = cl_timeNudge ? cl_timeNudge->integer : 0;
+	inputs.fnqlAutomaticFactor = cl_autoNudge ? cl_autoNudge->value : 0.0f;
+	if ( inputs.fnqlAutomaticFactor > 0.0f ) {
+		inputs.fnqlAveragePing = CL_AvgPing();
+	}
+	return fnql::client::cvars::SelectTimeNudge(
+		inputs, previousRetailAutomatic );
 }
 
 

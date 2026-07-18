@@ -50,6 +50,16 @@ class QLFontSourceTests(unittest.TestCase):
         self.assertIn("#define FONTSTASH_IMPLEMENTATION", source)
         self.assertIn("#include <fontstash.h>", source)
 
+    def test_clean_checkout_has_no_redirects_into_unfetched_freetype(self) -> None:
+        meson = read("meson.build")
+        self.assertIn("'png=disabled'", meson)
+        self.assertIn("'zlib=disabled'", meson)
+        for name in ("libpng.wrap", "zlib.wrap"):
+            self.assertFalse(
+                (ROOT / "subprojects" / name).exists(),
+                f"{name} must not redirect into the unfetched Freetype source tree",
+            )
+
     def test_every_supported_build_graph_enables_the_host_font_lane(self) -> None:
         meson = read("meson.build")
         makefile = read("Makefile")
@@ -58,10 +68,18 @@ class QLFontSourceTests(unittest.TestCase):
 
         self.assertIn("'code/renderercommon/tr_font_stash.c'", meson)
         self.assertIn("common_c_args += ['-DBUILD_FONTSTASH']", meson)
-        self.assertEqual(makefile.count("/tr_font_stash.o"), 4)
+        # GLx and Vulkan list their objects directly; RTX deliberately mirrors
+        # the Vulkan graph into its own object directory so the two backends
+        # cannot leak compile-time state into one another.
+        self.assertEqual(makefile.count("/tr_font_stash.o"), 2)
+        self.assertIn(
+            "Q3RENDRTXOBJ = $(patsubst $(B)/rendv/%,$(B)/rendrtx/%,$(Q3RENDVOBJ))",
+            makefile,
+        )
         self.assertIn("BASE_CFLAGS += -DBUILD_FONTSTASH", makefile)
-        self.assertIn("-DRENDERER_OPENGL2", makefile)
+        self.assertIn("-DRENDERER_GLX", makefile)
         self.assertIn("-DRENDERER_VULKAN", makefile)
+        self.assertIn("RTX_RENDCFLAGS = -DRENDERER_RTX", makefile)
         self.assertIn("meson subprojects download fontstash", makefile)
         self.assertIn("ADD_COMPILE_DEFINITIONS(BUILD_FONTSTASH)", cmake)
         self.assertIn("PRIVATE USE_RENDERER_DLOPEN RENDERER_VULKAN", cmake)
@@ -78,8 +96,8 @@ class QLFontSourceTests(unittest.TestCase):
         self.assertIn("(*GetScaledFontMetrics)", public)
         for path in (
             "code/renderer/tr_init.c",
-            "code/renderer2/tr_init.c",
             "code/renderervk/tr_init.c",
+            "code/rendererrtx/tr_init.c",
         ):
             source = read(path)
             self.assertIn("re.DrawScaledText = RE_DrawScaledText;", source)
@@ -117,7 +135,11 @@ class QLFontSourceTests(unittest.TestCase):
         self.assertIn("#define QL_HOST_ATLAS_MAX_WIDTH 2048", source)
         self.assertIn("#define QL_HOST_ATLAS_MAX_HEIGHT 1024", source)
         self.assertIn("IMGFLAG_NOLIGHTSCALE | IMGFLAG_NOSCALE", source)
-        self.assertIn("0x8058 /* GL_RGBA8 */", source)
+        self.assertIn(
+            "R_CreateImage( name, NULL, pixels, width, height, flags )", source
+        )
+        self.assertIn("R_UploadSubImage( pixels, x, y, width, height, image )", source)
+        self.assertIn("vk_upload_image_data( image, x, y, width, height", source)
         self.assertIn("fonsExpandAtlas( host->stash, grownWidth, grownHeight )", source)
         self.assertIn("fonsResetAtlas( host->stash, width, height )", source)
         self.assertIn('Q_strncpyz( name, "*fontstash"', source)
@@ -136,8 +158,8 @@ class QLFontSourceTests(unittest.TestCase):
         self.assertIn("SCR_DrawFontAtlasDebug", screen)
         for path in (
             "code/renderer/tr_init.c",
-            "code/renderer2/tr_init.c",
             "code/renderervk/tr_init.c",
+            "code/rendererrtx/tr_init.c",
         ):
             self.assertIn("re.GetFontAtlasDebugShader = RE_GetFontAtlasDebugShader;", read(path))
 

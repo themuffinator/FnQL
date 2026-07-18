@@ -60,9 +60,9 @@ Windows x86 adapter around the runtime's generated stdcall C exports:
 - exact required-export validation before any runtime object is created;
 - owned UTF-8/UTF-16 conversion and copied diagnostics;
 - reverse-order cleanup of partial or complete startup;
-- WebCore, bitmap factory, WebSession, `QL` DataPak source, and offscreen
-  WebView ownership;
-- pre-renderer DataPak startup with a bounded provisional surface, followed by
+- WebCore, bitmap factory, WebSession, engine-routed `QL` data source, native
+  retail-DataPak fallback, and offscreen WebView ownership;
+- pre-renderer WebUI startup with a bounded provisional surface, followed by
   normal renderer-driven resize, so the 32-bit Vulkan path does not contend
   with the legacy package loader during its initial reservation;
 - pre-document and post-navigation qz bridge injection;
@@ -71,6 +71,41 @@ Windows x86 adapter around the runtime's generated stdcall C exports:
   loading-state operations; and
 - no Steamworks success emulation. Unavailable social/online operations remain
   explicit and do not prevent the offline retail menu from rendering.
+
+### Sparse FnQL settings overlay
+
+FnQL builds and ships `fnql-web.pak`, a deterministic Chromium DataPack v4
+sidecar containing only three project-owned resources: `index.html`,
+`fnql-settings.js`, and `css/fnql-settings.css`. It does not contain retail
+`bundle.js`, fonts, images, or styles. The replacement bootstrap references the
+unchanged retail files by their original paths.
+
+The engine-owned resolver applies this order for the `asset://ql/` host:
+
+1. matching resources from `fnql-web.pak`;
+2. all remaining resources from the user's external retail `web.pak`; and
+3. the established bounded loose-file fallback.
+
+The settings script inserts an FnQL tab beside the retail Video tab and builds
+controls only for cvars present in the engine's allowlisted configuration
+snapshot. This naturally hides renderer- or platform-specific controls that
+are not registered. It also removes the retail Video menu's legacy
+post-processing column and replaces its duplicated mode/fullscreen controls;
+the corresponding FnQL controls own `r_mode`, `r_modeFullscreen`, renderer
+selection, and the supported post-processing cvars.
+
+Build systems generate the sidecar alongside the executable, installation and
+release-layout checks require it, and release packaging rebuilds it from source
+instead of trusting an artifact copy. Maintainers can reproduce it directly:
+
+```powershell
+python scripts/build_webpak.py --source-root code/client/webui --output .tmp/fnql-web.pak
+```
+
+If the overlay is absent or rejected, FnQL preserves the unmodified retail
+menu. If retail `web.pak` is absent, the browser backend still fails through
+the existing native-UI fallback rather than treating the sparse overlay as a
+standalone copy of the Quake Live launcher.
 
 The legacy native-UI `web_stopRefresh` verb is deliberately non-destructive
 when the live browser owns the document. Retail does not register it as an
@@ -88,7 +123,8 @@ only after a live Awesomium bitmap surface and renderer presenter both exist.
 
 - Privileged navigation remains locked to `asset://ql/`.
 - Browser resources remain bounded by the checked WebPak/launcher resolver.
-- The retail runtime and assets remain external and are never release inputs.
+- The retail runtime and assets remain external and are never release inputs;
+  only the small project-owned settings overlay is packaged.
 - x64, Linux, and macOS retain the null backend and native UI fallback.
 - A missing, incompatible, or crashed browser yields to the native UI instead
   of making the engine unusable.

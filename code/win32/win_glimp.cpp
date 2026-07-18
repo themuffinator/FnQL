@@ -272,6 +272,38 @@ static rserr_t GLW_StartDriverAndSetMode( int mode, const char *modeFS, int colo
 }
 
 
+void GLimp_QueryDisplayOutput( rendererDisplayOutput_t *output )
+{
+	if ( !output ) {
+		return;
+	}
+
+	Com_Memset( output, 0, sizeof( *output ) );
+	output->displayIndex = -1;
+	output->nativeBackend = ROUTPUT_BACKEND_SDR_SRGB;
+	output->sdrWhiteNits = 203.0f;
+	output->hdrHeadroom = 1.0f;
+	output->maxLuminanceNits = 203.0f;
+	output->maxFullFrameLuminanceNits = 203.0f;
+	Q_strncpyz( output->videoDriver, "win32", sizeof( output->videoDriver ) );
+	Q_strncpyz( output->reason,
+		"Legacy Win32 window path does not expose live Advanced Color headroom; use SDL3 output query for HDR proof",
+		sizeof( output->reason ) );
+
+	if ( !g_wv.hWnd ) {
+		return;
+	}
+
+	output->valid = qtrue;
+	output->windowsScRgbSupported = qtrue;
+	output->windowsHdr10Supported = qtrue;
+
+	if ( glw_state.displayName[0] ) {
+		Q_strncpyz( output->displayName, glw_state.displayName, sizeof( output->displayName ) );
+	}
+}
+
+
 #ifdef USE_OPENGL_API
 /*
 ** GLW_ChoosePFD
@@ -1536,38 +1568,6 @@ static qboolean GLW_StartOpenGL( void )
 	return qtrue;
 }
 
-void GLimp_QueryDisplayOutput( rendererDisplayOutput_t *output )
-{
-	if ( !output ) {
-		return;
-	}
-
-	Com_Memset( output, 0, sizeof( *output ) );
-	output->displayIndex = -1;
-	output->nativeBackend = ROUTPUT_BACKEND_SDR_SRGB;
-	output->sdrWhiteNits = 203.0f;
-	output->hdrHeadroom = 1.0f;
-	output->maxLuminanceNits = 203.0f;
-	output->maxFullFrameLuminanceNits = 203.0f;
-	Q_strncpyz( output->videoDriver, "win32", sizeof( output->videoDriver ) );
-	Q_strncpyz( output->reason,
-		"Legacy Win32 window path does not expose live Advanced Color headroom; use SDL3 output query for HDR proof",
-		sizeof( output->reason ) );
-
-	if ( !g_wv.hWnd ) {
-		return;
-	}
-
-	output->valid = qtrue;
-	output->windowsScRgbSupported = qtrue;
-	output->windowsHdr10Supported = qtrue;
-
-	if ( glw_state.displayName[0] ) {
-		Q_strncpyz( output->displayName, glw_state.displayName, sizeof( output->displayName ) );
-	}
-}
-
-
 /*
 ** GLimp_Init
 **
@@ -1581,6 +1581,11 @@ void GLimp_QueryDisplayOutput( rendererDisplayOutput_t *output )
 void GLimp_Init( glconfig_t *config )
 {
 	Com_Printf( "Initializing OpenGL subsystem\n" );
+	// REF_KEEP_WINDOW skips GLimp_Shutdown. Reinitialize input around the
+	// retained HWND so commands and native devices are never registered twice.
+	if ( g_wv.hWnd ) {
+		IN_Shutdown();
+	}
 
 	// glimp-specific
 
@@ -1742,6 +1747,9 @@ static qboolean GLW_StartVulkan( void )
 void VKimp_Init( glconfig_t *config )
 {
 	Com_Printf( "Initializing Vulkan subsystem\n" );
+	if ( g_wv.hWnd ) {
+		IN_Shutdown();
+	}
 
 	// feedback to renderer configuration
 	glw_state.config = config;

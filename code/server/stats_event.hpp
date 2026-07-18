@@ -19,6 +19,7 @@ version.
 #include <array>
 #include <charconv>
 #include <cctype>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -112,6 +113,140 @@ inline bool KeyEquals( std::string_view quoted, std::string_view key ) noexcept 
 		quoted.back() == '"' && quoted.substr( 1, key.size() ) == key;
 }
 
+// Floating-point std::from_chars is not available in the oldest libstdc++ and
+// libc++ versions supported by the release builders. Parse the deliberately
+// small JSON number grammar here instead so event decoding remains
+// locale-independent on every platform.
+inline bool ParseNumber( std::string_view value, double &target ) noexcept {
+	if ( value.empty() ) {
+		return false;
+	}
+
+	std::size_t offset = 0;
+	const bool negative = value[offset] == '-';
+	if ( negative && ++offset == value.size() ) {
+		return false;
+	}
+
+	std::uint64_t significand = 0;
+	int significantDigits = 0;
+	int discardedDigits = 0;
+	int fractionalDigits = 0;
+	bool significant = false;
+	bool exponentOutOfRange = false;
+
+	const auto consumeDigit = [&]( char digit, bool fractional ) {
+		if ( fractional ) {
+			if ( fractionalDigits == 10000 ) {
+				exponentOutOfRange = true;
+			} else {
+				++fractionalDigits;
+			}
+		}
+		if ( !significant && digit == '0' ) {
+			return;
+		}
+		significant = true;
+		if ( significantDigits < 19 ) {
+			significand = significand * 10 + static_cast<unsigned>( digit - '0' );
+			++significantDigits;
+		} else if ( discardedDigits == 10000 ) {
+			exponentOutOfRange = true;
+		} else {
+			++discardedDigits;
+		}
+	};
+
+	if ( offset >= value.size() || value[offset] < '0' || value[offset] > '9' ) {
+		return false;
+	}
+	if ( value[offset] == '0' ) {
+		consumeDigit( value[offset++], false );
+		if ( offset < value.size() && value[offset] >= '0' && value[offset] <= '9' ) {
+			return false;
+		}
+	} else {
+		while ( offset < value.size() && value[offset] >= '0' && value[offset] <= '9' ) {
+			consumeDigit( value[offset++], false );
+		}
+	}
+
+	if ( offset < value.size() && value[offset] == '.' ) {
+		const std::size_t fractionBegin = ++offset;
+		while ( offset < value.size() && value[offset] >= '0' && value[offset] <= '9' ) {
+			consumeDigit( value[offset++], true );
+		}
+		if ( offset == fractionBegin ) {
+			return false;
+		}
+	}
+
+	int explicitExponent = 0;
+	if ( offset < value.size() && ( value[offset] == 'e' || value[offset] == 'E' ) ) {
+		++offset;
+		bool exponentNegative = false;
+		if ( offset < value.size() && ( value[offset] == '+' || value[offset] == '-' ) ) {
+			exponentNegative = value[offset++] == '-';
+		}
+		const std::size_t exponentBegin = offset;
+		while ( offset < value.size() && value[offset] >= '0' && value[offset] <= '9' ) {
+			if ( explicitExponent > 1000 ) {
+				exponentOutOfRange = true;
+			} else {
+				explicitExponent = explicitExponent * 10 + ( value[offset] - '0' );
+			}
+			++offset;
+		}
+		if ( offset == exponentBegin ) {
+			return false;
+		}
+		if ( exponentNegative ) {
+			explicitExponent = -explicitExponent;
+		}
+	}
+	if ( offset != value.size() ) {
+		return false;
+	}
+
+	if ( !significant ) {
+		target = negative ? -0.0 : 0.0;
+		return true;
+	}
+	if ( exponentOutOfRange ) {
+		return false;
+	}
+
+	const int decimalExponent = explicitExponent + discardedDigits - fractionalDigits;
+	const int normalizedExponent = decimalExponent + significantDigits - 1;
+	if ( normalizedExponent > 308 || normalizedExponent < -324 ) {
+		return false;
+	}
+
+	double parsed = static_cast<double>( significand );
+	for ( int digit = 1; digit < significantDigits; ++digit ) {
+		parsed *= 0.1;
+	}
+
+	unsigned power = static_cast<unsigned>( normalizedExponent < 0
+		? -normalizedExponent : normalizedExponent );
+	double factor = normalizedExponent < 0 ? 0.1 : 10.0;
+	while ( power != 0 ) {
+		if ( power & 1U ) {
+			parsed *= factor;
+		}
+		power >>= 1U;
+		if ( power != 0 ) {
+			factor *= factor;
+		}
+	}
+
+	if ( !std::isfinite( parsed ) || parsed == 0.0 ) {
+		return false;
+	}
+	target = negative ? -parsed : parsed;
+	return true;
+}
+
 } // namespace detail
 
 class JsonObjectView {
@@ -193,14 +328,8 @@ public:
 
 	[[nodiscard]] double Number( std::string_view key, double fallback = 0.0 ) const noexcept {
 		const std::string_view value = Member( key );
-		if ( value.empty() ) {
-			return fallback;
-		}
-		double parsed = 0.0;
-		const auto result = std::from_chars( value.data(), value.data() + value.size(),
-			parsed, std::chars_format::general );
-		return result.ec == std::errc{} && result.ptr == value.data() + value.size()
-			? parsed : fallback;
+		double parsed = fallback;
+		return detail::ParseNumber( value, parsed ) ? parsed : fallback;
 	}
 
 	template<std::size_t Size>

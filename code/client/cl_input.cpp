@@ -777,6 +777,10 @@ CL_CmdButtons
 ==============
 */
 static void CL_CmdButtons( usercmd_t *cmd ) {
+	const int catcher = Key_GetCatcher();
+	const bool gameplayInputCaptured = fnql::input::CatcherBlocksGameplayInput(
+		catcher, KEYCATCH_RETAIL_MOUSEPASS );
+
 	//
 	// figure button bits
 	// send a button bit even if the key was pressed and released in
@@ -789,13 +793,15 @@ static void CL_CmdButtons( usercmd_t *cmd ) {
 		in_buttons[i].wasPressed = false;
 	}
 
-	if ( Key_GetCatcher() ) {
+	// BUTTON_TALK makes retail game code discard movement.  The retail
+	// mouse-pass catcher used by held HUD overlays must remain transparent.
+	if ( gameplayInputCaptured ) {
 		cmd->buttons |= BUTTON_TALK;
 	}
 
 	// allow the game to know if any key at all is
 	// currently pressed, even if it isn't bound to anything
-	if ( anykeydown && Key_GetCatcher() == 0 ) {
+	if ( anykeydown && !gameplayInputCaptured ) {
 		cmd->buttons |= BUTTON_ANY;
 	}
 }
@@ -1190,7 +1196,7 @@ CL_InitInput
 void CL_InitInput( void ) {
 	IN_AddCommandBindings();
 
-	cl_nodelta = Cvar_Get( "cl_nodelta", "0", CVAR_DEVELOPER );
+	cl_nodelta = Cvar_Get( "cl_nodelta", "0", 0 );
 	Cvar_SetDescription( cl_nodelta, "Flag server to disable delta compression on server snapshots." );
 	cl_debugMove = Cvar_Get( "cl_debugMove", "0", 0 );
 	Cvar_CheckRange( cl_debugMove, "0", "2", CV_INTEGER );
@@ -1199,17 +1205,17 @@ void CL_InitInput( void ) {
 	cl_showSend = Cvar_Get( "cl_showSend", "0", CVAR_TEMP );
 	Cvar_SetDescription( cl_showSend, "Prints client to server packet information." );
 
-	cl_yawspeed = Cvar_Get( "cl_yawspeed", "140", CVAR_ARCHIVE_ND );
+	cl_yawspeed = Cvar_Get( "cl_yawspeed", "140", CVAR_ARCHIVE_ND | CVAR_CHEAT );
 	Cvar_SetDescription( cl_yawspeed, "Side-to-side turning speed using keys (+left and +right)." );
-	cl_pitchspeed = Cvar_Get( "cl_pitchspeed", "140", CVAR_ARCHIVE_ND );
+	cl_pitchspeed = Cvar_Get( "cl_pitchspeed", "140", CVAR_ARCHIVE_ND | CVAR_CHEAT );
 	Cvar_SetDescription( cl_pitchspeed, "Up and down pitching speed using keys (+lookup and +lookdown)." );
-	cl_anglespeedkey = Cvar_Get( "cl_anglespeedkey", "1.5", 0 );
+	cl_anglespeedkey = Cvar_Get( "cl_anglespeedkey", "1.5", CVAR_CHEAT );
 	Cvar_SetDescription( cl_anglespeedkey, "Set the speed that the direction keys (not mouse) change the view angle." );
 
-	cl_maxpackets = Cvar_Get ("cl_maxpackets", "125", CVAR_ARCHIVE );
+	cl_maxpackets = Cvar_Get( "cl_maxpackets", "125", CVAR_ARCHIVE | CVAR_CHEAT );
 	Cvar_CheckRange( cl_maxpackets, "15", "125", CV_INTEGER );
 	Cvar_SetDescription( cl_maxpackets, "Set how many client packets are sent to the server per second, can't exceed \\com_maxFPS." );
-	cl_packetdup = Cvar_Get( "cl_packetdup", "1", CVAR_ARCHIVE_ND );
+	cl_packetdup = Cvar_Get( "cl_packetdup", "1", CVAR_ARCHIVE_ND | CVAR_CLOUD );
 	Cvar_CheckRange( cl_packetdup, "0", "5", CV_INTEGER );
 	Cvar_SetDescription( cl_packetdup, "Limits the number of previous client commands added in packet, helps in packet loss mitigation, increases client command packets size a bit." );
 
@@ -1219,11 +1225,13 @@ void CL_InitInput( void ) {
 	Cvar_CheckRange( cl_sensitivity, "0.1", "10", CV_FLOAT );
 	Cvar_SetDescription( cl_sensitivity, "Sets base mouse sensitivity (mouse speed)." );
 	Cvar_SetDescription( Cvar_Get( "cg_ignoreMouseInput", "0", CVAR_ROM ), "Read-only Quake Live cgame/UI bridge flag that blocks gameplay mouse deltas while retained overlays own input." );
-	cl_mouseAccel = Cvar_Get( "cl_mouseAccel", "0", CVAR_ARCHIVE_ND );
+	cl_mouseAccel = Cvar_Get( "cl_mouseAccel", "0",
+		CVAR_ARCHIVE_ND | CVAR_PROTECTED | CVAR_CLOUD );
 	Cvar_SetDescription( cl_mouseAccel, "Mouse acceleration amount. Negative values select Quake Live deceleration when the retail input style is active." );
 	cl_mouseAccelDebug = Cvar_Get( "cl_mouseAccelDebug", "0", CVAR_TEMP );
 	Cvar_SetDescription( cl_mouseAccelDebug, "Write bounded Quake Live mouse-transform diagnostics to mouse.log." );
-	cl_freelook = Cvar_Get( "cl_freelook", "1", CVAR_ARCHIVE_ND );
+	cl_freelook = Cvar_Get( "cl_freelook", "1",
+		CVAR_ARCHIVE_ND | CVAR_PROTECTED | CVAR_CLOUD );
 	Cvar_SetDescription( cl_freelook, "Allow pitching or up/down look with mouse." );
 
 	// 0: legacy mouse acceleration

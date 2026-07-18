@@ -805,10 +805,10 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 	drawBufferCommand_t	*cmd = NULL;
 	colorMaskCommand_t *colcmd = NULL;
 	clearColorCommand_t *clrcmd = NULL;
-
 	if ( !tr.registered ) {
 		return;
 	}
+	R_QLUpdateRendererCvars( NULL, r_bloom, r_colorGrade );
 
 	glState.finishCalled = qfalse;
 

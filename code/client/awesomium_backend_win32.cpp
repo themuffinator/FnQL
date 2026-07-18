@@ -25,6 +25,7 @@ version.
 #include <algorithm>
 #include <array>
 #include <cstdarg>
+#include <cstring>
 #include <cstdio>
 #include <limits>
 #include <new>
@@ -560,13 +561,30 @@ private:
 			return false;
 		}
 
-		dataPakSource_ = imports_.newDataPakSource( webPakPath_.c_str() );
-		if ( !dataPakSource_ ) {
-			Fail( BackendError::ResourceUnavailable,
-				"could not create the retail web.pak data source" );
-			return false;
+		// Route QL asset requests through the engine whenever HostServices are
+		// available. That resolver applies fnql-web.pak first and the external
+		// retail web.pak second. The native Awesomium DataPak source remains the
+		// compatibility fallback for hosts that do not expose resource callbacks.
+		if ( hostServices_.CanRequestResources() ) {
+			qlDataSource_ = imports_.newDataSource();
+			if ( !qlDataSource_ ) {
+				Fail( BackendError::ResourceUnavailable,
+					"could not create the FnQL WebUI overlay data source" );
+				return false;
+			}
+			activeBackend_ = this;
+			imports_.dataSourceDirectorConnect( qlDataSource_,
+				reinterpret_cast<void *>( &OnQlResourceRequest ) );
+			imports_.webSessionAddDataSource( session_, L"QL", qlDataSource_ );
+		} else {
+			dataPakSource_ = imports_.newDataPakSource( webPakPath_.c_str() );
+			if ( !dataPakSource_ ) {
+				Fail( BackendError::ResourceUnavailable,
+					"could not create the retail web.pak data source" );
+				return false;
+			}
+			imports_.webSessionAddDataSource( session_, L"QL", dataPakSource_ );
 		}
-		imports_.webSessionAddDataSource( session_, L"QL", dataPakSource_ );
 
 		// Retail installs a second, lower-case source host for
 		// asset://steam/avatar/<steamid>. Keep the Awesomium object and callback
@@ -613,6 +631,7 @@ private:
 		}
 		session_ = nullptr;
 		dataPakSource_ = nullptr; // owned by the released WebSession
+		qlDataSource_ = nullptr; // owned by the released WebSession
 		steamDataSource_ = nullptr; // owned by the released WebSession
 		if ( core_ && imports_.webCoreShutdown ) {
 			imports_.webCoreShutdown();
@@ -642,6 +661,65 @@ private:
 		if ( activeBackend_ ) {
 			activeBackend_->HandleSteamResourceRequest( requestId, path );
 		}
+	}
+
+	static void __stdcall OnQlResourceRequest( int requestId, void *,
+		const wchar_t *path ) noexcept {
+		if ( activeBackend_ ) {
+			activeBackend_->HandleQlResourceRequest( requestId, path );
+		}
+	}
+
+	static const wchar_t *ResourceMimeType( const char *path ) noexcept {
+		const char *extension = path ? std::strrchr( path, '.' ) : nullptr;
+		if ( !extension ) {
+			return L"application/octet-stream";
+		}
+		if ( _stricmp( extension, ".html" ) == 0 ) return L"text/html";
+		if ( _stricmp( extension, ".css" ) == 0 ) return L"text/css";
+		if ( _stricmp( extension, ".js" ) == 0 ) return L"text/javascript";
+		if ( _stricmp( extension, ".json" ) == 0 ) return L"application/json";
+		if ( _stricmp( extension, ".png" ) == 0 ) return L"image/png";
+		if ( _stricmp( extension, ".jpg" ) == 0 || _stricmp( extension, ".jpeg" ) == 0 ) return L"image/jpeg";
+		if ( _stricmp( extension, ".gif" ) == 0 ) return L"image/gif";
+		if ( _stricmp( extension, ".svg" ) == 0 ) return L"image/svg+xml";
+		if ( _stricmp( extension, ".woff" ) == 0 ) return L"application/font-woff";
+		if ( _stricmp( extension, ".ttf" ) == 0 ) return L"application/x-font-ttf";
+		return L"application/octet-stream";
+	}
+
+	void HandleQlResourceRequest( int requestId, const wchar_t *widePath ) noexcept {
+		std::array<char, 4096> utf8{};
+		if ( requestId <= 0 || !widePath || !widePath[0] ) {
+			return;
+		}
+
+		const int converted = WideCharToMultiByte( CP_UTF8, 0, widePath, -1,
+			utf8.data(), static_cast<int>( utf8.size() ), nullptr, nullptr );
+		if ( converted <= 0 ) {
+			return;
+		}
+
+		const char *path = utf8.data();
+		while ( *path == '/' || *path == '\\' ) {
+			++path;
+		}
+		if ( _strnicmp( path, "asset://ql/", 11 ) == 0 ) {
+			path += 11;
+		} else if ( _strnicmp( path, "ql://", 5 ) == 0 ) {
+			path += 5;
+		}
+		if ( !path[0] ) {
+			path = "index.html";
+		}
+
+		std::array<char, 4096> virtualPath{};
+		const int written = std::snprintf( virtualPath.data(), virtualPath.size(),
+			"asset://ql/%s", path );
+		if ( written <= 0 || static_cast<std::size_t>( written ) >= virtualPath.size() ) {
+			return;
+		}
+		TrySendResource( qlDataSource_, requestId, virtualPath.data(), ResourceMimeType( path ) );
 	}
 
 	void HandleSteamResourceRequest( int requestId, const wchar_t *widePath ) noexcept {
@@ -675,14 +753,15 @@ private:
 		if ( written <= 0 || static_cast<std::size_t>( written ) >= virtualPath.size() ) {
 			return;
 		}
-		if ( !TrySendResource( requestId, virtualPath.data() ) ) {
+		if ( !TrySendSteamResource( requestId, virtualPath.data() ) ) {
 			QueuePendingResource( requestId, virtualPath.data() );
 		}
 	}
 
-	bool TrySendResource( int requestId, const char *path ) noexcept {
+	bool TrySendResource( void *dataSource, int requestId, const char *path,
+		const wchar_t *mimeType ) noexcept {
 		ResourceBuffer resource{};
-		if ( !steamDataSource_ || !hostServices_.CanRequestResources()
+		if ( !dataSource || !mimeType || !hostServices_.CanRequestResources()
 			|| !hostServices_.requestResource( hostServices_.context, path, &resource ) ) {
 			return false;
 		}
@@ -691,12 +770,16 @@ private:
 			&& resource.size <= static_cast<std::size_t>(
 				( std::numeric_limits<int>::max )() );
 		if ( valid ) {
-			imports_.dataSourceSendResponse( steamDataSource_, requestId,
+			imports_.dataSourceSendResponse( dataSource, requestId,
 				static_cast<int>( resource.size ),
-				const_cast<std::uint8_t *>( resource.bytes ), L"image/png" );
+				const_cast<std::uint8_t *>( resource.bytes ), mimeType );
 		}
 		hostServices_.releaseResource( hostServices_.context, &resource );
 		return valid;
+	}
+
+	bool TrySendSteamResource( int requestId, const char *path ) noexcept {
+		return TrySendResource( steamDataSource_, requestId, path, L"image/png" );
 	}
 
 	void QueuePendingResource( int requestId, const char *path ) noexcept {
@@ -728,7 +811,7 @@ private:
 			if ( pending.attempts % 5u != 0u ) {
 				continue;
 			}
-			if ( TrySendResource( pending.requestId, pending.path.data() ) ) {
+			if ( TrySendSteamResource( pending.requestId, pending.path.data() ) ) {
 				pending = {};
 			}
 		}
@@ -930,6 +1013,7 @@ private:
 	void *bitmapFactory_ = nullptr;
 	void *session_ = nullptr;
 	void *dataPakSource_ = nullptr;
+	void *qlDataSource_ = nullptr;
 	void *steamDataSource_ = nullptr;
 	void *view_ = nullptr;
 	HostServices hostServices_{};

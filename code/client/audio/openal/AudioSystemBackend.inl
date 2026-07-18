@@ -12,8 +12,11 @@ public:
 	void StartLocalSound( sfxHandle_t sfxHandle, int channelNum, float volume );
 	void StartBackgroundTrack( const char *intro, const char *loop );
 	void StopBackgroundTrack();
+	void UpdateBackgroundTrack();
 	void RawSamples( int samples, int rate, int width, int channels, const byte *data, float volume );
+	void AddVoiceSamples( int clientNum, int samples, int rate, const short *data );
 	void StopAllSounds();
+	void ClearLoopingSoundsFrame();
 	void ClearLoopingSounds( qboolean killall );
 	void AddLoopingSound( int entityNum, const float *origin, const float *velocity, sfxHandle_t sfxHandle );
 	void AddRealLoopingSound( int entityNum, const float *origin, const float *velocity, sfxHandle_t sfxHandle );
@@ -48,6 +51,7 @@ private:
 	Q3SoundWorld world_;
 	StreamPlayer musicPlayer_;
 	StreamPlayer rawPlayer_;
+	VoiceChatPlayer voicePlayer_;
 	std::deque<SoundSample> samples_;
 	std::unordered_map<std::string, sfxHandle_t> sampleLookup_;
 	SoundShaderLibrary weaponSoundShaders_;
@@ -262,6 +266,17 @@ bool AudioSystem::Init( soundInterface_t *si ) {
 	s_alOcclusionStrength = Cvar_Get( "s_alOcclusionStrength", "1.0", CVAR_ARCHIVE_ND );
 	Cvar_CheckRange( s_alOcclusionStrength, "0", "2", CV_FLOAT );
 	Cvar_SetDescription( s_alOcclusionStrength, "Scales how strongly world occlusion attenuates and muffles OpenAL sounds before smoothing." );
+	s_alDopplerFactor = Cvar_Get( "s_alDopplerFactor", "1.0", CVAR_ARCHIVE_ND );
+	Cvar_CheckRange( s_alDopplerFactor, "0", "10", CV_FLOAT );
+	Cvar_SetDescription( s_alDopplerFactor, "Scales the OpenAL doppler effect from source and listener motion. Applies while s_doppler is enabled." );
+	s_alDopplerSpeed = Cvar_Get( "s_alDopplerSpeed", "6000", CVAR_ARCHIVE_ND );
+	Cvar_CheckRange( s_alDopplerSpeed, "1000", "20000", CV_FLOAT );
+	Cvar_SetDescription( s_alDopplerSpeed, "Speed of sound in world units per second for OpenAL doppler.\n"
+		"Lower values exaggerate pitch shifts; about 13500 matches real-world acoustics at Quake III scale." );
+	s_alAirAbsorption = Cvar_Get( "s_alAirAbsorption", "2.0", CVAR_ARCHIVE_ND );
+	Cvar_CheckRange( s_alAirAbsorption, "0", "10", CV_FLOAT );
+	Cvar_SetDescription( s_alAirAbsorption, "Scales distance-based high-frequency air absorption for positional sounds when EFX is available.\n"
+		"0 disables it, 1 is physically neutral, higher values darken distant sounds more strongly." );
 	s_alDebugOverlay = Cvar_Get( "s_alDebugOverlay", "0", CVAR_ARCHIVE_ND );
 	Cvar_CheckRange( s_alDebugOverlay, "0", "2", CV_INTEGER );
 	Cvar_SetDescription( s_alDebugOverlay, "Draws OpenAL spatial audio debug overlay.\n"
@@ -291,6 +306,7 @@ bool AudioSystem::Init( soundInterface_t *si ) {
 	world_.Reset( &device_ );
 	musicPlayer_.Init( &device_, device_.MusicSource() );
 	rawPlayer_.Init( &device_, device_.RawSource() );
+	voicePlayer_.Init( &device_ );
 
 	samples_.clear();
 	sampleLookup_.clear();
@@ -304,8 +320,11 @@ bool AudioSystem::Init( soundInterface_t *si ) {
 	si->StartLocalSound = []( sfxHandle_t sfxHandle, int channelNum, float volume ) { AudioSystem::Get().StartLocalSound( sfxHandle, channelNum, volume ); };
 	si->StartBackgroundTrack = []( const char *intro, const char *loop ) { AudioSystem::Get().StartBackgroundTrack( intro, loop ); };
 	si->StopBackgroundTrack = []() { AudioSystem::Get().StopBackgroundTrack(); };
+	si->UpdateBackgroundTrack = []() { AudioSystem::Get().UpdateBackgroundTrack(); };
 	si->RawSamples = []( int samples, int rate, int width, int channels, const byte *data, float volume ) { AudioSystem::Get().RawSamples( samples, rate, width, channels, data, volume ); };
+	si->AddVoiceSamples = []( int clientNum, int samples, int rate, const short *data ) { AudioSystem::Get().AddVoiceSamples( clientNum, samples, rate, data ); };
 	si->StopAllSounds = []() { AudioSystem::Get().StopAllSounds(); };
+	si->ClearLoopingSoundsFrame = []() { AudioSystem::Get().ClearLoopingSoundsFrame(); };
 	si->ClearLoopingSounds = []( qboolean killall ) { AudioSystem::Get().ClearLoopingSounds( killall ); };
 	si->AddLoopingSound = []( int entityNum, const vec3_t origin, const vec3_t velocity, sfxHandle_t sfxHandle ) { AudioSystem::Get().AddLoopingSound( entityNum, origin, velocity, sfxHandle ); };
 	si->AddRealLoopingSound = []( int entityNum, const vec3_t origin, const vec3_t velocity, sfxHandle_t sfxHandle ) { AudioSystem::Get().AddRealLoopingSound( entityNum, origin, velocity, sfxHandle ); };
@@ -338,6 +357,7 @@ void AudioSystem::Shutdown() {
 	samples_.clear();
 	sampleLookup_.clear();
 	weaponSoundShaders_.Clear();
+	voicePlayer_.Shutdown();
 	musicPlayer_.Shutdown();
 	rawPlayer_.Shutdown();
 	device_.Shutdown();
@@ -518,13 +538,27 @@ void AudioSystem::StopBackgroundTrack() {
 	musicPlayer_.Clear();
 }
 
+void AudioSystem::UpdateBackgroundTrack() {
+	if ( !started_ ) {
+		return;
+	}
+	const float musicVolume = ( s_musicVolume != nullptr ) ? s_musicVolume->value : 1.0f;
+	if ( musicVolume > 0.0f ) {
+		ServiceBackgroundTrack();
+	}
+}
+
 void AudioSystem::ServiceBackgroundTrack() {
 	if ( backgroundStream_ == nullptr ) {
 		return;
 	}
 
+	// Cap decode work per frame so starting a track does not burst several
+	// large codec reads into one frame; the queue still fills within a couple
+	// of frames, well inside the buffered playback margin.
 	int emptyRestarts = 0;
-	while ( musicPlayer_.QueuedBufferCount() < kQueuedStreamChunks ) {
+	int chunksQueuedThisCall = 0;
+	while ( musicPlayer_.QueuedBufferCount() < kQueuedStreamChunks && chunksQueuedThisCall < kMaxStreamChunksPerService ) {
 		std::array<byte, 32768> raw;
 		const int bytesRead = S_CodecReadStream( backgroundStream_, static_cast<int>( raw.size() ), raw.data() );
 		if ( bytesRead <= 0 ) {
@@ -572,6 +606,7 @@ void AudioSystem::ServiceBackgroundTrack() {
 			break;
 		}
 		emptyRestarts = 0;
+		++chunksQueuedThisCall;
 	}
 }
 
@@ -584,6 +619,13 @@ void AudioSystem::RawSamples( int samples, int rate, int width, int channels, co
 	QueueStreamChunk( rawPlayer_, samples, rate, width, channels, data, volume, outputChannels, false );
 }
 
+void AudioSystem::AddVoiceSamples( int clientNum, int samples, int rate, const short *data ) {
+	if ( !started_ || hardMuted_ ) {
+		return;
+	}
+	voicePlayer_.Queue( clientNum, samples, rate, data );
+}
+
 void AudioSystem::StopAllSounds() {
 	if ( !started_ ) {
 		return;
@@ -591,11 +633,16 @@ void AudioSystem::StopAllSounds() {
 
 	world_.StopAllSounds();
 	rawPlayer_.Clear();
+	voicePlayer_.Clear();
 	StopBackgroundTrack();
 }
 
 void AudioSystem::ClearLoopingSounds( qboolean killall ) {
 	world_.ClearLoopingSounds( killall );
+}
+
+void AudioSystem::ClearLoopingSoundsFrame() {
+	world_.ClearLoopingSoundsFrame();
 }
 
 qboolean AudioSystem::GetSpatialDebugInfo( spatialAudioDebugInfo_t *info ) const {
@@ -686,23 +733,24 @@ void AudioSystem::Update( int msec ) {
 
 	const qboolean softMuted = IsSoftMuted();
 	device_.SetMasterGain( ( s_volume != nullptr ) ? s_volume->value : 1.0f );
-	device_.AL().alDopplerFactor( 0.0f );
+	device_.ApplyDopplerState();
 	const bool deferredUpdates = device_.BeginDeferredUpdates();
 	world_.Update( softMuted );
 	if ( deferredUpdates ) {
 		device_.EndDeferredUpdates();
 	}
 	rawPlayer_.Update( softMuted ? 0.0f : 1.0f );
+	const float voiceVolume = ( s_voiceVolume != nullptr ) ? ClampFloat( s_voiceVolume->value, 0.0f, 2.0f ) : 1.0f;
+	voicePlayer_.Update( softMuted ? 0.0f : voiceVolume );
 	const float musicVolume = ( s_musicVolume != nullptr ) ? s_musicVolume->value : 1.0f;
 	musicPlayer_.Update( softMuted ? 0.0f : musicVolume );
-	if ( musicVolume > 0.0f ) {
-		ServiceBackgroundTrack();
-	}
+	UpdateBackgroundTrack();
 }
 
 void AudioSystem::DisableSounds() {
 	world_.StopAllSounds();
 	rawPlayer_.Clear();
+	voicePlayer_.Clear();
 	StopBackgroundTrack();
 	hardMuted_ = true;
 }
@@ -710,6 +758,7 @@ void AudioSystem::DisableSounds() {
 void AudioSystem::ClearSoundBuffer() {
 	world_.ClearSoundBuffer();
 	rawPlayer_.Clear();
+	voicePlayer_.Clear();
 }
 
 void AudioSystem::SoundInfo() {
@@ -734,8 +783,18 @@ void AudioSystem::SoundInfo() {
 	Com_Printf( "EFX support: %s\n", device_.HasEFX() ? "enabled" : "unavailable" );
 	if ( device_.HasEFX() ) {
 		Com_Printf( "Auxiliary sends: %d\n", device_.MaxAuxiliarySends() );
-		Com_Printf( "Reverb send: %s (%s)\n", device_.HasReverb() ? "enabled" : "disabled", device_.CurrentReverbName() );
+		Com_Printf( "Reverb send: %s (%s effect, %s)\n",
+			device_.HasReverb() ? "enabled" : "disabled",
+			device_.ReverbEffectName(),
+			device_.CurrentReverbName() );
+		Com_Printf( "Air absorption: %.2f (world units calibrated to %.4f m)\n",
+			ClampFloat( ( s_alAirAbsorption != nullptr ) ? s_alAirAbsorption->value : 0.0f, 0.0f, 10.0f ),
+			kMetersPerGameUnit );
 	}
+	Com_Printf( "Doppler: %s (factor %.2f, speed of sound %.0f u/s)\n",
+		( s_doppler != nullptr && s_doppler->integer ) ? "enabled" : "disabled",
+		ClampFloat( ( s_alDopplerFactor != nullptr ) ? s_alDopplerFactor->value : 1.0f, 0.0f, 10.0f ),
+		ClampFloat( ( s_alDopplerSpeed != nullptr ) ? s_alDopplerSpeed->value : 6000.0f, 1000.0f, 20000.0f ) );
 	const bool stereoSpatializeRequested = CvarIntegerOrDefault( s_alSpatializeStereo, 0 ) != 0;
 	Com_Printf( "OpenAL requested render: HRTF %s (id %s), output %s, distance %s, limiter %s, stereo spatialize %s%s\n",
 		CvarStringOrDefault( s_alHrtf, "auto" ),
@@ -777,6 +836,7 @@ void AudioSystem::SoundInfo() {
 	Com_Printf( "%5d stream buffers (%d free)\n", device_.BufferPool().TotalCount(), device_.BufferPool().FreeCount() );
 	Com_Printf( "Music stream buffers: %d queued\n", musicPlayer_.QueuedBufferCount() );
 	Com_Printf( "Raw stream buffers: %d queued\n", rawPlayer_.QueuedBufferCount() );
+	Com_Printf( "Remote voice lanes: %d allocated, %d active\n", voicePlayer_.LaneCount(), voicePlayer_.ActiveLaneCount() );
 	weaponSoundShaders_.EnsureLoaded();
 	Com_Printf( "%5d weapon sound shader rules\n", weaponSoundShaders_.Count() );
 	Com_Printf( "%5lu registered samples\n", static_cast<unsigned long>( samples_.size() ) );

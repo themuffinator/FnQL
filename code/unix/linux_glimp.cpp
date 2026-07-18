@@ -855,8 +855,8 @@ static fnql::window::Bounds X11_GetUsableBounds( Window root )
 	int workAreaCount;
 	int offset;
 	fnql::window::Bounds work;
-	const int monitorRight = monitor.x + monitor.width;
-	const int monitorBottom = monitor.y + monitor.height;
+	int monitorRight;
+	int monitorBottom;
 	int workRight;
 	int workBottom;
 
@@ -864,6 +864,10 @@ static fnql::window::Bounds X11_GetUsableBounds( Window root )
 		monitor = { 0, 0, DisplayWidth( dpy, scrnum ),
 			DisplayHeight( dpy, scrnum ) };
 	}
+	monitorRight = fnql::window::SaturateToInt(
+		static_cast<std::int64_t>( monitor.x ) + monitor.width );
+	monitorBottom = fnql::window::SaturateToInt(
+		static_cast<std::int64_t>( monitor.y ) + monitor.height );
 
 	if ( X11_ReadCardinals( root, "_NET_CURRENT_DESKTOP", desktopValue, 1 ) == 1 ) {
 		desktop = X11_CardinalExtent( desktopValue[0] );
@@ -882,8 +886,10 @@ static fnql::window::Bounds X11_GetUsableBounds( Window root )
 		X11_CardinalExtent( workAreas[offset + 2] ),
 		X11_CardinalExtent( workAreas[offset + 3] )
 	};
-	workRight = work.x + work.width;
-	workBottom = work.y + work.height;
+	workRight = fnql::window::SaturateToInt(
+		static_cast<std::int64_t>( work.x ) + work.width );
+	workBottom = fnql::window::SaturateToInt(
+		static_cast<std::int64_t>( work.y ) + work.height );
 
 	// EWMH exposes one work area for the whole desktop. Intersect it with the
 	// current RandR monitor so panels/docks and multi-monitor bounds both apply.
@@ -1275,16 +1281,25 @@ void HandleEvents( void )
 				X11_EnsureWindowOnScreen( event.xconfigure.width,
 					event.xconfigure.height );
 
-				Cvar_SetIntegerValue( "vid_xpos", win_x );
-				Cvar_SetIntegerValue( "vid_ypos", win_y );
+				if ( !X11_WindowHasState( win, "_NET_WM_STATE_MAXIMIZED_HORZ" ) &&
+					!X11_WindowHasState( win, "_NET_WM_STATE_MAXIMIZED_VERT" ) ) {
+					Cvar_SetIntegerValue( "vid_xpos", win_x );
+					Cvar_SetIntegerValue( "vid_ypos", win_y );
+				}
 
 				if ( window_width > 0 && window_height > 0 &&
 					( window_width != event.xconfigure.width ||
 					window_height != event.xconfigure.height ) ) {
-					// The legacy X11 path recreates its native window on restart;
-					// unlike SDL/Win32, it cannot retain the current X Window safely.
-					CL_NotifyWindowResize( event.xconfigure.width,
-						event.xconfigure.height, qfalse );
+					if ( glw_state.config &&
+						event.xconfigure.width == glw_state.config->vidWidth &&
+						event.xconfigure.height == glw_state.config->vidHeight ) {
+						CL_CancelWindowResize();
+					} else {
+						// The legacy X11 path recreates its native window on restart;
+						// unlike SDL/Win32, it cannot retain the current X Window safely.
+						CL_NotifyWindowResize( event.xconfigure.width,
+							event.xconfigure.height, qfalse );
+					}
 				}
 				window_width = event.xconfigure.width;
 				window_height = event.xconfigure.height;

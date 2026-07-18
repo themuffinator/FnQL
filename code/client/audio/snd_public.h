@@ -36,16 +36,23 @@ void S_StartLocalSoundVolume( sfxHandle_t sfx, int channelNum, float volume );
 
 void S_StartBackgroundTrack( const char *intro, const char *loop );
 void S_StopBackgroundTrack( void );
+void S_UpdateBackgroundTrack( void );
 
-// cinematics and voice-over-network will send raw samples
+// cinematics and other generic stream producers will send raw samples
 // 1.0 volume will be direct output of source samples
-void S_RawSamples (int samples, int rate, int width, int channels, 
-				   const byte *data, float volume);
+void S_RawSamples (int samples, int rate, int width, int channels,
+					const byte *data, float volume);
+
+// Queues one decoded remote-speaker packet without sharing the cinematic/raw
+// stream. The explicit rate keeps the fallback mixer correct when s_khz does
+// not match Steam's requested decode rate.
+void S_AddVoiceSamples( int clientNum, int samples, int rate, const short *data );
 
 // stop all sounds and the background track
 void S_StopAllSounds( void );
 
 // all continuous looping sounds must be added before calling S_Update
+void S_ClearLoopingSoundsFrame( void );
 void S_ClearLoopingSounds( qboolean killall );
 void S_AddLoopingSound( int entityNum, const vec3_t origin, const vec3_t velocity, sfxHandle_t sfx );
 void S_AddRealLoopingSound( int entityNum, const vec3_t origin, const vec3_t velocity, sfxHandle_t sfx );

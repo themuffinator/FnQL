@@ -272,22 +272,22 @@ def complete_evidence() -> dict[str, object]:
         "version": 1,
         "build": {
             "glx": {"status": "passed"},
-            "vulkan": {"status": "passed"},
+            "vk": {"status": "passed"},
         },
         "shaders": {
             "glx": {"status": "passed"},
-            "vulkan": {
+            "vk": {
                 "status": "passed",
                 "variants": list(dlight_shadow_release_gate.VULKAN_SHADER_VARIANTS),
             },
         },
         "runtimeSweeps": {
             "glx": "glx-manifest.json",
-            "vulkan": "vulkan-manifest.json",
+            "vk": "vk-manifest.json",
         },
         "renderdoc": {
             "glx": renderdoc_record("glx"),
-            "vulkan": renderdoc_record("vulkan"),
+            "vk": renderdoc_record("vk"),
         },
     }
 
@@ -297,8 +297,8 @@ def write_evidence(root: Path, evidence: dict[str, object]) -> Path:
         json.dumps(runtime_manifest("glx")),
         encoding="utf-8",
     )
-    (root / "vulkan-manifest.json").write_text(
-        json.dumps(runtime_manifest("vulkan")),
+    (root / "vk-manifest.json").write_text(
+        json.dumps(runtime_manifest("vk")),
         encoding="utf-8",
     )
     path = root / "evidence.json"
@@ -329,7 +329,7 @@ class DlightShadowReleaseGateTests(unittest.TestCase):
             evidence = complete_evidence()
             renderdoc = evidence["renderdoc"]  # type: ignore[index]
             assert isinstance(renderdoc, dict)
-            vulkan = renderdoc["vulkan"]
+            vulkan = renderdoc["vk"]
             assert isinstance(vulkan, dict)
             checks = vulkan["checks"]
             assert isinstance(checks, dict)
@@ -356,7 +356,7 @@ class DlightShadowReleaseGateTests(unittest.TestCase):
                 json.dumps(runtime_manifest("glx")),
                 encoding="utf-8",
             )
-            manifest = runtime_manifest("vulkan")
+            manifest = runtime_manifest("vk")
             shadow_run = manifest["runs"][1]  # type: ignore[index]
             assert isinstance(shadow_run, dict)
             shadow_run["screenshots"] = [
@@ -374,7 +374,7 @@ class DlightShadowReleaseGateTests(unittest.TestCase):
             manager_scenes = manager["scenes"]
             assert isinstance(manager_scenes, dict)
             manager_scenes.pop("stress-light-budget")
-            (root / "vulkan-manifest.json").write_text(
+            (root / "vk-manifest.json").write_text(
                 json.dumps(manifest),
                 encoding="utf-8",
             )
@@ -400,13 +400,13 @@ class DlightShadowReleaseGateTests(unittest.TestCase):
                 json.dumps(runtime_manifest("glx")),
                 encoding="utf-8",
             )
-            manifest = runtime_manifest("vulkan")
+            manifest = runtime_manifest("vk")
             shadow_run = manifest["runs"][1]  # type: ignore[index]
             assert isinstance(shadow_run, dict)
             dlight_shadow = shadow_run["dlightShadow"]
             assert isinstance(dlight_shadow, dict)
             dlight_shadow.pop("shadowManager")
-            (root / "vulkan-manifest.json").write_text(
+            (root / "vk-manifest.json").write_text(
                 json.dumps(manifest),
                 encoding="utf-8",
             )
@@ -432,13 +432,13 @@ class DlightShadowReleaseGateTests(unittest.TestCase):
                 json.dumps(runtime_manifest("glx")),
                 encoding="utf-8",
             )
-            manifest = runtime_manifest("vulkan")
+            manifest = runtime_manifest("vk")
             shadow_run = manifest["runs"][1]  # type: ignore[index]
             assert isinstance(shadow_run, dict)
             dlight_shadow = shadow_run["dlightShadow"]
             assert isinstance(dlight_shadow, dict)
             dlight_shadow["max"] = {"planned": True, "renderLights": True}
-            (root / "vulkan-manifest.json").write_text(
+            (root / "vk-manifest.json").write_text(
                 json.dumps(manifest),
                 encoding="utf-8",
             )
@@ -467,13 +467,13 @@ class DlightShadowReleaseGateTests(unittest.TestCase):
                 json.dumps(runtime_manifest("glx")),
                 encoding="utf-8",
             )
-            manifest = runtime_manifest("vulkan")
+            manifest = runtime_manifest("vk")
             shadow_run = manifest["runs"][1]  # type: ignore[index]
             assert isinstance(shadow_run, dict)
             dlight_shadow = shadow_run["dlightShadow"]
             assert isinstance(dlight_shadow, dict)
             dlight_shadow.pop("surfaceLightSpot")
-            (root / "vulkan-manifest.json").write_text(
+            (root / "vk-manifest.json").write_text(
                 json.dumps(manifest),
                 encoding="utf-8",
             )
@@ -499,7 +499,7 @@ class DlightShadowReleaseGateTests(unittest.TestCase):
                 json.dumps(runtime_manifest("glx")),
                 encoding="utf-8",
             )
-            manifest = runtime_manifest("vulkan")
+            manifest = runtime_manifest("vk")
             shadow_run = manifest["runs"][1]  # type: ignore[index]
             assert isinstance(shadow_run, dict)
             dlight_shadow = shadow_run["dlightShadow"]
@@ -514,7 +514,7 @@ class DlightShadowReleaseGateTests(unittest.TestCase):
             assert isinstance(maximum, dict)
             maximum["spotPublished"] = 0
             maximum["spotSurfacePlans"] = 0
-            (root / "vulkan-manifest.json").write_text(
+            (root / "vk-manifest.json").write_text(
                 json.dumps(manifest),
                 encoding="utf-8",
             )
@@ -540,13 +540,13 @@ class DlightShadowReleaseGateTests(unittest.TestCase):
                 json.dumps(runtime_manifest("glx")),
                 encoding="utf-8",
             )
-            manifest = runtime_manifest("vulkan")
+            manifest = runtime_manifest("vk")
             shadow_run = manifest["runs"][1]  # type: ignore[index]
             assert isinstance(shadow_run, dict)
             dlight_shadow = shadow_run["dlightShadow"]
             assert isinstance(dlight_shadow, dict)
             dlight_shadow.pop("csmShadows")
-            (root / "vulkan-manifest.json").write_text(
+            (root / "vk-manifest.json").write_text(
                 json.dumps(manifest),
                 encoding="utf-8",
             )
@@ -572,7 +572,7 @@ class DlightShadowReleaseGateTests(unittest.TestCase):
                 json.dumps(runtime_manifest("glx")),
                 encoding="utf-8",
             )
-            manifest = runtime_manifest("vulkan")
+            manifest = runtime_manifest("vk")
             shadow_run = manifest["runs"][1]  # type: ignore[index]
             assert isinstance(shadow_run, dict)
             dlight_shadow = shadow_run["dlightShadow"]
@@ -587,7 +587,7 @@ class DlightShadowReleaseGateTests(unittest.TestCase):
             assert isinstance(maximum, dict)
             maximum["csmPublished"] = 0
             maximum["csmGeneration"] = 0
-            (root / "vulkan-manifest.json").write_text(
+            (root / "vk-manifest.json").write_text(
                 json.dumps(manifest),
                 encoding="utf-8",
             )
@@ -613,14 +613,14 @@ class DlightShadowReleaseGateTests(unittest.TestCase):
                 json.dumps(runtime_manifest("glx")),
                 encoding="utf-8",
             )
-            manifest = runtime_manifest("vulkan")
+            manifest = runtime_manifest("vk")
             shadow_run = manifest["runs"][1]  # type: ignore[index]
             assert isinstance(shadow_run, dict)
             shadow_run.pop("csmFallbacks")
             dlight_shadow = shadow_run["dlightShadow"]
             assert isinstance(dlight_shadow, dict)
             dlight_shadow.pop("csmFallbacks")
-            (root / "vulkan-manifest.json").write_text(
+            (root / "vk-manifest.json").write_text(
                 json.dumps(manifest),
                 encoding="utf-8",
             )
@@ -644,7 +644,7 @@ class DlightShadowReleaseGateTests(unittest.TestCase):
             evidence = complete_evidence()
             renderdoc = evidence["renderdoc"]  # type: ignore[index]
             assert isinstance(renderdoc, dict)
-            renderdoc.pop("vulkan")
+            renderdoc.pop("vk")
             evidence_path = write_evidence(root, evidence)
 
             report = dlight_shadow_release_gate.release_gate_report(

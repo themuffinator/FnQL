@@ -28,13 +28,19 @@ constexpr float kOpenALReferenceDistance = kQ3SoundFullVolumeDistance;
 constexpr float kOpenALMaxDistance = kQ3SoundFullVolumeDistance + ( 1.0f / kQ3SoundAttenuation );
 constexpr float kOpenALRolloffFactor = 1.0f;
 constexpr float kDefaultSoundShaderScale = 1.0f;
+// Sound-shader distance scaling limits. Range scale also softens rolloff
+// (rolloff = 1 / rangeScale), so long-throw combat sounds carry through the
+// mid field instead of only gaining a distant, quiet tail.
+constexpr float kMinSoundShaderDistanceScale = 0.5f;
+constexpr float kMaxSoundShaderReferenceScale = 2.0f;
+constexpr float kMaxSoundShaderRangeScale = 3.0f;
 constexpr float kOcclusionTargetRiseHysteresis = 0.04f;
 constexpr float kOcclusionTargetFallHysteresis = 0.10f;
 constexpr float kOcclusionAttackPerSecond = 5.5f;
 constexpr float kOcclusionReleasePerSecond = 2.25f;
 constexpr float kToneNeutralThreshold = 0.985f;
 constexpr float kToneStrongOcclusionThreshold = 0.68f;
-constexpr float kToneStrongOcclusionLowCut = 0.18f;
+constexpr float kToneStrongOcclusionLowCut = 0.26f;
 constexpr float kToneUnderwaterLowCut = 0.30f;
 constexpr float kToneUnderwaterHighCut = 0.18f;
 constexpr float kToneAnnouncerLowCut = 0.10f;
@@ -43,7 +49,14 @@ constexpr float kToneItemLowCut = 0.06f;
 constexpr float kToneVoiceLowCut = 0.08f;
 constexpr float kToneBodyHighCut = 0.06f;
 constexpr float kPanScale = 2.0f;
-constexpr float kDopplerSpeedOfSound = 6000.0f;
+constexpr float kMetersPerGameUnit = 0.0254f;
+constexpr float kListenerVelocityMax = 1500.0f;
+constexpr float kListenerTeleportSpeed = 2500.0f;
+constexpr float kListenerVelocitySmoothMs = 60.0f;
+constexpr float kHorizonFadeStartFraction = 0.85f;
+constexpr float kOneShotCullMargin = 1.15f;
+constexpr float kLiquidBoundaryOcclusionFloor = 0.55f;
+constexpr int kMaxStreamChunksPerService = 2;
 constexpr int kOcclusionMask = CONTENTS_SOLID | CONTENTS_SLIME | CONTENTS_LAVA;
 constexpr int kLiquidContents = CONTENTS_WATER | CONTENTS_SLIME | CONTENTS_LAVA;
 
@@ -51,6 +64,9 @@ cvar_t *s_alReverb = nullptr;
 cvar_t *s_alOcclusion = nullptr;
 cvar_t *s_alReverbGain = nullptr;
 cvar_t *s_alOcclusionStrength = nullptr;
+cvar_t *s_alDopplerFactor = nullptr;
+cvar_t *s_alDopplerSpeed = nullptr;
+cvar_t *s_alAirAbsorption = nullptr;
 cvar_t *s_alDebugOverlay = nullptr;
 cvar_t *s_alDebugVoice = nullptr;
 cvar_t *s_alAudioZones = nullptr;
@@ -925,16 +941,32 @@ struct ReverbPreset {
 	float baseWet;
 	float directHF;
 	float wetHF;
+	// Extended parameters used when the runtime accepts AL_EFFECT_EAXREVERB.
+	float gainLF;
+	float decayLFRatio;
+	float echoTime;
+	float echoDepth;
+	float modulationTime;
+	float modulationDepth;
+	float hfReference;
+	float lfReference;
 };
 
 static constexpr ReverbPreset kReverbPresets[] = {
-	{ "small-room", 0.70f, 0.60f, 0.28f, 0.89f, 0.90f, 0.78f, 0.20f, 0.002f, 1.10f, 0.011f, 0.994f, 0.0f, AL_TRUE, 0.18f, 0.95f, 1.00f },
-	{ "room", 0.80f, 0.70f, 0.32f, 0.70f, 1.40f, 0.83f, 0.25f, 0.003f, 1.20f, 0.016f, 0.994f, 0.0f, AL_TRUE, 0.22f, 1.00f, 1.00f },
-	{ "stone-room", 1.00f, 0.85f, 0.36f, 0.50f, 2.20f, 0.72f, 0.45f, 0.012f, 1.45f, 0.028f, 0.993f, 0.0f, AL_TRUE, 0.28f, 0.95f, 0.95f },
-	{ "hallway", 1.00f, 0.78f, 0.33f, 0.59f, 1.80f, 0.69f, 0.42f, 0.008f, 1.35f, 0.019f, 0.994f, 0.0f, AL_TRUE, 0.24f, 0.95f, 0.95f },
-	{ "hall", 1.00f, 0.92f, 0.35f, 0.66f, 3.10f, 0.78f, 0.50f, 0.020f, 1.55f, 0.036f, 0.993f, 0.0f, AL_TRUE, 0.34f, 1.00f, 1.00f },
-	{ "outdoors", 0.25f, 0.30f, 0.18f, 0.99f, 1.60f, 0.85f, 0.05f, 0.007f, 0.28f, 0.011f, 0.999f, 0.0f, AL_TRUE, 0.10f, 1.00f, 1.00f },
-	{ "underwater", 1.00f, 1.00f, 0.20f, 0.01f, 1.50f, 0.10f, 0.59f, 0.007f, 1.18f, 0.011f, 0.994f, 0.0f, AL_TRUE, 0.45f, 0.25f, 0.30f }
+	{ "small-room", 0.70f, 0.60f, 0.28f, 0.89f, 0.90f, 0.78f, 0.20f, 0.002f, 1.10f, 0.011f, 0.994f, 0.0f, AL_TRUE, 0.30f, 0.95f, 1.00f,
+		1.00f, 1.00f, 0.25f, 0.00f, 0.25f, 0.00f, 5000.0f, 250.0f },
+	{ "room", 0.80f, 0.70f, 0.32f, 0.70f, 1.40f, 0.83f, 0.25f, 0.003f, 1.20f, 0.016f, 0.994f, 0.0f, AL_TRUE, 0.36f, 1.00f, 1.00f,
+		1.00f, 1.00f, 0.25f, 0.00f, 0.25f, 0.00f, 5000.0f, 250.0f },
+	{ "stone-room", 1.00f, 0.85f, 0.36f, 0.50f, 2.20f, 0.72f, 0.45f, 0.012f, 1.45f, 0.028f, 0.993f, 0.0f, AL_TRUE, 0.46f, 0.95f, 0.95f,
+		1.00f, 1.05f, 0.25f, 0.05f, 0.25f, 0.00f, 5000.0f, 250.0f },
+	{ "hallway", 1.00f, 0.78f, 0.33f, 0.59f, 1.80f, 0.69f, 0.42f, 0.008f, 1.35f, 0.019f, 0.994f, 0.0f, AL_TRUE, 0.40f, 0.95f, 0.95f,
+		1.00f, 0.95f, 0.25f, 0.10f, 0.25f, 0.00f, 5000.0f, 250.0f },
+	{ "hall", 1.00f, 0.92f, 0.35f, 0.66f, 3.10f, 0.78f, 0.50f, 0.020f, 1.55f, 0.036f, 0.993f, 0.0f, AL_TRUE, 0.55f, 1.00f, 1.00f,
+		1.00f, 0.90f, 0.25f, 0.08f, 0.25f, 0.00f, 5000.0f, 250.0f },
+	{ "outdoors", 0.25f, 0.30f, 0.18f, 0.99f, 1.60f, 0.85f, 0.05f, 0.007f, 0.28f, 0.011f, 0.999f, 0.0f, AL_TRUE, 0.16f, 1.00f, 1.00f,
+		0.90f, 0.75f, 0.25f, 0.30f, 0.25f, 0.00f, 5000.0f, 250.0f },
+	{ "underwater", 1.00f, 1.00f, 0.20f, 0.01f, 1.50f, 0.10f, 0.59f, 0.007f, 1.18f, 0.011f, 0.994f, 0.0f, AL_TRUE, 0.75f, 0.25f, 0.30f,
+		1.00f, 1.10f, 0.25f, 0.00f, 1.18f, 0.35f, 5000.0f, 250.0f }
 };
 
 struct EnvironmentState {
@@ -1456,19 +1488,52 @@ static float ComputeOcclusionFactor( const float *listenerOrigin, const float *s
 	return occ::ApplyStrength( occ::OcclusionFromProbeHits( blocked, total, centerBlocked ), strength );
 }
 
-static float ComputeDopplerPitch( const float *listenerOrigin, const float *sourceOrigin, const float *sourceVelocity ) {
-	if ( listenerOrigin == nullptr || sourceOrigin == nullptr || sourceVelocity == nullptr ) {
+static float AudibilityHorizonDistance( float rangeScale ) {
+	return kOpenALMaxDistance * ClampFloat( rangeScale, kMinSoundShaderDistanceScale, kMaxSoundShaderRangeScale );
+}
+
+// Q3's legacy mixer reaches true silence at its maximum range, while the
+// clamped OpenAL distance models hold a residual gain floor forever. Fading
+// the final stretch of the legacy range keeps far-away sounds out of the mix
+// without changing close and mid-range rolloff.
+static float HorizonGain( float distance, float rangeScale ) {
+	const float horizon = AudibilityHorizonDistance( rangeScale );
+	const float fadeStart = horizon * kHorizonFadeStartFraction;
+	if ( distance <= fadeStart ) {
 		return 1.0f;
 	}
+	if ( distance >= horizon ) {
+		return 0.0f;
+	}
+	return 1.0f - SmoothStep( ( distance - fadeStart ) / ( horizon - fadeStart ) );
+}
 
-	vec3_t toListener;
-	VectorSubtract( listenerOrigin, sourceOrigin, toListener );
-	if ( VectorNormalize( toListener ) == 0.0f ) {
-		return 1.0f;
+static bool PointInLiquid( const float *origin ) {
+	if ( origin == nullptr || !CollisionWorldReady() ) {
+		return false;
+	}
+	return ( CM_PointContents( origin, 0 ) & kLiquidContents ) != 0;
+}
+
+// Raw listener velocity comes from frame-to-frame position deltas, which spike
+// on teleports/respawns and jitter with frame timing. Native OpenAL doppler
+// hears every spike, so clamp and smooth before handing it to the listener.
+static void UpdateSmoothedListenerVelocity( Vec3f &smoothed, const float *rawVelocity, int elapsedMs ) {
+	vec3_t velocity;
+	VectorCopy( rawVelocity, velocity );
+
+	const float speed = VectorLength( velocity );
+	if ( speed > kListenerTeleportSpeed ) {
+		VectorClear( velocity );
+		smoothed = Vec3f();
+		return;
+	}
+	if ( speed > kListenerVelocityMax ) {
+		VectorScale( velocity, kListenerVelocityMax / speed, velocity );
 	}
 
-	const float radialVelocity = DotProduct( sourceVelocity, toListener );
-	const float denominator = ClampFloat( kDopplerSpeedOfSound - radialVelocity, kDopplerSpeedOfSound * 0.6f, kDopplerSpeedOfSound * 1.4f );
-	const float pitch = kDopplerSpeedOfSound / denominator;
-	return ClampFloat( pitch, 0.85f, 1.15f );
+	const float blend = 1.0f - std::exp( -static_cast<float>( ClampInt( elapsedMs, 0, 500 ) ) / kListenerVelocitySmoothMs );
+	smoothed.v[0] = LerpFloat( smoothed.v[0], velocity[0], blend );
+	smoothed.v[1] = LerpFloat( smoothed.v[1], velocity[1], blend );
+	smoothed.v[2] = LerpFloat( smoothed.v[2], velocity[2], blend );
 }

@@ -10,7 +10,7 @@ def read_text(relative_path):
 
 
 class PersonalShadowSourceTests(unittest.TestCase):
-    RENDERERS = ("code/renderer", "code/renderervk")
+    RENDERERS = ("code/renderer", "code/renderervk", "code/rendererrtx")
     MODEL_FILES = ("tr_mesh.c", "tr_animation.c", "tr_model_iqm.c")
 
     def test_surface_lists_have_shadow_caster_only_flags(self):

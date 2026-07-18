@@ -2,19 +2,19 @@
 
 ## Status
 
-Accepted target contract, 2026-05-09.
+Accepted target contract, 2026-05-09; renderer-name consolidation completed
+2026-07-18.
 
-This document defines the final GLx replacement contract. It is not a claim
-that the current renderer already satisfies the contract. The current
-implementation and release-candidate gates remain transitional until the work
-below is implemented and proven.
+This document defines the continuing GLx replacement contract. GLx is now the
+default and sole OpenGL-lineage public renderer name, while the detailed
+ownership and runtime gates below remain regression requirements.
 
 Where this ADR conflicts with older GLx planning notes, this ADR governs new
 GLx replacement work.
 
 ## Context
 
-FnQL preserves retail Quake III Arena compatibility, demo compatibility,
+FnQL preserves retail Quake Live compatibility, demo compatibility,
 hot-path efficiency, and cross-platform viability. GLx exists to consolidate
 the OpenGL renderer lineage behind the existing renderer module boundary
 without changing the game code, demo formats, protocol behavior, asset loading,
@@ -85,7 +85,7 @@ Disallowed final-state dependencies:
   unsupported work;
 - legacy OpenGL state setup as the final source of GLx material, fog, dynamic
   light, postprocess, or static-world draw semantics;
-- silent fallback from GLx renderer selection to `opengl` or `opengl2`;
+- silent fallback from GLx renderer selection to any unrecognized renderer name;
 - default cvar behavior that changes demo-visible output without parity proof
   and migration notes.
 
@@ -191,10 +191,11 @@ GLx color handling is renderer-owned and explicit:
 - screenshots and video exports state whether they capture scene-linear,
   display-referred SDR, or HDR-transformed output.
 
-## Promotion Rules
+## Consolidation And Regression Rules
 
-GLx cannot become the OpenGL-lineage default, and `opengl` cannot become a
-migration alias to GLx, until all of these are true:
+GLx is the OpenGL-lineage default and retired renderer names are intentionally
+not aliases. The consolidated contract remains valid only while all of these
+conditions stay true:
 
 - the five product tiers are represented in capability policy, diagnostics,
   tests, and documentation;
@@ -240,12 +241,12 @@ migration alias to GLx, until all of these are true:
 - migration notes, rollback instructions, and reviewed rollback package metadata
   exist before default changes ship.
 
-The machine-readable promotion guard is `python scripts/glx_promotion.py --require-ready --proof-root <dir> --rollback-metadata <json>`. It must report `ready` before build defaults, renderer aliases, or legacy OpenGL packaging rules are changed for promotion.
+The machine-readable historical promotion guard is `python scripts/glx_promotion.py --require-ready --proof-root <dir> --rollback-metadata <json>`. Its source-policy check now treats the exact consolidated renderer defaults as the passing state; its proof and rollback checks remain available for release review.
 
 ## Consequences
 
-Existing GLx RC gates remain useful for proving the transitional surface, but
-they are not sufficient for final renderer promotion. Future GLx work should
+Existing GLx RC gates remain useful for proving the compatibility surface, but
+they are not sufficient on their own to weaken this contract. Future GLx work should
 reference this ADR when changing ownership boundaries, capability tiers,
 material execution, pass scheduling, color output, runtime gates, or product
 documentation.

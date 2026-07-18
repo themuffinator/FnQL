@@ -320,8 +320,8 @@ class SteamProviderSourceTests(unittest.TestCase):
         self.assertIn('"asset://steam/avatar/"', client)
         for path in (
             "code/renderer/tr_init.c",
-            "code/renderer2/tr_init.c",
             "code/renderervk/tr_init.c",
+            "code/rendererrtx/tr_init.c",
         ):
             source = (ROOT / path).read_text(encoding="utf-8")
             self.assertIn("re.RegisterShaderFromRGBA = RE_RegisterShaderFromRGBA;", source)

@@ -4459,7 +4459,7 @@ void Con_Init( void )
 	con_scrollLines = Cvar_Get( "con_scrollLines", "8", CVAR_ARCHIVE_ND );
 	Cvar_CheckRange( con_scrollLines, "1", "256", CV_INTEGER );
 	Cvar_SetDescription( con_scrollLines, "Number of console lines scrolled per step, clamped to the current visible console page." );
-	con_backgroundStyle = Cvar_Get( "con_backgroundStyle", "0", CVAR_ARCHIVE_ND );
+	con_backgroundStyle = Cvar_Get( "con_backgroundStyle", "1", CVAR_ARCHIVE_ND );
 	Cvar_CheckRange( con_backgroundStyle, "0", "1", CV_INTEGER );
 	Cvar_SetDescription( con_backgroundStyle,
 		"Console background style:\n"

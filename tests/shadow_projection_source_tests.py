@@ -38,8 +38,189 @@ def section(text: str, start: str, end: str, label: str, failures: list[str]) ->
     return text[start_index:end_index]
 
 
+def check_vulkan_api_shadow_contracts(
+    label: str, renderer_root: str, failures: list[str]
+) -> None:
+    required_paths = (
+        f"{renderer_root}/vk.c",
+        f"{renderer_root}/tr_backend.c",
+        f"{renderer_root}/shaders/csm_shadow.frag",
+        f"{renderer_root}/shaders/light_frag.tmpl",
+        f"{renderer_root}/shaders/spirv/shader_data.c",
+    )
+    missing_paths = [path for path in required_paths if not (ROOT / path).is_file()]
+    if missing_paths:
+        for path in missing_paths:
+            failures.append(f"missing {label} shadow source: {path}")
+        return
+
+    vk = read_text(f"{renderer_root}/vk.c")
+    backend = read_text(f"{renderer_root}/tr_backend.c")
+    csm_frag = read_text(f"{renderer_root}/shaders/csm_shadow.frag")
+    light_frag = read_text(f"{renderer_root}/shaders/light_frag.tmpl")
+
+    dlight_projection = section(
+        backend,
+        "static void RB_SetDlightShadowProjectionZ",
+        "static void RB_BuildDlightShadowView",
+        f"{label} dynamic-light shadow projection",
+        failures,
+    )
+    require_order(
+        dlight_projection,
+        [
+            "#ifdef USE_REVERSED_DEPTH",
+            "viewParms->projectionMatrix[10] = zNear / depth;",
+            "viewParms->projectionMatrix[14] = zFar * zNear / depth;",
+            "#else",
+            "viewParms->projectionMatrix[10] = -zFar / depth;",
+            "viewParms->projectionMatrix[14] = -zFar * zNear / depth;",
+        ],
+        f"{label} zero-to-one dynamic shadow depth projection",
+        failures,
+    )
+    require(
+        backend,
+        "shadowParms->viewportY = atlasHeight - atlasY - atlasFaceSize;",
+        f"{label} shadow atlas plan-to-viewParms Y conversion",
+        failures,
+    )
+
+    viewport = section(
+        vk,
+        "static void get_viewport_rect",
+        "static void get_viewport(",
+        f"{label} API viewport conversion",
+        failures,
+    )
+    require(
+        viewport,
+        "r->offset.y = vk.renderHeight - (backEnd.viewParms.viewportY + backEnd.viewParms.viewportHeight) * vk.renderScaleY;",
+        f"{label} lower-left viewParms to top-left VkViewport conversion",
+        failures,
+    )
+
+    mvp = section(
+        vk,
+        "static void get_mvp_transform",
+        "void vk_clear_color",
+        f"{label} MVP conversion",
+        failures,
+    )
+    require_order(
+        mvp,
+        [
+            "Com_Memcpy( proj, p, 64 );",
+            "proj[1] = -p[1];",
+            "proj[5] = -p[5];",
+            "proj[9] = -p[9];",
+            "proj[13] = -p[13];",
+            "myGlMultMatrix( vk_world.modelview_transform, proj, mvp );",
+        ],
+        f"{label} full clip-Y projection row inversion",
+        failures,
+    )
+
+    depth_clear = section(
+        vk,
+        "static void vk_clear_depth_internal",
+        "void vk_clear_depth( qboolean clear_stencil )",
+        f"{label} depth clear convention",
+        failures,
+    )
+    require_order(
+        depth_clear,
+        [
+            "if ( vk.renderPassIndex == RENDER_PASS_CSM_SHADOW ) {",
+            "attachment.clearValue.depthStencil.depth = 1.0f;",
+            "#ifdef USE_REVERSED_DEPTH",
+            "attachment.clearValue.depthStencil.depth = 0.0f;",
+            "#else",
+            "attachment.clearValue.depthStencil.depth = 1.0f;",
+        ],
+        f"{label} CSM forward clear and dynamic reversed clear",
+        failures,
+    )
+
+    depth_compare = section(
+        vk,
+        "depth_stencil_state.depthWriteEnable = (state_bits & GLS_DEPTHMASK_TRUE) ? VK_TRUE : VK_FALSE;",
+        "depth_stencil_state.depthBoundsTestEnable",
+        f"{label} depth compare convention",
+        failures,
+    )
+    require_order(
+        depth_compare,
+        [
+            "if ( renderPassIndex == RENDER_PASS_CSM_SHADOW ) {",
+            "VK_COMPARE_OP_LESS_OR_EQUAL",
+            "#ifdef USE_REVERSED_DEPTH",
+            "VK_COMPARE_OP_GREATER_OR_EQUAL",
+        ],
+        f"{label} CSM forward compare and dynamic reversed compare",
+        failures,
+    )
+
+    csm_projection = section(
+        backend,
+        "static void RB_SetCSMShadowProjection",
+        "static void RB_BuildCSMShadowView",
+        f"{label} CSM producer projection",
+        failures,
+    )
+    require(
+        csm_projection,
+        "shadowParms->projectionMatrix[13] = -( cascade->bounds[1][2] + cascade->bounds[0][2] ) / extentZ;",
+        f"{label} CSM orthographic vertical offset",
+        failures,
+    )
+
+    require_order(
+        csm_frag,
+        [
+            "vec2 texel = 1.0 / vec2(textureSize(csm_shadow_texture, 0));",
+            "float atlas_x = csmSplitAtlas.z + light_coord.y * csmSplitAtlas.w;",
+            "float atlas_x_min = csmSplitAtlas.z + texel.x;",
+            "float atlas_x_max = csmSplitAtlas.z + csmSplitAtlas.w - texel.x;",
+            "clamp(atlas_x, atlas_x_min, atlas_x_max),",
+            "clamp(1.0 - light_coord.z, texel.y, 1.0 - texel.y));",
+        ],
+        f"{label} CSM receiver atlas mapping",
+        failures,
+    )
+    require(
+        light_frag,
+        "vec2 atlasUV = (vec2(column, row) * faceSize + localUV * faceSize) / atlasSize;",
+        f"{label} dynamic-light top-left atlas row sampling",
+        failures,
+    )
+    require_order(
+        light_frag,
+        [
+            "float texelInset = 1.0 / tileSize;",
+            "localUV = clamp(localUV, vec2(texelInset), vec2(1.0 - texelInset));",
+            "vec2 atlasUV = (depthFadeScale.xy + localUV * tileSize) / atlasSize;",
+        ],
+        f"{label} spot atlas interior clamp",
+        failures,
+    )
+    require(
+        light_frag,
+        "float receiverDepth = mix(forwardDepth, reversedDepth, depthFadeBias.x);",
+        f"{label} dynamic-light depth convention mode",
+        failures,
+    )
+    require(
+        read_text(f"{renderer_root}/shaders/spirv/shader_data.c"),
+        "const unsigned char csm_shadow_frag_spv",
+        f"embedded {label} CSM fragment SPIR-V",
+        failures,
+    )
+
+
 def main() -> int:
     failures: list[str] = []
+    check_vulkan_api_shadow_contracts("RTX", "code/rendererrtx", failures)
     vk = read_text("code/renderervk/vk.c")
     vk_backend = read_text("code/renderervk/tr_backend.c")
     vk_csm_frag = read_text("code/renderervk/shaders/csm_shadow.frag")

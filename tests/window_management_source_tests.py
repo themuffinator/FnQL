@@ -40,14 +40,37 @@ class WindowManagementSourceTests(unittest.TestCase):
 
     def test_resize_refresh_is_debounced_and_persistent(self) -> None:
         source = read_text("code/client/cl_main.cpp")
+        scheduler = read_text("code/client/window_resize.hpp")
 
-        self.assertIn("cl_windowResizeDeadline = Sys_Milliseconds() + 250;", source)
-        self.assertIn('Cvar_SetIntegerValue( "r_customWidth", cl_windowResizeWidth );', source)
-        self.assertIn('Cvar_SetIntegerValue( "r_customHeight", cl_windowResizeHeight );', source)
+        self.assertIn("WindowResizeScheduler", source)
+        self.assertIn("kDebounceMilliseconds = 100", scheduler)
+        self.assertIn("now - deadline < 0x80000000u", scheduler)
+        self.assertIn("ConsumeIfReady", source)
+        self.assertIn('Cvar_SetIntegerValue( "r_customWidth", request.width );', source)
+        self.assertIn('Cvar_SetIntegerValue( "r_customHeight", request.height );', source)
         self.assertIn('Cvar_Set( "r_mode", "-1" );', source)
-        self.assertIn('Cbuf_AddText( "vid_restart fast window_resize\\n" );', source)
+        self.assertIn('Cvar_Set2( "r_windowedWidth", r_customwidth->string', source)
+        self.assertIn('Cvar_Set2( "r_windowedHeight", r_customheight->string', source)
+        self.assertIn("request.preserveWindow ? REF_KEEP_WINDOW : REF_DESTROY_WINDOW", source)
+        self.assertNotIn('Cbuf_AddText( "vid_restart fast window_resize', source)
+        self.assertIn("if ( gw_minimized ||", source)
         self.assertIn("cl_windowModeChange", source)
         self.assertIn("CL_IsWindowResizeRestart()", read_text("code/sdl/sdl_glimp.cpp"))
+
+    def test_canvas_geometry_is_refreshed_before_console_and_web_surfaces(self) -> None:
+        client = read_text("code/client/cl_main.cpp")
+        geometry = read_text("code/client/canvas_geometry.hpp")
+        webui = read_text("code/client/cl_webui.cpp")
+
+        self.assertIn("CalculateCanvasGeometry", geometry)
+        canvas_update = client.index("fnql::client::CalculateCanvasGeometry")
+        console_reflow = client.index("Con_CheckResize();", canvas_update)
+        web_resize = client.index("CL_WebHost_RefreshSurfaceSize();", canvas_update)
+        self.assertLess(canvas_update, console_reflow)
+        self.assertLess(console_reflow, web_resize)
+        self.assertIn("void CL_WebHost_RefreshSurfaceSize( void )", webui)
+        self.assertIn("CL_Awesomium_Resize( desired.width, desired.height )", webui)
+        self.assertIn("requestedSurfaceSize", webui)
 
     def test_native_windows_supports_snap_dpi_and_work_area_recovery(self) -> None:
         local = read_text("code/win32/win_local.h")
@@ -60,7 +83,12 @@ class WindowManagementSourceTests(unittest.TestCase):
         self.assertIn("case WM_DPICHANGED:", wndproc)
         self.assertIn("case WM_DISPLAYCHANGE:", wndproc)
         self.assertIn("case WM_SETTINGCHANGE:", wndproc)
-        self.assertIn("CL_NotifyWindowResize( LOWORD( lParam ), HIWORD( lParam ), qtrue );", wndproc)
+        self.assertIn("case WM_GETMINMAXINFO:", wndproc)
+        self.assertIn("WIN_ApplyMinimumTrackSize", wndproc)
+        self.assertIn("GetClientRect( hWnd, &clientRect )", wndproc)
+        self.assertIn("CL_CompleteWindowResize();", wndproc)
+        self.assertIn("clientWidth == glw_state.config->vidWidth", wndproc)
+        self.assertIn("CL_CancelWindowResize();", wndproc)
 
     def test_native_x11_no_longer_locks_window_size(self) -> None:
         source = read_text("code/unix/linux_glimp.cpp")
@@ -79,7 +107,7 @@ class WindowManagementSourceTests(unittest.TestCase):
         for path in (
             "code/renderer/tr_init.c",
             "code/renderervk/tr_init.c",
-            "code/renderer2/tr_init.c",
+            "code/rendererrtx/tr_init.c",
         ):
             with self.subTest(path=path):
                 source = read_text(path)

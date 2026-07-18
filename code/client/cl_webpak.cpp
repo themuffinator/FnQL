@@ -53,11 +53,16 @@ typedef struct {
 } clWebDataPak_t;
 
 static clWebDataPak_t cl_webDataPak;
+static clWebDataPak_t cl_fnqlWebDataPak;
 
 static cvar_t *cl_webPakLoaded;
 static cvar_t *cl_webPakSource;
 static cvar_t *cl_webPakVersion;
 static cvar_t *cl_webPakResourceCount;
+static cvar_t *cl_fnqlWebPakLoaded;
+static cvar_t *cl_fnqlWebPakSource;
+static cvar_t *cl_fnqlWebPakVersion;
+static cvar_t *cl_fnqlWebPakResourceCount;
 static cvar_t *ui_resourceBridgeProvider;
 static cvar_t *ui_resourceBridgePolicy;
 static cvar_t *ui_resourceBridgeParityScope;
@@ -483,32 +488,31 @@ static qboolean CL_WebDataPak_LoadFile( const char *pakPath, clWebDataPak_t *out
 	return qtrue;
 }
 
-static qboolean CL_WebDataPak_Load( const char *pakPath ) {
+static qboolean CL_WebDataPak_Load( const char *pakPath, clWebDataPak_t *target ) {
 	clWebDataPak_t dataPak;
 
-	if ( !CL_WebDataPak_LoadFile( pakPath, &dataPak ) ) {
+	if ( !target || !CL_WebDataPak_LoadFile( pakPath, &dataPak ) ) {
 		return qfalse;
 	}
 
-	CL_WebDataPak_Clear( &cl_webDataPak );
-	cl_webDataPak = dataPak;
+	CL_WebDataPak_Clear( target );
+	*target = dataPak;
 	return qtrue;
 }
 
-static qboolean CL_WebDataPak_Fetch( const char *normalizedPath, void **outBuffer, int *outLength ) {
+static qboolean CL_WebDataPak_Fetch( const clWebDataPak_t *dataPak, const char *normalizedPath, void **outBuffer, int *outLength ) {
 	clWebDataPakPath_t *match;
 
-	if ( !cl_webDataPak.loaded || !normalizedPath || !normalizedPath[0] ) {
+	if ( !dataPak || !dataPak->loaded || !normalizedPath || !normalizedPath[0] ) {
 		return qfalse;
 	}
 
-
-	match = std::lower_bound( cl_webDataPak.paths, cl_webDataPak.paths + cl_webDataPak.pathCount, normalizedPath,
+	match = std::lower_bound( dataPak->paths, dataPak->paths + dataPak->pathCount, normalizedPath,
 		[]( const clWebDataPakPath_t &entry, const char *path ) {
 			return strcmp( entry.path, path ) < 0;
 		} );
-	if ( match != cl_webDataPak.paths + cl_webDataPak.pathCount && !strcmp( match->path, normalizedPath ) ) {
-		return CL_WebDataPak_ReadResource( &cl_webDataPak, match->resourceId, outBuffer, outLength );
+	if ( match != dataPak->paths + dataPak->pathCount && !strcmp( match->path, normalizedPath ) ) {
+		return CL_WebDataPak_ReadResource( dataPak, match->resourceId, outBuffer, outLength );
 	}
 
 	return qfalse;
@@ -658,7 +662,11 @@ static qboolean CL_WebPak_ReadInternal( const char *normalizedPath, void **outBu
 		return qfalse;
 	}
 
-	if ( CL_WebDataPak_Fetch( normalizedPath, outBuffer, outLength ) ) {
+	// fnql-web.pak is deliberately sparse. Its project-owned resources replace
+	// matching retail paths; every other request falls through to the external
+	// Quake Live web.pak and finally the established loose-file fallback.
+	if ( CL_WebDataPak_Fetch( &cl_fnqlWebDataPak, normalizedPath, outBuffer, outLength )
+		|| CL_WebDataPak_Fetch( &cl_webDataPak, normalizedPath, outBuffer, outLength ) ) {
 		return qtrue;
 	}
 
@@ -712,14 +720,14 @@ static int CL_WebPak_AppendFileList( const char *sourceList, int sourceCount, ch
 	return count;
 }
 
-static int CL_WebDataPak_GetFileList( const char *path, const char *extension, char *listbuf, int bufsize ) {
+static int CL_WebDataPak_GetFileList( const clWebDataPak_t *dataPak, const char *path, const char *extension, char *listbuf, int bufsize ) {
 	int pathLength;
 	int extensionLength;
 	int offset;
 	int count;
 	int i;
 
-	if ( !cl_webDataPak.loaded || !path || !extension || !listbuf || bufsize <= 0 ) {
+	if ( !dataPak || !dataPak->loaded || !path || !extension || !listbuf || bufsize <= 0 ) {
 		return 0;
 	}
 
@@ -733,12 +741,12 @@ static int CL_WebDataPak_GetFileList( const char *path, const char *extension, c
 	offset = 0;
 	count = 0;
 
-	for ( i = 0; i < cl_webDataPak.pathCount; i++ ) {
+	for ( i = 0; i < dataPak->pathCount; i++ ) {
 		const char *entryPath;
 		const char *name;
 		int length;
 
-		entryPath = cl_webDataPak.paths[i].path;
+		entryPath = dataPak->paths[i].path;
 		if ( pathLength > 0 ) {
 			if ( Q_stricmpn( entryPath, path, pathLength ) || entryPath[pathLength] != '/' ) {
 				continue;
@@ -772,6 +780,14 @@ static void CL_WebPak_RegisterCvars( void ) {
 	Cvar_SetDescription( cl_webPakVersion, "Read-only Chromium DataPack version for the mounted external Quake Live web.pak." );
 	cl_webPakResourceCount = Cvar_Get( "cl_webPakResourceCount", "0", CVAR_ROM );
 	Cvar_SetDescription( cl_webPakResourceCount, "Read-only validated resource count for the mounted external Quake Live web.pak." );
+	cl_fnqlWebPakLoaded = Cvar_Get( "cl_fnqlWebPakLoaded", "0", CVAR_ROM );
+	Cvar_SetDescription( cl_fnqlWebPakLoaded, "Read-only state for FnQL's sparse WebUI settings overlay." );
+	cl_fnqlWebPakSource = Cvar_Get( "cl_fnqlWebPakSource", "", CVAR_ROM );
+	Cvar_SetDescription( cl_fnqlWebPakSource, "Read-only source path for the mounted fnql-web.pak overlay." );
+	cl_fnqlWebPakVersion = Cvar_Get( "cl_fnqlWebPakVersion", "0", CVAR_ROM );
+	Cvar_SetDescription( cl_fnqlWebPakVersion, "Read-only Chromium DataPack version for the mounted fnql-web.pak overlay." );
+	cl_fnqlWebPakResourceCount = Cvar_Get( "cl_fnqlWebPakResourceCount", "0", CVAR_ROM );
+	Cvar_SetDescription( cl_fnqlWebPakResourceCount, "Read-only validated resource count for the mounted fnql-web.pak overlay." );
 	ui_resourceBridgeProvider = Cvar_Get( "ui_resourceBridgeProvider", "Unavailable", CVAR_ROM );
 	Cvar_SetDescription( ui_resourceBridgeProvider, "Read-only provider label for WebUI resource requests." );
 	ui_resourceBridgePolicy = Cvar_Get( "ui_resourceBridgePolicy", "webpak-unavailable", CVAR_ROM );
@@ -790,6 +806,7 @@ static void CL_WebPak_RegisterCvars( void ) {
 
 static void CL_WebPak_RefreshCvars( void ) {
 	const qboolean loaded = cl_webDataPak.loaded;
+	const qboolean overlayLoaded = cl_fnqlWebDataPak.loaded;
 
 	if ( !cl_webPakLoaded ) {
 		CL_WebPak_RegisterCvars();
@@ -801,31 +818,53 @@ static void CL_WebPak_RefreshCvars( void ) {
 		loaded ? va( "%u", static_cast<unsigned int>( cl_webDataPak.version ) ) : "0" );
 	CL_WebPak_SetCvarIfChanged( "cl_webPakResourceCount",
 		loaded ? va( "%u", static_cast<unsigned int>( cl_webDataPak.resourceCount ) ) : "0" );
-	CL_WebPak_SetCvarIfChanged( "ui_resourceBridgeProvider", loaded ? "Awesomium DataPak web.pak" : "Loose filesystem fallback" );
-	CL_WebPak_SetCvarIfChanged( "ui_resourceBridgePolicy", loaded ? "retail-assets-external" : "webpak-unavailable" );
-	CL_WebPak_SetCvarIfChanged( "ui_resourceBridgeParityScope", "retail web.pak resource bridge" );
-	CL_WebPak_SetCvarIfChanged( "ui_resourceBridgeParityReason", loaded ? "external retail web.pak mounted" : "external retail web.pak not found" );
+	CL_WebPak_SetCvarIfChanged( "cl_fnqlWebPakLoaded", overlayLoaded ? "1" : "0" );
+	CL_WebPak_SetCvarIfChanged( "cl_fnqlWebPakSource", overlayLoaded ? cl_fnqlWebDataPak.sourcePath : "" );
+	CL_WebPak_SetCvarIfChanged( "cl_fnqlWebPakVersion",
+		overlayLoaded ? va( "%u", static_cast<unsigned int>( cl_fnqlWebDataPak.version ) ) : "0" );
+	CL_WebPak_SetCvarIfChanged( "cl_fnqlWebPakResourceCount",
+		overlayLoaded ? va( "%u", static_cast<unsigned int>( cl_fnqlWebDataPak.resourceCount ) ) : "0" );
+	CL_WebPak_SetCvarIfChanged( "ui_resourceBridgeProvider",
+		overlayLoaded ? ( loaded ? "FnQL overlay + retail web.pak" : "FnQL overlay + loose fallback" )
+			: ( loaded ? "Awesomium DataPak web.pak" : "Loose filesystem fallback" ) );
+	CL_WebPak_SetCvarIfChanged( "ui_resourceBridgePolicy",
+		overlayLoaded ? "fnql-overlay-retail-fallback" : ( loaded ? "retail-assets-external" : "webpak-unavailable" ) );
+	CL_WebPak_SetCvarIfChanged( "ui_resourceBridgeParityScope",
+		overlayLoaded ? "FnQL settings overlay with retail asset fallback" : "retail web.pak resource bridge" );
+	CL_WebPak_SetCvarIfChanged( "ui_resourceBridgeParityReason",
+		overlayLoaded ? ( loaded ? "project-owned overrides mounted over external retail web.pak" : "FnQL overrides mounted; external retail web.pak not found" )
+			: ( loaded ? "external retail web.pak mounted" : "external retail web.pak not found" ) );
 	CL_WebPak_SetCvarIfChanged( "ui_resourceBridgeSteamDataSourceSubset", "avatar-only SteamDataSource" );
 	CL_WebPak_SetCvarIfChanged( "ui_resourceBridgeSteamDataSourceNativeGap", "missing non-avatar SteamDataSource owner" );
 	CL_WebPak_SetCvarIfChanged( "ui_resourceBridgeSteamDataSourceFallbackOwner", "QLResourceInterceptor launcher/web fallback" );
 }
 
 void CL_WebPak_Init( void ) {
-	static const char *pathCvars[] = { "fs_homepath", "fs_basepath", "fs_steampath" };
+	static const char *retailPathCvars[] = { "fs_homepath", "fs_basepath", "fs_steampath" };
+	static const char *overlayPathCvars[] = { "fs_homepath", "fs_apppath", "fs_basepath", "fs_steampath" };
 	char rootPath[MAX_OSPATH];
 	char pakPath[MAX_OSPATH];
 	int i;
 
 	CL_WebPak_RegisterCvars();
 	CL_WebDataPak_Clear( &cl_webDataPak );
+	CL_WebDataPak_Clear( &cl_fnqlWebDataPak );
 
-	for ( i = 0; i < (int)ARRAY_LEN( pathCvars ); i++ ) {
-		Cvar_VariableStringBuffer( pathCvars[i], rootPath, sizeof( rootPath ) );
+	for ( i = 0; i < (int)ARRAY_LEN( retailPathCvars ); i++ ) {
+		Cvar_VariableStringBuffer( retailPathCvars[i], rootPath, sizeof( rootPath ) );
 		CL_WebPak_BuildStandalonePath( rootPath, "web.pak", pakPath, sizeof( pakPath ) );
-		if ( CL_WebDataPak_Load( pakPath ) ) {
+		if ( CL_WebDataPak_Load( pakPath, &cl_webDataPak ) ) {
 			Com_Printf( "web.pak datapack mounted from %s\n", pakPath );
-			CL_WebPak_RefreshCvars();
-			return;
+			break;
+		}
+	}
+
+	for ( i = 0; i < (int)ARRAY_LEN( overlayPathCvars ); i++ ) {
+		Cvar_VariableStringBuffer( overlayPathCvars[i], rootPath, sizeof( rootPath ) );
+		CL_WebPak_BuildStandalonePath( rootPath, "fnql-web.pak", pakPath, sizeof( pakPath ) );
+		if ( CL_WebDataPak_Load( pakPath, &cl_fnqlWebDataPak ) ) {
+			Com_Printf( "fnql-web.pak sparse overlay mounted from %s\n", pakPath );
+			break;
 		}
 	}
 
@@ -834,6 +873,7 @@ void CL_WebPak_Init( void ) {
 
 void CL_WebPak_Shutdown( void ) {
 	CL_WebDataPak_Clear( &cl_webDataPak );
+	CL_WebDataPak_Clear( &cl_fnqlWebDataPak );
 	CL_WebPak_RefreshCvars();
 }
 
@@ -872,7 +912,10 @@ int CL_WebPak_GetFileList( const char *path, const char *extension, char *listbu
 	offset = 0;
 	count = 0;
 
-	sourceCount = CL_WebDataPak_GetFileList( path, extension, sourceList, sizeof( sourceList ) );
+	sourceCount = CL_WebDataPak_GetFileList( &cl_fnqlWebDataPak, path, extension, sourceList, sizeof( sourceList ) );
+	count = CL_WebPak_AppendFileList( sourceList, sourceCount, listbuf, bufsize, &offset, count );
+
+	sourceCount = CL_WebDataPak_GetFileList( &cl_webDataPak, path, extension, sourceList, sizeof( sourceList ) );
 	count = CL_WebPak_AppendFileList( sourceList, sourceCount, listbuf, bufsize, &offset, count );
 
 	sourceCount = FS_GetFileList( path, extension, sourceList, sizeof( sourceList ) );

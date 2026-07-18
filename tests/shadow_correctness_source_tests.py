@@ -16,7 +16,7 @@ def section(text, start, end):
 
 
 class ShadowCorrectnessSourceTests(unittest.TestCase):
-    RENDERERS = ("code/renderer", "code/renderervk")
+    RENDERERS = ("code/renderer", "code/renderervk", "code/rendererrtx")
 
     def test_correctness_cvar_is_registered_in_both_renderers(self):
         for renderer in self.RENDERERS:
@@ -185,26 +185,30 @@ class ShadowCorrectnessSourceTests(unittest.TestCase):
         self.assertIn("r_shadowCorrectness && r_shadowCorrectness->integer", available)
 
     def test_vulkan_correctness_mode_forces_hard_filter_and_one_point_atlas(self):
-        shade = read_text("code/renderervk/tr_shade.c")
-        vk = read_text("code/renderervk/vk.c")
-        dlight_params = section(shade, "static qboolean VK_DlightShadowParams", "static void VK_DlightShadowFilterOffsets")
-        dlight_filter = section(shade, "static void VK_DlightShadowFilterOffsets", "static qboolean VK_SpotShadowParams")
-        csm_filter = section(shade, "static void VK_CSMShadowFilterOffsets", "void VK_CSMShadowPass")
-        pipelines = section(vk, "static void vk_alloc_persistent_pipelines", "static void vk_alloc_attachment_batch")
-        dlight_layout = section(vk, "static qboolean vk_dlight_shadow_atlas_layout", "static qboolean vk_spot_shadow_atlas_layout")
-        spot_layout = section(vk, "static qboolean vk_spot_shadow_atlas_layout", "static qboolean vk_csm_shadow_atlas_layout")
-        csm_layout = section(vk, "static qboolean vk_csm_shadow_atlas_layout", "static void vk_store_dlight_shadow_atlas_layout")
+        for renderer in ("code/renderervk", "code/rendererrtx"):
+            with self.subTest(renderer=renderer):
+                shade = read_text(f"{renderer}/tr_shade.c")
+                vk = read_text(f"{renderer}/vk.c")
+                dlight_params = section(shade, "static qboolean VK_DlightShadowParams", "static void VK_DlightShadowFilterOffsets")
+                dlight_filter = section(shade, "static void VK_DlightShadowFilterOffsets", "static qboolean VK_SpotShadowParams")
+                csm_filter = section(shade, "static void VK_CSMShadowFilterOffsets", "void VK_CSMShadowPass")
+                pipelines_end = ("static void vk_alloc_attachment_batch" if renderer == "code/renderervk"
+                                 else "static void vk_alloc_attachments")
+                pipelines = section(vk, "static void vk_alloc_persistent_pipelines", pipelines_end)
+                dlight_layout = section(vk, "static qboolean vk_dlight_shadow_atlas_layout", "static qboolean vk_spot_shadow_atlas_layout")
+                spot_layout = section(vk, "static qboolean vk_spot_shadow_atlas_layout", "static qboolean vk_csm_shadow_atlas_layout")
+                csm_layout = section(vk, "static qboolean vk_csm_shadow_atlas_layout", "static void vk_store_dlight_shadow_atlas_layout")
 
-        self.assertIn("!r_shadowCorrectness || !r_shadowCorrectness->integer", dlight_params)
-        self.assertIn("filter = SHADOW_FILTER_HARD;", dlight_filter)
-        self.assertIn("R_ShadowFilterOffsets( filter, inner, outer );", dlight_filter)
-        self.assertIn("filter = SHADOW_FILTER_HARD;", csm_filter)
-        self.assertIn("R_ShadowFilterOffsets( filter, inner, outer );", csm_filter)
-        self.assertIn("r_shadowCorrectness && r_shadowCorrectness->integer", pipelines)
-        self.assertIn("qboolean correctnessMode", dlight_layout)
-        self.assertIn("R_DlightShadowAtlasLayout( correctnessMode ? 1 : r_dlightShadowMaxLights->integer", dlight_layout)
-        self.assertIn("r_shadowCorrectness && r_shadowCorrectness->integer", spot_layout)
-        self.assertIn("r_shadowCorrectness && r_shadowCorrectness->integer", csm_layout)
+                self.assertIn("!r_shadowCorrectness || !r_shadowCorrectness->integer", dlight_params)
+                self.assertIn("filter = SHADOW_FILTER_HARD;", dlight_filter)
+                self.assertIn("R_ShadowFilterOffsets( filter, inner, outer );", dlight_filter)
+                self.assertIn("filter = SHADOW_FILTER_HARD;", csm_filter)
+                self.assertIn("R_ShadowFilterOffsets( filter, inner, outer );", csm_filter)
+                self.assertIn("r_shadowCorrectness && r_shadowCorrectness->integer", pipelines)
+                self.assertIn("qboolean correctnessMode", dlight_layout)
+                self.assertIn("R_DlightShadowAtlasLayout( correctnessMode ? 1 : r_dlightShadowMaxLights->integer", dlight_layout)
+                self.assertIn("r_shadowCorrectness && r_shadowCorrectness->integer", spot_layout)
+                self.assertIn("r_shadowCorrectness && r_shadowCorrectness->integer", csm_layout)
 
 
 if __name__ == "__main__":

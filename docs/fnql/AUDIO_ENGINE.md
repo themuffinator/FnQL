@@ -1,7 +1,7 @@
 # Modern Audio Engine
 
-FnQL's modern audio engine is a client-side rendering upgrade for the
-existing Quake III sound contract. Game code, mods, demos, network protocol,
+FnQL's modern audio engine is a client-side rendering upgrade around the
+retail Quake Live sound contract. Game code, modules, demos, network protocol,
 filesystem behavior, and accepted asset formats stay on the classic surface;
 the modern path changes how the client renders sounds after the game has already
 chosen what to play.
@@ -12,7 +12,7 @@ start.
 
 ## Design Goals
 
-- Preserve retail Quake III behavior first. Spatial features must be additive,
+- Preserve retail Quake Live behavior first. Spatial features must be additive,
   optional where appropriate, and observable through diagnostics.
 - Keep player-facing controls stable. `s_backend`, `s_backendActive`,
   `s_volume`, `s_musicVolume`, `s_doppler`, OpenAL device/HRTF/output cvars,
@@ -55,6 +55,7 @@ code/client/audio/
     shared/
         AudioDeviceRecovery.h device-loss policy
         AudioOcclusion.h      occlusion smoothing policy
+        AudioVoiceQueue.h     retail remote-voice lane policy and legacy SRC
         AudioZoneFormat.h     .azb sidecar format
         AudioZoneRuntime.h    sidecar parser and lookup runtime
 
@@ -129,8 +130,9 @@ soundInterface_t backend table
 ```
 
 The OpenAL backend uses the same sound registration, start, loop, raw stream,
-music, respatialization, update, list, info, and shutdown semantics expected by
-the rest of the client. OpenAL does not create a second game-facing sound API.
+remote voice, music, respatialization, update, list, info, and shutdown
+semantics expected by the rest of the client. OpenAL does not create a second
+game-facing sound API.
 
 Startup is request-oriented:
 
@@ -146,6 +148,39 @@ Startup is request-oriented:
 6. Later callers keep using classic `S_*` functions without knowing which
    backend is active.
 
+## Retail Quake Live Compatibility Layer
+
+Retail voice chat is deliberately not sent through `S_RawSamples`. That stream
+is shared by cinematics and other raw PCM producers, so using it for network
+voice causes speakers and cinematics to overwrite one another. `S_AddVoiceSamples`
+instead routes each remote client into one of five retail-sized voice lanes.
+Both backends preserve speaker identity, never steal a busy lane, apply
+`s_voiceVolume` independently, and use `s_voiceStep` as a small underrun buffer.
+The legacy mixer converts the Steam decoder's reported sample rate to its DMA
+rate; OpenAL queues the original mono PCM rate and lets the runtime resample it.
+OpenAL reserves these lanes without crossing its protected gameplay-source
+floor, degrading to fewer simultaneous speakers on unusually constrained
+devices rather than suppressing weapon or announcer sounds.
+
+The public facade also retains retail-shaped controls that differ from the old
+Quake III defaults: master, music, and voice gain accept `0..2`; `s_mixPreStep`
+provides the retail legacy-mixer cursor lead; and opt-in `s_pvs` culls
+positional sounds outside the listener's BSP PVS. PVS lookup is fail-open when
+no valid collision world is loaded, so menus, cinematics, and malformed custom
+maps do not become silently muted. The default remains `s_pvs 0`, preserving
+FnQL's established audio reach unless the compatibility switch is requested.
+Retail native cgame's frame-clear import also has its own
+`S_ClearLoopingSoundsFrame` path. This expires every loop not refreshed by the
+new frame without conflating that operation with the older selective/kill-all
+loop clear; OpenAL defers release until the frame update so refreshed loops keep
+their playback position.
+
+WAV ingestion accepts the formats needed by the retail and modern asset paths:
+8/16/24-bit integer PCM, 32-bit IEEE float, and the corresponding extensible
+WAV declarations. Higher-precision sources are converted through a bounded
+16-bit path shared by streaming and whole-file loads; unsupported or malformed
+layouts fail with a diagnostic rather than being reinterpreted.
+
 ## OpenAL Backend Slices
 
 `AudioSystem.cpp` includes private implementation slices inside an anonymous
@@ -160,8 +195,8 @@ namespace. They are not public headers.
 - `AudioSystemWorld.inl` owns registered samples, world voices, looping sound
   state, listener state, positional updates, occlusion smoothing, tone
   application, source budgeting, and spatial debug snapshots.
-- `AudioSystemStreams.inl` owns OpenAL buffer queues for music and raw sample
-  streams.
+- `AudioSystemStreams.inl` owns OpenAL buffer queues for music, raw samples,
+  and isolated remote-voice lanes.
 - `AudioSystemBackend.inl` owns the `soundInterface_t` facade, backend lifetime,
   diagnostics, sample registration, music/raw handling, and per-frame service
   flow.
@@ -193,6 +228,12 @@ samples only enter positional routing through the opt-in
 `s_alSpatializeStereo` compatibility switch and only on runtimes with
 `AL_SOFT_source_spatialize`.
 
+Native listener and source velocities drive Doppler on capable OpenAL
+runtimes. Listener velocity is smoothed and teleport-clamped, distant one-shots
+are rejected before consuming a source, and inaudible loops remain virtual
+until they return inside the audibility horizon. These policies preserve loop
+continuity while protecting source capacity during dense matches.
+
 UHJ and B-Format are explicit filename-tag features, not automatic
 reinterpretations of ordinary WAV files. If the runtime does not accept the
 encoded OpenAL format, the backend falls back to a safe stereo-compatible path
@@ -203,8 +244,9 @@ instead of failing the sound.
 The OpenAL backend adds an environmental layer on top of the normal source
 selection path.
 
-- Reverb uses EFX when the device supports it. `s_alReverb` is latched because
-  the effect slot is created at backend init.
+- Reverb prefers EAXREVERB when the EFX runtime accepts it and falls back to
+  basic EFX reverb. `s_alReverb` is latched because the effect slot is created
+  at backend init.
 - Occlusion uses conservative collision traces between listener and source,
   including a small source-side probe fan so edge cases can become partial
   occlusion instead of a binary mute.
@@ -212,6 +254,8 @@ selection path.
   environment, and occlusion state.
 - Environment transitions are smoothed so moving through thresholds does not
   zipper.
+- Positional sources use capability-gated air absorption, and a liquid boundary
+  between listener and source contributes a conservative occlusion floor.
 - `s_alReverbGain` and `s_alOcclusionStrength` scale feature strengths without
   changing asset data.
 
@@ -244,8 +288,8 @@ Runtime device recovery is conservative:
 The main inspection commands are:
 
 - `s_info`: active backend, device, requested-vs-active OpenAL settings, source
-  counts, EFX state, audio-zone status, latency/clock data when available, and
-  music/raw state.
+  counts, EFX state, audio-zone status, latency/clock data when available,
+  music/raw state, and remote-voice lane allocation.
 - `s_list`: registered sample list and load state.
 - `s_alListDevices`: OpenAL playback device list.
 - `s_alListHrtfs`: HRTF specifier list for the active or requested device.
@@ -265,20 +309,20 @@ match the touched area.
 Meson:
 
 ```powershell
-meson compile -C meson/build fnql.x64 fnql-audiozonesc fnql_audio_zone_tests fnql_audio_recovery_tests fnql_audio_occlusion_tests fnql_audio_loopback_tests
-meson test -C meson/build fnql_audio_zones fnql_audio_zone_authoring_audit fnql_audio_zone_sweep_script fnql_audio_zone_material_map fnql_audio_recovery fnql_audio_occlusion fnql_audio_loopback --print-errorlogs
+meson compile -C meson/build fnql.x64 fnql-audiozonesc fnql_audio_zone_tests fnql_audio_recovery_tests fnql_audio_occlusion_tests fnql_audio_voice_queue_tests fnql_audio_loopback_tests
+meson test -C meson/build fnql_audio_zones fnql_audio_zone_authoring_audit fnql_audio_zone_sweep_script fnql_audio_zone_material_map fnql_audio_recovery fnql_audio_occlusion fnql_audio_voice_queue fnql_audio_loopback --print-errorlogs
 ```
 
 CMake:
 
 ```powershell
-cmake --build <build-dir> --target fnql-audiozonesc fnql_audio_zone_tests fnql_audio_recovery_tests fnql_audio_occlusion_tests fnql_audio_loopback_tests
+cmake --build <build-dir> --target fnql-audiozonesc fnql_audio_zone_tests fnql_audio_recovery_tests fnql_audio_occlusion_tests fnql_audio_voice_queue_tests fnql_audio_loopback_tests
 ctest --test-dir <build-dir> -R "fnql_audio" --output-on-failure
 ```
 
 `fnql_audio_loopback_tests` may skip when OpenAL Soft loopback is unavailable.
-Zone runtime, recovery policy, and occlusion policy tests do not need real audio
-hardware.
+Zone runtime, recovery, occlusion, and voice-lane policy tests do not need real
+audio hardware.
 
 ## Maintainer Checklist
 
@@ -288,6 +332,8 @@ hardware.
 - Keep OpenAL startup cvars latched and request-oriented.
 - Keep ordinary stereo and authored surround content direct unless the user
   explicitly opts into stereo world-source spatialization.
+- Keep remote voice isolated from raw/cinematic PCM and preserve the five-lane
+  retail concurrency bound in both backends.
 - Keep `.azb` files optional, data-only, and compatible across sidecar versions.
 - Keep audio source ownership under `code/client/audio/`; avoid recreating a
   top-level `code/audio/` unless audio becomes a true qcommon/server subsystem.

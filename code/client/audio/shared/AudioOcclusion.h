@@ -25,13 +25,18 @@ constexpr float kProbeSpreadMaximum = 28.0f;
 constexpr float kPartialOcclusionBias = 0.18f;
 constexpr float kCenterBlockedMinimum = 0.55f;
 
-constexpr float kDirectAttenuation = 0.58f;
+constexpr float kDirectAttenuation = 0.72f;
 constexpr float kDirectGainMinimum = 0.18f;
 constexpr float kDirectHFCut = 0.92f;
 constexpr float kDirectHFMinimum = 0.08f;
-constexpr float kWetBoost = 0.28f;
+constexpr float kWetBoost = 0.35f;
 constexpr float kWetHFCut = 0.42f;
 constexpr float kWetHFMinimum = 0.08f;
+// Wet send level curve: reverberant energy is already present close to a
+// source in a real room, so keep a solid near-field send and grow it with
+// distance instead of starting from near silence.
+constexpr float kWetNearLevel = 0.55f;
+constexpr float kWetDistanceLevel = 0.45f;
 
 inline float Clamp01( float value ) {
 	return ( std::max )( 0.0f, ( std::min )( value, 1.0f ) );
@@ -79,7 +84,7 @@ inline float DirectHF( float environmentDirectHF, float occlusion ) {
 }
 
 inline float WetGain( float environmentWetGain, float distanceMix, float occlusion ) {
-	return Clamp01( Clamp01( environmentWetGain ) * ( 0.35f + Clamp01( distanceMix ) * 0.65f ) +
+	return Clamp01( Clamp01( environmentWetGain ) * ( kWetNearLevel + Clamp01( distanceMix ) * kWetDistanceLevel ) +
 		Clamp01( occlusion ) * kWetBoost );
 }
 

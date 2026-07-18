@@ -214,7 +214,7 @@ seta r_screenshotWatermarkMargin "24"
 
 ## Cube Maps
 
-The OpenGL-lineage renderers, `opengl` and canonical `glx`, and the Vulkan renderer can capture a six-face cube map from the current camera position through the `screenshot ... cubemap` subcommand.
+The `glx` and `vk` renderers can capture a six-face cube map from the current camera position through the `screenshot ... cubemap` subcommand.
 
 - Each face is saved as a square image.
 - The renderer captures the five non-front faces from one frozen scene state inside the same scene submission.
@@ -244,9 +244,8 @@ That produces:
 
 Renderer status:
 
-- OpenGL-lineage renderers: full cube-map capture support on `opengl` and canonical `glx`.
+- GLx renderer: full cube-map capture support.
 - Vulkan renderer: full cube-map capture support with the same face names, orientation, visibility controls, and SDR output contract.
-- `renderer2`: normal screenshots and levelshots honor the same levelshot visibility controls, but cube-map capture is not implemented there.
 
 ## Recommended Starting Points
 

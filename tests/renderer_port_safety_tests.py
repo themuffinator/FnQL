@@ -50,7 +50,7 @@ class RendererPortSafetyTests(unittest.TestCase):
         self.assertIn("strtod", helper)
         self.assertIn("R_LevelshotFloatIsFinite", helper)
 
-        for renderer in ("renderer", "renderervk", "renderer2"):
+        for renderer in ("renderer", "renderervk", "rendererrtx"):
             source = read(f"code/{renderer}/tr_init.c")
             levelshot = source[source.index("void RB_TakeLevelShot") : source.index("static void R_ScheduleLevelShot")]
             self.assertIn('renderercommon/tr_levelshot.h"', source)
@@ -62,14 +62,6 @@ class RendererPortSafetyTests(unittest.TestCase):
             self.assertLess(levelshot.index("rgb = ri.Hunk_AllocateTempMemory"), levelshot.index("buffer = ri.Hunk_AllocateTempMemory"))
             self.assertLess(levelshot.index("Hunk_FreeTempMemory(buffer)"), levelshot.index("Hunk_FreeTempMemory(rgb)"))
             self.assertLess(levelshot.index("Hunk_FreeTempMemory(rgb)"), levelshot.index("Hunk_FreeTempMemory(allsource)"))
-
-    def test_renderer2_accepts_api_13_with_zeroed_optional_export(self) -> None:
-        public = read("code/renderercommon/tr_public.h")
-        renderer2 = read("code/renderer2/tr_init.c")
-        self.assertIn("REF_API_VERSION\t\t13", public)
-        self.assertIn("Com_Memset( &re, 0, sizeof( re ) );", renderer2)
-        self.assertNotIn("re.AddLiquidInteractionToScene =", renderer2)
-
 
 if __name__ == "__main__":
     unittest.main()

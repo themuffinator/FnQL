@@ -28,6 +28,43 @@ class PlatformPortSafetyTests(unittest.TestCase):
         self.assertIn("x = (int64_t)*width - modeWidth;", randr)
         self.assertIn("r = (int64_t)*rate - getRefreshRate( mode_info );", randr)
 
+    def test_win32_display_query_is_available_without_opengl(self) -> None:
+        win32 = read("code/win32/win_glimp.cpp")
+
+        query_output = win32.index("void GLimp_QueryDisplayOutput")
+        previous_opengl_guard = win32.rfind("#ifdef USE_OPENGL_API", 0, query_output)
+        previous_guard_end = win32.rfind("#endif", 0, query_output)
+        choose_pixel_format = win32.index("static int GLW_ChoosePFD", query_output)
+        opengl_guard = win32.rfind(
+            "#ifdef USE_OPENGL_API", query_output, choose_pixel_format
+        )
+
+        self.assertGreater(previous_guard_end, previous_opengl_guard)
+        self.assertGreater(opengl_guard, query_output)
+        self.assertEqual(win32.count("void GLimp_QueryDisplayOutput"), 1)
+
+    def test_supported_renderer_contract_is_consistent(self) -> None:
+        cmake = read("CMakeLists.txt")
+        makefile = read("Makefile")
+        msvc_driver = read("scripts/msvc_meson.py")
+        vscode_build = read(".vscode/build-release.ps1")
+
+        self.assertIn('OPTION(USE_RTX "Build the ray-tracing renderer module" ON)', cmake)
+        self.assertIn("SET(RENDERER_DEFAULT glx CACHE STRING", cmake)
+        self.assertIn("RENDERER_DEFAULT PROPERTY STRINGS glx vk rtx", cmake)
+        self.assertIn("USE_RTX          = 1", makefile)
+        self.assertIn("RENDERER_DEFAULT = glx", makefile)
+        self.assertIn("TARGET_RENDRTX = $(RENDERER_PREFIX)_rtx_$(SHLIBNAME)", makefile)
+        self.assertIn("RE_DrawScaledText=R_RTX_DrawScaledText", cmake)
+        self.assertIn("RE_DrawScaledText=R_RTX_DrawScaledText", makefile)
+        self.assertIn(
+            'DEFAULT_RENDERERS = ("glx", "vk", "rtx")',
+            msvc_driver,
+        )
+        self.assertIn("SUPPORTED_RENDERERS = DEFAULT_RENDERERS", msvc_driver)
+        self.assertIn("'glx,vk,rtx'", vscode_build)
+        self.assertIn("'glx', 'vk', 'rtx'", vscode_build)
+
     def test_alsa_preserves_signed_error_results(self) -> None:
         alsa = read("code/unix/linux_snd.cpp")
 

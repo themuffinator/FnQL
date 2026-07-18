@@ -313,6 +313,8 @@ extern	cvar_t	*sv_clientTLD;
 
 extern	cvar_t	*sv_privateClients;
 extern	cvar_t	*sv_hostname;
+extern	cvar_t	*sv_tags;
+extern	cvar_t	*sv_masterAdvertise;
 extern	cvar_t	*sv_master[MAX_MASTER_SERVERS];
 extern	cvar_t	*sv_reconnectlimit;
 extern	cvar_t	*sv_padPackets;
@@ -333,6 +335,17 @@ extern	cvar_t	*sv_rankingsActive;
 extern	cvar_t	*sv_lanForceRate;
 extern	cvar_t	*sv_autoRecordDemos;
 extern	cvar_t	*sv_cheats;
+extern	cvar_t	*sv_gtid;
+extern	cvar_t	*sv_idleRestart;
+extern	cvar_t	*sv_idleExit;
+extern	cvar_t	*sv_errorExit;
+extern	cvar_t	*sv_quitOnEmpty;
+extern	cvar_t	*sv_quitOnExitLevel;
+extern	cvar_t	*sv_altEntDir;
+extern	cvar_t	*sv_dumpEntities;
+extern	cvar_t	*sv_cylinderScale;
+extern	cvar_t	*sv_vac;
+extern	cvar_t	*sv_showloss;
 
 extern	cvar_t *sv_levelTimeReset;
 extern	cvar_t *sv_filter;
@@ -378,6 +391,8 @@ void SV_RemoveOperatorCommands( void );
 
 void SV_MasterShutdown( void );
 int SV_RateMsec( const client_t *client );
+qboolean SV_HandleQuitOnExitLevel( const char *context );
+void SV_ResetServerCvarRuntime( void );
 
 void Zmq_RegisterCvarsAndInitRcon( void );
 void Zmq_UpdatePasswords( void );

@@ -1,0 +1,153 @@
+.fnql-settings-tab.is-active {
+  border-color: #f28c28;
+  color: #fff;
+  background: rgba(242, 140, 40, 0.2);
+}
+
+.game-settings section .fnql-retail-unsupported,
+.game-settings section .fnql-retail-replaced {
+  display: none;
+}
+
+.game-settings section .fnql-retail-supported.one-half.column {
+  width: 100%;
+  margin-left: 0;
+}
+
+.game-settings section .fnql-legacy-video-note {
+  margin: 0 0 1.5rem;
+  padding: 0.8rem 1rem;
+  border-left: 0.3rem solid #f28c28;
+  color: #ccc;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.fnql-settings-panel {
+  padding-bottom: 4rem;
+}
+
+.fnql-settings-panel .fnql-settings-intro {
+  margin: 0 0 2rem;
+  color: #bbb;
+}
+
+.fnql-settings-panel .fnql-settings-group {
+  margin: 0 0 2.5rem;
+  padding: 1.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.fnql-settings-panel .fnql-settings-group h2 {
+  margin: 0 0 1.25rem;
+  color: #f28c28;
+}
+
+.fnql-settings-panel .fnql-setting {
+  display: table;
+  width: 100%;
+  min-height: 4.4rem;
+  padding: 0.7rem 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.fnql-settings-panel .fnql-setting:first-of-type {
+  border-top: 0;
+}
+
+.fnql-settings-panel .fnql-setting-copy,
+.fnql-settings-panel .fnql-setting-control {
+  display: table-cell;
+  vertical-align: middle;
+}
+
+.fnql-settings-panel .fnql-setting-copy {
+  width: 62%;
+  padding-right: 2rem;
+}
+
+.fnql-settings-panel .fnql-setting-control {
+  width: 38%;
+  text-align: right;
+}
+
+.fnql-settings-panel .fnql-setting-title {
+  display: block;
+  font-weight: bold;
+  color: #eee;
+}
+
+.fnql-settings-panel .fnql-setting-name {
+  display: block;
+  margin-top: 0.2rem;
+  color: #888;
+  font-family: monospace;
+  font-size: 0.85em;
+}
+
+.fnql-settings-panel .fnql-setting-help {
+  display: block;
+  margin-top: 0.35rem;
+  color: #aaa;
+  font-size: 0.9em;
+  line-height: 1.35;
+}
+
+.fnql-settings-panel input[type="text"],
+.fnql-settings-panel input[type="number"],
+.fnql-settings-panel select {
+  width: 100%;
+  max-width: 25rem;
+  margin: 0;
+  color: #ddd;
+  background: #181818;
+  border-color: #555;
+}
+
+.fnql-settings-panel input[type="range"] {
+  width: 100%;
+  max-width: 22rem;
+  margin: 0;
+}
+
+.fnql-settings-panel input[type="checkbox"] {
+  width: 2rem;
+  height: 2rem;
+  margin: 0;
+}
+
+.fnql-settings-panel .fnql-range-value {
+  display: inline-block;
+  min-width: 4.5rem;
+  margin-left: 0.8rem;
+  color: #ddd;
+  text-align: left;
+}
+
+.fnql-settings-panel .fnql-settings-actions {
+  margin: 2rem 0 0;
+  text-align: right;
+}
+
+.fnql-settings-panel .fnql-settings-actions button {
+  margin-left: 1rem;
+}
+
+.fnql-settings-panel .fnql-setting-unavailable {
+  padding: 1rem 0;
+  color: #888;
+}
+
+@media (max-width: 780px) {
+  .fnql-settings-panel .fnql-setting,
+  .fnql-settings-panel .fnql-setting-copy,
+  .fnql-settings-panel .fnql-setting-control {
+    display: block;
+    width: 100%;
+  }
+
+  .fnql-settings-panel .fnql-setting-control {
+    margin-top: 0.8rem;
+    text-align: left;
+  }
+}

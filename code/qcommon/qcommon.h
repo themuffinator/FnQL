@@ -1315,6 +1315,7 @@ void SV_RefreshPlatformServiceCvars( void );
 void SV_RegisterGameCvars( void );
 void SV_SteamGameServerStart( const char *mapName );
 void SV_Shutdown( const char *finalmsg );
+qboolean SV_ShouldErrorExit( errorParm_t code );
 void SV_Frame( int msec, int realMsec );
 void SV_TrackCvarChanges( void );
 void SV_PacketEvent( const netadr_t *from, msg_t *msg );

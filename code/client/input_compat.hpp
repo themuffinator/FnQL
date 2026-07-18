@@ -23,6 +23,31 @@ version.
 
 namespace fnql::input {
 
+/*
+Retail catcher bit 0x10 is transparent to gameplay input.  In particular,
+retail Quake Live keeps movement active while a held scoreboard uses that bit.
+Keep the pass-through mask as a parameter so q_shared.h remains the canonical
+owner of the ABI value.
+*/
+[[nodiscard]] constexpr int GameplayCatcherBits(
+	int catcher, int passThroughMask ) noexcept
+{
+	return catcher & ~passThroughMask;
+}
+
+[[nodiscard]] constexpr bool CatcherBlocksGameplayInput(
+	int catcher, int passThroughMask ) noexcept
+{
+	return GameplayCatcherBits( catcher, passThroughMask ) != 0;
+}
+
+[[nodiscard]] constexpr bool GameplayCatcherStateChanged(
+	int previous, int next, int passThroughMask ) noexcept
+{
+	return GameplayCatcherBits( previous, passThroughMask ) !=
+		GameplayCatcherBits( next, passThroughMask );
+}
+
 constexpr std::size_t kRetailMouseFilterCapacity = 32;
 constexpr int kRetailMouseFilterMaximum =
 	static_cast<int>( kRetailMouseFilterCapacity ) - 1;

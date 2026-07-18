@@ -9,8 +9,8 @@ class QLServicesSourceTests(unittest.TestCase):
     def test_all_renderers_share_the_bounded_v47_contract(self) -> None:
         for relative in (
             "code/renderer/tr_bsp.c",
-            "code/renderer2/tr_bsp.c",
             "code/renderervk/tr_bsp.c",
+            "code/rendererrtx/tr_bsp.c",
         ):
             source = (ROOT / relative).read_text(encoding="utf-8")
             self.assertIn('../qcommon/ql_bsp.h', source)

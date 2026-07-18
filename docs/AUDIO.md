@@ -1,6 +1,6 @@
 # Audio Guide
 
-FnQL keeps Quake III's familiar sound commands and music flow, then layers a more modern backend model on top. The default path now uses OpenAL, which means you can keep the classic feel, use a more capable spatial pipeline, or drop back to the original mixer when you need strict fallback behavior.
+FnQL keeps retail Quake Live's sound commands, voice chat, and music flow, then layers a more modern backend model on top. The default path uses OpenAL, while the original mixer remains available as a deterministic fallback.
 
 This guide focuses on the player-facing audio controls: backend selection, device choice, master and music volume, focus muting, spatial audio, legacy mixer tuning, and the commands that help you verify what the engine actually started.
 
@@ -23,6 +23,8 @@ If you want the short version first:
 - `s_alAutoRecover 1`: Try OpenAL Soft live device recovery after a playback-device disconnect.
 - `s_volume`: Set the master volume for all game audio.
 - `s_musicVolume`: Set the music volume independently of gameplay sounds.
+- `s_voiceVolume`: Set received Steam voice-chat volume independently of music and cinematics.
+- `s_pvs`: Opt into retail QL's client-side PVS cull for positional sounds. Default `0`.
 - `s_muteWhenUnfocused 1`: Mute audio when the game window loses focus.
 - `s_muteWhenMinimized 1`: Mute audio when the game is minimized.
 - `s_alReverb 1`: Enable OpenAL environmental reverb when the device supports EFX. Requires `snd_restart`.
@@ -43,7 +45,7 @@ If you want the short version first:
 FnQL exposes two audio paths on the client side.
 
 - `openal`: The default backend. This is the modern path and the only one that provides the current spatial audio controls such as reverb, occlusion, device selection, and the spatial debug tools.
-- `legacy`: The original Quake III mixer and output-device path. Use this when you want the classic backend behavior or when OpenAL is unavailable on a given system.
+- `legacy`: The original id Tech 3 software mixer and output-device path, extended with the retail QL controls described below. Use it when OpenAL is unavailable or when you need the classic fallback.
 
 Behavior notes:
 
@@ -68,7 +70,7 @@ snd_restart
 
 ## Defaults, Migration, And Fallback
 
-The modern audio path is designed to be an additive default rather than a new content requirement. Existing retail assets, mods, demos, and ordinary Quake III sound commands keep working; the OpenAL backend changes how the client renders audio after the game has already chosen which sounds to play.
+The modern audio path is designed to be an additive default rather than a new content requirement. Existing retail Quake Live assets, modules, demos, and sound commands keep working; the OpenAL backend changes how the client renders audio after the game has already chosen which sounds to play.
 
 Fresh configs start from these intended defaults:
 
@@ -172,8 +174,9 @@ OpenAL Soft options worth knowing about include `stereo-mode`, `stereo-encoding`
 
 The main day-to-day controls are intentionally simple.
 
-- `s_volume`: Master volume for game audio. Range `0` to `1`. Default `0.8`.
-- `s_musicVolume`: Music-only volume. Range `0` to `1`. Default `0.25`.
+- `s_volume`: Master volume for game audio. Retail range `0` to `2`. Default `0.8`.
+- `s_musicVolume`: Music-only volume. Retail range `0` to `2`. Default `0.25`.
+- `s_voiceVolume`: Received Steam voice-chat volume. Retail range `0` to `2`. Default `1.0`.
 - `s_muteWhenUnfocused`: Mute audio when the window is no longer focused. Default `1`.
 - `s_muteWhenMinimized`: Mute audio when the game is minimized. Default `1`.
 
@@ -183,6 +186,10 @@ Practical guidance:
 - Use `s_volume` when the whole mix is too loud or too quiet.
 - If the game seems to "lose" audio after task switching, check the two focus-muting cvars before assuming the backend is broken.
 - Focus muting applies to both backends.
+- Remote speakers use five independent retail-style queues, so simultaneous
+  speakers do not overwrite one another or the raw PCM stream used by
+  cinematics. `s_voiceStep` controls the small packet prebuffer and is normally
+  best left at its `0.02` default.
 
 Examples:
 
@@ -245,7 +252,7 @@ Occlusion is useful when you want walls, doors, and arena structure to affect ho
 
 ### Audio Visibility And Culling
 
-The audio backend does not run its own PVS, PVS2, or PHS pass. It plays the transient and looping sounds that the client game asks it to play, then applies source budgets, distance attenuation, and optional trace-based occlusion.
+FnQL plays the transient and looping sounds requested by the client module, then applies source budgets, distance attenuation, and optional trace-based occlusion. For retail QL parity, `s_pvs 1` additionally mutes positional sounds whose origins are outside the listener's current BSP PVS. The check is off by default and fails open when no valid collision world is loaded; it does not affect local/UI audio, music, raw/cinematic PCM, or remote voice chat.
 
 - Snapshot visibility is handled before audio sees most world entities. The server builds snapshots from `CM_ClusterPVS`, area-portal connectivity, broadcast/single-client flags, and the portal-style second-view PVS paths (`SVF_PORTAL` and `SVF_SELF_PORTAL2`).
 - There is no engine-wide `CM_ClusterPHS` sound visibility path in this tree. The only PHS reference is in bot AAS helpers, not in client sound dispatch.
@@ -331,6 +338,7 @@ The main legacy-specific controls are:
 
 - `s_khz`: Output sampling rate for the legacy backend. Valid values are `8`, `11`, `22`, `44`, and `48`. Default `22`. Requires `snd_restart`.
 - `s_mixAhead`: Amount of audio to pre-mix ahead of playback. Default `0.2`.
+- `s_mixPreStep`: Retail QL-compatible DMA cursor lead. Default `0.05`.
 - `s_mixOffset`: Developer-facing timing offset for the legacy mixer. Range `0` to `0.5`.
 - `s_device`: ALSA output device selector on Linux builds that use the non-SDL ALSA path.
 

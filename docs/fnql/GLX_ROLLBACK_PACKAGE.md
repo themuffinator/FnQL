@@ -1,9 +1,13 @@
 # GLx Rollback Package Metadata
 
-This document defines the release metadata required before a promoted GLx release
-can ship with `opengl` as a migration alias for GLx. The current unpromoted
-release line does not need this metadata, but the release script records whether
-it was supplied and refuses a promoted source tree unless the metadata validates.
+> Historical record: this rollback format belonged to the retired
+> `opengl`/`opengl2` promotion transition. Current releases may contain only the
+> `glx`, `vk`, and `rtx` renderer modules; release packaging rejects every other
+> renderer module name.
+
+This document records the release metadata that was required before GLx could
+replace `opengl`. It remains available for interpreting historical proof
+artifacts and does not define a supported renderer alias today.
 
 The metadata is a reviewed JSON file passed to release packaging with
 `--glx-rollback-metadata <path>`. It is release-specific, so it should live with

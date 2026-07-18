@@ -492,8 +492,13 @@ static void Console_Key( int key ) {
 
 	// enter finishes the line
 	if ( key == K_ENTER || key == K_KP_ENTER ) {
-		// if not in the game explicitly prepend a slash if needed
-		if ( cls.state != CA_ACTIVE
+		const bool consoleChatAllowed =
+			( cl_allowConsoleChat && cl_allowConsoleChat->integer ) ||
+			Con_UseAutoSay();
+
+		// Retail treats bare text as a command unless console chat is
+		// explicitly enabled. FnQL's con_autoSay retains the same opt-in.
+		if ( !consoleChatAllowed
 			&& g_consoleField.buffer[0] != '\0'
 			&& g_consoleField.buffer[0] != '\\'
 			&& g_consoleField.buffer[0] != '/' ) {
@@ -513,8 +518,9 @@ static void Console_Key( int key ) {
 		} else {
 			if ( !g_consoleField.buffer[0] ) {
 				return;	// empty lines just scroll the console without adding to history
-			} else if ( Con_UseAutoSay() ) {
-				// Opt-in legacy console behavior for plain-text chat.
+			} else if ( consoleChatAllowed ) {
+				// Retail owns cl_allowConsoleChat. Keep FnQL's con_autoSay as a
+				// supported alias so existing configs retain their behavior.
 				if ( Con_UseRawSay() ) {
 					Com_sprintf( rawSayBuffer.data(), static_cast<int>( rawSayBuffer.size() ), "say \"%s\"\n", g_consoleField.buffer );
 					CL_AddReliableCommand( rawSayBuffer.data(), qfalse );
@@ -1093,9 +1099,13 @@ Key_SetCatcher
 */
 void Key_SetCatcher( int catcher )
 {
-	// If the catcher state is changing, clear all key states
-	if ( catcher != keyCatchers )
+	// Preserve the anti-stuck release for real input-ownership changes, but
+	// not when retail's gameplay-transparent HUD catcher is toggled.  Clearing
+	// there releases movement keys that are already held when +scores begins.
+	if ( fnql::input::GameplayCatcherStateChanged(
+		keyCatchers, catcher, KEYCATCH_RETAIL_MOUSEPASS ) ) {
 		Key_ClearStates();
+	}
 
 	keyCatchers = catcher;
 }

@@ -139,7 +139,7 @@ jobs:
             -Dsdl=disabled \
             -Dcurl=disabled \
             -Drenderer-dlopen=true \
-            -Drenderers=opengl,glx \
+            -Drenderers=glx,vk \
             -Dbuild-client=false \
             -Dbuild-server=false \
             -Daudio-tests=false \

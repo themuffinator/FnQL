@@ -412,7 +412,7 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
 
         self.assertIn("vkinfo", cfg)
         self.assertIn('set r_speeds "7"', cfg)
-        self.assertEqual(screenshots[0]["baselineKey"], "vk-modern-map1-q3dm1-vulkan")
+        self.assertEqual(screenshots[0]["baselineKey"], "vk-modern-map1-q3dm1-vk")
 
     def test_extra_set_rejects_cfg_injection(self) -> None:
         with self.assertRaisesRegex(ValueError, "not safe"):
@@ -559,13 +559,13 @@ class VkRuntimeSweepGateTests(unittest.TestCase):
         self.assertTrue(
             any(
                 shot["baselineKey"]
-                == "vk-modern-dlight-shadows-csm-shimmer-path-baseline-q3dm17-vulkan"
+                == "vk-modern-dlight-shadows-csm-shimmer-path-baseline-q3dm17-vk"
                 for shot in screenshots
             )
         )
         self.assertTrue(
             any(
-                shot["baselineKey"] == "vk-modern-dlight-shadows-stress-light-budget-q3dm6-vulkan"
+                shot["baselineKey"] == "vk-modern-dlight-shadows-stress-light-budget-q3dm6-vk"
                 for shot in screenshots
             )
         )

@@ -261,8 +261,17 @@ def main() -> int:
         "vk_csm_shadow_atlas_ready()",
         failures,
     )
+    check_backend(
+        "RTX",
+        "code/rendererrtx/tr_backend.c",
+        "code/rendererrtx/tr_local.h",
+        "vk_mark_csm_shadow_atlas_rendered();",
+        "vk_csm_shadow_atlas_ready()",
+        failures,
+    )
     check_debug("OpenGL", "code/renderer/tr_cmds.c", failures)
     check_debug("Vulkan", "code/renderervk/tr_cmds.c", failures)
+    check_debug("RTX", "code/rendererrtx/tr_cmds.c", failures)
     check_glx_gpu_pass(failures)
 
     if failures:

@@ -218,7 +218,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Launch a repeatable GLx/Vulkan dynamic-light shadow test scene."
     )
-    parser.add_argument("--renderer", choices=("glx", "vulkan"), default="vulkan")
+    parser.add_argument("--renderer", choices=("glx", "vk"), default="vk")
     parser.add_argument("--exe", help="Path to the FnQL client executable.")
     parser.add_argument(
         "--search-root",

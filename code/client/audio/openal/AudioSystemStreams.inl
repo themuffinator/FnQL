@@ -6,9 +6,11 @@ public:
 	void Init( OpenALDevice *device, ALuint source );
 	void Shutdown();
 	void Clear();
-	void Update( float gain );
-	bool QueuePCM16( const short *samples, int frameCount, int channels, int sampleRate );
+	void Update( float gain, bool allowStart = true );
+	bool QueuePCM16( const short *samples, int frameCount, int channels, int sampleRate, bool startPlayback = true );
+	bool Idle();
 	int QueuedBufferCount() const { return queuedBuffers_; }
+	double QueuedSeconds() const;
 
 private:
 	void ReclaimProcessedBuffers();
@@ -16,6 +18,7 @@ private:
 	OpenALDevice *device_ = nullptr;
 	ALuint source_ = 0;
 	int queuedBuffers_ = 0;
+	std::deque<double> queuedDurations_;
 };
 
 void StreamPlayer::Init( OpenALDevice *device, ALuint source ) {
@@ -44,6 +47,9 @@ void StreamPlayer::ReclaimProcessedBuffers() {
 		if ( buffer != 0 ) {
 			device_->BufferPool().Release( buffer );
 			queuedBuffers_ = ( std::max )( 0, queuedBuffers_ - 1 );
+			if ( !queuedDurations_.empty() ) {
+				queuedDurations_.pop_front();
+			}
 		}
 	}
 }
@@ -75,6 +81,7 @@ void StreamPlayer::Clear() {
 		}
 	}
 	queuedBuffers_ = 0;
+	queuedDurations_.clear();
 	device_->AL().alSourcei( source_, AL_BUFFER, 0 );
 	device_->SetSourceSpatialize( source_, false );
 	device_->SetSourceDirectChannels( source_, true );
@@ -91,7 +98,7 @@ void StreamPlayer::Shutdown() {
 	source_ = 0;
 }
 
-bool StreamPlayer::QueuePCM16( const short *samples, int frameCount, int channels, int sampleRate ) {
+bool StreamPlayer::QueuePCM16( const short *samples, int frameCount, int channels, int sampleRate, bool startPlayback ) {
 	if ( device_ == nullptr || source_ == 0 || samples == nullptr || frameCount <= 0 ||
 		!device_->SupportsPCMChannels( channels ) || sampleRate <= 0 ) {
 		return false;
@@ -130,6 +137,7 @@ bool StreamPlayer::QueuePCM16( const short *samples, int frameCount, int channel
 	}
 
 	++queuedBuffers_;
+	queuedDurations_.push_back( static_cast<double>( frameCount ) / static_cast<double>( sampleRate ) );
 
 	ALint state = 0;
 	device_->AL().alGetError();
@@ -137,14 +145,14 @@ bool StreamPlayer::QueuePCM16( const short *samples, int frameCount, int channel
 	if ( device_->AL().alGetError() != AL_NO_ERROR ) {
 		return true;
 	}
-	if ( state != AL_PLAYING ) {
+	if ( startPlayback && state != AL_PLAYING ) {
 		device_->AL().alSourcePlay( source_ );
 	}
 
 	return true;
 }
 
-void StreamPlayer::Update( float gain ) {
+void StreamPlayer::Update( float gain, bool allowStart ) {
 	if ( device_ == nullptr || source_ == 0 ) {
 		return;
 	}
@@ -158,7 +166,168 @@ void StreamPlayer::Update( float gain ) {
 	if ( device_->AL().alGetError() != AL_NO_ERROR ) {
 		return;
 	}
-	if ( state != AL_PLAYING && queuedBuffers_ > 0 ) {
+	if ( allowStart && state != AL_PLAYING && queuedBuffers_ > 0 ) {
 		device_->AL().alSourcePlay( source_ );
 	}
+}
+
+bool StreamPlayer::Idle() {
+	ReclaimProcessedBuffers();
+	return queuedBuffers_ <= 0;
+}
+
+double StreamPlayer::QueuedSeconds() const {
+	double seconds = 0.0;
+	for ( const double duration : queuedDurations_ ) {
+		seconds += duration;
+	}
+	return seconds;
+}
+
+class VoiceChatPlayer {
+public:
+	void Init( OpenALDevice *device );
+	void Shutdown();
+	void Clear();
+	void Queue( int clientNum, int frameCount, int sampleRate, const short *samples );
+	void Update( float gain );
+	int LaneCount() const { return laneCount_; }
+	int ActiveLaneCount() const;
+
+private:
+	struct Lane {
+		fnql_audio_voice::LaneActivity activity;
+		StreamPlayer player;
+		ALuint source = 0;
+		int startAtMs = 0;
+	};
+
+	static constexpr int kMaxQueuedBuffersPerLane = 20;
+	static constexpr double kMaxQueuedSeconds =
+		static_cast<double>( fnql_audio_voice::kLaneSampleCapacity ) / 22050.0;
+	OpenALDevice *device_ = nullptr;
+	std::array<Lane, fnql_audio_voice::kMaxLanes> lanes_{};
+	int laneCount_ = 0;
+};
+
+void VoiceChatPlayer::Init( OpenALDevice *device ) {
+	Shutdown();
+	device_ = device;
+	if ( device_ == nullptr ) {
+		return;
+	}
+
+	// Keep a useful gameplay-source floor even on deliberately constrained
+	// OpenAL configurations. Retail's five voice lanes are used whenever the
+	// device budget permits it; fewer lanes degrade cleanly instead of starving
+	// weapon, announcer, or ambient sounds.
+	const int gameplayReserve = ( std::max )( 1, ( std::min )( 8, device_->TotalVoiceCount() / 2 ) );
+	const int requestedLanes = ( std::min )( fnql_audio_voice::kMaxLanes,
+		( std::max )( 0, device_->FreeVoiceCount() - gameplayReserve ) );
+	for ( int i = 0; i < requestedLanes; ++i ) {
+		const ALuint source = device_->AcquireVoiceSource();
+		if ( source == 0 ) {
+			break;
+		}
+		Lane &lane = lanes_[static_cast<size_t>( laneCount_++ )];
+		lane.source = source;
+		lane.player.Init( device_, source );
+	}
+	if ( laneCount_ < fnql_audio_voice::kMaxLanes ) {
+		Com_DPrintf( "OpenAL remote voice: allocated %i of %i retail lanes to preserve gameplay sources\n",
+			laneCount_, fnql_audio_voice::kMaxLanes );
+	}
+}
+
+void VoiceChatPlayer::Shutdown() {
+	for ( Lane &lane : lanes_ ) {
+		lane.player.Shutdown();
+		if ( device_ != nullptr && lane.source != 0 ) {
+			device_->ReleaseVoiceSource( lane.source );
+		}
+		lane = Lane();
+	}
+	laneCount_ = 0;
+	device_ = nullptr;
+}
+
+void VoiceChatPlayer::Clear() {
+	for ( int i = 0; i < laneCount_; ++i ) {
+		Lane &lane = lanes_[static_cast<size_t>( i )];
+		lane.player.Clear();
+		fnql_audio_voice::ResetLane( lane.activity );
+		lane.startAtMs = 0;
+	}
+}
+
+void VoiceChatPlayer::Queue( int clientNum, int frameCount, int sampleRate, const short *samples ) {
+	if ( device_ == nullptr || laneCount_ <= 0 || samples == nullptr || frameCount <= 0 || sampleRate <= 0 ) {
+		return;
+	}
+
+	std::array<fnql_audio_voice::LaneActivity, fnql_audio_voice::kMaxLanes> activity{};
+	for ( int i = 0; i < laneCount_; ++i ) {
+		Lane &lane = lanes_[static_cast<size_t>( i )];
+		lane.activity.queued = !lane.player.Idle();
+		activity[static_cast<size_t>( i )] = lane.activity;
+	}
+
+	const int now = Com_Milliseconds();
+	const int laneIndex = fnql_audio_voice::SelectLane( activity.data(), laneCount_, clientNum, now );
+	if ( laneIndex < 0 ) {
+		Com_DPrintf( "OpenAL remote voice: all lanes are busy; dropping client %i packet\n", clientNum );
+		return;
+	}
+
+	Lane &lane = lanes_[static_cast<size_t>( laneIndex )];
+	if ( lane.activity.clientNum != clientNum ) {
+		lane.player.Clear();
+		fnql_audio_voice::ResetLane( lane.activity );
+	}
+	const double availableSeconds = kMaxQueuedSeconds - lane.player.QueuedSeconds();
+	const int availableFrames = static_cast<int>( ( std::max )( 0.0, availableSeconds ) * sampleRate );
+	const int queuedFrames = ( std::min )( frameCount, availableFrames );
+	if ( lane.player.QueuedBufferCount() >= kMaxQueuedBuffersPerLane || queuedFrames <= 0 ) {
+		Com_DPrintf( "OpenAL remote voice: client %i lane is full; dropping packet\n", clientNum );
+		return;
+	}
+
+	const bool wasIdle = lane.player.QueuedBufferCount() <= 0;
+	if ( !lane.player.QueuePCM16( samples, queuedFrames, 1, sampleRate, false ) ) {
+		Com_DPrintf( "OpenAL remote voice: could not queue client %i packet\n", clientNum );
+		return;
+	}
+	if ( queuedFrames < frameCount ) {
+		Com_DPrintf( "OpenAL remote voice: client %i lane overflowed; truncated packet\n", clientNum );
+	}
+	if ( wasIdle ) {
+		const float stepSeconds = ( s_voiceStep != nullptr ) ? ClampFloat( s_voiceStep->value, 0.0f, 0.25f ) : 0.0f;
+		const std::uint32_t startAt = static_cast<std::uint32_t>( now ) +
+			static_cast<std::uint32_t>( stepSeconds * 1000.0f );
+		lane.startAtMs = static_cast<std::int32_t>( startAt );
+	}
+	lane.activity.clientNum = clientNum;
+	lane.activity.queued = true;
+	lane.activity.lastPacketMs = now;
+}
+
+void VoiceChatPlayer::Update( float gain ) {
+	const int now = Com_Milliseconds();
+	for ( int i = 0; i < laneCount_; ++i ) {
+		Lane &lane = lanes_[static_cast<size_t>( i )];
+		const bool allowStart = lane.player.QueuedBufferCount() >= 2 ||
+			fnql_audio_voice::ElapsedMilliseconds( now, lane.startAtMs ) >= 0;
+		lane.player.Update( gain, allowStart );
+		lane.activity.queued = !lane.player.Idle();
+	}
+}
+
+int VoiceChatPlayer::ActiveLaneCount() const {
+	int active = 0;
+	for ( int i = 0; i < laneCount_; ++i ) {
+		if ( lanes_[static_cast<size_t>( i )].activity.queued ) {
+			++active;
+		}
+	}
+	return active;
 }

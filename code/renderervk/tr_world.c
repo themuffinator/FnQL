@@ -20,6 +20,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 #include "tr_local.h"
+#include "../renderercommon/tr_ql_ad_debug.h"
 
 
 
@@ -708,6 +709,8 @@ void R_UpdateAdvertisements( void ) {
 		advertisement->projectedNormalX = DotProduct( tr.refdef.viewaxis[1], advertisement->normal );
 		advertisement->projectedNormalY = DotProduct( tr.refdef.viewaxis[2], advertisement->normal );
 	}
+
+	R_QLDebugAdvertisements();
 }
 
 /*

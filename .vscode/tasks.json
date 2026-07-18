@@ -39,7 +39,7 @@
         "-Target",
         "both",
         "-Renderers",
-        "opengl,glx,vulkan,opengl2",
+        "glx,vk,rtx",
         "-Archive",
         "-WithSteam"
       ],
@@ -71,8 +71,33 @@
         "-Target",
         "both",
         "-Renderers",
-        "opengl,glx,vulkan,opengl2",
+        "glx,vk,rtx",
         "-Archive",
+        "-WithSteam"
+      ],
+      "problemMatcher": [
+        "$gcc",
+        "$msCompile"
+      ]
+    },
+    {
+      "label": "meson: build RTX (Steam)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\.vscode\\build-release.ps1",
+        "-Platform",
+        "Win32",
+        "-BuildDir",
+        "meson\\build\\win32-rtx",
+        "-Target",
+        "client",
+        "-Renderer",
+        "rtx",
         "-WithSteam"
       ],
       "problemMatcher": [
@@ -97,7 +122,7 @@
         "-Target",
         "both",
         "-Renderers",
-        "opengl,glx,vulkan,opengl2",
+        "glx,vk,rtx",
         "-Archive",
         "-WithSteam"
       ],
@@ -138,9 +163,9 @@
         "--exe",
         "${workspaceFolder}\\meson\\build\\fnql.x64.exe",
         "--renderers",
-        "opengl,glx",
+        "glx,vk",
         "--switch-sequence",
-        "opengl,glx,opengl,glx",
+        "glx,vk,glx,vk",
         "--maps",
         "q3dm1",
         "--profile",

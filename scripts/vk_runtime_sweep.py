@@ -1408,7 +1408,7 @@ def build_map_cfg(
     lines.append(f"wait {args.startup_wait}")
     for map_index, map_name in enumerate(maps, start=1):
         safe_map = sanitize(map_name)
-        shot_name = f"{run_id}-map{map_index}-{safe_map}-vulkan"
+        shot_name = f"{run_id}-map{map_index}-{safe_map}-vk"
         lines.append(f"map {map_name}")
         lines.append(f"wait {args.map_wait}")
         lines.append("vkinfo")
@@ -1426,8 +1426,8 @@ def build_map_cfg(
         screenshots.append(
             {
                 "name": shot_name,
-                "baselineKey": f"{args.profile}-map{map_index}-{safe_map}-vulkan",
-                "renderer": "vulkan",
+                "baselineKey": f"{args.profile}-map{map_index}-{safe_map}-vk",
+                "renderer": "vk",
                 "map": map_name,
                 "mapIndex": map_index,
             }
@@ -1495,9 +1495,9 @@ def build_dlight_shadow_cfg(
                         "name": step_shot_name,
                         "baselineKey": (
                             f"{args.profile}-dlight-shadows-{scene_id}-"
-                            f"{step_id}-{safe_map}-vulkan"
+                            f"{step_id}-{safe_map}-vk"
                         ),
-                        "renderer": "vulkan",
+                        "renderer": "vk",
                         "map": map_name,
                         "mapIndex": scene_index,
                         "scene": scene_id,
@@ -1525,8 +1525,8 @@ def build_dlight_shadow_cfg(
             screenshots.append(
                 {
                     "name": shot_name,
-                    "baselineKey": f"{args.profile}-dlight-shadows-{scene_id}-{safe_map}-vulkan",
-                    "renderer": "vulkan",
+                    "baselineKey": f"{args.profile}-dlight-shadows-{scene_id}-{safe_map}-vk",
+                    "renderer": "vk",
                     "map": map_name,
                     "mapIndex": scene_index,
                     "scene": scene_id,
@@ -1600,7 +1600,7 @@ def base_launch_args(
         q3_path(basepath),
         "+set",
         "cl_renderer",
-        "vulkan",
+        "vk",
     ]
 
     for name in sorted(startup_cvars):

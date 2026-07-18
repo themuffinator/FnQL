@@ -1739,7 +1739,7 @@ DLIGHT_SHADOW_SCENE_END_RE = re.compile(
 )
 
 DEFAULT_OPTIONS = {
-    "renderers": "opengl,glx",
+    "renderers": "vk,glx",
     "switch_sequence": None,
     "maps": None,
     "demos": "",
@@ -3204,8 +3204,8 @@ RC_GATE_PRESETS = {
             "corpus_scenes": corpus_scene_ids_csv(GLX_GATE_CORPUS_SCENES["rc-smoke"]),
             "maps": corpus_targets_csv(GLX_GATE_CORPUS_SCENES["rc-smoke"], "map"),
             "demos": "",
-            "renderers": "opengl,glx",
-            "switch_sequence": "opengl,glx,opengl,glx",
+            "renderers": "vk,glx",
+            "switch_sequence": "vk,glx,vk,glx",
             "switch_rounds": 2,
             "timeout": 240.0,
         },
@@ -3231,8 +3231,8 @@ RC_GATE_PRESETS = {
             "corpus_scenes": corpus_scene_ids_csv(GLX_GATE_CORPUS_SCENES["rc-parity"]),
             "maps": corpus_targets_csv(GLX_GATE_CORPUS_SCENES["rc-parity"], "map"),
             "demos": corpus_targets_csv(GLX_GATE_CORPUS_SCENES["rc-parity"], "demo"),
-            "renderers": "opengl,glx",
-            "switch_sequence": "opengl,glx,opengl,glx",
+            "renderers": "vk,glx",
+            "switch_sequence": "vk,glx,vk,glx",
             "switch_rounds": 1,
             "color_sweep": True,
             "timeout": 300.0,
@@ -3252,7 +3252,7 @@ RC_GATE_PRESETS = {
             ),
             "require_screenshots": True,
             "require_timedemo_metrics": True,
-            "baseline_renderer": "opengl",
+            "baseline_renderer": "vk",
             "candidate_renderer": "glx",
             "min_timedemo_fps_ratio": 0.90,
             "screenshot_max_rms": 2.0,
@@ -3283,8 +3283,8 @@ RC_GATE_PRESETS = {
             "corpus_scenes": corpus_scene_ids_csv(GLX_GATE_CORPUS_SCENES["rc-proof"]),
             "maps": corpus_targets_csv(GLX_GATE_CORPUS_SCENES["rc-proof"], "map"),
             "demos": corpus_targets_csv(GLX_GATE_CORPUS_SCENES["rc-proof"], "demo"),
-            "renderers": "opengl,glx",
-            "switch_sequence": "opengl,glx,opengl,glx",
+            "renderers": "vk,glx",
+            "switch_sequence": "vk,glx,vk,glx",
             "switch_rounds": 1,
             "color_sweep": True,
             "timeout": 300.0,
@@ -3323,7 +3323,7 @@ RC_GATE_PRESETS = {
             "require_visual_baseline": True,
             "require_performance_baseline": True,
             "require_timedemo_metrics": True,
-            "baseline_renderer": "opengl",
+            "baseline_renderer": "vk",
             "candidate_renderer": "glx",
             "min_timedemo_fps_ratio": 0.90,
             "screenshot_max_rms": 2.0,
@@ -3410,8 +3410,8 @@ RC_GATE_PRESETS = {
             "corpus_scenes": corpus_scene_ids_csv(GLX_GATE_CORPUS_SCENES["rc-stress"]),
             "maps": corpus_targets_csv(GLX_GATE_CORPUS_SCENES["rc-stress"], "map"),
             "demos": corpus_targets_csv(GLX_GATE_CORPUS_SCENES["rc-stress"], "demo"),
-            "renderers": "opengl,glx",
-            "switch_sequence": "opengl,glx",
+            "renderers": "vk,glx",
+            "switch_sequence": "vk,glx",
             "switch_rounds": 1,
             "timeout": 360.0,
         },
@@ -4872,7 +4872,7 @@ def build_switch_cfg(
                         "paritySuiteIds": map_parity_suite_ids,
                         "parityCvars": map_parity_cvars,
                         "projectedDlightShaderParity": True,
-                        "legacyFallbackBaseline": "opengl-projected-light",
+                        "legacyFallbackBaseline": "compat-projected-light",
                     }
                     expected_shots.append(
                         {
@@ -4928,7 +4928,7 @@ def build_switch_cfg(
                 }
                 if projected_dlight_shader_parity:
                     shot_record["projectedDlightShaderParity"] = True
-                    shot_record["legacyFallbackBaseline"] = "opengl-projected-light"
+                    shot_record["legacyFallbackBaseline"] = "compat-projected-light"
                 expected_shots.append(shot_record)
 
         lines.append("disconnect")
@@ -5163,7 +5163,7 @@ def build_demo_cfg(
             "paritySuiteIds": demo_parity_suite_ids,
             "projectedDlightShaderParity": True,
             "projectedDlightShaderTimedemoParity": True,
-            "legacyFallbackBaseline": "opengl-projected-light",
+            "legacyFallbackBaseline": "compat-projected-light",
         }
         expected_shots.extend(
             [
@@ -14513,7 +14513,7 @@ def projected_dlight_shader_parity_evidence(
                         "Projected dlight shader parity screenshot did not pass its "
                         f"legacy fallback baseline: {shot.get('baselineKey', shot.get('name', map_name))}."
                     )
-                if shot.get("legacyFallbackBaseline") != "opengl-projected-light":
+                if shot.get("legacyFallbackBaseline") != "compat-projected-light":
                     failures.append(
                         "Projected dlight shader parity screenshot is missing the legacy fallback baseline role: "
                         f"{shot.get('name', map_name)}."
@@ -14625,7 +14625,7 @@ def projected_dlight_shader_parity_evidence(
                         "Projected dlight shader parity timedemo screenshot did not pass its "
                         f"legacy fallback baseline: {shot.get('baselineKey', shot.get('name', demo))}."
                     )
-                if shot.get("legacyFallbackBaseline") != "opengl-projected-light":
+                if shot.get("legacyFallbackBaseline") != "compat-projected-light":
                     failures.append(
                         "Projected dlight shader parity timedemo screenshot is missing the "
                         f"legacy fallback baseline role: {shot.get('name', demo)}."
@@ -15405,7 +15405,7 @@ def evaluate_gate(manifest: dict[str, object]) -> list[str]:
 
     min_ratio = requirements.get("min_timedemo_fps_ratio")
     if min_ratio is not None:
-        baseline = str(requirements.get("baseline_renderer", "opengl")).lower()
+        baseline = str(requirements.get("baseline_renderer", "vk")).lower()
         candidate = str(requirements.get("candidate_renderer", "glx")).lower()
         for demo in demos:
             base = timedemos.get((baseline, demo))

@@ -35,7 +35,7 @@ class MapOverbrightCapSourceTests(unittest.TestCase):
             'ri.Cvar_Get( "r_mapOverBrightCap", "255", '
             'CVAR_ARCHIVE | CVAR_LATCH | CVAR_VM_CREATED | CVAR_CLOUD )'
         )
-        for renderer in ("renderer", "renderer2", "renderervk"):
+        for renderer in ("renderer", "renderervk", "rendererrtx"):
             init = read(f"code/{renderer}/tr_init.c")
             local = read(f"code/{renderer}/tr_local.h")
             self.assertIn("cvar_t\t*r_mapOverBrightCap;", init)
@@ -47,7 +47,7 @@ class MapOverbrightCapSourceTests(unittest.TestCase):
             )
 
     def test_byte_lightmap_and_lightgrid_paths_use_the_configured_cap(self) -> None:
-        for renderer in ("renderer", "renderer2", "renderervk"):
+        for renderer in ("renderer", "renderervk", "rendererrtx"):
             bsp = read(f"code/{renderer}/tr_bsp.c")
             self.assertIn(
                 "const int\tcap = r_mapOverBrightCap ? r_mapOverBrightCap->integer : 255;",
@@ -57,16 +57,6 @@ class MapOverbrightCapSourceTests(unittest.TestCase):
             self.assertIn("g = g * cap / max;", bsp)
             self.assertIn("b = b * cap / max;", bsp)
             self.assertNotIn("r = r * 255 / max;", bsp)
-
-    def test_renderer2_float_lightmaps_use_the_same_normalized_cap(self) -> None:
-        bsp = read("code/renderer2/tr_bsp.c")
-        self.assertIn(
-            "const float cap = ( r_mapOverBrightCap ? r_mapOverBrightCap->integer : 255 ) / 255.0f;",
-            bsp,
-        )
-        self.assertIn("r = r * cap / max;", bsp)
-        self.assertIn("g = g * cap / max;", bsp)
-        self.assertIn("b = b * cap / max;", bsp)
 
 
 if __name__ == "__main__":

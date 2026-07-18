@@ -42,7 +42,8 @@
 			/>
 			<Tool
 				Name="VCCLCompilerTool"
-				PreprocessorDefinitions="NDEBUG;_CRT_SECURE_NO_DEPRECATE"
+				AdditionalIncludeDirectories="..\\..\\..\\subprojects\\fontstash\\src"
+				PreprocessorDefinitions="NDEBUG;_CRT_SECURE_NO_DEPRECATE;RENDERER_VULKAN;BUILD_FONTSTASH"
 				AssemblerListingLocation="$(IntDir)\"
 				WarningLevel="4"
 			/>
@@ -100,7 +101,8 @@
 			/>
 			<Tool
 				Name="VCCLCompilerTool"
-				PreprocessorDefinitions="NDEBUG;_CRT_SECURE_NO_DEPRECATE"
+				AdditionalIncludeDirectories="..\\..\\..\\subprojects\\fontstash\\src"
+				PreprocessorDefinitions="NDEBUG;_CRT_SECURE_NO_DEPRECATE;RENDERER_VULKAN;BUILD_FONTSTASH"
 				AssemblerListingLocation="$(IntDir)\"
 				WarningLevel="4"
 			/>
@@ -158,8 +160,9 @@
 			/>
 			<Tool
 				Name="VCCLCompilerTool"
+				AdditionalIncludeDirectories="..\\..\\..\\subprojects\\fontstash\\src"
 				Optimization="0"
-				PreprocessorDefinitions="_DEBUG;_CRT_SECURE_NO_DEPRECATE"
+				PreprocessorDefinitions="_DEBUG;_CRT_SECURE_NO_DEPRECATE;RENDERER_VULKAN;BUILD_FONTSTASH"
 				BasicRuntimeChecks="3"
 				RuntimeLibrary="1"
 				AssemblerListingLocation="$(IntDir)\"
@@ -221,8 +224,9 @@
 			/>
 			<Tool
 				Name="VCCLCompilerTool"
+				AdditionalIncludeDirectories="..\\..\\..\\subprojects\\fontstash\\src"
 				Optimization="0"
-				PreprocessorDefinitions="_DEBUG;_CRT_SECURE_NO_DEPRECATE"
+				PreprocessorDefinitions="_DEBUG;_CRT_SECURE_NO_DEPRECATE;RENDERER_VULKAN;BUILD_FONTSTASH"
 				BasicRuntimeChecks="3"
 				RuntimeLibrary="1"
 				AssemblerListingLocation="$(IntDir)\"
@@ -288,6 +292,10 @@
 			</File>
 			<File
 				RelativePath="..\..\renderercommon\tr_font.c"
+				>
+			</File>
+			<File
+				RelativePath="..\\..\\renderercommon\\tr_font_stash.c"
 				>
 			</File>
 			<File

@@ -147,6 +147,7 @@ typedef struct {
 	byte		*surfacePixels;
 	size_t		surfaceBytes;
 	fnql::webui::SurfaceSize surfaceSize;
+	fnql::webui::SurfaceSize requestedSurfaceSize;
 	qboolean	surfaceCopied;
 #if defined( _WIN32 )
 	HCURSOR		activeCursorHandle;
@@ -1675,6 +1676,35 @@ void CL_WebHost_Shutdown( void ) {
 	CL_RefreshOnlineServicesBridgeState();
 }
 
+void CL_WebHost_RefreshSurfaceSize( void ) {
+	if ( !cl_webui.initialized || !CL_WebUI_ServiceAvailable() ||
+		!CL_WebHost_HasLiveView() || cls.glconfig.vidWidth <= 0 ||
+		cls.glconfig.vidHeight <= 0 ) {
+		return;
+	}
+
+	const fnql::webui::BackendStatus backendStatus =
+		fnql::webui::ClientBackendHost().Status();
+	const fnql::webui::SurfaceSize desired = {
+		cls.glconfig.vidWidth, cls.glconfig.vidHeight
+	};
+	if ( backendStatus.surface == desired ) {
+		cl_webui.requestedSurfaceSize = desired;
+		return;
+	}
+	// Awesomium temporarily reports no surface after Resize(). Remember the
+	// requested extent so a newer resize can supersede it without resubmitting
+	// the same request every frame while the replacement surface is produced.
+	if ( !backendStatus.surface.IsValid() &&
+		cl_webui.requestedSurfaceSize == desired ) {
+		return;
+	}
+	if ( CL_Awesomium_Resize( desired.width, desired.height ) ) {
+		cl_webui.requestedSurfaceSize = desired;
+	}
+}
+
+
 void CL_WebHost_Frame( void ) {
 	if ( !cl_webui.initialized ) {
 		return;
@@ -1688,14 +1718,7 @@ void CL_WebHost_Frame( void ) {
 
 	if ( CL_WebUI_ServiceAvailable() ) {
 		if ( CL_WebHost_HasLiveView() ) {
-			const fnql::webui::BackendStatus backendStatus =
-				fnql::webui::ClientBackendHost().Status();
-			if ( backendStatus.surface.IsValid()
-				&& cls.glconfig.vidWidth > 0 && cls.glconfig.vidHeight > 0
-				&& backendStatus.surface != fnql::webui::SurfaceSize{
-					cls.glconfig.vidWidth, cls.glconfig.vidHeight } ) {
-				CL_Awesomium_Resize( cls.glconfig.vidWidth, cls.glconfig.vidHeight );
-			}
+			CL_WebHost_RefreshSurfaceSize();
 			if ( cl_webZoom && cl_webZoom->modified
 				&& CL_Awesomium_SetZoom( cl_webZoom->integer ) ) {
 				cl_webZoom->modified = qfalse;
@@ -2820,9 +2843,57 @@ static void CL_WebHost_BuildConfigCvarJson( char *buffer, size_t bufferSize ) {
 		"ui_resourceBridgeSteamDataSourceSubset",
 		"ui_resourceBridgeSteamDataSourceNativeGap",
 		"ui_resourceBridgeSteamDataSourceFallbackOwner",
+		"cl_fnqlWebPakLoaded",
+		"cl_fnqlWebPakSource",
+		"cl_fnqlWebPakVersion",
+		"cl_fnqlWebPakResourceCount",
+		"cl_renderer",
 		"r_mode",
 		"r_modeFullscreen",
 		"r_fullscreen",
+		"r_noborder",
+		"r_customWidth",
+		"r_customHeight",
+		"r_displayRefresh",
+		"r_swapInterval",
+		"r_ext_multisample",
+		"r_renderScale",
+		"r_fbo",
+		"r_hdr",
+		"r_bloom",
+		"r_depthFade",
+		"r_globalFog",
+		"r_globalFogStrength",
+		"r_celShading",
+		"r_celShadingWorld",
+		"r_celShadingSteps",
+		"r_celOutline",
+		"r_dlightMode",
+		"r_dlightShadows",
+		"cl_playerHighlight",
+		"cl_playerHighlightRimIntensity",
+		"cl_playerHighlightOutlineIntensity",
+		"cl_playerHighlightOutlineScale",
+		"cl_playerHighlightRedColor",
+		"cl_playerHighlightBlueColor",
+		"cl_playerHighlightFreeColor",
+		"cl_menuAspect",
+		"cl_menuDepthOfField",
+		"cl_menuDepthOfFieldTime",
+		"cl_cinematicAspect",
+		"cl_autoRecordDemo",
+		"cl_drawRecording",
+		"r_levelshotHideHud",
+		"r_levelshotHideViewWeapon",
+		"s_backend",
+		"s_alDevice",
+		"s_alHrtf",
+		"s_alOutputMode",
+		"s_alFrequency",
+		"s_alOutputLimiter",
+		"s_alSpatializeStereo",
+		"s_muteWhenUnfocused",
+		"s_muteWhenMinimized",
 		NULL
 	};
 	qboolean first;
@@ -4864,14 +4935,14 @@ void CL_SteamP2PFrame( void ) {
 			Z_Free( packet );
 			continue;
 		}
-		byte pcm[maxDecompressedVoice];
+		short pcm[maxDecompressedVoice / sizeof( short )];
 		uint32_t pcmSize = 0;
-		if ( FNQL_Steam_DecompressVoice( packet + 1, bytesRead - 1u, pcm,
+		if ( FNQL_Steam_DecompressVoice( packet + 1, bytesRead - 1u, reinterpret_cast<byte *>( pcm ),
 			sizeof( pcm ), &pcmSize, sampleRate ) == FNQL_STEAM_RESULT_OK
 			&& pcmSize >= 2u && pcmSize <= sizeof( pcm ) && !( pcmSize & 1u ) ) {
 			CL_SetClientSpeakingState( sender, qtrue );
-			S_RawSamples( static_cast<int>( pcmSize / 2u ),
-				static_cast<int>( sampleRate ), 2, 1, pcm, 1.0f );
+			S_AddVoiceSamples( sender, static_cast<int>( pcmSize / sizeof( short ) ),
+				static_cast<int>( sampleRate ), pcm );
 		}
 		Z_Free( packet );
 	}

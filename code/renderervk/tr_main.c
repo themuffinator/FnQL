@@ -38,6 +38,7 @@ static const float s_flipMatrix[16] = {
 
 
 refimport_t	ri;
+qlRendererCvars_t qlRendererCvars;
 
 // entities that will have procedurally generated surfaces will just
 // point at this for their sorting surface

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,8 @@ PLATFORM_CPU_FAMILIES = {
     "x64": "x86_64",
     "ARM64": "aarch64",
 }
+DEFAULT_RENDERERS = ("glx", "vk", "rtx")
+SUPPORTED_RENDERERS = DEFAULT_RENDERERS
 
 
 def run(command: list[str]) -> None:
@@ -39,7 +42,27 @@ def find_meson() -> list[str] | None:
     return None
 
 
-def configure(meson: list[str], build_dir: Path, buildtype: str) -> None:
+def parse_renderers(value: str) -> tuple[str, ...]:
+    renderers: list[str] = []
+    for item in value.split(","):
+        renderer = item.strip()
+        if not renderer:
+            continue
+        if renderer not in SUPPORTED_RENDERERS:
+            supported = ", ".join(SUPPORTED_RENDERERS)
+            raise argparse.ArgumentTypeError(
+                f"unsupported renderer {renderer!r}; choose from {supported}"
+            )
+        if renderer not in renderers:
+            renderers.append(renderer)
+    if not renderers:
+        raise argparse.ArgumentTypeError("at least one renderer must be selected")
+    return tuple(renderers)
+
+
+def configure(
+    meson: list[str], build_dir: Path, buildtype: str, renderers: tuple[str, ...]
+) -> None:
     command = [*meson, "setup"]
     if (build_dir / "meson-private" / "coredata.dat").is_file():
         command.append("--reconfigure")
@@ -49,7 +72,7 @@ def configure(meson: list[str], build_dir: Path, buildtype: str) -> None:
             str(SOURCE_ROOT),
             f"--buildtype={buildtype}",
             "-Dstrict-warnings=true",
-            "-Drenderers=opengl,opengl2,vulkan,glx",
+            f"-Drenderers={','.join(renderers)}",
         ]
     )
     run(command)
@@ -81,9 +104,15 @@ def validate_toolchain(platform: str) -> None:
         )
 
 
-def build(meson: list[str], build_dir: Path, buildtype: str, platform: str) -> None:
+def build(
+    meson: list[str],
+    build_dir: Path,
+    buildtype: str,
+    platform: str,
+    renderers: tuple[str, ...],
+) -> None:
     validate_toolchain(platform)
-    configure(meson, build_dir, buildtype)
+    configure(meson, build_dir, buildtype, renderers)
     validate_machine(build_dir, platform)
     run([*meson, "compile", "-C", str(build_dir)])
 
@@ -101,6 +130,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--build-dir", type=Path, required=True)
     parser.add_argument("--buildtype", choices=("debug", "release"), required=True)
     parser.add_argument("--platform", choices=tuple(PLATFORM_CPU_FAMILIES), required=True)
+    parser.add_argument(
+        "--renderers",
+        type=parse_renderers,
+        default=os.environ.get("FNQL_MESON_RENDERERS", ",".join(DEFAULT_RENDERERS)),
+        help=(
+            "comma-separated renderer modules; defaults to the supported three-module "
+            "set, or FNQL_MESON_RENDERERS when set"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -120,7 +158,7 @@ def main() -> int:
         if args.action in ("clean", "rebuild"):
             clean(meson, build_dir)
         if args.action in ("build", "rebuild"):
-            build(meson, build_dir, args.buildtype, args.platform)
+            build(meson, build_dir, args.buildtype, args.platform, args.renderers)
     except (RuntimeError, subprocess.CalledProcessError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

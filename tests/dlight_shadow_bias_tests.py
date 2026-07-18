@@ -18,7 +18,11 @@ class DlightShadowBiasTests(unittest.TestCase):
         )
 
     def test_dlight_shadow_bias_defaults_match_between_renderers(self):
-        for path in ("code/renderer/tr_init.c", "code/renderervk/tr_init.c"):
+        for path in (
+            "code/renderer/tr_init.c",
+            "code/renderervk/tr_init.c",
+            "code/rendererrtx/tr_init.c",
+        ):
             with self.subTest(path=path):
                 source = read_text(path)
                 self.assert_cvar_default(source, "r_dlightShadowBias", "4")
@@ -28,7 +32,11 @@ class DlightShadowBiasTests(unittest.TestCase):
                 self.assertIn("angle-aware, texel-aware dynamic-light shadow-map sampling", source)
 
     def test_csm_shadow_bias_defaults_match_between_renderers(self):
-        for path in ("code/renderer/tr_init.c", "code/renderervk/tr_init.c"):
+        for path in (
+            "code/renderer/tr_init.c",
+            "code/renderervk/tr_init.c",
+            "code/rendererrtx/tr_init.c",
+        ):
             with self.subTest(path=path):
                 source = read_text(path)
                 self.assert_cvar_default(source, "r_csmShadowBias", "8")
@@ -38,7 +46,7 @@ class DlightShadowBiasTests(unittest.TestCase):
                 self.assertIn("Maximum receiver bias in world units for directional sky-sun shadow-map sampling", source)
 
     def test_correctness_mode_reports_separated_bias_classes(self):
-        for renderer in ("code/renderer", "code/renderervk"):
+        for renderer in ("code/renderer", "code/renderervk", "code/rendererrtx"):
             with self.subTest(renderer=renderer):
                 header = read_text(f"{renderer}/tr_local.h")
                 backend = read_text(f"{renderer}/tr_backend.c")
@@ -55,12 +63,17 @@ class DlightShadowBiasTests(unittest.TestCase):
                 self.assertIn("bias receiver:%.2f caster-depth:%.2f caster-slope:%.2f caster-normal:%.2f", cmds)
 
     def test_vulkan_receiver_bias_is_angle_aware_and_texel_limited(self):
-        source = read_text("code/renderervk/shaders/light_frag.tmpl")
+        for path in (
+            "code/renderervk/shaders/light_frag.tmpl",
+            "code/rendererrtx/shaders/light_frag.tmpl",
+        ):
+            with self.subTest(path=path):
+                source = read_text(path)
 
-        self.assertIn("float receiverSlope = 1.0 - receiverNDotL;", source)
-        self.assertIn("float receiverBias = depthFadeInfo.z * (0.125 + 0.375 * receiverSlope);", source)
-        self.assertIn("float texelWorldBias = max(2.0 * faceDist / faceSize, 0.125);", source)
-        self.assertIn("receiverBias = min(receiverBias, texelWorldBias);", source)
+                self.assertIn("float receiverSlope = 1.0 - receiverNDotL;", source)
+                self.assertIn("float receiverBias = depthFadeInfo.z * (0.125 + 0.375 * receiverSlope);", source)
+                self.assertIn("float texelWorldBias = max(2.0 * faceDist / faceSize, 0.125);", source)
+                self.assertIn("receiverBias = min(receiverBias, texelWorldBias);", source)
 
     def test_glx_receiver_bias_matches_vulkan_policy(self):
         source = read_text("code/renderer/tr_arb.c")
@@ -91,7 +104,11 @@ class DlightShadowBiasTests(unittest.TestCase):
             "normalScale = 0.25f + 0.50f * ( 1.0f - "
             "Com_Clamp( 0.0f, 1.0f, fabsf( lightSide ) ) );"
         )
-        for path in ("code/renderer/tr_shade.c", "code/renderervk/tr_shade.c"):
+        for path in (
+            "code/renderer/tr_shade.c",
+            "code/renderervk/tr_shade.c",
+            "code/rendererrtx/tr_shade.c",
+        ):
             with self.subTest(path=path):
                 source = read_text(path)
                 self.assertIn("r_dlightShadowCasterNormalBias->value : 0.25f", source)
@@ -111,11 +128,13 @@ class DlightShadowBiasTests(unittest.TestCase):
         self.assertIn("r_csmCasterSlopeBias ? r_csmCasterSlopeBias->value : 1.5f", glx_backend)
         self.assertIn("r_csmCasterDepthBias ? r_csmCasterDepthBias->value : 1.5f", glx_backend)
 
-        vk_backend = read_text("code/renderervk/vk.c")
-        self.assertIn("r_dlightShadowCasterDepthBias->value : 1.0f", vk_backend)
-        self.assertIn("r_dlightShadowCasterSlopeBias->value : 1.0f", vk_backend)
-        self.assertIn("r_csmCasterDepthBias ? r_csmCasterDepthBias->value : 1.5f", vk_backend)
-        self.assertIn("r_csmCasterSlopeBias ? r_csmCasterSlopeBias->value : 1.5f", vk_backend)
+        for path in ("code/renderervk/vk.c", "code/rendererrtx/vk.c"):
+            with self.subTest(path=path):
+                vk_backend = read_text(path)
+                self.assertIn("r_dlightShadowCasterDepthBias->value : 1.0f", vk_backend)
+                self.assertIn("r_dlightShadowCasterSlopeBias->value : 1.0f", vk_backend)
+                self.assertIn("r_csmCasterDepthBias ? r_csmCasterDepthBias->value : 1.5f", vk_backend)
+                self.assertIn("r_csmCasterSlopeBias ? r_csmCasterSlopeBias->value : 1.5f", vk_backend)
 
     def test_glx_shadow_atlas_avoids_duplicate_caster_probe(self):
         source = read_text("code/renderer/tr_backend.c")
@@ -132,9 +151,16 @@ class DlightShadowBiasTests(unittest.TestCase):
         self.assertNotIn("RB_CollectDlightShadowCasterEntities", dlight_block)
         self.assertIn("if ( entityNum != currentEntityNum )", dlight_block)
 
-        for path in ("code/renderer/tr_backend.c", "code/renderervk/tr_backend.c"):
+        for path in (
+            "code/renderer/tr_backend.c",
+            "code/renderervk/tr_backend.c",
+            "code/rendererrtx/tr_backend.c",
+        ):
             with self.subTest(path=path):
                 source = read_text(path)
+                self.assertIn("static int RB_RenderCSMShadowCascade(", source)
+                self.assertIn("static void RB_CSMShadowReceiverPass(", source)
+                self.assertIn("static void RB_SetDlightShadowCasterEntity(", source)
                 csm_cascade_start = source.index("static int RB_RenderCSMShadowCascade(")
                 csm_cascade_end = source.index("static void RB_RenderCSMShadowAtlas(", csm_cascade_start)
                 csm_cascade_block = source[csm_cascade_start:csm_cascade_end]

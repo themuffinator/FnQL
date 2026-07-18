@@ -1,0 +1,2816 @@
+{
+  "schema": "q3rtx.rendererrtx.shader_reflection.v1",
+  "generator": "code/rendererrtx/shaders/build_shaders.py",
+  "shader_count": 87,
+  "shaders": [
+    {
+      "symbol": "color_vert_spv",
+      "source": "color.vert",
+      "stage": "vert",
+      "defines": [],
+      "byte_size": 872,
+      "reflection": {
+        "descriptor_bindings": [],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "csm_shadow_vert_spv",
+      "source": "csm_shadow.vert",
+      "stage": "vert",
+      "defines": [],
+      "byte_size": 2964,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_23",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_66",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "dot_vert_spv",
+      "source": "dot.vert",
+      "stage": "vert",
+      "defines": [],
+      "byte_size": 1192,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_9",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "storage_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_21",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "fog_vert_spv",
+      "source": "fog.vert",
+      "stage": "vert",
+      "defines": [],
+      "byte_size": 2700,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_37",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "gamma_vert_spv",
+      "source": "gamma.vert",
+      "stage": "vert",
+      "defines": [],
+      "byte_size": 1188,
+      "reflection": {
+        "descriptor_bindings": [],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "liquid_vert_spv",
+      "source": "liquid.vert",
+      "stage": "vert",
+      "defines": [],
+      "byte_size": 2452,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_67",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_13",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "blend_frag_spv",
+      "source": "blend.frag",
+      "stage": "frag",
+      "defines": [],
+      "byte_size": 1504,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "texture0",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture1",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture2",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture3",
+            "set": 3,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "bloom_frag_spv",
+      "source": "bloom.frag",
+      "stage": "frag",
+      "defines": [],
+      "byte_size": 3500,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "texture0",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "blur_frag_spv",
+      "source": "blur.frag",
+      "stage": "frag",
+      "defines": [],
+      "byte_size": 1756,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "texture0",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "color_frag_spv",
+      "source": "color.frag",
+      "stage": "frag",
+      "defines": [],
+      "byte_size": 904,
+      "reflection": {
+        "descriptor_bindings": [],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "csm_shadow_frag_spv",
+      "source": "csm_shadow.frag",
+      "stage": "frag",
+      "defines": [],
+      "byte_size": 8312,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_124",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "csm_shadow_texture",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "dot_frag_spv",
+      "source": "dot.frag",
+      "stage": "frag",
+      "defines": [],
+      "byte_size": 544,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_9",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "storage_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "fog_frag_spv",
+      "source": "fog.frag",
+      "stage": "frag",
+      "defines": [],
+      "byte_size": 2680,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_16",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "fog_texture",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "gamma_frag_spv",
+      "source": "gamma.frag",
+      "stage": "frag",
+      "defines": [],
+      "byte_size": 25272,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "texture0",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "colorGradeLut",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "pc",
+            "size_bytes": 16
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "global_fog_frag_spv",
+      "source": "global_fog.frag",
+      "stage": "frag",
+      "defines": [],
+      "byte_size": 4456,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "depth_texture",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "pc",
+            "size_bytes": 48
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "liquid_frag_spv",
+      "source": "liquid.frag",
+      "stage": "frag",
+      "defines": [],
+      "byte_size": 11764,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_38",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "scene_color",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "scene_depth",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "liquid_copy_frag_spv",
+      "source": "liquid_copy.frag",
+      "stage": "frag",
+      "defines": [],
+      "byte_size": 572,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "current_scene",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "motion_blur_frag_spv",
+      "source": "motion_blur.frag",
+      "stage": "frag",
+      "defines": [],
+      "byte_size": 2720,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "current_scene",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "pc",
+            "size_bytes": 32
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "world_outline_frag_spv",
+      "source": "world_outline.frag",
+      "stage": "frag",
+      "defines": [],
+      "byte_size": 2388,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "depth_texture",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "pc",
+            "size_bytes": 16
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "rt_main_rgen_spv",
+      "source": "rt_main.rgen",
+      "stage": "rgen",
+      "defines": [],
+      "byte_size": 29184,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "u_tlas",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "acceleration_structure",
+            "descriptor_count": 1
+          },
+          {
+            "name": "u_output",
+            "set": 0,
+            "binding": 1,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "storage_image",
+            "descriptor_count": 1
+          },
+          {
+            "name": "u_historyIn",
+            "set": 0,
+            "binding": 9,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "storage_image",
+            "descriptor_count": 1
+          },
+          {
+            "name": "u_historyOut",
+            "set": 0,
+            "binding": 10,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "storage_image",
+            "descriptor_count": 1
+          },
+          {
+            "name": "u_temporal",
+            "set": 0,
+            "binding": 11,
+            "storage_class": "StorageBuffer",
+            "descriptor_class": "storage_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "u_sceneColor",
+            "set": 0,
+            "binding": 12,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "pc",
+            "size_bytes": 156
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "rt_main_rmiss_spv",
+      "source": "rt_main.rmiss",
+      "stage": "rmiss",
+      "defines": [],
+      "byte_size": 4768,
+      "reflection": {
+        "descriptor_bindings": [],
+        "push_constants": [
+          {
+            "name": "pc",
+            "size_bytes": 156
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "rt_shadow_rmiss_spv",
+      "source": "rt_shadow.rmiss",
+      "stage": "rmiss",
+      "defines": [],
+      "byte_size": 320,
+      "reflection": {
+        "descriptor_bindings": [],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "rt_main_rchit_spv",
+      "source": "rt_main.rchit",
+      "stage": "rchit",
+      "defines": [],
+      "byte_size": 51916,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "u_tlas",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "acceleration_structure",
+            "descriptor_count": 1
+          },
+          {
+            "name": "u_worldVertices",
+            "set": 0,
+            "binding": 2,
+            "storage_class": "StorageBuffer",
+            "descriptor_class": "storage_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "u_worldIndices",
+            "set": 0,
+            "binding": 3,
+            "storage_class": "StorageBuffer",
+            "descriptor_class": "storage_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "u_worldMaterials",
+            "set": 0,
+            "binding": 4,
+            "storage_class": "StorageBuffer",
+            "descriptor_class": "storage_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "u_dynamicVertices",
+            "set": 0,
+            "binding": 5,
+            "storage_class": "StorageBuffer",
+            "descriptor_class": "storage_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "u_dynamicIndices",
+            "set": 0,
+            "binding": 6,
+            "storage_class": "StorageBuffer",
+            "descriptor_class": "storage_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "u_dynamicMaterials",
+            "set": 0,
+            "binding": 7,
+            "storage_class": "StorageBuffer",
+            "descriptor_class": "storage_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "u_lights",
+            "set": 0,
+            "binding": 8,
+            "storage_class": "StorageBuffer",
+            "descriptor_class": "storage_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "u_temporal",
+            "set": 0,
+            "binding": 11,
+            "storage_class": "StorageBuffer",
+            "descriptor_class": "storage_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "u_sceneTextures",
+            "set": 0,
+            "binding": 13,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 2048
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "pc",
+            "size_bytes": 156
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "rt_main_rahit_spv",
+      "source": "rt_main.rahit",
+      "stage": "rahit",
+      "defines": [],
+      "byte_size": 11368,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "u_worldVertices",
+            "set": 0,
+            "binding": 2,
+            "storage_class": "StorageBuffer",
+            "descriptor_class": "storage_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "u_worldIndices",
+            "set": 0,
+            "binding": 3,
+            "storage_class": "StorageBuffer",
+            "descriptor_class": "storage_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "u_worldMaterials",
+            "set": 0,
+            "binding": 4,
+            "storage_class": "StorageBuffer",
+            "descriptor_class": "storage_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "u_dynamicVertices",
+            "set": 0,
+            "binding": 5,
+            "storage_class": "StorageBuffer",
+            "descriptor_class": "storage_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "u_dynamicIndices",
+            "set": 0,
+            "binding": 6,
+            "storage_class": "StorageBuffer",
+            "descriptor_class": "storage_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "u_dynamicMaterials",
+            "set": 0,
+            "binding": 7,
+            "storage_class": "StorageBuffer",
+            "descriptor_class": "storage_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "u_sceneTextures",
+            "set": 0,
+            "binding": 13,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 2048
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "pc",
+            "size_bytes": 156
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_light",
+      "source": "light_vert.tmpl",
+      "stage": "vert",
+      "defines": [],
+      "byte_size": 1984,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_45",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_light_fog",
+      "source": "light_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_FOG"
+      ],
+      "byte_size": 3468,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_45",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "frag_light",
+      "source": "light_frag.tmpl",
+      "stage": "frag",
+      "defines": [],
+      "byte_size": 23812,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_85",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "dlight_shadow_texture",
+            "set": 3,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_light_fog",
+      "source": "light_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_FOG"
+      ],
+      "byte_size": 25388,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_26",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "fogtexture",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "dlight_shadow_texture",
+            "set": 3,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_light_line",
+      "source": "light_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_LINE"
+      ],
+      "byte_size": 24248,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_85",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "dlight_shadow_texture",
+            "set": 3,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_light_line_fog",
+      "source": "light_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_LINE",
+        "USE_FOG"
+      ],
+      "byte_size": 25824,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_26",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "fogtexture",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "dlight_shadow_texture",
+            "set": 3,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "vert_tx0",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [],
+      "byte_size": 1224,
+      "reflection": {
+        "descriptor_bindings": [],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx0_fog",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_FOG"
+      ],
+      "byte_size": 3020,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_47",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx0_env",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_ENV"
+      ],
+      "byte_size": 2324,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_40",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx0_env_fog",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_FOG",
+        "USE_ENV"
+      ],
+      "byte_size": 3744,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_40",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx0_ident1",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_CLX_IDENT"
+      ],
+      "byte_size": 1068,
+      "reflection": {
+        "descriptor_bindings": [],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx0_ident1_fog",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_CLX_IDENT",
+        "USE_FOG"
+      ],
+      "byte_size": 2864,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_43",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx0_ident1_env",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_CLX_IDENT",
+        "USE_ENV"
+      ],
+      "byte_size": 2168,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_36",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx0_ident1_env_fog",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_CLX_IDENT",
+        "USE_FOG",
+        "USE_ENV"
+      ],
+      "byte_size": 3588,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_36",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx0_fixed",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_FIXED_COLOR"
+      ],
+      "byte_size": 1068,
+      "reflection": {
+        "descriptor_bindings": [],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx0_fixed_fog",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_FIXED_COLOR",
+        "USE_FOG"
+      ],
+      "byte_size": 2864,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_43",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx0_fixed_env",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_FIXED_COLOR",
+        "USE_ENV"
+      ],
+      "byte_size": 2168,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_36",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx0_fixed_env_fog",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_FIXED_COLOR",
+        "USE_FOG",
+        "USE_ENV"
+      ],
+      "byte_size": 3588,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_36",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx1",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_TX1"
+      ],
+      "byte_size": 1372,
+      "reflection": {
+        "descriptor_bindings": [],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx1_fog",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_TX1",
+        "USE_FOG"
+      ],
+      "byte_size": 3168,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_50",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx1_env",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_TX1",
+        "USE_ENV"
+      ],
+      "byte_size": 2488,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_40",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx1_env_fog",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_TX1",
+        "USE_FOG",
+        "USE_ENV"
+      ],
+      "byte_size": 3908,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_40",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx1_ident1",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_CLX_IDENT",
+        "USE_TX1"
+      ],
+      "byte_size": 1216,
+      "reflection": {
+        "descriptor_bindings": [],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx1_ident1_fog",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_CLX_IDENT",
+        "USE_TX1",
+        "USE_FOG"
+      ],
+      "byte_size": 3012,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_46",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx1_ident1_env",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_CLX_IDENT",
+        "USE_TX1",
+        "USE_ENV"
+      ],
+      "byte_size": 2332,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_36",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx1_ident1_env_fog",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_CLX_IDENT",
+        "USE_TX1",
+        "USE_FOG",
+        "USE_ENV"
+      ],
+      "byte_size": 3752,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_36",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx1_fixed",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_FIXED_COLOR",
+        "USE_TX1"
+      ],
+      "byte_size": 1216,
+      "reflection": {
+        "descriptor_bindings": [],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx1_fixed_fog",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_FIXED_COLOR",
+        "USE_TX1",
+        "USE_FOG"
+      ],
+      "byte_size": 3012,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_46",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx1_fixed_env",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_FIXED_COLOR",
+        "USE_TX1",
+        "USE_ENV"
+      ],
+      "byte_size": 2332,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_36",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx1_fixed_env_fog",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_FIXED_COLOR",
+        "USE_TX1",
+        "USE_FOG",
+        "USE_ENV"
+      ],
+      "byte_size": 3752,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_36",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx1_cl",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_CL1",
+        "USE_TX1"
+      ],
+      "byte_size": 1512,
+      "reflection": {
+        "descriptor_bindings": [],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx1_cl_fog",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_CL1",
+        "USE_TX1",
+        "USE_FOG"
+      ],
+      "byte_size": 3308,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_53",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx1_cl_env",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_CL1",
+        "USE_TX1",
+        "USE_ENV"
+      ],
+      "byte_size": 2628,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_43",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx1_cl_env_fog",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_CL1",
+        "USE_TX1",
+        "USE_FOG",
+        "USE_ENV"
+      ],
+      "byte_size": 4048,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_43",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx2",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_TX2"
+      ],
+      "byte_size": 1520,
+      "reflection": {
+        "descriptor_bindings": [],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx2_fog",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_TX2",
+        "USE_FOG"
+      ],
+      "byte_size": 3316,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_53",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx2_env",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_TX2",
+        "USE_ENV"
+      ],
+      "byte_size": 2636,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_40",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx2_env_fog",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_TX2",
+        "USE_FOG",
+        "USE_ENV"
+      ],
+      "byte_size": 4056,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_40",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx2_cl",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_CL2",
+        "USE_TX2"
+      ],
+      "byte_size": 1800,
+      "reflection": {
+        "descriptor_bindings": [],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx2_cl_fog",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_CL2",
+        "USE_TX2",
+        "USE_FOG"
+      ],
+      "byte_size": 3596,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_59",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx2_cl_env",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_CL2",
+        "USE_TX2",
+        "USE_ENV"
+      ],
+      "byte_size": 2916,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_46",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "vert_tx2_cl_env_fog",
+      "source": "gen_vert.tmpl",
+      "stage": "vert",
+      "defines": [
+        "USE_CL2",
+        "USE_TX2",
+        "USE_FOG",
+        "USE_ENV"
+      ],
+      "byte_size": 4336,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_46",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "id_16",
+            "size_bytes": 64
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "frag_tx0",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_ATEST"
+      ],
+      "byte_size": 7616,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_28",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "depth_texture",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_tx0_fog",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_ATEST",
+        "USE_FOG"
+      ],
+      "byte_size": 10032,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_32",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "depth_texture",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "fog_texture",
+            "set": 4,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_tx0_ident1",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_CLX_IDENT",
+        "USE_ATEST"
+      ],
+      "byte_size": 7524,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_28",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "depth_texture",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_tx0_ident1_fog",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_CLX_IDENT",
+        "USE_ATEST",
+        "USE_FOG"
+      ],
+      "byte_size": 9940,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_32",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "depth_texture",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "fog_texture",
+            "set": 4,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_tx0_fixed",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_FIXED_COLOR",
+        "USE_ATEST"
+      ],
+      "byte_size": 7704,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_28",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "depth_texture",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_tx0_fixed_fog",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_FIXED_COLOR",
+        "USE_ATEST",
+        "USE_FOG"
+      ],
+      "byte_size": 10120,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_32",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "depth_texture",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "fog_texture",
+            "set": 4,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_tx0_ent",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_ENT_COLOR",
+        "USE_ATEST"
+      ],
+      "byte_size": 7580,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_28",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "depth_texture",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_tx0_ent_fog",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_ENT_COLOR",
+        "USE_ATEST",
+        "USE_FOG"
+      ],
+      "byte_size": 9996,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_32",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "depth_texture",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "fog_texture",
+            "set": 4,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_tx0_df",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_CLX_IDENT",
+        "USE_ATEST",
+        "USE_DF"
+      ],
+      "byte_size": 5708,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_83",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_tx1",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_TX1"
+      ],
+      "byte_size": 3980,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_26",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture1",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_tx1_fog",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_TX1",
+        "USE_FOG"
+      ],
+      "byte_size": 6460,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_16",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture1",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "fog_texture",
+            "set": 4,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_tx1_ident1",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_CLX_IDENT",
+        "USE_TX1"
+      ],
+      "byte_size": 3836,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_22",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture1",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_tx1_ident1_fog",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_CLX_IDENT",
+        "USE_TX1",
+        "USE_FOG"
+      ],
+      "byte_size": 6316,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_16",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture1",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "fog_texture",
+            "set": 4,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_tx1_fixed",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_FIXED_COLOR",
+        "USE_TX1"
+      ],
+      "byte_size": 4056,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_26",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture1",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_tx1_fixed_fog",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_FIXED_COLOR",
+        "USE_TX1",
+        "USE_FOG"
+      ],
+      "byte_size": 6536,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_16",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture1",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "fog_texture",
+            "set": 4,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_tx1_cl",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_CL1",
+        "USE_TX1"
+      ],
+      "byte_size": 6260,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_26",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture1",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_tx1_cl_fog",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_CL1",
+        "USE_TX1",
+        "USE_FOG"
+      ],
+      "byte_size": 8676,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_16",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture1",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "fog_texture",
+            "set": 4,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_tx2",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_TX2"
+      ],
+      "byte_size": 4728,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_26",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture1",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture2",
+            "set": 3,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_tx2_fog",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_TX2",
+        "USE_FOG"
+      ],
+      "byte_size": 7208,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_16",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture1",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture2",
+            "set": 3,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "fog_texture",
+            "set": 4,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_tx2_cl",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_CL2",
+        "USE_TX2"
+      ],
+      "byte_size": 8320,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_26",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture1",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture2",
+            "set": 3,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    },
+    {
+      "symbol": "frag_tx2_cl_fog",
+      "source": "gen_frag.tmpl",
+      "stage": "frag",
+      "defines": [
+        "USE_CL2",
+        "USE_TX2",
+        "USE_FOG"
+      ],
+      "byte_size": 10736,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "id_16",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "Uniform",
+            "descriptor_class": "uniform_buffer",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture0",
+            "set": 1,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture1",
+            "set": 2,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "texture2",
+            "set": 3,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          },
+          {
+            "name": "fog_texture",
+            "set": 4,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": []
+      }
+    }
+  ]
+}

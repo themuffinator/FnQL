@@ -36,10 +36,15 @@ remains compatible.
 - Engine compatibility reconstructed from QLSRP evidence: filesystem behavior,
   pak/pk3 loading, protocol and demo paths, VM/native module ABI, server and
   client glue, renderer data formats, platform services, and runtime identity.
+- A project-owned `fnql-web.pak` settings overlay that exposes FnQL engine
+  cvars and removes unsupported retail post-processing controls while loading
+  all untouched launcher resources from the legitimate retail `web.pak`.
 - Modernized engine features inherited from FnQ3, including SDL3, OpenAL,
-  modular OpenGL-lineage/GLx/Vulkan renderers, console and screenshot
+  exactly three renderers (GLx, Vulkan raster `vk`, and ray-traced `rtx`), console and screenshot
   improvements, opt-in motion blur, enhanced map lens flares and liquids,
   optional per-map global fog, and deterministic release tooling.
+- An RTX renderer with complete raster fallback and a strict native ray-tracing
+  mode, built alongside GLx and VK in the supported three-renderer set.
 - Compatibility validation against a legitimate retail Quake Live installation.
 
 ### Out of scope
@@ -64,6 +69,11 @@ FnQL is at the initial migration stage:
 For day-to-day development instructions, see [AGENTS.md](AGENTS.md). For build
 commands, see [BUILD.md](BUILD.md).
 
+Keep `fnql-web.pak` beside the FnQL executable. Official install and release
+layouts include it automatically. It is a sparse override and does not replace
+the retail `web.pak`; the Windows x86 WebUI still requires a legitimate Quake
+Live installation.
+
 ## 4. Reference Workflow
 
 Use QLSRP before making compatibility claims:
@@ -86,8 +96,13 @@ staging, security, and compatibility contract.
 - [Build Guide](BUILD.md) for compiling FnQL locally.
 - [Technical Notes](docs/fnql/TECHNICAL.md) for repository structure, release
   flow, and maintainer conventions.
-- [GLx Renderer Guide](docs/GLX.md) for the canonical OpenGL-lineage renderer,
-  migration notes, and troubleshooting.
+- [WebUI Backend and Settings Overlay](docs/fnql/WEBUI_BACKEND.md) for the
+  external retail-resource boundary, sparse override order, and fallback rules.
+- [GLx Renderer Guide](docs/GLX.md) for the default OpenGL-lineage renderer,
+  diagnostics, and troubleshooting.
+- [RTX Renderer Contract](docs/fnql/RTX_RENDERER.md) for the hybrid
+  renderer, Quake Live ABI boundary, conservative defaults, build gates, and
+  retail-safe runtime smoke procedure.
 - [Display Guide](docs/DISPLAY.md) for renderer selection, motion blur, map lens
   flares, enhanced liquids, optional global fog, and other presentation controls;
   [Audio Guide](docs/AUDIO.md),

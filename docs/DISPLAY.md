@@ -8,11 +8,11 @@ For menu and cinematic layout on widescreen displays, use the separate [Aspect H
 
 `cl_renderer` selects the rendering backend and requires `vid_restart`.
 
-- `cl_renderer opengl`: Legacy OpenGL renderer and current compatibility default.
-- `cl_renderer glx`: Canonical OpenGL-lineage renderer module. Normal modular builds include it, and it preserves the OpenGL display and bloom surface while adding GLx-owned capability tiers, streaming, static-world, material, postprocess, output, and profiling paths.
-- `cl_renderer vulkan`: Modern backend with the same core display path controls for FBO rendering, HDR, multisampling, supersampling, render scaling, shader-based SDR gamma/overbright, and greyscale. Bloom is available here too, but the exposed control set is smaller.
+- `cl_renderer glx`: Default OpenGL-lineage renderer with compatibility tiers, streaming, static-world, material, postprocess, output, and profiling paths.
+- `cl_renderer vk`: Vulkan raster renderer with FBO rendering, HDR, multisampling, supersampling, render scaling, shader-based SDR gamma/overbright, greyscale, and bloom.
+- `cl_renderer rtx`: Vulkan ray-tracing renderer; full RT mode requires a ray-tracing-capable Vulkan GPU. See the [RTX Renderer Guide](fnql/RTX_RENDERER.md).
 
-Use `glx` for OpenGL-lineage validation, GLx diagnostics, and the renderer path intended for promotion once [GLX_PROMOTION.md](fnql/GLX_PROMOTION.md) is green. Use `opengl` when you need the current legacy default for comparison or rollback. If you want the simpler cross-platform path and do not need the OpenGL-only bloom extras, `vulkan` is fine. See [GLX.md](GLX.md) for GLx migration and troubleshooting notes.
+Only `glx`, `vk`, and `rtx` are valid renderer selectors. See [GLX.md](GLX.md) for GLx diagnostics and troubleshooting.
 
 ## Display Modes And Window Behavior
 
@@ -394,7 +394,7 @@ Map authors and mods can add a visual-only, depth-aware atmospheric layer with a
 
 - `r_globalFog`: Enables sidecar loading and composition on the OpenGL-lineage and Vulkan renderers. The default is `0`; changing it requires `vid_restart`.
 - `r_globalFogStrength`: Live opacity multiplier from `0.0` to `1.0`, with a default of `1.0`.
-- `r_fbo 1` and a usable depth texture are required. Missing or invalid sidecars and optional-shader failures disable only the fog layer. `renderer2` remains available and ignores these sidecars.
+- `r_fbo 1` and a usable depth texture are required. Missing or invalid sidecars and optional-shader failures disable only the fog layer; they never prevent `glx`, `vk`, or `rtx` from starting.
 
 See [Global Fog Sidecars](fnql/GLOBAL_FOG.md) for the bounded file format, search precedence, curve definitions, and fallback contract.
 
@@ -439,9 +439,9 @@ Recommended tuning order:
 4. Adjust `r_bloom_modulate` if you want a tighter or more contrast-driven response.
 5. Adjust `r_bloom_intensity` last.
 
-### OpenGL And GLx Bloom Controls
+### GLx Bloom Controls
 
-These settings are currently specific to the OpenGL-lineage renderers, `opengl` and `glx`.
+These settings are specific to the canonical OpenGL-lineage renderer, `glx`.
 
 - `r_bloom_passes`: Number of downsampled bloom levels used in the effect. More passes generally create a wider haze and cost more GPU time. The engine may clamp the effective chain length based on hardware limits or very small internal render sizes.
 - `r_bloom_blend_base`: Which downsampled level to start blending from. Higher values skip the tighter levels and bias the result toward a broader, softer haze.
@@ -481,10 +481,10 @@ seta r_bloom_modulate "2"
 seta r_bloom_intensity "0.45"
 ```
 
-OpenGL haze-heavy bloom:
+GLx haze-heavy bloom:
 
 ```cfg
-seta cl_renderer "opengl"
+seta cl_renderer "glx"
 seta r_fbo "1"
 seta r_bloom "1"
 seta r_bloom_threshold "0.55"
@@ -497,10 +497,10 @@ seta r_bloom_filter_size "8"
 vid_restart
 ```
 
-OpenGL HUD-inclusive bloom:
+GLx HUD-inclusive bloom:
 
 ```cfg
-seta cl_renderer "opengl"
+seta cl_renderer "glx"
 seta r_fbo "1"
 seta r_bloom "2"
 seta r_bloom_threshold "0.65"
@@ -508,10 +508,10 @@ seta r_bloom_threshold_mode "2"
 seta r_bloom_intensity "0.35"
 ```
 
-OpenGL lens reflection add-on:
+GLx lens reflection add-on:
 
 ```cfg
-seta cl_renderer "opengl"
+seta cl_renderer "glx"
 seta r_fbo "1"
 seta r_bloom "1"
 seta r_bloom_threshold "0.60"

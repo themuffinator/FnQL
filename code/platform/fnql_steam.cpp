@@ -294,7 +294,8 @@ uint64_t ValidatedCapabilities(const fnqlSteamProvider_t *provider,
 	if (!provider->start_game_server || !provider->stop_game_server
 		|| !provider->update_game_server) {
 		capabilities &= ~(FNQL_STEAM_CAP_GAME_SERVER
-			| FNQL_STEAM_CAP_GAME_SERVER_STATS);
+			| FNQL_STEAM_CAP_GAME_SERVER_STATS
+			| FNQL_STEAM_CAP_GAME_SERVER_ACCOUNT);
 	}
 	if (!FNQL_HAS_PROVIDER_FIELD(store_user_stats)
 		|| !provider->get_user_stat_i32 || !provider->set_user_stat_i32

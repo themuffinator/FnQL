@@ -1,0 +1,177 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_EXT_nonuniform_qualifier : require
+
+const uint RTX_RT_MAX_SCENE_TEXTURES = 2048u;
+const uint RTX_RT_INVALID_TEXTURE_INDEX = 0xFFFFFFFFu;
+const uint RTX_RT_MATFLAG_MASKED = 1u << 0;
+const uint RTX_RT_MATFLAG_TRANSLUCENT = 1u << 2;
+const uint RTX_RT_MATFLAG_SKY = 1u << 4;
+const uint RTX_RT_MATFLAG_DECAL = 1u << 5;
+const uint RTX_RT_MATFLAG_PARTICLE = 1u << 6;
+const uint RTX_RT_MATFLAG_EFFECT = 1u << 7;
+const uint RTX_RT_MATFLAG_ALPHA_LT = 1u << 8;
+const uint RTX_RT_MATFLAG_CULL_FRONT = 1u << 9;
+const uint RTX_RT_MATFLAG_CULL_BACK = 1u << 10;
+const uint RTX_RT_MATFLAG_RASTER_OVERLAY = 1u << 11;
+
+struct RtPackedVertex {
+	vec4 xyz;
+	vec4 normal;
+	vec4 tangent;
+	vec2 texCoord;
+	uint color;
+	uint materialIndex;
+};
+
+struct RtGpuMaterial {
+	vec4 baseColor;
+	vec4 emissiveColorScale;
+	vec4 pbrParams;
+	uvec4 metadata;
+	uvec4 textureInfo;
+};
+
+hitAttributeEXT vec2 barycentrics;
+
+layout(set = 0, binding = 2, std430) readonly buffer RtWorldVertexBuffer {
+	RtPackedVertex vertices[];
+} u_worldVertices;
+layout(set = 0, binding = 3, std430) readonly buffer RtWorldIndexBuffer {
+	uint indices[];
+} u_worldIndices;
+layout(set = 0, binding = 4, std430) readonly buffer RtWorldMaterialBuffer {
+	RtGpuMaterial materials[];
+} u_worldMaterials;
+layout(set = 0, binding = 5, std430) readonly buffer RtDynamicVertexBuffer {
+	RtPackedVertex vertices[];
+} u_dynamicVertices;
+layout(set = 0, binding = 6, std430) readonly buffer RtDynamicIndexBuffer {
+	uint indices[];
+} u_dynamicIndices;
+layout(set = 0, binding = 7, std430) readonly buffer RtDynamicMaterialBuffer {
+	RtGpuMaterial materials[];
+} u_dynamicMaterials;
+layout(set = 0, binding = 13) uniform sampler2D u_sceneTextures[RTX_RT_MAX_SCENE_TEXTURES];
+
+layout(push_constant) uniform RtPushConstants {
+	vec4 cameraOriginTanHalfFovX;
+	vec4 cameraForwardTanHalfFovY;
+	vec4 cameraRightWidth;
+	vec4 cameraUpHeight;
+	vec4 sunDirection;
+	vec4 sunColorIntensity;
+	uint debugMode;
+	uint frameIndex;
+	uint activeInstances;
+	uint lightCount;
+	uint worldMaterialCount;
+	uint dynamicMaterialCount;
+	uint shadowMode;
+	float shadowSoftness;
+	float indirectStrength;
+	float reflectionStrength;
+	float skyIntensity;
+	float refractionIor;
+	float sunIntensity;
+	uint refractiveMode;
+	uint indirectBounce;
+} pc;
+
+uint fetch_index(uint geometryClass, uint index)
+{
+	return geometryClass == 0u ? u_worldIndices.indices[index] : u_dynamicIndices.indices[index];
+}
+
+RtPackedVertex fetch_vertex(uint geometryClass, uint index)
+{
+	return geometryClass == 0u ? u_worldVertices.vertices[index] : u_dynamicVertices.vertices[index];
+}
+
+RtGpuMaterial fetch_material(uint geometryClass, uint index)
+{
+	uint maxCount = geometryClass == 0u ? max(pc.worldMaterialCount, 1u) : max(pc.dynamicMaterialCount, 1u);
+	uint clamped = min(index, maxCount - 1u);
+	return geometryClass == 0u ? u_worldMaterials.materials[clamped] : u_dynamicMaterials.materials[clamped];
+}
+
+void main()
+{
+	uint geometryClass = gl_InstanceCustomIndexEXT == 1u ? 1u : 0u;
+	uint triBase = gl_PrimitiveID * 3u;
+	RtPackedVertex v0 = fetch_vertex(geometryClass, fetch_index(geometryClass, triBase + 0u));
+	RtPackedVertex v1 = fetch_vertex(geometryClass, fetch_index(geometryClass, triBase + 1u));
+	RtPackedVertex v2 = fetch_vertex(geometryClass, fetch_index(geometryClass, triBase + 2u));
+	RtGpuMaterial material = fetch_material(geometryClass, v0.materialIndex);
+	uint materialFlags = material.metadata.x;
+	uint textureIndex = material.textureInfo.x;
+	float alpha;
+	float cutoff;
+	float b1;
+	float b2;
+	float b0;
+	vec2 uv;
+	bool frontFacing;
+	bool shadowRay;
+	bool reject;
+
+	/*
+	 * TLAS instances disable fixed-function facing cull so Quake shader
+	 * cull semantics can be evaluated per material.  Instance facing is
+	 * flipped to match the raster renderer's clockwise front-face convention.
+	 */
+	frontFacing = gl_HitKindEXT == gl_HitKindFrontFacingTriangleEXT;
+	if (((materialFlags & RTX_RT_MATFLAG_CULL_FRONT) != 0u && frontFacing) ||
+		((materialFlags & RTX_RT_MATFLAG_CULL_BACK) != 0u && !frontFacing)) {
+		ignoreIntersectionEXT;
+		return;
+	}
+
+	shadowRay =
+		(gl_IncomingRayFlagsEXT & gl_RayFlagsSkipClosestHitShaderEXT) != 0u;
+	if ((materialFlags & RTX_RT_MATFLAG_RASTER_OVERLAY) != 0u) {
+		if (!shadowRay) {
+			/*
+			 * Authored overlays never replace the native RT primary result.
+			 * Their raster pass supplies final color after the trace.
+			 */
+			ignoreIntersectionEXT;
+			return;
+		}
+
+		if ((materialFlags &
+				(RTX_RT_MATFLAG_SKY |
+				 RTX_RT_MATFLAG_DECAL |
+				 RTX_RT_MATFLAG_PARTICLE |
+				 RTX_RT_MATFLAG_EFFECT)) != 0u ||
+			((materialFlags & RTX_RT_MATFLAG_TRANSLUCENT) != 0u &&
+			 (materialFlags & RTX_RT_MATFLAG_MASKED) == 0u)) {
+			ignoreIntersectionEXT;
+			return;
+		}
+	}
+
+	if ((materialFlags & RTX_RT_MATFLAG_MASKED) == 0u) {
+		return;
+	}
+
+	alpha = clamp(material.baseColor.a, 0.0, 1.0);
+	if (textureIndex != RTX_RT_INVALID_TEXTURE_INDEX &&
+		textureIndex < RTX_RT_MAX_SCENE_TEXTURES) {
+		b1 = barycentrics.x;
+		b2 = barycentrics.y;
+		b0 = max(0.0, 1.0 - b1 - b2);
+		uv = v0.texCoord * b0 + v1.texCoord * b1 + v2.texCoord * b2;
+		/* Ray-hit shaders have no screen-space derivatives.  A fixed base mip
+		 * keeps alpha silhouettes deterministic for primary and shadow rays. */
+		alpha *= textureLod(u_sceneTextures[nonuniformEXT(textureIndex)], uv, 0.0).a;
+	}
+
+	cutoff = clamp(material.pbrParams.z, 0.0, 1.0);
+	reject = (materialFlags & RTX_RT_MATFLAG_ALPHA_LT) != 0u ?
+		alpha >= cutoff :
+		alpha < cutoff;
+	if (reject) {
+		ignoreIntersectionEXT;
+	}
+}

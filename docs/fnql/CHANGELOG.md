@@ -17,6 +17,9 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
   optional dedicated-server services.
 
 ### Compatibility
+- Completed the retail client `cl_*` contract: restored the missing console,
+  timing, avidemo, demo-lifecycle, recording-HUD, platform, and download
+  controls while preserving FnQL aliases and modern client extensions.
 - Corrected native DLL entry-point selection so retail structured modules and
   legacy `vmMain` modules use their respective ABIs without an incompatible
   probe call.
@@ -60,6 +63,9 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
   gamepads; the non-SDL Windows joystick mapping is available as an opt-in.
 
 ### Rendering and Display
+- Added an explicit-only fifth `rtx` renderer with a complete raster fallback,
+  conservative Quake Live material ownership, default-off native ray tracing,
+  and a strict windowed retail-Steam smoke gate for reviewed RT hardware.
 - Added compatibility-preserving, opt-in camera motion blur, enhanced map lens
   flares, and liquid refraction/reflection with bounded visual ripple impulses;
   all remain disabled by default and do not alter BSP, VM, snapshot, protocol,

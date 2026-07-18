@@ -343,6 +343,7 @@ static void SV_Startup( void ) {
 	}
 
 	SV_AllocClients( sv_maxclients->integer );
+	SV_ResetServerCvarRuntime();
 
 	sv_maxclients->modified = qfalse;
 
@@ -780,6 +781,9 @@ void SV_Init( void )
 	Cvar_SetDescription( sv_privateClients, "The number of spots, out of sv_maxclients, reserved for players with the server password (sv_privatePassword)." );
 	sv_hostname = Cvar_Get ("sv_hostname", "noname", CVAR_SERVERINFO | CVAR_ARCHIVE );
 	Cvar_SetDescription( sv_hostname, "Sets the name of the server." );
+	sv_tags = Cvar_Get( "sv_tags", "", CVAR_ARCHIVE );
+	Cvar_SetDescription( sv_tags,
+		"Comma-separated custom tags appended to the retail Steam server tag set." );
 	sv_maxclients = Cvar_Get ("sv_maxclients", "8", CVAR_SERVERINFO | CVAR_LATCH);
 	Cvar_CheckRange( sv_maxclients, "1", XSTRING(MAX_CLIENTS), CV_INTEGER );
 	Cvar_SetDescription( sv_maxclients, "Maximum number of people allowed to join the server." );
@@ -806,6 +810,44 @@ void SV_Init( void )
 	Cvar_SetDescription( sv_enableRankings, "Retained Quake Live rankings compatibility toggle. FnQL keeps this disabled because no live rankings service is owned by the engine." );
 	sv_rankingsActive = Cvar_Get( "sv_rankingsActive", "0", CVAR_SERVERINFO );
 	Cvar_SetDescription( sv_rankingsActive, "Reports whether the retained Quake Live rankings compatibility surface is active." );
+	sv_gtid = Cvar_Get( "sv_gtid", "", CVAR_SERVERINFO | CVAR_ROM );
+	Cvar_SetDescription( sv_gtid,
+		"Retail Quake Live game-type identifier published by compatible game modules." );
+	sv_idleRestart = Cvar_Get( "sv_idleRestart", "1", 0 );
+	Cvar_CheckRange( sv_idleRestart, "0", "1", CV_INTEGER );
+	Cvar_SetDescription( sv_idleRestart,
+		"Restart an unattended server after the retail 24-hour uptime boundary." );
+	sv_idleExit = Cvar_Get( "sv_idleExit", "120", 0 );
+	Cvar_CheckRange( sv_idleExit, "0", nullptr, CV_INTEGER );
+	Cvar_SetDescription( sv_idleExit,
+		"Exit a dedicated process that has no running map after this many seconds; zero disables it." );
+	sv_errorExit = Cvar_Get( "sv_errorExit", "1", 0 );
+	Cvar_CheckRange( sv_errorExit, "0", "2", CV_INTEGER );
+	Cvar_SetDescription( sv_errorExit,
+		"Retail recoverable-error policy: 0 recovers, 1 exits while a server is running, 2 always exits." );
+	sv_quitOnEmpty = Cvar_Get( "sv_quitOnEmpty", "0", 0 );
+	Cvar_CheckRange( sv_quitOnEmpty, "0", nullptr, CV_INTEGER );
+	Cvar_SetDescription( sv_quitOnEmpty,
+		"Quit after this many seconds without a connected human client; zero disables it." );
+	sv_quitOnExitLevel = Cvar_Get( "sv_quitOnExitLevel", "0", 0 );
+	Cvar_CheckRange( sv_quitOnExitLevel, "0", nullptr, CV_INTEGER );
+	Cvar_SetDescription( sv_quitOnExitLevel,
+		"Level-exit policy: 0 continues, 1 stops the server, and values above 1 quit the process." );
+	sv_altEntDir = Cvar_Get( "sv_altEntDir", "", 0 );
+	Cvar_SetDescription( sv_altEntDir,
+		"Virtual-filesystem directory containing per-map retail .ent overrides." );
+	sv_dumpEntities = Cvar_Get( "sv_dumpEntities", "0", 0 );
+	Cvar_CheckRange( sv_dumpEntities, "0", "1", CV_INTEGER );
+	Cvar_SetDescription( sv_dumpEntities,
+		"Dump the entity text used by qagame to ents/<map>.ent." );
+	sv_cylinderScale = Cvar_Get( "sv_cylinderScale", "1.1f", 0 );
+	Cvar_CheckRange( sv_cylinderScale, "0", "16", CV_FLOAT );
+	Cvar_SetDescription( sv_cylinderScale,
+		"Retail radius scale for vertical cylinder collision traces." );
+	sv_vac = Cvar_Get( "sv_vac", "1", CVAR_INIT );
+	Cvar_CheckRange( sv_vac, "0", "1", CV_INTEGER );
+	Cvar_SetDescription( sv_vac,
+		"Allow an explicitly requested Steam secure server; FnQL's sv_steamSecure opt-in remains authoritative." );
 
 	// systeminfo
 	sv_cheats = Cvar_Get( "sv_cheats", "1", CVAR_SYSTEMINFO | CVAR_ROM );
@@ -863,10 +905,19 @@ void SV_Init( void )
 	for ( int index : SV_Indices( MAX_MASTER_SERVERS ) ) {
 		sv_master[ index ] = Cvar_Get( va( "sv_master%d", index + 1 ), "", CVAR_ARCHIVE_ND );
 	}
+	sv_masterAdvertise = Cvar_Get( "sv_master", "1", CVAR_ARCHIVE );
+	Cvar_CheckRange( sv_masterAdvertise, "0", "1", CV_INTEGER );
+	Cvar_SetDescription( sv_masterAdvertise,
+		"Enable publication to configured legacy master servers." );
 
 	sv_reconnectlimit = Cvar_Get( "sv_reconnectlimit", "3", 0 );
 	Cvar_CheckRange( sv_reconnectlimit, "0", "12", CV_INTEGER );
 	Cvar_SetDescription( sv_reconnectlimit, "Number of seconds a disconnected client should wait before next reconnect." );
+	sv_showloss = Cvar_Get( "sv_showloss", "0", 0 );
+	Cvar_SetDescription( sv_showloss,
+		"Retained retail server packet-loss diagnostic toggle." );
+	(void)Cvar_Get( "sv_setSteamAccount", "",
+		CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_PRIVATE );
 
 	sv_padPackets = Cvar_Get( "sv_padPackets", "0", CVAR_DEVELOPER );
 	Cvar_SetDescription( sv_padPackets, "Adds padding bytes to network packets for rate debugging." );
@@ -1008,6 +1059,7 @@ void SV_Shutdown( const char *finalmsg ) {
 	sv.time = 0;
 
 	Cvar_Set( "sv_running", "0" );
+	SV_ResetServerCvarRuntime();
 
 #ifndef DEDICATED
 	Cvar_Set( "ui_singlePlayerActive", "0" );

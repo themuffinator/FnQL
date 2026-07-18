@@ -36,6 +36,7 @@ extern "C" {
 }
 
 #include "../../client_cpp.h"
+#include "../shared/AudioVoiceQueue.h"
 
 #include <algorithm>
 #include <array>
@@ -44,7 +45,7 @@ extern "C" {
 #include <new>
 
 static void S_Update_( int msec );
-static void S_UpdateBackgroundTrack( void );
+static void S_Base_UpdateBackgroundTrack( void );
 static void S_Base_StopAllSounds( void );
 static void S_Base_StopBackgroundTrack( void );
 static void S_memoryLoad( sfx_t *sfx );
@@ -133,6 +134,7 @@ cvar_t		*s_show;
 }
 static cvar_t *s_mixahead;
 static cvar_t *s_mixOffset;
+static cvar_t *s_mixPreStep;
 #if defined(__linux__) && !defined(USE_SDL)
 extern "C" {
 cvar_t		*s_device;
@@ -155,6 +157,108 @@ static sfxHandle_t S_HandleForKnownSfx( const sfx_t *sfx )
 extern "C" {
 int			s_rawend;
 portable_samplepair_t	s_rawsamples[MAX_RAW_SAMPLES];
+}
+
+namespace {
+
+struct LegacyVoiceLane {
+	fnql_audio_voice::LaneActivity activity;
+	int startSample = 0;
+	int endSample = 0;
+	std::array<short, fnql_audio_voice::kLaneSampleCapacity> samples{};
+};
+
+static std::array<LegacyVoiceLane, fnql_audio_voice::kMaxLanes> s_voiceLanes;
+
+static void ResetVoiceLanes() {
+	s_voiceLanes.fill( LegacyVoiceLane() );
+}
+
+static int MixPreStepSamples() {
+	const float preStep = ( s_mixPreStep != nullptr ) ? s_mixPreStep->value : 0.0f;
+	return static_cast<int>( preStep * static_cast<float>( dma.speed ) );
+}
+
+static void S_Base_AddVoiceSamples( int clientNum, int samples, int rate, const short *data ) {
+	if ( !s_soundStarted || s_soundMuted || dma.speed <= 0 || data == nullptr || samples <= 0 || rate <= 0 ) {
+		return;
+	}
+
+	std::array<fnql_audio_voice::LaneActivity, fnql_audio_voice::kMaxLanes> activity;
+	for ( size_t i = 0; i < s_voiceLanes.size(); ++i ) {
+		s_voiceLanes[i].activity.queued = s_voiceLanes[i].endSample > s_voiceLanes[i].startSample;
+		activity[i] = s_voiceLanes[i].activity;
+	}
+
+	const int now = Com_Milliseconds();
+	const int laneIndex = fnql_audio_voice::SelectLane( activity.data(), static_cast<int>( activity.size() ), clientNum, now );
+	if ( laneIndex < 0 ) {
+		Com_DPrintf( "S_AddVoiceSamples: all remote-voice lanes are busy; dropping client %i packet\n", clientNum );
+		return;
+	}
+
+	LegacyVoiceLane &lane = s_voiceLanes[static_cast<size_t>( laneIndex )];
+	if ( lane.activity.clientNum != clientNum ) {
+		lane = LegacyVoiceLane();
+	}
+	if ( lane.startSample < s_paintedtime ) {
+		lane.startSample = ( std::min )( s_paintedtime, lane.endSample );
+	}
+
+	if ( lane.endSample <= lane.startSample ) {
+		const int voiceStepSamples = static_cast<int>(
+			( ( s_voiceStep != nullptr ) ? s_voiceStep->value : 0.0f ) * static_cast<float>( dma.speed ) );
+		lane.startSample = ( std::max )( s_paintedtime, s_soundtime ) + MixPreStepSamples() + voiceStepSamples;
+		lane.endSample = lane.startSample;
+	}
+
+	const int queuedSamples = ( std::max )( 0, lane.endSample - lane.startSample );
+	const int room = fnql_audio_voice::kLaneSampleCapacity - ( std::min )( queuedSamples, fnql_audio_voice::kLaneSampleCapacity );
+	if ( room <= 0 ) {
+		Com_DPrintf( "S_AddVoiceSamples: remote-voice lane %i is full; dropping client %i packet\n", laneIndex, clientNum );
+		return;
+	}
+
+	std::array<short, fnql_audio_voice::kLaneSampleCapacity> converted{};
+	const int convertedSamples = fnql_audio_voice::ResampleMonoPCM16(
+		data, samples, rate, converted.data(), room, dma.speed );
+	for ( int i = 0; i < convertedSamples; ++i ) {
+		lane.samples[static_cast<size_t>( lane.endSample ) & ( fnql_audio_voice::kLaneSampleCapacity - 1 )] = converted[static_cast<size_t>( i )];
+		++lane.endSample;
+	}
+
+	lane.activity.clientNum = clientNum;
+	lane.activity.queued = lane.endSample > lane.startSample;
+	lane.activity.lastPacketMs = now;
+	if ( convertedSamples < fnql_audio_voice::ResampledFrameCount( samples, rate, dma.speed ) ) {
+		Com_DPrintf( "S_AddVoiceSamples: remote-voice lane %i overflowed; truncated client %i packet\n", laneIndex, clientNum );
+	}
+}
+
+} // namespace
+
+extern "C" void S_PaintVoiceSamples( int starttime, int endtime, portable_samplepair_t *paintSamples ) {
+	if ( paintSamples == nullptr || endtime <= starttime ) {
+		return;
+	}
+
+	const float voiceVolume = ( s_voiceVolume != nullptr ) ? s_voiceVolume->value : 1.0f;
+	const int voiceScale = static_cast<int>( ( std::max )( 0.0f, ( std::min )( voiceVolume, 2.0f ) ) * 256.0f );
+	for ( LegacyVoiceLane &lane : s_voiceLanes ) {
+		if ( lane.startSample < starttime ) {
+			lane.startSample = ( std::min )( starttime, lane.endSample );
+		}
+		const int voiceStart = ( std::max )( starttime, lane.startSample );
+		const int voiceEnd = ( std::min )( endtime, lane.endSample );
+		for ( int sampleTime = voiceStart; sampleTime < voiceEnd; ++sampleTime ) {
+			const int sample = lane.samples[static_cast<size_t>( sampleTime ) & ( fnql_audio_voice::kLaneSampleCapacity - 1 )];
+			portable_samplepair_t &output = paintSamples[sampleTime - starttime];
+			output.left += sample * voiceScale;
+			output.right += sample * voiceScale;
+		}
+		lane.startSample = ( std::max )( lane.startSample, voiceEnd );
+		lane.activity.queued = lane.endSample > lane.startSample;
+	}
 }
 
 
@@ -182,6 +286,14 @@ static void S_Base_SoundInfo( void ) {
 		} else {
 			Com_Printf("No background file.\n" );
 		}
+		int activeVoiceLanes = 0;
+		for ( const LegacyVoiceLane &lane : s_voiceLanes ) {
+			if ( lane.endSample > lane.startSample ) {
+				++activeVoiceLanes;
+			}
+		}
+		Com_Printf( "Remote voice lanes: %i allocated, %i active\n",
+			fnql_audio_voice::kMaxLanes, activeVoiceLanes );
 
 	}
 	Com_Printf("----------------------\n" );
@@ -702,6 +814,7 @@ static void S_Base_ClearSoundBuffer( void ) {
 	S_ChannelSetup();
 
 	s_rawend = 0;
+	ResetVoiceLanes();
 
 	if (dma.samplebits == 8)
 		clear = 0x80;
@@ -746,6 +859,19 @@ static void S_Base_StopLoopingSound(int entityNum) {
 	loopSounds[entityNum].active = qfalse;
 //	loopSounds[entityNum].sfx = 0;
 	loopSounds[entityNum].kill = qfalse;
+}
+
+
+/*
+==================
+S_ClearLoopingSoundsFrame
+==================
+*/
+static void S_Base_ClearLoopingSoundsFrame( void ) {
+	for ( loopSound_t &loop : loopSounds ) {
+		loop.active = qfalse;
+	}
+	numLoopChannels = 0;
 }
 
 
@@ -1116,6 +1242,11 @@ static void S_Base_Respatialize( int entityNum, const vec3_t head, vec3_t axis[3
 			} else {
 				VectorCopy( loopSounds[ ch->entnum ].origin, origin );
 			}
+			if ( s_pvs != nullptr && s_pvs->integer && !S_OriginInPVS( listener_origin, origin ) ) {
+				ch->leftvol = 0;
+				ch->rightvol = 0;
+				continue;
+			}
 
 			S_SpatializeOrigin (origin, ch->master_vol, &ch->leftvol, &ch->rightvol);
 		}
@@ -1218,7 +1349,10 @@ static void S_GetSoundtime( void )
 		clc.aviSoundFrameRemainder = frameDuration - msec;
 
 		// use same offset as in game
-		s_paintedtime = s_soundtime + static_cast<int>( s_mixOffset->value * static_cast<float>( dma.speed ) );
+		const int cursorOffset = ( s_mixOffset != nullptr && s_mixOffset->value > 0.0f )
+			? static_cast<int>( s_mixOffset->value * static_cast<float>( dma.speed ) )
+			: MixPreStepSamples();
+		s_paintedtime = s_soundtime + cursorOffset;
 
 		// render exactly one frame of audio data
 		clc.aviFrameEndTime = s_paintedtime + static_cast<int>( duration + clc.aviSoundFrameRemainder );
@@ -1244,7 +1378,10 @@ static void S_GetSoundtime( void )
 	s_soundtime = buffers * dma.fullsamples + samplepos/dma.channels;
 
 	if ( dma.submission_chunk < 256 ) {
-		s_paintedtime = s_soundtime + s_mixOffset->value * dma.speed;
+		const int cursorOffset = ( s_mixOffset != nullptr && s_mixOffset->value > 0.0f )
+			? static_cast<int>( s_mixOffset->value * static_cast<float>( dma.speed ) )
+			: MixPreStepSamples();
+		s_paintedtime = s_soundtime + cursorOffset;
 	} else {
 		s_paintedtime = s_soundtime + dma.submission_chunk;
 	}
@@ -1302,7 +1439,7 @@ static void S_Update_( int msec ) {
 	}
 
 	// add raw data from streamed samples
-	S_UpdateBackgroundTrack();
+	S_Base_UpdateBackgroundTrack();
 
 	SNDDMA_BeginPainting();
 
@@ -1391,10 +1528,10 @@ static void S_Base_StartBackgroundTrack( const char *intro, const char *loop ){
 
 /*
 ======================
-S_UpdateBackgroundTrack
+S_Base_UpdateBackgroundTrack
 ======================
 */
-static void S_UpdateBackgroundTrack( void ) {
+static void S_Base_UpdateBackgroundTrack( void ) {
 	int		bufferSamples;
 	int		fileSamples;
 	std::array<byte, 30000> raw;		// just enough to fit in a mac stack frame
@@ -1571,6 +1708,9 @@ extern "C" qboolean S_Base_Init( soundInterface_t *si ) {
 
 	s_mixOffset = Cvar_Get( "s_mixOffset", "0", CVAR_ARCHIVE_ND | CVAR_DEVELOPER );
 	Cvar_CheckRange( s_mixOffset, "0", "0.5", CV_FLOAT );
+	s_mixPreStep = Cvar_Get( "s_mixPreStep", "0.05", CVAR_ARCHIVE_ND );
+	Cvar_CheckRange( s_mixPreStep, "0", "0.25", CV_FLOAT );
+	Cvar_SetDescription( s_mixPreStep, "Retail QL-compatible amount of audio mixed ahead of the current DMA cursor, in seconds." );
 
 	s_show = Cvar_Get( "s_show", "0", CVAR_CHEAT );
 	Cvar_SetDescription( s_show, "Debugging output (used sound files)." );
@@ -1622,8 +1762,11 @@ extern "C" qboolean S_Base_Init( soundInterface_t *si ) {
 	si->StartLocalSound = S_Base_StartLocalSound;
 	si->StartBackgroundTrack = S_Base_StartBackgroundTrack;
 	si->StopBackgroundTrack = S_Base_StopBackgroundTrack;
+	si->UpdateBackgroundTrack = S_Base_UpdateBackgroundTrack;
 	si->RawSamples = S_Base_RawSamples;
+	si->AddVoiceSamples = S_Base_AddVoiceSamples;
 	si->StopAllSounds = S_Base_StopAllSounds;
+	si->ClearLoopingSoundsFrame = S_Base_ClearLoopingSoundsFrame;
 	si->ClearLoopingSounds = S_Base_ClearLoopingSounds;
 	si->AddLoopingSound = S_Base_AddLoopingSound;
 	si->AddRealLoopingSound = S_Base_AddRealLoopingSound;

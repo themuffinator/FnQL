@@ -49,6 +49,7 @@ layout(constant_id = 42) const float crtMaskStrength = 0.35;
 layout(constant_id = 43) const float crtCurvature = 0.01;
 layout(constant_id = 44) const float crtChromatic = 1.35;
 layout(constant_id = 45) const int cubemapCaptureMode = 0;
+layout(constant_id = 46) const float retailContrast = 1.0;
 
 layout(push_constant) uniform PostPushConstants {
 	vec4 crtRuntime; // time seconds, inv source width, inv source height, unused
@@ -211,6 +212,8 @@ vec3 resolvePostColor(vec2 uv) {
 			color = base * obScale;
 		}
 	}
+
+	color = (color - vec3(0.5)) * retailContrast + vec3(0.5);
 
 	if ( outputColorSpace == 1 ) {
 		color = encodeHdr10(color);

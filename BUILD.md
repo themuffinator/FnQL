@@ -20,6 +20,13 @@ Retail `bin.pk3` ships `qagamex86.dll`, `cgamex86.dll`, and `uix86.dll`; the x64
 build remains useful for engine-only validation but cannot load those x86
 modules in-process.
 
+All maintained build graphs generate `fnql-web.pak` beside the client. Keep
+that sidecar with the executable when copying a build manually. It contains
+only FnQL's settings overrides and still requires the legitimate retail
+`web.pak` for every untouched launcher resource. To build only the sidecar,
+run `python scripts/build_webpak.py --source-root code/client/webui --output
+.tmp/fnql-web.pak`.
+
 ### meson/ninja
 
 Install Meson, Ninja, a C/C++ toolchain, and the platform dependencies listed below. Configure the default build directory from the repository root:
@@ -34,7 +41,7 @@ Then build and run tests:
 
 `meson test -C meson/build`
 
-The default Meson build produces one client executable (`fnql` with the platform suffix where applicable), one dedicated server executable, and renderer modules named `fnql_opengl_<arch>`, `fnql_glx_<arch>`, and `fnql_vulkan_<arch>`.
+The default Meson build produces one client executable (`fnql` with the platform suffix where applicable), one dedicated server executable, and exactly three renderer modules: `fnql_glx_<arch>`, `fnql_vk_<arch>`, and `fnql_rtx_<arch>`.
 
 Project Meson options:
 
@@ -44,11 +51,13 @@ Project Meson options:
 
 `-Drenderer-dlopen=true|false` - build external renderer modules and one unified client executable, enabled by default
 
-`-Drenderers=opengl,glx,vulkan` - choose which external renderer modules are built; valid entries are `opengl`, `glx`, `vulkan`, and `opengl2`
+`-Drenderers=glx,vk,rtx` - choose which external renderer modules are built; valid entries are exactly `glx`, `vk`, and `rtx`
 
-`-Drenderer-default=opengl|glx|vulkan|opengl2` - set the default value for `\cl_renderer`, or the linked renderer when `renderer-dlopen=false`
+`-Drenderer-default=glx|vk|rtx` - set the default value for `\cl_renderer`, or the linked renderer when `renderer-dlopen=false`; the default is `glx`
 
-`-Drenderer-dlopen=false -Drenderer-default=vulkan` - explicit compatibility/testing mode for linking one renderer into the client
+`-Drenderer-dlopen=false -Drenderer-default=vk` - explicit compatibility/testing mode for linking one renderer into the client
+
+`-Drenderer-dlopen=false -Drenderer-default=rtx` - explicit static RTX linkage and initialization gate
 
 `-Dsdl=auto|enabled|disabled` - enable, require, or disable the SDL3 video, input, and audio backend
 
@@ -216,21 +225,17 @@ Several Makefile options are available for Linux, MinGW, and macOS builds:
 
 `USE_SDL=0` - disable the SDL3 backend for video, audio, and input and use the legacy non-SDL Unix backend instead; SDL3 is enabled by default and enforced for macOS
 
-`USE_VULKAN=1` - build vulkan modular renderer, enabled by default
+`USE_VK=1` - build the Vulkan raster renderer module (`vk`), enabled by default
 
-`USE_GLX=1` - build the GLx modular renderer, enabled by default for dynamic renderer builds. GLx is the canonical OpenGL-lineage renderer path for capability tiers, debug callbacks, GPU timing, static-world acceleration, dynamic streaming, material execution, postprocess parity, and promotion proof.
+`USE_RTX=1` - build the Vulkan ray-tracing renderer module (`rtx`), enabled by default
 
-`USE_OPENGL=1` - build opengl modular renderer, enabled by default
-
-`USE_OPENGL2=0` - build opengl2 modular renderer, disabled by default
+`USE_GLX=1` - build the GLx modular renderer, enabled by default. GLx is the canonical OpenGL-lineage renderer path for capability tiers, debug callbacks, GPU timing, static-world acceleration, dynamic streaming, material execution, postprocess, and output.
 
 `USE_RENDERER_DLOPEN=1` - do not link a single renderer into the client binary; compile all enabled renderers as dynamic libraries and allow switching on the fly via the `\cl_renderer` cvar, enabled by default
 
-`RENDERER_DEFAULT=opengl` - set the default value for `\cl_renderer`, or choose the renderer used for a static build when `USE_RENDERER_DLOPEN=0`; valid options are `opengl`, `glx`, `opengl2`, `vulkan`
+`RENDERER_DEFAULT=glx` - set the default value for `\cl_renderer`, or choose the renderer used for a static build when `USE_RENDERER_DLOPEN=0`; valid options are exactly `glx`, `vk`, and `rtx`
 
 Choosing `RENDERER_DEFAULT=glx` also enables `USE_GLX=1` so the selected renderer is actually included in the build.
-
-Release builds must not promote GLx as the default or alias `opengl` to GLx until `python scripts/glx_promotion.py --proof-root <reviewed-glx-proof-root> --require-ready` passes. Local `RENDERER_DEFAULT=glx` builds remain useful for explicit developer testing, but the repository default stays `opengl` until the promotion gate is green.
 
 `USE_SYSTEM_JPEG=1` - use the current system JPEG library for Makefile builds, enabled by default
 
@@ -240,6 +245,8 @@ Release builds must not promote GLx as the default or alias `opengl` to GLx unti
 
 Example:
 
-`make BUILD_SERVER=0 USE_RENDERER_DLOPEN=0 RENDERER_DEFAULT=vulkan` - build the client with a single static Vulkan renderer and skip the dedicated server binary
+`make BUILD_SERVER=0 USE_RENDERER_DLOPEN=0 RENDERER_DEFAULT=vk` - build the client with a single static Vulkan renderer and skip the dedicated server binary
+
+`make BUILD_SERVER=0 USE_RENDERER_DLOPEN=0 RENDERER_DEFAULT=rtx` - build an explicit static RTX validation client
 
 `make BUILD_SERVER=0 USE_GLX=1` - include the GLx renderer module so it can be selected with `\cl_renderer glx` after a `\vid_restart`

@@ -24,12 +24,18 @@ SET(CNAME "fnql")
 SET(DNAME "fnql.ded")
 
 SET(RENDERER_PREFIX ${CNAME})
-SET(RENDERER_DEFAULT opengl CACHE STRING "Default renderer: opengl, glx, vulkan, or opengl2")
-set_property(CACHE RENDERER_DEFAULT PROPERTY STRINGS opengl glx vulkan opengl2)
+SET(RENDERER_DEFAULT glx CACHE STRING "Default renderer: glx, vk, or rtx")
+set_property(CACHE RENDERER_DEFAULT PROPERTY STRINGS glx vk rtx)
+set(FNQL_CMAKE_RENDERERS glx vk rtx)
+list(FIND FNQL_CMAKE_RENDERERS "${RENDERER_DEFAULT}" FNQL_RENDERER_DEFAULT_INDEX)
+if(FNQL_RENDERER_DEFAULT_INDEX EQUAL -1)
+	message(FATAL_ERROR "Unsupported RENDERER_DEFAULT='${RENDERER_DEFAULT}'; choose glx, vk, or rtx")
+endif()
 
 OPTION(USE_SDL "" ON)
 OPTION(USE_CURL "" ON)
-OPTION(USE_VULKAN "" ON)
+OPTION(USE_VK "Build the Vulkan renderer module" ON)
+OPTION(USE_RTX "Build the ray-tracing renderer module" ON)
 OPTION(USE_GLX "Build the GLx OpenGL-lineage renderer module" ON)
 OPTION(USE_SYSTEM_JPEG "Use a system libjpeg instead of the Meson-fetched libjpeg-turbo source tree" OFF)
 OPTION(USE_RENDERER_DLOPEN "" ON)
@@ -38,6 +44,14 @@ OPTION(FNQL_GLX_LOGIC_TESTS "Build deterministic GLx renderer logic tests" ON)
 
 IF(RENDERER_DEFAULT STREQUAL "glx")
 	SET(USE_GLX ON CACHE BOOL "Build the GLx OpenGL-lineage renderer module" FORCE)
+ENDIF()
+
+IF(RENDERER_DEFAULT STREQUAL "vk")
+	SET(USE_VK ON CACHE BOOL "Build the Vulkan renderer module" FORCE)
+ENDIF()
+
+IF(RENDERER_DEFAULT STREQUAL "rtx")
+	SET(USE_RTX ON CACHE BOOL "Build the ray-tracing renderer module" FORCE)
 ENDIF()
 
 IF(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -52,8 +66,13 @@ IF(WIN32 AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 	ENDIF()
 ENDIF()
 
-IF(NOT USE_RENDERER_DLOPEN AND RENDERER_DEFAULT STREQUAL "glx")
-	SET(USE_VULKAN OFF)
+IF(NOT USE_RENDERER_DLOPEN)
+	IF(NOT RENDERER_DEFAULT STREQUAL "vk")
+		SET(USE_VK OFF)
+	ENDIF()
+	IF(NOT RENDERER_DEFAULT STREQUAL "rtx")
+		SET(USE_RTX OFF)
+	ENDIF()
 ENDIF()
 
 AUX_SOURCE_DIRECTORY(code/qcommon QCOMMON_SRCS)
@@ -266,6 +285,11 @@ IF(FNQL_AUDIO_LOOPBACK_TESTS)
 	target_include_directories(fnql_audio_occlusion_tests PRIVATE code/client/audio/shared)
 	add_test(NAME fnql_audio_occlusion COMMAND fnql_audio_occlusion_tests)
 
+	ADD_EXECUTABLE(fnql_audio_voice_queue_tests tests/audio/voice_queue_tests.cpp)
+	target_compile_features(fnql_audio_voice_queue_tests PRIVATE cxx_std_17)
+	target_include_directories(fnql_audio_voice_queue_tests PRIVATE code/client/audio/shared)
+	add_test(NAME fnql_audio_voice_queue COMMAND fnql_audio_voice_queue_tests)
+
 	ADD_EXECUTABLE(fnql_audio_loopback_tests tests/audio/openal_loopback_tests.cpp)
 	target_compile_features(fnql_audio_loopback_tests PRIVATE cxx_std_17)
 	if(FNQL_OPENAL_INCLUDE_DIRS)
@@ -279,6 +303,8 @@ IF(FNQL_AUDIO_LOOPBACK_TESTS)
 
 	find_package(Python3 COMPONENTS Interpreter)
 	IF(Python3_Interpreter_FOUND)
+		add_test(NAME fnql_retail_sound_compat_source
+			COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/audio/retail_sound_compat_source_tests.py")
 		add_test(NAME fnql_audio_zone_sweep_script
 			COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/audio/audio_zone_sweep_tests.py")
 		add_test(NAME fnql_audio_zone_material_map
@@ -308,6 +334,14 @@ enable_testing()
 ADD_EXECUTABLE(fnql_window_placement_tests tests/window_placement_tests.cpp)
 target_compile_features(fnql_window_placement_tests PRIVATE cxx_std_17)
 add_test(NAME fnql_window_placement COMMAND fnql_window_placement_tests)
+
+ADD_EXECUTABLE(fnql_client_cvar_compat_tests tests/client_cvar_compat_tests.cpp)
+target_compile_features(fnql_client_cvar_compat_tests PRIVATE cxx_std_17)
+add_test(NAME fnql_client_cvar_compat COMMAND fnql_client_cvar_compat_tests)
+
+ADD_EXECUTABLE(fnql_server_cvar_compat_tests tests/server_cvar_compat_tests.cpp)
+target_compile_features(fnql_server_cvar_compat_tests PRIVATE cxx_std_17)
+add_test(NAME fnql_server_cvar_compat COMMAND fnql_server_cvar_compat_tests)
 
 ADD_EXECUTABLE(fnql_ql_font_text_tests tests/ql_font_text_tests.cpp)
 target_compile_features(fnql_ql_font_text_tests PRIVATE cxx_std_17)
@@ -364,10 +398,30 @@ add_test(NAME fnql_factory_rotation COMMAND fnql_factory_rotation_tests)
 
 find_package(Python3 COMPONENTS Interpreter)
 IF(Python3_Interpreter_FOUND)
+	set(FNQL_WEBPAK_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/fnql-web.pak")
+	set(FNQL_WEBPAK_SOURCES
+		"${CMAKE_CURRENT_SOURCE_DIR}/code/client/webui/index.html"
+		"${CMAKE_CURRENT_SOURCE_DIR}/code/client/webui/fnql-settings.js"
+		"${CMAKE_CURRENT_SOURCE_DIR}/code/client/webui/css/fnql-settings.css")
+	add_custom_command(
+		OUTPUT "${FNQL_WEBPAK_OUTPUT}"
+		COMMAND ${Python3_EXECUTABLE}
+			"${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_webpak.py"
+			--source-root "${CMAKE_CURRENT_SOURCE_DIR}/code/client/webui"
+			--output "${FNQL_WEBPAK_OUTPUT}"
+		DEPENDS ${FNQL_WEBPAK_SOURCES} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_webpak.py"
+		VERBATIM)
+	add_custom_target(fnql_webpak ALL DEPENDS "${FNQL_WEBPAK_OUTPUT}")
+	add_test(NAME fnql_webpak_builder_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/webpak_builder_tests.py")
 	add_test(NAME fnql_ql_font_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/ql_font_source_tests.py")
 	add_test(NAME fnql_window_management_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/window_management_source_tests.py")
+	add_test(NAME fnql_client_cvar_compat_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/client_cvar_compat_source_tests.py")
+	add_test(NAME fnql_server_cvar_compat_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/server_cvar_compat_source_tests.py")
 	add_test(NAME fnql_ql_services_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/ql_services_source_tests.py")
 	add_test(NAME fnql_ql_cvar_configstring_source
@@ -384,6 +438,18 @@ IF(Python3_Interpreter_FOUND)
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/factory_runtime_source_tests.py")
 	add_test(NAME fnql_map_overbright_cap_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/map_overbright_cap_source_tests.py")
+	add_test(NAME fnql_renderer_contract_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/renderer_contract_source_tests.py")
+	add_test(NAME fnql_renderer_cvar_compat_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/renderer_cvar_compat_source_tests.py")
+	add_test(NAME fnql_rtx_renderer_contract_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/rtx_renderer_contract_source_tests.py")
+	add_test(NAME fnql_rtx_raster_feature_parity_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/rtx_raster_feature_parity_source_tests.py")
+	add_test(NAME fnql_rtx_vulkan_safety_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/rtx_vulkan_safety_source_tests.py")
+	add_test(NAME fnql_rtx_runtime_smoke_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/rtx_runtime_smoke_tests.py")
 	add_test(NAME fnql_retail_factory_probe
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/retail_factory_probe_tests.py" --meson)
 	set_tests_properties(fnql_retail_factory_probe PROPERTIES SKIP_RETURN_CODE 77)
@@ -402,6 +468,7 @@ AUX_SOURCE_DIRECTORY(code/renderercommon RENDERER_COMMON_SRCS)
 AUX_SOURCE_DIRECTORY(code/renderer RENDERER_GL_SRCS)
 AUX_SOURCE_DIRECTORY(code/rendererglx RENDERER_GLX_SRCS)
 AUX_SOURCE_DIRECTORY(code/renderervk RENDERER_VK_SRCS)
+AUX_SOURCE_DIRECTORY(code/rendererrtx RENDERER_RTX_SRCS)
 
 IF(USE_RENDERER_DLOPEN)
 	SET(AUX_SRCS
@@ -412,28 +479,45 @@ IF(USE_RENDERER_DLOPEN)
 	)
 	TARGET_COMPILE_DEFINITIONS(client PRIVATE USE_RENDERER_DLOPEN RENDERER_PREFIX="${RENDERER_PREFIX}" RENDERER_DEFAULT=${RENDERER_DEFAULT})
 
-	ADD_LIBRARY(${RENDERER_PREFIX}_opengl${RENDEXT} SHARED ${RENDERER_GL_SRCS} ${RENDERER_COMMON_SRCS} ${AUX_SRCS})
-	TARGET_COMPILE_DEFINITIONS(${RENDERER_PREFIX}_opengl${RENDEXT} PRIVATE USE_RENDERER_DLOPEN)
-	SET_TARGET_PROPERTIES(${RENDERER_PREFIX}_opengl${RENDEXT} PROPERTIES PREFIX "")
-
 	IF(USE_GLX)
 		ADD_LIBRARY(${RENDERER_PREFIX}_glx${RENDEXT} SHARED ${RENDERER_GL_SRCS} ${RENDERER_GLX_SRCS} ${RENDERER_COMMON_SRCS} ${AUX_SRCS})
 		TARGET_COMPILE_DEFINITIONS(${RENDERER_PREFIX}_glx${RENDEXT} PRIVATE USE_RENDERER_DLOPEN RENDERER_GLX)
 		SET_TARGET_PROPERTIES(${RENDERER_PREFIX}_glx${RENDEXT} PROPERTIES PREFIX "")
 	ENDIF()
 
-	ADD_LIBRARY(${RENDERER_PREFIX}_vulkan${RENDEXT} SHARED ${RENDERER_VK_SRCS} ${RENDERER_COMMON_SRCS} ${AUX_SRCS})
-	TARGET_COMPILE_DEFINITIONS(${RENDERER_PREFIX}_vulkan${RENDEXT} PRIVATE USE_RENDERER_DLOPEN RENDERER_VULKAN)
-	SET_TARGET_PROPERTIES(${RENDERER_PREFIX}_vulkan${RENDEXT} PROPERTIES PREFIX "")
+	IF(USE_VK)
+		ADD_LIBRARY(${RENDERER_PREFIX}_vk${RENDEXT} SHARED ${RENDERER_VK_SRCS} ${RENDERER_COMMON_SRCS} ${AUX_SRCS})
+		TARGET_COMPILE_DEFINITIONS(${RENDERER_PREFIX}_vk${RENDEXT} PRIVATE USE_RENDERER_DLOPEN RENDERER_VULKAN)
+		SET_TARGET_PROPERTIES(${RENDERER_PREFIX}_vk${RENDEXT} PROPERTIES PREFIX "")
+	ENDIF()
+
+	IF(USE_RTX)
+		ADD_LIBRARY(${RENDERER_PREFIX}_rtx${RENDEXT} SHARED ${RENDERER_RTX_SRCS} ${RENDERER_COMMON_SRCS} ${AUX_SRCS})
+		TARGET_COMPILE_DEFINITIONS(${RENDERER_PREFIX}_rtx${RENDEXT} PRIVATE USE_RENDERER_DLOPEN RENDERER_RTX)
+		SET_TARGET_PROPERTIES(${RENDERER_PREFIX}_rtx${RENDEXT} PROPERTIES PREFIX "")
+	ENDIF()
 ELSE()
 	IF(RENDERER_DEFAULT STREQUAL "glx")
 		ADD_LIBRARY(${RENDERER_PREFIX}_glx OBJECT ${RENDERER_GL_SRCS} ${RENDERER_GLX_SRCS} ${RENDERER_COMMON_SRCS})
-		TARGET_COMPILE_DEFINITIONS(${RENDERER_PREFIX}_glx PRIVATE RENDERER_GLX)
-	ELSEIF(USE_VULKAN)
-		ADD_LIBRARY(${RENDERER_PREFIX}_vulkan OBJECT ${RENDERER_VK_SRCS} ${RENDERER_COMMON_SRCS})
-		TARGET_COMPILE_DEFINITIONS(${RENDERER_PREFIX}_vulkan PRIVATE RENDERER_VULKAN)
-	ELSE()
-		ADD_LIBRARY(${RENDERER_PREFIX}_opengl OBJECT ${RENDERER_GL_SRCS} ${RENDERER_COMMON_SRCS})
+		TARGET_COMPILE_DEFINITIONS(${RENDERER_PREFIX}_glx PRIVATE
+			RENDERER_GLX
+			RE_DrawScaledText=R_GLX_DrawScaledText
+			RE_MeasureScaledText=R_GLX_MeasureScaledText)
+	ELSEIF(RENDERER_DEFAULT STREQUAL "rtx")
+		ADD_LIBRARY(${RENDERER_PREFIX}_rtx OBJECT ${RENDERER_RTX_SRCS} ${RENDERER_COMMON_SRCS})
+		# The statically linked client owns fallback host-font wrappers with the
+		# public RE_* names. Keep the renderer implementation private so both
+		# halves can coexist in one executable while GetRefAPI supplies the ABI.
+		TARGET_COMPILE_DEFINITIONS(${RENDERER_PREFIX}_rtx PRIVATE
+			RENDERER_RTX
+			RE_DrawScaledText=R_RTX_DrawScaledText
+			RE_MeasureScaledText=R_RTX_MeasureScaledText)
+	ELSEIF(RENDERER_DEFAULT STREQUAL "vk")
+		ADD_LIBRARY(${RENDERER_PREFIX}_vk OBJECT ${RENDERER_VK_SRCS} ${RENDERER_COMMON_SRCS})
+		TARGET_COMPILE_DEFINITIONS(${RENDERER_PREFIX}_vk PRIVATE
+			RENDERER_VULKAN
+			RE_DrawScaledText=R_VK_DrawScaledText
+			RE_MeasureScaledText=R_VK_MeasureScaledText)
 	ENDIF()
 ENDIF()
 
@@ -459,7 +543,7 @@ IF(UNIX)
 			code/unix/x11_dga.cpp
 			code/unix/x11_randr.cpp
 			code/unix/x11_vidmode.cpp)
-		IF(USE_VULKAN)
+		IF(USE_VK OR USE_RTX)
 			list(APPEND Q3_UI_SRCS code/unix/linux_qvk.cpp)
 		ENDIF()
 	ENDIF()
@@ -497,7 +581,7 @@ ELSEIF(WIN32)
 		code/win32/win_qgl.cpp
 		code/win32/win_snd.cpp
 		code/win32/win_wndproc.cpp)
-	IF(USE_VULKAN)
+	IF(USE_VK OR USE_RTX)
 		list(APPEND Q3_UI_SRCS code/win32/win_qvk.cpp)
 	ENDIF()
 ENDIF(UNIX)
@@ -523,12 +607,12 @@ ELSEIF(UNIX AND NOT MSVC)
 	ENDIF()
 ENDIF()
 
-IF(USE_VULKAN)
+IF(USE_VK OR USE_RTX)
 	TARGET_COMPILE_DEFINITIONS(q3ui PRIVATE USE_VULKAN_API)
 	TARGET_COMPILE_DEFINITIONS(client PRIVATE USE_VULKAN_API)
 ENDIF()
 
-IF(USE_RENDERER_DLOPEN OR RENDERER_DEFAULT STREQUAL "opengl" OR RENDERER_DEFAULT STREQUAL "glx")
+IF(USE_GLX OR RENDERER_DEFAULT STREQUAL "glx")
 	TARGET_COMPILE_DEFINITIONS(q3ui PRIVATE USE_OPENGL_API)
 	TARGET_COMPILE_DEFINITIONS(client PRIVATE USE_OPENGL_API)
 ENDIF()
@@ -538,15 +622,23 @@ ENDIF()
 ADD_EXECUTABLE(${CNAME}${BINEXT} ${EXE_TYPE} ${Q3_SRCS})
 TARGET_LINK_LIBRARIES(${CNAME}${BINEXT} qcommon botlib client q3ui Threads::Threads ${FNQL_CLIENT_LINK_LIBS})
 set_property(TARGET ${CNAME}${BINEXT} PROPERTY LINKER_LANGUAGE CXX)
+IF(TARGET fnql_webpak)
+	add_dependencies(${CNAME}${BINEXT} fnql_webpak)
+	add_custom_command(
+		TARGET ${CNAME}${BINEXT} POST_BUILD
+		COMMAND ${CMAKE_COMMAND} -E copy_if_different
+			"${FNQL_WEBPAK_OUTPUT}"
+			"$<TARGET_FILE_DIR:${CNAME}${BINEXT}>/fnql-web.pak")
+ENDIF()
 #TARGET_LINK_OPTIONS(${CNAME} PRIVATE -fno-pie) # v3.13+
 
 IF(NOT USE_RENDERER_DLOPEN)
 	IF(RENDERER_DEFAULT STREQUAL "glx")
 		TARGET_LINK_LIBRARIES(${CNAME}${BINEXT} ${RENDERER_PREFIX}_glx)
-	ELSEIF(USE_VULKAN)
-		TARGET_LINK_LIBRARIES(${CNAME}${BINEXT} ${RENDERER_PREFIX}_vulkan)
-	ELSE()
-		TARGET_LINK_LIBRARIES(${CNAME}${BINEXT} ${RENDERER_PREFIX}_opengl)
+	ELSEIF(RENDERER_DEFAULT STREQUAL "rtx")
+		TARGET_LINK_LIBRARIES(${CNAME}${BINEXT} ${RENDERER_PREFIX}_rtx)
+	ELSEIF(RENDERER_DEFAULT STREQUAL "vk")
+		TARGET_LINK_LIBRARIES(${CNAME}${BINEXT} ${RENDERER_PREFIX}_vk)
 	ENDIF()
 ENDIF()
 

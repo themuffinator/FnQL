@@ -1,8 +1,14 @@
 # GLx Promotion Gate
 
+> Historical record: this gate predates renderer consolidation. GLx is now the
+> default renderer, the `opengl` and `opengl2` selectors have been removed, and
+> the only public renderer selectors are `glx`, `vk`, and `rtx`. The material
+> below is retained as verification history, not as current build or release
+> policy.
+
 ## Status
 
-GLx is the canonical OpenGL-lineage renderer module, but it is not the default renderer yet. The default renderer remains `opengl`, `cl_renderer glx` remains an explicit selection path, and `opengl2` remains a separately selectable legacy renderer when built.
+At the time this gate was written, GLx was the candidate OpenGL-lineage renderer and the default was still `opengl`. That transition is complete; see [`BUILD.md`](../../BUILD.md) and [`docs/GLX.md`](../GLX.md) for the current configuration.
 
 The promotion gate is intentionally stricter than the RC gate. RC proof shows that the current compatibility-first GLx surface is viable. Promotion proof is the point where maintainers may safely make `opengl` a migration alias for GLx and move `opengl2` behind a legacy build flag.
 

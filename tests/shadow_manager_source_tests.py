@@ -224,6 +224,7 @@ def main() -> int:
     failures: list[str] = []
     check_source("OpenGL", "code/renderer", failures)
     check_source("Vulkan", "code/renderervk", failures)
+    check_source("RTX", "code/rendererrtx", failures)
 
     if failures:
         print("Shadow manager source contract violations:", file=sys.stderr)

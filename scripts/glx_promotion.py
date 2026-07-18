@@ -166,7 +166,6 @@ def check_renderer_source_policy(
         meson_options_path.read_text(encoding="utf-8"),
         re.MULTILINE | re.DOTALL,
     ) and "renderer_prefix + '_glx_'" in meson_path.read_text(encoding="utf-8") else ""
-    promoted = any(default and default != "opengl" for default in (make_default, meson_default))
     blockers = []
     if not make_default:
         blockers.append("Makefile renderer default could not be read.")
@@ -176,10 +175,16 @@ def check_renderer_source_policy(
         blockers.append("Make modular builds must include GLx by default.")
     if meson_use_glx_default != "glx":
         blockers.append("Meson modular builds must include GLx by default.")
+    if make_default != "glx":
+        blockers.append("Make must use GLx as the renderer default.")
+    if meson_default != "glx":
+        blockers.append("Meson must use GLx as the renderer default.")
+    consolidated = not blockers
     return {
         "name": "renderer-source-policy",
-        "status": "promoted" if promoted else ("passed" if not blockers else "blocked"),
-        "promoted": promoted,
+        "status": "passed" if consolidated else "blocked",
+        "promoted": False,
+        "consolidated": consolidated,
         "makeDefault": make_default,
         "mesonDefault": meson_default,
         "makeUseGlxDefault": make_use_glx_default,

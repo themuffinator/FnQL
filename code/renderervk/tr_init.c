@@ -2653,6 +2653,8 @@ R_Register
 */
 static void R_Register( void )
 {
+	R_QLRegisterRendererCvars( QL_CVAR_BACKEND_VULKAN );
+
 	// make sure all the commands added here are also removed in R_Shutdown
 	ri.Cmd_AddCommand( "imagelist", R_ImageList_f );
 	ri.Cmd_AddCommand( "shaderlist", R_ShaderList_f );
@@ -2761,7 +2763,8 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_stereoSeparation, "Control eye separation. Resulting separation is \\r_zproj divided by this value in standard units." );
 	r_ignoreGLErrors = ri.Cvar_Get( "r_ignoreGLErrors", "1", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_ignoreGLErrors, "Ignore OpenGL errors." );
-	r_teleporterFlash = ri.Cvar_Get( "r_teleporterFlash", "1", CVAR_ARCHIVE );
+	r_teleporterFlash = ri.Cvar_Get( "r_teleporterFlash", "1", CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_CLOUD );
+	ri.Cvar_CheckRange( r_teleporterFlash, "0", "1", CV_INTEGER );
 	ri.Cvar_SetDescription( r_teleporterFlash, "Show a white screen instead of a black screen when being teleported in hyperspace." );
 	r_fastsky = ri.Cvar_Get( "r_fastsky", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_fastsky, "Draw flat colored skies." );
@@ -3576,12 +3579,10 @@ static void RE_Shutdown( refShutdownCode_t code ) {
 			if ( ri.VKimp_Shutdown ) {
 				ri.VKimp_Shutdown( code == REF_UNLOAD_DLL ? qtrue : qfalse );
 			}
-			Com_Memset( &glConfig, 0, sizeof( glConfig ) );
-		} else {
-			// The Vulkan device/swapchain was released above. Re-enter the
-			// platform init path while retaining the desktop window itself.
-			Com_Memset( &glConfig, 0, sizeof( glConfig ) );
 		}
+		// The device/swapchain was released above. Always discard the old
+		// extent so retained-window initialization queries the live drawable.
+		Com_Memset( &glConfig, 0, sizeof( glConfig ) );
 #else
 		R_ClearSymTables();
 		Com_Memset( &glState, 0, sizeof( glState ) );
@@ -3590,10 +3591,8 @@ static void RE_Shutdown( refShutdownCode_t code ) {
 			if ( ri.GLimp_Shutdown ) {
 				ri.GLimp_Shutdown( code == REF_UNLOAD_DLL ? qtrue : qfalse );
 			}
-			Com_Memset( &glConfig, 0, sizeof( glConfig ) );
-		} else {
-			Com_Memset( &glConfig, 0, sizeof( glConfig ) );
 		}
+		Com_Memset( &glConfig, 0, sizeof( glConfig ) );
 #endif
 	}
 

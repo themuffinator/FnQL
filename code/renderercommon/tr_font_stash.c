@@ -31,8 +31,8 @@ version.
 #include <windows.h>
 #endif
 
-#if defined( RENDERER_OPENGL2 )
-#include "../renderer2/tr_common.h"
+#if defined( RENDERER_RTX )
+#include "../rendererrtx/tr_common.h"
 #elif defined( RENDERER_VULKAN )
 #include "../renderervk/tr_common.h"
 #else
@@ -44,10 +44,7 @@ extern void RE_SetColor( const float *rgba );
 extern void RE_StretchPic( float x, float y, float w, float h,
 	float s1, float t1, float s2, float t2, qhandle_t hShader );
 
-#if defined( RENDERER_OPENGL2 )
-extern void R_UpdateSubImage( image_t *image, byte *pic, int x, int y,
-	int width, int height, unsigned int picFormat );
-#elif defined( RENDERER_VULKAN ) && defined( USE_VULKAN )
+#if ( defined( RENDERER_VULKAN ) || defined( RENDERER_RTX ) ) && defined( USE_VULKAN )
 extern void vk_upload_image_data( image_t *image, int x, int y, int width,
 	int height, int miplevels, byte *pixels, int size, qboolean update );
 #endif
@@ -97,20 +94,12 @@ static image_t *QL_CreateHostAtlasImage( const char *name, byte *pixels,
 	int width, int height ) {
 	const int flags = IMGFLAG_CLAMPTOEDGE | IMGFLAG_NO_COMPRESSION |
 		IMGFLAG_NOLIGHTSCALE | IMGFLAG_NOSCALE;
-#if defined( RENDERER_OPENGL2 )
-	return R_CreateImage( name, pixels, width, height,
-		IMGTYPE_COLORALPHA, flags, 0 );
-#else
 	return R_CreateImage( name, NULL, pixels, width, height, flags );
-#endif
 }
 
 static void QL_UploadHostAtlas( image_t *image, byte *pixels, int x, int y,
 	int width, int height ) {
-#if defined( RENDERER_OPENGL2 )
-	/* renderer2's upload path describes canonical RGBA bytes as GL_RGBA8. */
-	R_UpdateSubImage( image, pixels, x, y, width, height, 0x8058 /* GL_RGBA8 */ );
-#elif defined( RENDERER_VULKAN ) && defined( USE_VULKAN )
+#if ( defined( RENDERER_VULKAN ) || defined( RENDERER_RTX ) ) && defined( USE_VULKAN )
 	vk_upload_image_data( image, x, y, width, height, 1, pixels,
 		width * height * 4, qtrue );
 #else

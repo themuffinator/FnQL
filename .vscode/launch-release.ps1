@@ -3,8 +3,8 @@ param(
 	[ValidateSet('x64', 'Win32', 'ARM64')]
 	[string]$Platform = 'x64',
 
-	[ValidateSet('opengl', 'renderer2', 'opengl2', 'vulkan', 'glx')]
-	[string]$Renderer = 'opengl',
+	[ValidateSet('glx', 'vk', 'rtx')]
+	[string]$Renderer = 'glx',
 
 	[ValidateSet('client', 'dedicated')]
 	[string]$Target = 'client',
@@ -20,13 +20,6 @@ function Get-BinarySuffix {
 		'x64' { return '.x64' }
 		'ARM64' { return '.arm64' }
 		default { throw "Unsupported platform: $Platform" }
-	}
-}
-
-function Convert-RendererName {
-	switch ($Renderer) {
-		'renderer2' { return 'opengl2' }
-		default { return $Renderer }
 	}
 }
 
@@ -54,6 +47,6 @@ Set-Location $buildRoot
 if ($Target -eq 'dedicated') {
 	& $executablePath
 } else {
-	& $executablePath '+set' 'r_fullscreen' '0' '+set' 'cl_renderer' (Convert-RendererName)
+	& $executablePath '+set' 'r_fullscreen' '0' '+set' 'cl_renderer' $Renderer
 }
 exit $LASTEXITCODE

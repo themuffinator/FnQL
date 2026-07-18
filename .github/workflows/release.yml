@@ -88,8 +88,8 @@ jobs:
             -Dcurl-dlopen=false \
             -Dsdl=disabled \
             -Drenderer-dlopen=true \
-            -Drenderers=opengl,glx,vulkan \
-            -Drenderer-default=opengl \
+            -Drenderers=glx,vk,rtx \
+            -Drenderer-default=glx \
             -Daudio-tests=false \
             -Dglx-tests=false \
             -Dlibjpeg-turbo:simd=disabled
@@ -148,9 +148,9 @@ jobs:
           for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=${{ matrix.vs_arch }} -host_arch=x64 || exit /b
           if /I "${{ matrix.arch }}"=="arm64" (
-            meson setup meson\build-${{ matrix.arch }} --cross-file scripts\windows-arm64-cross.ini --buildtype=release --prefix "%CD%\bin" -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=opengl,glx,vulkan -Drenderer-default=opengl -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
+            meson setup meson\build-${{ matrix.arch }} --cross-file scripts\windows-arm64-cross.ini --buildtype=release --prefix "%CD%\bin" -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=glx,vk,rtx -Drenderer-default=glx -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
           ) else (
-            meson setup meson\build-${{ matrix.arch }} --buildtype=release --prefix "%CD%\bin" -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=opengl,glx,vulkan -Drenderer-default=opengl -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
+            meson setup meson\build-${{ matrix.arch }} --buildtype=release --prefix "%CD%\bin" -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=glx,vk,rtx -Drenderer-default=glx -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
           )
           meson compile -C meson\build-${{ matrix.arch }} || exit /b
           meson install -C meson\build-${{ matrix.arch }} --no-rebuild || exit /b
@@ -189,8 +189,8 @@ jobs:
             -Dsdl=disabled \
             -Dcurl=disabled \
             -Drenderer-dlopen=true \
-            -Drenderers=opengl,glx,vulkan,opengl2 \
-            -Drenderer-default=opengl
+            -Drenderers=glx,vk,rtx \
+            -Drenderer-default=glx
 
       - name: Build Meson targets
         run: meson compile -C meson/build
@@ -243,7 +243,7 @@ jobs:
 
       - name: Build
         run: |
-          make ${{ matrix.rule }} -j$(nproc) ARCH=${{ matrix.arch }} COMPILE_ARCH=${{ matrix.arch }} CC=gcc DESTDIR=bin ${{ matrix.use_sdl }} USE_RENDERER_DLOPEN=1 USE_OPENGL=1 USE_GLX=1 USE_VULKAN=1
+          make ${{ matrix.rule }} -j$(nproc) ARCH=${{ matrix.arch }} COMPILE_ARCH=${{ matrix.arch }} CC=gcc DESTDIR=bin ${{ matrix.use_sdl }} USE_RENDERER_DLOPEN=1 USE_GLX=1 USE_VK=1 USE_RTX=1
 
       - name: Check glibc baseline
         run: python3 scripts/check_elf_glibc.py --max-glibc "$FNQ3_LINUX_GLIBC_MAX" --require-elf bin
@@ -286,7 +286,7 @@ jobs:
 
       - name: Build
         run: |
-          make install -j$(nproc) ARCH=aarch64 COMPILE_ARCH=aarch64 CC=gcc DESTDIR=bin USE_SDL=0 USE_RENDERER_DLOPEN=1 USE_OPENGL=1 USE_GLX=1 USE_VULKAN=1
+          make install -j$(nproc) ARCH=aarch64 COMPILE_ARCH=aarch64 CC=gcc DESTDIR=bin USE_SDL=0 USE_RENDERER_DLOPEN=1 USE_GLX=1 USE_VK=1 USE_RTX=1
 
       - name: Check glibc baseline
         run: python3 scripts/check_elf_glibc.py --max-glibc "$FNQ3_LINUX_GLIBC_MAX" --require-elf bin
@@ -348,7 +348,7 @@ jobs:
           OGG_LIBS="$(pkg-config --libs ogg)" \
           VORBIS_CFLAGS="$(pkg-config --cflags vorbisfile)" \
           VORBIS_LIBS="$(pkg-config --libs vorbisfile)" \
-            gmake install -j$(sysctl -n hw.logicalcpu) ARCH=${{ matrix.arch }} CC=clang DESTDIR=bin INSTALL=ginstall USE_LOCAL_HEADERS=0 USE_SYSTEM_JPEG=1 USE_SYSTEM_OGG=1 USE_SYSTEM_VORBIS=1 USE_RENDERER_DLOPEN=1 USE_OPENGL=1 USE_GLX=1 USE_VULKAN=1 STRIP=echo
+            gmake install -j$(sysctl -n hw.logicalcpu) ARCH=${{ matrix.arch }} CC=clang DESTDIR=bin INSTALL=ginstall USE_LOCAL_HEADERS=0 USE_SYSTEM_JPEG=1 USE_SYSTEM_OGG=1 USE_SYSTEM_VORBIS=1 USE_RENDERER_DLOPEN=1 USE_GLX=1 USE_VK=1 USE_RTX=1 STRIP=echo
 
       - name: Verify release layout
         run: python3 scripts/verify_release_layout.py bin

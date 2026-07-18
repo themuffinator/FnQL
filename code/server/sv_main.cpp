@@ -21,6 +21,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 #include "server.h"
+#include "server_cvar_compat.hpp"
 #include "../qcommon/netchan_safety.hpp"
 
 #include <algorithm>
@@ -45,6 +46,8 @@ cvar_t	*sv_clientTLD;
 
 cvar_t	*sv_privateClients;		// number of clients reserved for password
 cvar_t	*sv_hostname;
+cvar_t	*sv_tags;
+cvar_t	*sv_masterAdvertise;
 cvar_t	*sv_master[MAX_MASTER_SERVERS];		// master server ip address
 cvar_t	*sv_reconnectlimit;		// minimum seconds between connect messages
 cvar_t	*sv_padPackets;			// add nop bytes to messages
@@ -65,9 +68,77 @@ cvar_t	*sv_rankingsActive;
 cvar_t	*sv_lanForceRate; // dedicated 1 (LAN) server forces local client rates to 99999 (bug #491)
 cvar_t	*sv_autoRecordDemos;
 cvar_t	*sv_cheats;
+cvar_t	*sv_gtid;
+cvar_t	*sv_idleRestart;
+cvar_t	*sv_idleExit;
+cvar_t	*sv_errorExit;
+cvar_t	*sv_quitOnEmpty;
+cvar_t	*sv_quitOnExitLevel;
+cvar_t	*sv_altEntDir;
+cvar_t	*sv_dumpEntities;
+cvar_t	*sv_cylinderScale;
+cvar_t	*sv_vac;
+cvar_t	*sv_showloss;
 
 cvar_t *sv_levelTimeReset;
 cvar_t *sv_filter;
+
+namespace {
+
+fnql::server::cvars::InactivityTimer idleExitTimer;
+fnql::server::cvars::InactivityTimer emptyServerTimer;
+
+bool SV_HasHumanClients()
+{
+	if ( !svs.clients || !sv_maxclients ) {
+		return false;
+	}
+	for ( const client_t &client : SV_Clients() ) {
+		if ( client.state >= CS_CONNECTED
+			&& client.netchan.remoteAddress.type != NA_BOT ) {
+			return true;
+		}
+	}
+	return false;
+}
+
+} // namespace
+
+void SV_ResetServerCvarRuntime( void )
+{
+	idleExitTimer.Reset();
+	emptyServerTimer.Reset();
+}
+
+qboolean SV_ShouldErrorExit( errorParm_t code )
+{
+	const bool recoverable = code == ERR_DROP || code == ERR_DISCONNECT;
+	const int policy = sv_errorExit ? sv_errorExit->integer : 0;
+	const bool running = com_sv_running && com_sv_running->integer;
+	return fnql::server::cvars::ShouldEscalateError(
+		policy, running, recoverable ) ? qtrue : qfalse;
+}
+
+qboolean SV_HandleQuitOnExitLevel( const char *context )
+{
+	using fnql::server::cvars::ExitLevelAction;
+	const int policy = sv_quitOnExitLevel ? sv_quitOnExitLevel->integer : 0;
+	switch ( fnql::server::cvars::SelectExitLevelAction( policy ) ) {
+		case ExitLevelAction::Continue:
+			return qfalse;
+		case ExitLevelAction::Shutdown:
+			Com_Printf( "sv_quitOnExitLevel %d: shutting down after %s\n",
+				policy, context ? context : "level exit" );
+			SV_Shutdown( "Server stopped by sv_quitOnExitLevel" );
+			return qtrue;
+		case ExitLevelAction::Quit:
+			Com_Printf( "sv_quitOnExitLevel %d: exiting after %s\n",
+				policy, context ? context : "level exit" );
+			Cbuf_AddText( "quit\n" );
+			return qtrue;
+	}
+	return qfalse;
+}
 
 #ifdef USE_BANS
 cvar_t	*sv_banFile;
@@ -264,6 +335,8 @@ static void SV_MasterHeartbeat( const char *message )
 	// "dedicated 1" is for lan play, "dedicated 2" is for inet public play
 	if (!com_dedicated || com_dedicated->integer != 2 || !(netenabled & (NET_ENABLEV4 | NET_ENABLEV6)))
 		return;		// only dedicated servers send heartbeats
+	if ( sv_masterAdvertise && !sv_masterAdvertise->integer )
+		return;		// retail sv_master is the publication gate
 
 	// if not time yet, don't send anything
 	if ( svs.nextHeartbeatTime - svs.time > 0 )
@@ -1191,6 +1264,14 @@ static void SV_CheckTimeouts( void ) {
 			client.timeoutCount = 0;
 		}
 	}
+
+	if ( emptyServerTimer.Poll( !SV_HasHumanClients(),
+		static_cast<uint32_t>( svs.time ),
+		sv_quitOnEmpty ? sv_quitOnEmpty->integer : 0 ) ) {
+		Com_Printf( "Server has been empty for %d seconds; quitting.\n",
+			sv_quitOnEmpty->integer );
+		Cbuf_AddText( "quit\n" );
+	}
 }
 
 
@@ -1297,6 +1378,10 @@ static void SV_Restart( const char *reason ) {
 	bool sv_shutdown = false;
 	std::array<char, MAX_CVAR_VALUE_STRING> mapName{};
 
+	if ( SV_HandleQuitOnExitLevel( reason ) ) {
+		return;
+	}
+
 	if ( svs.clients ) {
 		// check if we can reset map time without full server shutdown
 		for ( const client_t &client : SV_Clients() ) {
@@ -1346,12 +1431,23 @@ void SV_Frame( int msec, int realMsec ) {
 	{
 		if ( com_dedicated->integer )
 		{
-			// Block indefinitely until something interesting happens
-			// on STDIN.
-			Sys_Sleep( -1 );
+			if ( idleExitTimer.Poll( true,
+				static_cast<uint32_t>( Sys_Milliseconds() ),
+				sv_idleExit ? sv_idleExit->integer : 0 ) ) {
+				Com_Error( ERR_FATAL,
+					"Dedicated server remained idle for sv_idleExit (%d) seconds",
+					sv_idleExit->integer );
+			}
+			// A finite sleep is required while the retail idle-exit policy is
+			// armed; the disabled path retains FnQL's event-driven blocking.
+			Sys_Sleep( sv_idleExit && sv_idleExit->integer > 0 ? 50 : -1 );
+		}
+		else {
+			idleExitTimer.Reset();
 		}
 		return;
 	}
+	idleExitTimer.Reset();
 
 	Zmq_UpdatePasswords();
 	Zmq_PumpRcon();
@@ -1387,6 +1483,19 @@ void SV_Frame( int msec, int realMsec ) {
 		return;
 	}
 
+	// Retail recycles an unattended server after a day.  Bots do not keep a
+	// host alive for this policy, and the inherited 12-hour time-maintenance
+	// restart below remains intact as an independent FnQL safeguard.
+	if ( sv_idleRestart && sv_idleRestart->integer && svs.time > 24 * 60 * 60 * 1000
+		&& !SV_HasHumanClients() ) {
+		if ( SV_HandleQuitOnExitLevel( "idle server restart" ) ) {
+			return;
+		}
+		SV_Shutdown( "Restarting idle server" );
+		Cbuf_AddText( "vstr nextmap\n" );
+		return;
+	}
+
 	// try to do silent restart earlier if possible
 	if ( sv.time > (12*3600*1000) && ( sv_levelTimeReset->integer == 0 || sv.time > 0x40000000 ) ) {
 		if ( svs.clients ) {
@@ -1407,6 +1516,9 @@ void SV_Frame( int msec, int realMsec ) {
 
 	if ( sv.restartTime && sv.time - sv.restartTime >= 0 ) {
 		sv.restartTime = 0;
+		if ( SV_HandleQuitOnExitLevel( "scheduled map_restart" ) ) {
+			return;
+		}
 		Cbuf_AddText( "map_restart 0\n" );
 		return;
 	}

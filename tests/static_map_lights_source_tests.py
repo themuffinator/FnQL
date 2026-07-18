@@ -124,6 +124,7 @@ def main() -> int:
     for label, relative_path in (
         ("OpenGL", "code/renderer/tr_bsp.c"),
         ("Vulkan", "code/renderervk/tr_bsp.c"),
+        ("RTX", "code/rendererrtx/tr_bsp.c"),
     ):
         check_source(label, relative_path, failures)
 

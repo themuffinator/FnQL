@@ -351,6 +351,14 @@ void NORETURN FORMAT_PRINTF(2, 3) QDECL Com_Error( errorParm_t code, const char 
 	Q_vsnprintf( com_errorMessage, sizeof( com_errorMessage ), fmt, argptr );
 	va_end( argptr );
 
+	/* Retail sv_errorExit promotes recoverable server failures only after the
+	 * message is safely captured.  The server owns the policy, while common
+	 * remains the single error-unwind owner. */
+	if ( SV_ShouldErrorExit( code ) ) {
+		code = ERR_FATAL;
+		Cvar_SetIntegerValue( "com_errorCode", code );
+	}
+
 	if ( code != ERR_DISCONNECT && code != ERR_NEED_CD ) {
 		// we can't recover from ERR_FATAL so there is no recipients for com_errorMessage
 		// also if ERR_FATAL was called from S_Malloc - CopyString for a long (2+ chars) text
