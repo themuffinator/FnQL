@@ -20,6 +20,7 @@ class VSCodeWorkflowSourceTests(unittest.TestCase):
         self.assertIn("Copy-Item -LiteralPath $canonicalArchivePath", build)
         self.assertIn("Root archive name must be a .fnz file name", build)
         self.assertIn("'-Dstrict-warnings=true'", build)
+        self.assertIn("'-Db_vscrt=static_from_buildtype'", build)
         self.assertIn("[ValidateSet('Win32')]", build)
         self.assertIn("[ValidateSet('Win32')]", launch)
         self.assertIn("'meson\\build\\win32'", build)

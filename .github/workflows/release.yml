@@ -75,6 +75,8 @@ jobs:
           meson setup meson/build-x86 \
             --buildtype=release \
             --prefix "$PWD/bin" \
+            -Dc_link_args=-static \
+            -Dcpp_link_args=-static \
             -Dcurl=enabled \
             -Dcurl-dlopen=false \
             -Dsdl=disabled \
@@ -83,9 +85,18 @@ jobs:
             -Drenderer-default=glx \
             -Daudio-tests=false \
             -Dglx-tests=false \
+            -Dzlib:default_library=static \
             -Dlibjpeg-turbo:simd=disabled
           meson compile -C meson/build-x86
           meson install -C meson/build-x86 --no-rebuild --skip-subprojects
+
+      - name: Stage pinned Steam provider
+        shell: msys2 {0}
+        run: python scripts/fetch_steam_provider.py --output bin/fnql_steam.dll
+
+      - name: Check Windows runtime dependencies
+        shell: msys2 {0}
+        run: python scripts/check_windows_runtime_deps.py --require-pe bin
 
       - name: Verify release layout
         shell: msys2 {0}
@@ -122,9 +133,15 @@ jobs:
 
           for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x86 -host_arch=x64 || exit /b
-          meson setup meson\build-x86 --buildtype=release --prefix "%CD%\bin" -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=glx,vk,rtx -Drenderer-default=glx -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
+          meson setup meson\build-x86 --buildtype=release --prefix "%CD%\bin" -Db_vscrt=static_from_buildtype -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=glx,vk,rtx -Drenderer-default=glx -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
           meson compile -C meson\build-x86 || exit /b
           meson install -C meson\build-x86 --no-rebuild --skip-subprojects || exit /b
+
+      - name: Stage pinned Steam provider
+        run: python scripts/fetch_steam_provider.py --output bin/fnql_steam.dll
+
+      - name: Check Windows runtime dependencies
+        run: python scripts/check_windows_runtime_deps.py --require-pe bin
 
       - name: Verify release layout
         run: python scripts/verify_release_layout.py bin/FnQL-pkg.fnz
@@ -149,6 +166,7 @@ jobs:
           python tests/webui_wiring_tests.py
           python tests/webui_backend_source_tests.py
           python tests/client_cvar_compat_source_tests.py
+          python tests/steam_provider_source_tests.py
 
   ubuntu-x86:
     needs: [prepare]

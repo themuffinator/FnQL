@@ -2,14 +2,21 @@
 
 FnQL integrates Steam through an optional dynamic provider. The provider source
 is maintained in a separate, closed-source sibling repository, normally
-`../FnQL-Steam`; no provider implementation, Steamworks SDK file, Steam
-redistributable, credential, ticket, or retail asset belongs in this repository.
-FnQL contains only the versioned C ABI, its secure loader, engine-facing
-adapters, tests, and documentation.
+`../FnQL-Steam`; it must remain private and is never copied into FnQL. Official
+compiled Win32 `fnql_steam.dll` binaries may be published in binary-only
+provider releases and bundled with official FnQL Windows releases. No provider
+implementation source, Steamworks SDK file, Valve Steam redistributable,
+credential, ticket, or retail asset belongs in this repository. FnQL contains
+only the versioned C ABI, its secure loader, engine-facing adapters, release
+pin/checksum metadata, tests, and documentation.
 
 ## Compatibility and policy
 
 - Retail Quake Live AppID `282440` is the compatibility target.
+- `version/fnql_steam_provider.json` is the release ownership boundary for the
+  closed provider binary. CI accepts only that versioned URL, SHA-256 digest,
+  PE i386 machine, and DLL image. Provider source is not fetched or published,
+  and Valve's `steam_api.dll` is never bundled.
 - Steam install discovery and retail filesystem mounting do not depend on the
   provider. A missing, disabled, mismatched, or failed provider cannot change
   `fs_basepath`, the active-user homepath, pak ordering, native-module lookup,
@@ -55,7 +62,12 @@ enables Steam, but never starts a build task. Run `meson: build (Steam)` before
 those launch entries. Use `meson: build Win32 debug (Steam)` only when manually
 launching the separate debug build directory.
 Only `fnql_steam.dll` is staged into the build tree; private source is never
-copied into FnQL.
+copied into FnQL. Official release CI instead runs
+`scripts/fetch_steam_provider.py`, which downloads the binary-only provider
+asset pinned in `version/fnql_steam_provider.json`, validates its SHA-256 and
+PE i386 DLL identity, and stages it beside each Windows executable. Both
+Windows release toolchains statically link their compiler runtimes, and a PE
+import audit rejects known unshipped runtime DLL dependencies before upload.
 
 Runtime controls and diagnostics:
 
@@ -217,7 +229,7 @@ subscription enumeration, item state, install metadata, byte progress,
 download, subscribe, unsubscribe, and bounded callback/event delivery for AppID
 `282440`. FnQL starts the Steam GameServer before its initial Workshop snapshot
 and revalidates the provider's dynamic status after that start and callback
-pumping. Provider version 0.3.0 uses the Steam client UGC owner for client and
+pumping. Provider version 0.3.1 uses the Steam client UGC owner for client and
 listen-server sessions, then mirrors retail's dedicated-server split by
 acquiring `SteamGameServerUGC` only after successful GameServer startup.
 Dedicated install/download callbacks and all-UGC call results use the
@@ -242,7 +254,7 @@ enumeration/download has not yet been performed, so that remains the promotion
 gate rather than an observed success claim.
 
 The same read-only export audit found all 142 flat symbols currently resolved
-by provider 0.3.0 in the retail x86 redistributable. This proves symbol
+by provider 0.3.1 in the retail x86 redistributable. This proves symbol
 availability only; it did not initialize Steam, log on a GameServer, enumerate
 account content, or call a live service.
 
@@ -256,7 +268,7 @@ or repository.
 ## Implemented service surface
 
 The versioned capability matrix has 25 independently gated entries. Provider
-version 0.3.0 implements and fake-runtime tests all 25 on the
+version 0.3.1 implements and fake-runtime tests all 25 on the
 retail-compatible Win32 lane, for **100% ABI capability completion**. The final
 entry, `FNQL_STEAM_CAP_RETAIL_JSON`, is architecture-gated: Windows x64 and
 portable builds keep it clear and return an explicit unsupported result while
@@ -443,6 +455,11 @@ when `com_steamIntegration=0`, demonstrating that the no-Steam path reaches the
 remote authorization boundary without FnQL fabricating or locally rejecting a
 session.
 
+Provider 0.3.1 retains that validated service implementation; its release
+change is the static MSVC runtime and the explicit binary-only distribution
+policy. The dated live evidence remains attributed to the exact 0.3.0 binary
+that was exercised rather than being silently relabelled.
+
 The target retail `steam_api.dll` does not export the later Web API auth-ticket
 entry point. FnQL therefore does not advertise or synthesize that capability;
 session tickets remain the supported retail authentication contract. Likewise,
@@ -453,7 +470,7 @@ are deliberately not substituted into the active integer update lane.
 Retail qagame passes report/event data as an opaque `Json::Value` owned by its
 VC10/JsonCpp runtime. The executable and qagame import `MSVCP100`/`MSVCR100`,
 and the committed retail corpus shows a 16-byte tagged value backed by a
-16-byte VC10 tree object with 48-byte nodes. Provider 0.3.0 independently
+16-byte VC10 tree object with 48-byte nodes. Provider 0.3.1 independently
 implements a read-only Win32 view of that observed layout instead of compiling
 against or invoking the foreign C++ ABI. It copies input through checked
 process-memory reads, validates every tag, pointer, tree relation, node count,

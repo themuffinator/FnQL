@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 
@@ -8,6 +9,31 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class SteamProviderSourceTests(unittest.TestCase):
+    def test_release_policy_distributes_only_the_pinned_closed_provider_binary(self) -> None:
+        manifest = json.loads(
+            (ROOT / "version" / "fnql_steam_provider.json").read_text(encoding="utf-8")
+        )
+        workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+        policy = (ROOT / "docs" / "fnql" / "STEAM_PROVIDER.md").read_text(
+            encoding="utf-8"
+        )
+        notice = (
+            ROOT / "docs" / "fnql" / "STEAM_PROVIDER_BINARY_NOTICE.txt"
+        ).read_text(encoding="utf-8")
+
+        self.assertEqual(manifest["version"], "0.3.1")
+        self.assertEqual(manifest["asset"], "fnql_steam.dll")
+        self.assertEqual(manifest["pe_machine"], "i386")
+        self.assertEqual(len(manifest["sha256"]), 64)
+        self.assertEqual(workflow.count("fetch_steam_provider.py"), 2)
+        self.assertNotIn("FnQL-Steam.git", workflow)
+        self.assertIn("must remain private", policy)
+        self.assertIn("Provider source is not fetched or published", policy)
+        self.assertIn("source remains proprietary", notice)
+        self.assertIn("does not include Valve's steam_api.dll", notice)
+
     def test_public_contract_is_versioned_bounded_and_c_compatible(self) -> None:
         source = (ROOT / "code/platform/fnql_steam_api.h").read_text(encoding="utf-8")
         self.assertIn("#define FNQL_STEAM_ABI_VERSION 0x00010000u", source)
@@ -284,7 +310,7 @@ class SteamProviderSourceTests(unittest.TestCase):
         self.assertIn("CL_Steam_GetCurrentServerP2PIdentity", client)
         self.assertIn("serverId != event->subject_id", client)
         self.assertIn("CL_IsVoiceSenderMuted", client)
-        self.assertIn("S_RawSamples", client)
+        self.assertIn("S_AddVoiceSamples", client)
         self.assertIn("FNQL_Steam_SetLocalVoiceSpeaking", client)
         self.assertIn("QZ_Uncompress", client)
         self.assertIn('"game.stats.report"', client)

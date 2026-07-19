@@ -71,8 +71,9 @@ Steamworks work are maintained in
 The browser-neutral runtime boundary, external-runtime policy, Windows-x86
 default, and deterministic fallback on unsupported targets are detailed in
 [`WEBUI_BACKEND.md`](./WEBUI_BACKEND.md).
-The closed-source sibling Steam implementation and FnQL's open ABI/loader
-boundary are documented in [`STEAM_PROVIDER.md`](./STEAM_PROVIDER.md).
+The closed-source sibling Steam implementation, compiled-binary release policy,
+and FnQL's open ABI/loader boundary are documented in
+[`STEAM_PROVIDER.md`](./STEAM_PROVIDER.md).
 Retail mouse math, UTF-8 character dispatch, the legacy WinMM joystick profile,
 and the preserved FnQ3/SDL3 input paths are recorded in
 [`INPUT_COMPATIBILITY.md`](./INPUT_COMPATIBILITY.md).
@@ -196,6 +197,13 @@ Expected behavior:
 - release artifacts are 32-bit x86 only on Windows (MSYS2 and MSVC) and Linux,
   matching the retail Quake Live native-module and Awesomium ABI; 64-bit and
   ARM builds remain developer/verification targets outside the release flow
+- both Windows packages fetch the provider version pinned in
+  `version/fnql_steam_provider.json`, verify its SHA-256 and PE i386 identity,
+  and include only `fnql_steam.dll`; provider source and Valve's
+  `steam_api.dll` remain excluded
+- MinGW release links its compiler, C++ and bundled compression runtimes
+  statically, while MSVC uses its static runtime; a PE import audit rejects
+  known unshipped compiler/runtime DLL dependencies before artifact upload
 - `scripts/release.py` rejects artifact-directory/file architecture markers
   for 64-bit targets and verifies recognized PE, ELF, and Mach-O headers before
   an archive is emitted, so a mislabeled 64-bit binary fails packaging

@@ -1,0 +1,8 @@
+{
+  "version": "0.3.1",
+  "tag": "fnql-steam-0.3.1",
+  "asset": "fnql_steam.dll",
+  "url": "https://github.com/themuffinator/FnQL/releases/download/fnql-steam-0.3.1/fnql_steam.dll",
+  "sha256": "d2884e24306e5ab2246180923374d2c3a8ef5a52c7b92f0e4471e97f69c2de5a",
+  "pe_machine": "i386"
+}

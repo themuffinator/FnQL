@@ -112,6 +112,14 @@ not compile Meson's native test executables. Invoke the helper explicitly with
 `-RunTests` or use Meson directly for tests; use the maintained solution below
 for non-retail architecture work.
 
+Official Windows release archives include the compiled closed-source Win32
+`fnql_steam.dll` provider. Release CI downloads the exact binary pinned in
+`version/fnql_steam_provider.json`, verifies its SHA-256 digest and PE i386
+header, and never downloads provider source or Valve's `steam_api.dll`. Local
+Steam-enabled development continues to build the private `../FnQL-Steam`
+sibling through the `-WithSteam` helper path documented in
+`docs/fnql/STEAM_PROVIDER.md`.
+
 Alternatively, open `code/win32/msvc2017/fnql.sln`. Its single maintained
 project delegates the selected Debug/Release and Win32/x64/ARM64 configuration
 to Meson with strict warnings enabled and all renderer modules selected. Build

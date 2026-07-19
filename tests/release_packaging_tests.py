@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import shutil
 import io
+import hashlib
+import json
+import struct
 import sys
 import tempfile
 import unittest
@@ -12,8 +15,51 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from scripts import release
+from scripts import fetch_steam_provider
 from scripts import root_archive
 from scripts import verify_release_layout
+from scripts import windows_pe
+
+
+def make_pe(*, dll: bool, imports: tuple[str, ...] = ()) -> bytes:
+    binary = bytearray(0x600)
+    pe_offset = 0x80
+    optional_offset = pe_offset + 24
+    optional_size = 224
+    section_offset = optional_offset + optional_size
+    raw_offset = 0x200
+    import_rva = 0x1000 if imports else 0
+    import_size = (len(imports) + 1) * 20 if imports else 0
+
+    binary[0:2] = b"MZ"
+    struct.pack_into("<I", binary, 60, pe_offset)
+    binary[pe_offset : pe_offset + 4] = b"PE\0\0"
+    struct.pack_into(
+        "<HHIIIHH",
+        binary,
+        pe_offset + 4,
+        windows_pe.PE_I386,
+        1,
+        0,
+        0,
+        0,
+        optional_size,
+        0x2102 if dll else 0x0102,
+    )
+    struct.pack_into("<H", binary, optional_offset, 0x10B)
+    struct.pack_into("<I", binary, optional_offset + 92, 16)
+    struct.pack_into("<II", binary, optional_offset + 104, import_rva, import_size)
+    binary[section_offset : section_offset + 8] = b".rdata\0\0"
+    struct.pack_into("<IIII", binary, section_offset + 8, 0x400, 0x1000, 0x400, raw_offset)
+
+    string_offset = raw_offset + 0x200
+    for index, dependency in enumerate(imports):
+        encoded = dependency.encode("ascii") + b"\0"
+        name_rva = 0x1000 + (string_offset - raw_offset)
+        struct.pack_into("<IIIII", binary, raw_offset + index * 20, 0, 0, 0, name_rva, 0)
+        binary[string_offset : string_offset + len(encoded)] = encoded
+        string_offset += len(encoded)
+    return bytes(binary)
 
 
 class ReleasePackagingTests(unittest.TestCase):
@@ -67,6 +113,7 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertIn("README.html", destinations)
         self.assertIn("docs/fnql/TECHNICAL.md", destinations)
         self.assertIn("docs/fnql/RTX_RENDERER.md", destinations)
+        self.assertIn("docs/fnql/STEAM_PROVIDER_BINARY_NOTICE.txt", destinations)
         self.assertIn("docs/GLX.md", destinations)
         self.assertNotIn("docs/fnql/GLX_PROMOTION.md", destinations)
         self.assertNotIn("docs/fnql/GLX_ROLLBACK_PACKAGE.md", destinations)
@@ -228,6 +275,7 @@ class ReleasePackagingTests(unittest.TestCase):
             stage_root = root / "stage"
             stage_root.mkdir()
             (stage_root / "fnql.x86.exe").write_text("binary", encoding="utf-8")
+            (stage_root / "fnql_steam.dll").write_bytes(make_pe(dll=True))
             (stage_root / "missionpack" / "vm").mkdir(parents=True)
             (stage_root / "missionpack" / "vm" / "cgame.qvm").write_text(
                 "mod data",
@@ -287,12 +335,71 @@ class ReleasePackagingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "fnql.x86.exe").write_text("binary", encoding="utf-8")
+            (root / "fnql_steam.dll").write_bytes(make_pe(dll=True))
             for renderer in ("glx", "vk", "rtx"):
                 (root / f"fnql_{renderer}_x86.dll").write_text(
                     renderer, encoding="utf-8"
                 )
 
             release.validate_stage_tree(root)
+
+    def test_windows_release_requires_the_closed_provider_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "fnql.exe").write_text("binary", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "missing fnql_steam.dll"):
+                release.validate_stage_tree(root)
+
+    def test_windows_release_forbids_valve_redistributable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "fnql.exe").write_text("binary", encoding="utf-8")
+            (root / "fnql_steam.dll").write_bytes(make_pe(dll=True))
+            (root / "steam_api.dll").write_bytes(make_pe(dll=True))
+
+            with self.assertRaisesRegex(ValueError, "must not redistribute"):
+                release.validate_stage_tree(root)
+
+    def test_windows_release_rejects_unshipped_compiler_runtime_imports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "fnql.exe").write_bytes(
+                make_pe(dll=False, imports=("KERNEL32.dll", "libgcc_s_dw2-1.dll"))
+            )
+            (root / "fnql_steam.dll").write_bytes(make_pe(dll=True))
+
+            with self.assertRaisesRegex(ValueError, "unshipped Windows runtime DLLs"):
+                release.validate_stage_tree(root)
+
+    def test_pinned_provider_stager_checks_digest_and_i386_dll_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "provider.dll"
+            output = root / "out" / "fnql_steam.dll"
+            manifest = root / "provider.json"
+            provider = make_pe(dll=True, imports=("KERNEL32.dll",))
+            source.write_bytes(provider)
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "version": "test",
+                        "tag": "test",
+                        "asset": "fnql_steam.dll",
+                        "url": "https://invalid.example/fnql_steam.dll",
+                        "sha256": hashlib.sha256(provider).hexdigest(),
+                        "pe_machine": "i386",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            digest = fetch_steam_provider.stage_provider(
+                output, manifest_path=manifest, source=source
+            )
+
+            self.assertEqual(digest, hashlib.sha256(provider).hexdigest())
+            self.assertEqual(output.read_bytes(), provider)
 
     def test_copy_release_artifact_contents_rejects_symlinks(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -379,6 +486,12 @@ class ReleasePackagingTests(unittest.TestCase):
             3,
         )
         self.assertEqual(workflow.count("--skip-subprojects"), 2)
+        self.assertEqual(workflow.count("fetch_steam_provider.py --output bin/fnql_steam.dll"), 2)
+        self.assertEqual(workflow.count("check_windows_runtime_deps.py --require-pe bin"), 2)
+        self.assertIn("-Dc_link_args=-static", workflow)
+        self.assertIn("-Dcpp_link_args=-static", workflow)
+        self.assertIn("-Dzlib:default_library=static", workflow)
+        self.assertIn("-Db_vscrt=static_from_buildtype", workflow)
         self.assertNotIn("verify_release_layout.py bin\n", workflow)
         self.assertNotIn("FNQ3_", workflow)
         self.assertNotIn("docs/fnquake3/", workflow)

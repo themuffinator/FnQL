@@ -84,9 +84,10 @@ class QLFontSourceTests(unittest.TestCase):
         self.assertIn("ADD_COMPILE_DEFINITIONS(BUILD_FONTSTASH)", cmake)
         self.assertIn("PRIVATE USE_RENDERER_DLOPEN RENDERER_VULKAN", cmake)
         self.assertIn("subprojects/fontstash/src", cmake)
-        self.assertGreaterEqual(
-            release.count("meson subprojects download fontstash"), 3
-        )
+        # Make needs an explicit prefetch in the Linux job. Both Windows jobs
+        # use Meson, which resolves the pinned fallback during setup.
+        self.assertEqual(release.count("meson subprojects download fontstash"), 1)
+        self.assertEqual(release.count("meson setup"), 2)
 
     def test_host_text_service_is_exported_by_every_renderer(self) -> None:
         public = read("code/renderercommon/tr_public.h")

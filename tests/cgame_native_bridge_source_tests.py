@@ -668,7 +668,7 @@ class CGameNativeBridgeSourceTests(unittest.TestCase):
         self.assertIn("world_.StartSound( entnum, entchannel, sfxHandle, sample, origin, volume );", openal_backend)
         self.assertIn("float volumeScale = 1.0f;", openal_world)
         self.assertIn("voice->volumeScale = ClampFloat( volume, 0.0f, 2.0f );", openal_world)
-        self.assertIn("gain = ClampFloat( gain * gainScale * voice.volumeScale, 0.0f, 2.0f );", openal_world)
+        self.assertIn("gain = ClampFloat( gain * gainScale * horizonGain * voice.volumeScale, 0.0f, 2.0f );", openal_world)
         self.assertIn("S_StartSoundVolume( origin, entityNum, entchannel, sfx, volume );", cl_cgame)
         self.assertIn("S_StartLocalSoundVolume( sfx, channelNum, volume );", cl_cgame)
 

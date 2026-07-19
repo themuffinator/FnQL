@@ -85,9 +85,13 @@ Use QLSRP before making compatibility claims:
 4. Reconstruct the engine-side compatibility needed by retail Quake Live.
 5. Validate against a legitimate Steam install of Quake Live.
 
-Optional live Steam services are developed through the separately versioned,
-closed-source `FnQL-Steam` sibling. FnQL contains only the open provider ABI and
-a default-off runtime loader; see
+Optional live Steam services are implemented by the separately versioned,
+closed-source `FnQL-Steam` provider. FnQL contains only the open provider ABI
+and loader source. Official Windows releases include the compiled Win32
+provider binary, pinned by version and SHA-256; provider source and Valve's
+`steam_api.dll` are not distributed. Steam integration is enabled by default
+and falls back safely when the provider or legitimate retail Steam API is
+unavailable; see
 [`docs/fnql/STEAM_PROVIDER.md`](docs/fnql/STEAM_PROVIDER.md) for the build,
 staging, security, and compatibility contract.
 

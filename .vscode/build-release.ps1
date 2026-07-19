@@ -329,6 +329,7 @@ $setupArgs = @(
 	'setup',
 	$buildPath,
 	"--buildtype=$buildType",
+	'-Db_vscrt=static_from_buildtype',
 	'-Dstrict-warnings=true',
 	'-Drenderer-dlopen=true',
 	"-Drenderers=$rendererCsv",

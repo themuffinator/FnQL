@@ -1,0 +1,12 @@
+FnQL Steam provider binary distribution notice
+
+Copyright (C) 2026. All rights reserved.
+
+Official compiled Win32 fnql_steam.dll binaries may be publicly distributed
+in binary-only provider releases and bundled with official FnQL Windows
+releases. FnQL-Steam source remains proprietary and may not be redistributed.
+
+This binary does not include Valve's steam_api.dll, Steamworks SDK files,
+retail Quake Live assets, credentials, tickets, or user data. It loads the
+steam_api.dll from the user's legitimate retail Quake Live installation at
+runtime.
