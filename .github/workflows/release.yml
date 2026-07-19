@@ -48,24 +48,15 @@ jobs:
 
   windows-msys32:
     needs: [prepare]
-    name: Build Windows-msys32 ${{ matrix.arch }}
+    name: Build Windows-MSYS2 x86
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [x86, x86_64]
-        include:
-          - arch: x86
-            msystem: MINGW32
-          - arch: x86_64
-            msystem: MINGW64
     steps:
       - name: Checkout current repo
         uses: actions/checkout@v6
 
       - uses: msys2/setup-msys2@v2
         with:
-          msystem: ${{ matrix.msystem }}
+          msystem: MINGW32
           update: true
           install: git
           pacboy: >-
@@ -81,7 +72,7 @@ jobs:
         shell: msys2 {0}
         run: |
           mkdir -p bin
-          meson setup meson/build-${{ matrix.arch }} \
+          meson setup meson/build-x86 \
             --buildtype=release \
             --prefix "$PWD/bin" \
             -Dcurl=enabled \
@@ -93,8 +84,8 @@ jobs:
             -Daudio-tests=false \
             -Dglx-tests=false \
             -Dlibjpeg-turbo:simd=disabled
-          meson compile -C meson/build-${{ matrix.arch }}
-          meson install -C meson/build-${{ matrix.arch }} --no-rebuild
+          meson compile -C meson/build-x86
+          meson install -C meson/build-x86 --no-rebuild
 
       - name: Verify release layout
         shell: msys2 {0}
@@ -102,31 +93,15 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: windows-mingw-${{ matrix.arch }}
+          name: windows-mingw-x86
           path: bin
           if-no-files-found: error
           retention-days: 5
 
   windows-msvc:
     needs: [prepare]
-    name: Build Windows-MSVC ${{ matrix.arch }}
+    name: Build Windows-MSVC x86
     runs-on: windows-2022
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [arm64, x86, x64]
-        include:
-          - arch: arm64
-            vs_arch: arm64
-            pkg_suffix: arm64
-
-          - arch: x86
-            vs_arch: x86
-            pkg_suffix: x86
-
-          - arch: x64
-            vs_arch: x64
-            pkg_suffix: x86_64
     steps:
       - uses: microsoft/setup-msbuild@v3
 
@@ -146,132 +121,49 @@ jobs:
           if not exist bin mkdir bin
 
           for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
-          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=${{ matrix.vs_arch }} -host_arch=x64 || exit /b
-          if /I "${{ matrix.arch }}"=="arm64" (
-            meson setup meson\build-${{ matrix.arch }} --cross-file scripts\windows-arm64-cross.ini --buildtype=release --prefix "%CD%\bin" -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=glx,vk,rtx -Drenderer-default=glx -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
-          ) else (
-            meson setup meson\build-${{ matrix.arch }} --buildtype=release --prefix "%CD%\bin" -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=glx,vk,rtx -Drenderer-default=glx -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
-          )
-          meson compile -C meson\build-${{ matrix.arch }} || exit /b
-          meson install -C meson\build-${{ matrix.arch }} --no-rebuild || exit /b
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x86 -host_arch=x64 || exit /b
+          meson setup meson\build-x86 --buildtype=release --prefix "%CD%\bin" -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=glx,vk,rtx -Drenderer-default=glx -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
+          meson compile -C meson\build-x86 || exit /b
+          meson install -C meson\build-x86 --no-rebuild || exit /b
 
       - name: Verify release layout
         run: python scripts/verify_release_layout.py bin
 
       - uses: actions/upload-artifact@v7
         with:
-          name: windows-msvc-${{ matrix.pkg_suffix }}
+          name: windows-msvc-x86
           path: bin
           if-no-files-found: error
           retention-days: 5
 
-  meson-validation:
+  source-validation:
     needs: [prepare]
-    name: Meson build validation
-    runs-on: ubuntu-24.04
+    name: Release source validation
+    runs-on: ubuntu-latest
     steps:
-      - name: Install tools
-        run: |
-          sudo apt-get -qq update
-          sudo apt-get -y install meson ninja-build gcc g++ libcurl4-openssl-dev libjpeg-dev libogg-dev libvorbis-dev mesa-common-dev libx11-dev libxext-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev libasound2-dev libopenal-dev
-
       - uses: actions/checkout@v6
-        with:
-          submodules: recursive
 
-      - name: Stamp release build version
-        run: python scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
-
-      - name: Configure Meson build
+      - name: Check release and WebUI source contracts
         run: |
-          meson setup meson/build \
-            --buildtype=release \
-            -Dsdl=disabled \
-            -Dcurl=disabled \
-            -Drenderer-dlopen=true \
-            -Drenderers=glx,vk,rtx \
-            -Drenderer-default=glx
-
-      - name: Build Meson targets
-        run: meson compile -C meson/build
-
-      - name: Run Meson tests
-        run: meson test -C meson/build --print-errorlogs
+          python tests/release_packaging_tests.py
+          python tests/webui_wiring_tests.py
+          python tests/webui_backend_source_tests.py
+          python tests/client_cvar_compat_source_tests.py
 
   ubuntu-x86:
     needs: [prepare]
-    name: Build Ubuntu ${{ matrix.arch }}
+    name: Build Ubuntu x86
     runs-on: ubuntu-24.04
     container:
       image: ubuntu:20.04
       env:
         DEBIAN_FRONTEND: noninteractive
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [x86, x86_64]
-        include:
-          - arch: x86
-            rule: install
-            use_sdl: USE_SDL=0
-
-          - arch: x86_64
-            rule: install
-            use_sdl: USE_SDL=0
     steps:
       - name: Install tools
         run: |
-          if [ "${{ matrix.arch }}" = "x86" ]; then
-            dpkg --add-architecture i386
-            apt-get -qq update
-            apt-get -y install git make python3 python3-pip binutils gcc-multilib g++-multilib libcurl4-openssl-dev:i386 libjpeg-dev:i386 libogg-dev:i386 libvorbis-dev:i386 mesa-common-dev:i386 libxxf86dga-dev:i386 libxrandr-dev:i386 libxxf86vm-dev:i386 libasound2-dev:i386 libopenal-dev:i386
-          else
-            apt-get -qq update
-            apt-get -y install git make python3 python3-pip binutils gcc g++ libcurl4-openssl-dev libjpeg-dev libogg-dev libvorbis-dev mesa-common-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev libasound2-dev libopenal-dev
-          fi
-          python3 -m pip install meson==1.9.1
-
-      - uses: actions/checkout@v6
-        with:
-          submodules: recursive
-
-      - name: Fetch pinned FontStash source
-        run: meson subprojects download fontstash
-
-      - name: Stamp release build version
-        run: python3 scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
-
-      - name: Build
-        run: |
-          make ${{ matrix.rule }} -j$(nproc) ARCH=${{ matrix.arch }} COMPILE_ARCH=${{ matrix.arch }} CC=gcc DESTDIR=bin ${{ matrix.use_sdl }} USE_RENDERER_DLOPEN=1 USE_GLX=1 USE_VK=1 USE_RTX=1
-
-      - name: Check glibc baseline
-        run: python3 scripts/check_elf_glibc.py --max-glibc "$FNQ3_LINUX_GLIBC_MAX" --require-elf bin
-
-      - name: Verify release layout
-        run: python3 scripts/verify_release_layout.py bin
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: linux-${{ matrix.arch }}
-          path: bin
-          if-no-files-found: error
-          retention-days: 5
-
-  ubuntu-arm64:
-    needs: [prepare]
-    name: Build Ubuntu arm64
-    runs-on: ubuntu-22.04-arm
-    container:
-      image: ubuntu:20.04
-      env:
-        DEBIAN_FRONTEND: noninteractive
-    steps:
-      - name: Install tools
-        run: |
+          dpkg --add-architecture i386
           apt-get -qq update
-          apt-get install -y git make python3 python3-pip binutils gcc g++
-          apt-get -y install libcurl4-openssl-dev libjpeg-dev libogg-dev libvorbis-dev mesa-common-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev libasound2-dev libopenal-dev
+          apt-get -y install git make python3 python3-pip binutils gcc-multilib g++-multilib libcurl4-openssl-dev:i386 libjpeg-dev:i386 libogg-dev:i386 libvorbis-dev:i386 mesa-common-dev:i386 libxxf86dga-dev:i386 libxrandr-dev:i386 libxxf86vm-dev:i386 libasound2-dev:i386 libopenal-dev:i386
           python3 -m pip install meson==1.9.1
 
       - uses: actions/checkout@v6
@@ -286,7 +178,7 @@ jobs:
 
       - name: Build
         run: |
-          make install -j$(nproc) ARCH=aarch64 COMPILE_ARCH=aarch64 CC=gcc DESTDIR=bin USE_SDL=0 USE_RENDERER_DLOPEN=1 USE_GLX=1 USE_VK=1 USE_RTX=1
+          make install -j$(nproc) ARCH=x86 COMPILE_ARCH=x86 CC=gcc DESTDIR=bin USE_SDL=0 USE_RENDERER_DLOPEN=1 USE_GLX=1 USE_VK=1 USE_RTX=1
 
       - name: Check glibc baseline
         run: python3 scripts/check_elf_glibc.py --max-glibc "$FNQ3_LINUX_GLIBC_MAX" --require-elf bin
@@ -296,73 +188,14 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: linux-arm64
-          path: bin
-          if-no-files-found: error
-          retention-days: 5
-
-  macos-x86:
-    needs: [prepare]
-    name: Build macOS ${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64
-            runner: macos-15-intel
-
-          - arch: aarch64
-            runner: macos-14
-    steps:
-      - name: Install tools
-        run: |
-          for pkg in coreutils jpeg libogg libvorbis make meson openal-soft pkg-config sdl3; do
-            brew list --versions "$pkg" >/dev/null 2>&1 || brew install "$pkg"
-          done
-
-      - uses: actions/checkout@v6
-        with:
-          submodules: recursive
-
-      - name: Fetch pinned FontStash source
-        run: meson subprojects download fontstash
-
-      - name: Stamp release build version
-        run: python3 scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
-
-      - name: Build
-        run: |
-          BREW_PREFIX="$(brew --prefix)"
-          export PKG_CONFIG_PATH="${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/share/pkgconfig${PKG_CONFIG_PATH:+:${PKG_CONFIG_PATH}}"
-          OPENAL_CFLAGS="$(pkg-config --cflags openal 2>/dev/null || true)"
-          if [ -z "${OPENAL_CFLAGS}" ]; then
-            OPENAL_CFLAGS="-I$(brew --prefix openal-soft)/include"
-          fi
-          OPENAL_CFLAGS="${OPENAL_CFLAGS}" \
-          SDL_INCLUDE="$(pkg-config --cflags-only-I sdl3)" \
-          SDL_LIBS="$(pkg-config --libs sdl3)" \
-          JPEG_CFLAGS="$(pkg-config --cflags libjpeg)" \
-          JPEG_LIBS="$(pkg-config --libs libjpeg)" \
-          OGG_CFLAGS="$(pkg-config --cflags ogg)" \
-          OGG_LIBS="$(pkg-config --libs ogg)" \
-          VORBIS_CFLAGS="$(pkg-config --cflags vorbisfile)" \
-          VORBIS_LIBS="$(pkg-config --libs vorbisfile)" \
-            gmake install -j$(sysctl -n hw.logicalcpu) ARCH=${{ matrix.arch }} CC=clang DESTDIR=bin INSTALL=ginstall USE_LOCAL_HEADERS=0 USE_SYSTEM_JPEG=1 USE_SYSTEM_OGG=1 USE_SYSTEM_VORBIS=1 USE_RENDERER_DLOPEN=1 USE_GLX=1 USE_VK=1 USE_RTX=1 STRIP=echo
-
-      - name: Verify release layout
-        run: python3 scripts/verify_release_layout.py bin
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: macos-${{ matrix.arch }}
+          name: linux-x86
           path: bin
           if-no-files-found: error
           retention-days: 5
 
   push-build-validation:
     if: github.event_name == 'push' && always()
-    needs: [prepare, windows-msys32, windows-msvc, meson-validation, ubuntu-x86, ubuntu-arm64, macos-x86]
+    needs: [prepare, windows-msys32, windows-msvc, source-validation, ubuntu-x86]
     runs-on: ubuntu-latest
     steps:
       - name: Check platform build results
@@ -391,7 +224,7 @@ jobs:
 
   publish:
     if: github.event_name == 'workflow_dispatch'
-    needs: [prepare, windows-msys32, windows-msvc, meson-validation, ubuntu-x86, ubuntu-arm64, macos-x86]
+    needs: [prepare, windows-msys32, windows-msvc, source-validation, ubuntu-x86]
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
-	[ValidateSet('x64', 'Win32', 'ARM64')]
-	[string]$Platform = 'x64',
+	[ValidateSet('Win32')]
+	[string]$Platform = 'Win32',
 
 	[ValidateSet('glx', 'vk', 'rtx')]
 	[string]$Renderer = 'glx',
@@ -9,18 +9,16 @@ param(
 	[ValidateSet('client', 'dedicated')]
 	[string]$Target = 'client',
 
-	[string]$BuildDir = $(if ($env:FNQL_MESON_BUILD_DIR) { $env:FNQL_MESON_BUILD_DIR } elseif ($env:FNQ3_MESON_BUILD_DIR) { $env:FNQ3_MESON_BUILD_DIR } else { 'meson\build' })
+	[string]$BuildDir = $(if ($env:FNQL_MESON_BUILD_DIR) { $env:FNQL_MESON_BUILD_DIR } elseif ($env:FNQ3_MESON_BUILD_DIR) { $env:FNQ3_MESON_BUILD_DIR } else { 'meson\build\win32' })
 )
 
 $ErrorActionPreference = 'Stop'
 
 function Get-BinarySuffix {
-	switch ($Platform) {
-		'Win32' { return '' }
-		'x64' { return '.x64' }
-		'ARM64' { return '.arm64' }
-		default { throw "Unsupported platform: $Platform" }
+	if ($Platform -ne 'Win32') {
+		throw "The VS Code launch helper supports only the retail-compatible Win32 target."
 	}
+	return ''
 }
 
 $workspaceRoot = Split-Path -Parent $PSScriptRoot

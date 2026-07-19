@@ -54,6 +54,7 @@ engine owner.
 | Contract | FnQL behavior |
 |---|---|
 | Console chat | `cl_allowConsoleChat` owns the retail bare-console-chat gate. Existing `con_autoSay` and raw-chat handling remain supported. |
+| Console notifications | Retail registers no `con_notifytime`; `Con_DrawNotify` renders only the live chat-entry strip and never overlays general console print. The retained `con.times` / `[skipnotify]` bookkeeping remains intact because it is still present in the retail print pipeline. |
 | Time nudge | `cl_timeNudge` uses the retail `[-20, 0]` bound; `cl_autoTimeNudge` applies the spectator/local-server gates and retained negative half-ping selection. |
 | Demo capture | `cl_avidemo`, its latch, minimum time, and maximum time drive deterministic silent screenshot capture and fixed frame timing. This stays separate from FnQL's AVI/video-pipe recorder. |
 | Demo lifecycle | `cl_quitOnDemoCompleted` queues a clean quit after the next-demo action; `cl_freezeDemo` behavior remains intact. |

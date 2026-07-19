@@ -546,6 +546,23 @@ class CGameNativeBridgeSourceTests(unittest.TestCase):
         self.assertIn("Con_WriteTimestampPrefix( skipnotify, colorIndex );", cl_console)
         self.assertIn("if ( con.newline )", cl_console)
 
+    def test_console_notify_draw_matches_retail_chat_only_owner(self) -> None:
+        cl_console = read_repo_file("code/client/cl_console.cpp")
+        notify = cl_console[
+            cl_console.index("static void Con_DrawNotify( void )") :
+            cl_console.index("static void Con_DrawSolidConsole")
+        ]
+
+        self.assertNotIn('Cvar_Get( "con_notifytime"', cl_console)
+        self.assertNotIn("*con_notifytime", cl_console)
+        self.assertNotIn("con_notifytime->", cl_console)
+        self.assertNotIn("con.times[", notify)
+        self.assertNotIn("Con_DrawConsoleLineText", notify)
+        self.assertIn("KEYCATCH_MESSAGE", notify)
+        self.assertIn("Con_GetChatFieldY()", notify)
+        self.assertIn("Con_GetChatFieldPixelWidth()", notify)
+        self.assertIn("Con_DrawInputText( &chatField", notify)
+
     def test_recovered_cgame_exports_have_client_helpers(self) -> None:
         client_h = read_repo_file("code/client/client.h")
         cl_cgame = read_repo_file("code/client/cl_cgame.cpp")

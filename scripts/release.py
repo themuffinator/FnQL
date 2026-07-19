@@ -64,6 +64,10 @@ RENDERER_MODULE_RE = re.compile(
     r"(?:^|/)fnql_(?P<renderer>[a-z0-9]+)_[^/]+\.(?:dll|so|dylib)$",
     re.IGNORECASE,
 )
+FORBIDDEN_RELEASE_ARCH_RE = re.compile(
+    r"(?<![a-z0-9])(?:x86[_-]?64|x64|amd64|arm64|aarch64|mingw64)(?![a-z0-9])",
+    re.IGNORECASE,
+)
 
 GLX_RELEASE_EVIDENCE_DOCS = {
     "visualDossier": {
@@ -268,6 +272,67 @@ def validate_renderer_module_names(names: list[str]) -> None:
         )
 
 
+def validate_release_architecture_names(names: list[str]) -> None:
+    offenders = [
+        name
+        for name in names
+        if FORBIDDEN_RELEASE_ARCH_RE.search(name.replace("\\", "/"))
+    ]
+    if offenders:
+        raise ValueError(
+            "release artifacts are 32-bit x86 only; found a 64-bit architecture marker: "
+            + ", ".join(offenders[:12])
+        )
+
+
+def validate_release_binary_stream(name: str, handle: object) -> None:
+    header = handle.read(64)
+    if header.startswith(b"MZ") and len(header) >= 64:
+        pe_offset = int.from_bytes(header[60:64], "little")
+        handle.seek(pe_offset)
+        pe_header = handle.read(6)
+        if pe_header.startswith(b"PE\0\0"):
+            machine = int.from_bytes(pe_header[4:6], "little")
+            if machine != 0x014C:
+                raise ValueError(
+                    f"release artifacts are 32-bit x86 only; {name} has PE machine 0x{machine:04x}"
+                )
+        return
+
+    if header.startswith(b"\x7fELF") and len(header) >= 20:
+        elf_class = header[4]
+        byte_order = "little" if header[5] == 1 else "big"
+        machine = int.from_bytes(header[18:20], byte_order)
+        if elf_class != 1 or machine != 3:
+            raise ValueError(
+                f"release artifacts are 32-bit x86 only; {name} has ELF class {elf_class} "
+                f"and machine {machine}"
+            )
+        return
+
+    macho_magic = header[:4]
+    if macho_magic in (b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf"):
+        raise ValueError(
+            f"release artifacts are 32-bit x86 only; {name} is a 64-bit Mach-O binary"
+        )
+    if macho_magic in (
+        b"\xca\xfe\xba\xbe",
+        b"\xbe\xba\xfe\xca",
+        b"\xca\xfe\xba\xbf",
+        b"\xbf\xba\xfe\xca",
+    ):
+        raise ValueError(
+            f"release artifacts are 32-bit x86 only; {name} is a universal Mach-O binary"
+        )
+    if macho_magic in (b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xce") and len(header) >= 8:
+        byte_order = "little" if macho_magic == b"\xce\xfa\xed\xfe" else "big"
+        cpu_type = int.from_bytes(header[4:8], byte_order)
+        if cpu_type != 7:
+            raise ValueError(
+                f"release artifacts are 32-bit x86 only; {name} has Mach-O CPU type {cpu_type}"
+            )
+
+
 def validate_release_archive_contents(archive_path: Path) -> None:
     with zipfile.ZipFile(archive_path) as archive:
         archived_names = [
@@ -276,7 +341,13 @@ def validate_release_archive_contents(archive_path: Path) -> None:
             if not info.is_dir()
         ]
         validate_archive_member_names(archived_names, archive_name=archive_path.name)
+        validate_release_architecture_names(archived_names)
         validate_renderer_module_names(archived_names)
+        for info in archive.infolist():
+            if info.is_dir():
+                continue
+            with archive.open(info) as member:
+                validate_release_binary_stream(info.filename, member)
         archived_name_set = set(archived_names)
         missing_release_entries = [
             name
@@ -316,7 +387,11 @@ def validate_stage_tree(stage_root: Path) -> None:
             "release package contains filtered build byproducts: "
             + ", ".join(offenders[:12])
         )
+    validate_release_architecture_names(staged_names)
     validate_renderer_module_names(staged_names)
+    for relative_name in staged_names:
+        with (stage_root / Path(relative_name)).open("rb") as handle:
+            validate_release_binary_stream(relative_name, handle)
 
 
 def release_artifact_dirs(artifact_root: Path) -> list[Path]:
@@ -328,6 +403,7 @@ def release_artifact_dirs(artifact_root: Path) -> list[Path]:
     artifact_dirs = sorted(path for path in artifact_root.iterdir() if path.is_dir())
     if not artifact_dirs:
         raise ValueError(f"Artifact root does not contain any artifact directories: {artifact_root}")
+    validate_release_architecture_names([path.name for path in artifact_dirs])
     return artifact_dirs
 
 

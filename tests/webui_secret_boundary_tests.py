@@ -20,7 +20,13 @@ class WebUiSecretBoundaryTests(unittest.TestCase):
             publish.index("var->flags & CVAR_PRIVATE"),
             publish.index("CL_WebView_PublishCvarChange"),
         )
-        self.assertGreaterEqual(webui.count("Cvar_Flags( name ) & CVAR_PRIVATE"), 4)
+        config_snapshot = webui[
+            webui.index("static qboolean CL_WebHost_AppendConfigCvar") : webui.index(
+                "static void CL_WebHost_BuildConfigCvarJson"
+            )
+        ]
+        self.assertIn("flags & CVAR_PRIVATE", config_snapshot)
+        self.assertGreaterEqual(webui.count("Cvar_Flags( name ) & CVAR_PRIVATE"), 3)
         self.assertGreaterEqual(
             webui.count("Cvar_Flags( name ) & ( CVAR_PRIVATE | CVAR_PROTECTED )"),
             2,

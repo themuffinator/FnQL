@@ -38,6 +38,26 @@ user's legitimate Steam installation; they are not inferred from QLSRP:
 - A Vulkan `vid_restart` rebuilt the renderer while retaining the browser
   document and reproduced the identical full-menu screenshot without an engine
   or Awesomium diagnostic.
+- A 2026-07-19 windowed GLx quit probe under a first/second-chance exception
+  tracer reproduced an `0xC0000005` access violation after the adapter released
+  its WebSession before WebCore shutdown. Retail static evidence shows only
+  WebView destruction followed by `WebCore::Shutdown`; assigning session
+  ownership to WebCore produced a clean traced exit with code `0` and no access
+  violation.
+- The packaged retail top-right power control sends
+  `qz_instance.SendGameCommand("quit")`. Native JavaScript requests are drained
+  while the document is loading so that command cannot be stranded during the
+  preload-to-retail-page handoff; heavier snapshot and live-event work remains
+  loading-gated.
+- The packaged retail Start Match component takes a synchronous copy of
+  `GetConfig().cvars` when it mounts. Its four numeric range rows parse missing
+  values into `NaN`; the package identifies those rows as
+  `sv_maxclients`, `bot_minplayers`, `teamsize`, and
+  `sv_warmupReadyPercentage`.
+- A 2026-07-19 windowed 1280x720 GLx probe displayed those four rows as `8`,
+  `0`, `0`, and `0.51`. Sending the same `map campgrounds ffa` command used by
+  the Launch Match button then reached the retail cgame Join Match view with no
+  WebUI connection/loading document composited over it.
 - Starting the legacy DataPak loader after Vulkan initialization made the same
   verified absolute `web.pak` path fail with `DataPak.cc(102)` in the 32-bit
   process. Starting WebCore and the DataPak source during the existing
@@ -133,6 +153,14 @@ Awesomium navigation-stop command, and aborting an in-flight `index.html`
 load can leave Chromium's `chrome://chromewebdata/` error document active.
 Bridge retries use a private lightweight qz synchronizer rather than calling a
 page-owned `main_hook_v2` repeatedly after startup.
+
+The initial qz snapshot includes the complete retail Start Match setting set.
+Existing engine values win; defaults are supplied only for module-owned cvars
+that do not exist before qagame loads, so the client does not steal their
+registration or flag ownership. Local map loads use a non-menu disconnect and
+keep the earlier browser pause/unfocus in force through connection, loading,
+and active play. Terminal disconnects still resume the retained document and
+restore WebUI input, with the native menu as fallback.
 
 The renderer API owns a dedicated bounded RGBA WebUI image and shader in
 OpenGL, OpenGL2, GLx, and Vulkan. It does not consume cinematic handles or

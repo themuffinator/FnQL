@@ -44,28 +44,6 @@
       "preLaunchTask": "meson: build (Steam)",
       "stopAtEntry": false,
       "console": "internalConsole"
-    },
-    {
-      "name": "GLx (Steam / x64 engine-only)",
-      "type": "cppvsdbg",
-      "request": "launch",
-      "program": "${workspaceFolder}\\meson\\build\\fnql.x64.exe",
-      "args": ["+set", "r_fullscreen", "0", "+set", "cl_renderer", "glx", "+set", "com_steamIntegration", "1"],
-      "cwd": "${workspaceFolder}\\meson\\build",
-      "preLaunchTask": "meson: build x64 (Steam)",
-      "stopAtEntry": false,
-      "console": "internalConsole"
-    },
-    {
-      "name": "Dedicated (Steam / x64 engine-only)",
-      "type": "cppvsdbg",
-      "request": "launch",
-      "program": "${workspaceFolder}\\meson\\build\\fnql.ded.x64.exe",
-      "args": ["+set", "com_steamIntegration", "1"],
-      "cwd": "${workspaceFolder}\\meson\\build",
-      "preLaunchTask": "meson: build x64 (Steam)",
-      "stopAtEntry": false,
-      "console": "internalConsole"
     }
   ]
 }

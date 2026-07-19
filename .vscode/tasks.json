@@ -106,47 +106,6 @@
       ]
     },
     {
-      "label": "meson: build x64 (Steam)",
-      "type": "shell",
-      "command": "powershell",
-      "args": [
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "${workspaceFolder}\\.vscode\\build-release.ps1",
-        "-Platform",
-        "x64",
-        "-BuildDir",
-        "meson\\build",
-        "-Target",
-        "both",
-        "-Renderers",
-        "glx,vk,rtx",
-        "-Archive",
-        "-WithSteam"
-      ],
-      "problemMatcher": [
-        "$gcc",
-        "$msCompile"
-      ]
-    },
-    {
-      "label": "meson: test",
-      "type": "shell",
-      "command": "meson",
-      "args": [
-        "test",
-        "-C",
-        "meson/build/win32",
-        "--print-errorlogs"
-      ],
-      "dependsOn": [
-        "meson: build (Steam)"
-      ],
-      "problemMatcher": []
-    },
-    {
       "label": "Release: Build FnQL Full",
       "dependsOrder": "sequence",
       "dependsOn": [
@@ -155,13 +114,13 @@
       "problemMatcher": []
     },
     {
-      "label": "Release: Runtime Sweep x64 GLx",
+      "label": "Release: Runtime Sweep Win32 GLx",
       "type": "shell",
       "command": "python",
       "args": [
         "${workspaceFolder}\\scripts\\glx_runtime_sweep.py",
         "--exe",
-        "${workspaceFolder}\\meson\\build\\fnql.x64.exe",
+        "${workspaceFolder}\\meson\\build\\win32\\fnql.exe",
         "--renderers",
         "glx,vk",
         "--switch-sequence",
@@ -172,7 +131,7 @@
         "glx-parity"
       ],
       "dependsOn": [
-        "meson: build x64 (Steam)"
+        "meson: build (Steam)"
       ],
       "problemMatcher": []
     }

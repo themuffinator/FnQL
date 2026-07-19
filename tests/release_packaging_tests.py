@@ -23,7 +23,7 @@ class ReleasePackagingTests(unittest.TestCase):
             source = root / "artifact"
             target = root / "stage"
             source.mkdir()
-            (source / "fnql.x86_64").write_text("binary", encoding="utf-8")
+            (source / "fnql.x86").write_text("binary", encoding="utf-8")
             (source / "README.txt").write_text("keep", encoding="utf-8")
             (source / "baseq3" / "maps").mkdir(parents=True)
             (source / "baseq3" / "maps" / "q3dm1.azb").write_bytes(b"zones")
@@ -50,7 +50,7 @@ class ReleasePackagingTests(unittest.TestCase):
             [
                 "README.txt",
                 "baseq3/maps/q3dm1.azb",
-                "fnql.x86_64",
+                "fnql.x86",
                 "missionpack/vm/cgame.qvm",
             ],
         )
@@ -227,7 +227,7 @@ class ReleasePackagingTests(unittest.TestCase):
             root = Path(tmp)
             stage_root = root / "stage"
             stage_root.mkdir()
-            (stage_root / "fnql.x64.exe").write_text("binary", encoding="utf-8")
+            (stage_root / "fnql.x86.exe").write_text("binary", encoding="utf-8")
             (stage_root / "missionpack" / "vm").mkdir(parents=True)
             (stage_root / "missionpack" / "vm" / "cgame.qvm").write_text(
                 "mod data",
@@ -262,7 +262,7 @@ class ReleasePackagingTests(unittest.TestCase):
             root = Path(tmp)
             stage_root = root / "stage"
             stage_root.mkdir()
-            (stage_root / "fnql.x64.exe").write_text("binary", encoding="utf-8")
+            (stage_root / "fnql.x86.exe").write_text("binary", encoding="utf-8")
             release.build_fnql_webpak(stage_root)
             release.build_root_archive(stage_root)
             archive_path = Path(
@@ -275,8 +275,8 @@ class ReleasePackagingTests(unittest.TestCase):
     def test_release_layout_rejects_renderer_modules_outside_public_three(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "fnql.x64.exe").write_text("binary", encoding="utf-8")
-            (root / "fnql_opengl_x86_64.dll").write_text(
+            (root / "fnql.x86.exe").write_text("binary", encoding="utf-8")
+            (root / "fnql_opengl_x86.dll").write_text(
                 "old renderer", encoding="utf-8"
             )
 
@@ -286,9 +286,9 @@ class ReleasePackagingTests(unittest.TestCase):
     def test_release_layout_accepts_the_public_renderer_modules(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "fnql.x64.exe").write_text("binary", encoding="utf-8")
+            (root / "fnql.x86.exe").write_text("binary", encoding="utf-8")
             for renderer in ("glx", "vk", "rtx"):
-                (root / f"fnql_{renderer}_x86_64.dll").write_text(
+                (root / f"fnql_{renderer}_x86.dll").write_text(
                     renderer, encoding="utf-8"
                 )
 
@@ -316,7 +316,7 @@ class ReleasePackagingTests(unittest.TestCase):
             root = Path(tmp)
             source = root / "artifact"
             source.mkdir()
-            (source / "fnql.x64.exe").write_text("binary", encoding="utf-8")
+            (source / "fnql.x86.exe").write_text("binary", encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "inside artifact source"):
                 release.copy_release_artifact_contents(source, source / "stage")
@@ -327,6 +327,57 @@ class ReleasePackagingTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "does not contain any artifact directories"):
                 release.release_artifact_dirs(root)
+
+    def test_release_artifact_dirs_reject_64_bit_architecture_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "windows-msvc-x86").mkdir()
+            (root / "linux-x86_64").mkdir()
+
+            with self.assertRaisesRegex(ValueError, "32-bit x86 only"):
+                release.release_artifact_dirs(root)
+
+    def test_release_stage_rejects_a_64_bit_pe_even_without_an_arch_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binary = bytearray(128)
+            binary[0:2] = b"MZ"
+            binary[60:64] = (64).to_bytes(4, "little")
+            binary[64:68] = b"PE\0\0"
+            binary[68:70] = (0x8664).to_bytes(2, "little")
+            (root / "fnql.exe").write_bytes(binary)
+
+            with self.assertRaisesRegex(ValueError, "PE machine 0x8664"):
+                release.validate_stage_tree(root)
+
+    def test_release_binary_header_gate_rejects_64_bit_elf_and_macho(self) -> None:
+        elf = bytearray(64)
+        elf[0:4] = b"\x7fELF"
+        elf[4] = 2
+        elf[5] = 1
+        elf[18:20] = (62).to_bytes(2, "little")
+
+        for name, binary in (
+            ("fnql", bytes(elf)),
+            ("fnql.dylib", b"\xcf\xfa\xed\xfe" + bytes(60)),
+        ):
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, "32-bit x86 only"):
+                    release.validate_release_binary_stream(name, io.BytesIO(binary))
+
+    def test_release_workflow_builds_only_32_bit_x86_artifacts(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("name: windows-mingw-x86", workflow)
+        self.assertIn("name: windows-msvc-x86", workflow)
+        self.assertIn("name: linux-x86", workflow)
+        self.assertIn("ARCH=x86 COMPILE_ARCH=x86", workflow)
+        self.assertNotIn("ubuntu-arm64:", workflow)
+        self.assertNotIn("macos-x86:", workflow)
+        self.assertNotIn("arch: [x86, x86_64]", workflow)
+        self.assertNotIn("arch: [arm64, x86, x64]", workflow)
 
     def test_release_cli_parser_rejects_negative_build_numbers(self) -> None:
         with self.assertRaisesRegex(Exception, "non-negative"):

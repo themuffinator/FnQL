@@ -1481,7 +1481,11 @@ void CL_MapLoading( void ) {
 	} else {
 		// clear nextmap so the cinematic shutdown doesn't execute it
 		Cvar_Set( "nextmap", "" );
-		CL_Disconnect( qtrue );
+		// This is an in-progress local-game transition, not a terminal
+		// disconnect. Restoring the retained WebUI here would resume and focus
+		// its game.start route after the transition hide above, allowing it to
+		// reacquire the screen when the new cgame reaches CA_ACTIVE.
+		CL_Disconnect( qfalse );
 		Q_strncpyz( cls.servername, "localhost", sizeof(cls.servername) );
 		cls.state = CA_CHALLENGING;		// so the connect screen is drawn
 		Key_SetCatcher( 0 );

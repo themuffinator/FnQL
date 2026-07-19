@@ -376,7 +376,6 @@ private:
 		DataSourceDirectorConnect dataSourceDirectorConnect = nullptr;
 		DataSourceSendResponse dataSourceSendResponse = nullptr;
 		AddDataSource webSessionAddDataSource = nullptr;
-		SessionVoid webSessionRelease = nullptr;
 		SessionVoid webSessionClearCache = nullptr;
 		CreateView webCoreCreateView = nullptr;
 		ViewVoid webViewDestroy = nullptr;
@@ -459,7 +458,6 @@ private:
 		FNQL_AWE_IMPORT( dataSourceDirectorConnect, "_Awe_DataSource_director_connect@8" );
 		FNQL_AWE_IMPORT( dataSourceSendResponse, "_Awe_DataSource_SendResponse@20" );
 		FNQL_AWE_IMPORT( webSessionAddDataSource, "_Awe_WebSession_AddDataSource@12" );
-		FNQL_AWE_IMPORT( webSessionRelease, "_Awe_WebSession_Release@4" );
 		FNQL_AWE_IMPORT( webSessionClearCache, "_Awe_WebSession_ClearCache@4" );
 		FNQL_AWE_IMPORT( webCoreCreateView, "_Awe_WebCore_CreateWebView_0@20" );
 		FNQL_AWE_IMPORT( webViewDestroy, "_Awe_WebView_Destroy@4" );
@@ -612,12 +610,13 @@ private:
 			imports_.webViewDestroy( view_ );
 		}
 		view_ = nullptr;
-		if ( session_ && imports_.webSessionRelease ) {
-			imports_.webSessionRelease( session_ );
-		}
+		// Retail Quake Live 1.40.6 destroys the WebView and then lets
+		// WebCore::Shutdown own its sessions. Releasing the generated C-export
+		// session handle first leaves the retail core with stale session state and
+		// raises an access violation in AwesomiumBrowserMain during quit.
 		session_ = nullptr;
-		dataPakSource_ = nullptr; // owned by the released WebSession
-		steamDataSource_ = nullptr; // owned by the released WebSession
+		dataPakSource_ = nullptr; // owned by the WebCore-managed WebSession
+		steamDataSource_ = nullptr; // owned by the WebCore-managed WebSession
 		if ( core_ && imports_.webCoreShutdown ) {
 			imports_.webCoreShutdown();
 		}

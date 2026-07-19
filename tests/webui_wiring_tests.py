@@ -248,6 +248,10 @@ class WebUiWiringTests(unittest.TestCase):
     def test_webui_native_javascript_requests_are_pumped_into_engine(self) -> None:
         source = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
 
+        pump_start = source.index("static void CL_WebHost_PumpNativeJavascriptRequests( void ) {")
+        pump_end = source.index("static void CL_WebView_DispatchLiveEvent", pump_start)
+        pump = source[pump_start:pump_end]
+
         self.assertIn("#define CL_WEB_NATIVE_REQUESTS_PER_FRAME 8", source)
         self.assertIn("int\t\t\tframeSequence;", source)
         self.assertIn("int\t\t\tnextNativeRequestPollFrame;", source)
@@ -262,7 +266,10 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("CL_WebHost_UpdateBrowserCvarCache( name, value );", source)
         self.assertIn("CL_Awesomium_PopJavascriptRequest( request, sizeof( request ) )", source)
         self.assertIn("CL_WEB_NATIVE_REQUEST_BUSY_POLL_FRAMES", source)
+        self.assertNotIn("CL_Awesomium_IsLoading()", pump)
         self.assertIn("window.__qlr_native_requests||[]", source)
+        self.assertIn("SendGameCommand:function(cmd)", source)
+        self.assertIn("return queue('cmd',cmd);", source)
         self.assertIn("window.__qlr_native_read=String(q.shift())", source)
         self.assertIn("s.charCodeAt(%d)||0", source)
         self.assertIn('CL_Awesomium_ExecuteJavascript( "(function(){window.__qlr_native_read=\'\';})()", "" );', source)
@@ -950,10 +957,25 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn('"ui_resourceBridgeSteamDataSourceSubset"', source)
         self.assertIn('"ui_resourceBridgeSteamDataSourceNativeGap"', source)
         self.assertIn('"ui_resourceBridgeSteamDataSourceFallbackOwner"', source)
-        self.assertIn('Cvar_Flags( name ) == CVAR_NONEXISTENT', source)
+        self.assertIn('flags == CVAR_NONEXISTENT', source)
         self.assertIn('"cl_webuiEnable"', source)
         self.assertIn('"ui_browserAwesomiumProvider"', source)
         self.assertIn('"fs_game"', source)
+        self.assertIn("static const clWebConfigCvarDefault_t startMatchCvars[]", source)
+        for name, value in (
+            ("sv_hostname", "noname"),
+            ("sv_serverType", "0"),
+            ("net_port", "27960"),
+            ("sv_maxclients", "8"),
+            ("bot_minplayers", "0"),
+            ("g_spSkill", "2"),
+            ("teamsize", "0"),
+            ("g_password", ""),
+            ("sv_warmupReadyPercentage", "0.51"),
+            ("sv_mapPoolFile", "mappool.txt"),
+        ):
+            self.assertIn(f'{{ "{name}", "{value}" }}', source)
+        self.assertIn("startMatchCvars[i].name, startMatchCvars[i].value", source)
         self.assertIn("for ( int i = 0; i < MAX_KEYS; ++i )", source)
         self.assertIn("binding = Key_GetBinding( i );", source)
         self.assertIn("keyName = Key_KeynumToString( i );", source)

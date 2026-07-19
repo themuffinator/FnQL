@@ -3,8 +3,8 @@ param(
 	[ValidateSet('Debug', 'Release', 'RelWithDebInfo')]
 	[string]$Configuration = 'Release',
 
-	[ValidateSet('x64', 'Win32', 'ARM64')]
-	[string]$Platform = 'x64',
+	[ValidateSet('Win32')]
+	[string]$Platform = 'Win32',
 
 	[ValidateSet('client', 'dedicated', 'both')]
 	[string]$Target = 'both',
@@ -15,7 +15,7 @@ param(
 	[string]$Renderers = $(if ($env:FNQL_MESON_RENDERERS) { $env:FNQL_MESON_RENDERERS } elseif ($env:FNQ3_MESON_RENDERERS) { $env:FNQ3_MESON_RENDERERS } else { 'glx,vk,rtx' }),
 	[ValidateSet('glx', 'vk', 'rtx')]
 	[string]$RendererDefault = $(if ($env:FNQL_MESON_RENDERER_DEFAULT) { $env:FNQL_MESON_RENDERER_DEFAULT } elseif ($env:FNQ3_MESON_RENDERER_DEFAULT) { $env:FNQ3_MESON_RENDERER_DEFAULT } else { 'glx' }),
-	[string]$BuildDir = $(if ($env:FNQL_MESON_BUILD_DIR) { $env:FNQL_MESON_BUILD_DIR } elseif ($env:FNQ3_MESON_BUILD_DIR) { $env:FNQ3_MESON_BUILD_DIR } else { 'meson\build' }),
+	[string]$BuildDir = $(if ($env:FNQL_MESON_BUILD_DIR) { $env:FNQL_MESON_BUILD_DIR } elseif ($env:FNQ3_MESON_BUILD_DIR) { $env:FNQ3_MESON_BUILD_DIR } else { 'meson\build\win32' }),
 	[switch]$SetupOnly,
 	[switch]$RunTests,
 	[switch]$Install,
@@ -66,12 +66,10 @@ function Import-MsvcEnvironment {
 		return
 	}
 
-	$arch = switch ($SelectedPlatform) {
-		'Win32' { 'x86' }
-		'x64' { 'amd64' }
-		'ARM64' { 'arm64' }
-		default { throw "Unsupported platform: $SelectedPlatform" }
+	if ($SelectedPlatform -ne 'Win32') {
+		throw "The VS Code build helper supports only the retail-compatible Win32 target."
 	}
+	$arch = 'x86'
 
 	$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 	if (-not (Test-Path $vswhere)) {
@@ -150,23 +148,19 @@ function Resolve-BuildPath {
 function Get-ExpectedBinarySuffix {
 	param([string]$SelectedPlatform)
 
-	switch ($SelectedPlatform) {
-		'Win32' { return '' }
-		'x64' { return '.x64' }
-		'ARM64' { return '.arm64' }
-		default { throw "Unsupported platform: $SelectedPlatform" }
+	if ($SelectedPlatform -ne 'Win32') {
+		throw "The VS Code build helper supports only the retail-compatible Win32 target."
 	}
+	return ''
 }
 
 function Get-ExpectedRendererArch {
 	param([string]$SelectedPlatform)
 
-	switch ($SelectedPlatform) {
-		'Win32' { return 'x86' }
-		'x64' { return 'x86_64' }
-		'ARM64' { return 'arm64' }
-		default { throw "Unsupported platform: $SelectedPlatform" }
+	if ($SelectedPlatform -ne 'Win32') {
+		throw "The VS Code build helper supports only the retail-compatible Win32 target."
 	}
+	return 'x86'
 }
 
 function Assert-WindowsOutputs {
@@ -218,6 +212,34 @@ function Clear-StaleMesonArchive {
 	}
 }
 
+function Remove-StaleNativeTestBinaries {
+	param(
+		[string]$SelectedBuildPath,
+		[switch]$Recurse
+	)
+
+	if (-not (Test-Path -LiteralPath $SelectedBuildPath)) {
+		return
+	}
+	$searchArgs = @{
+		LiteralPath = $SelectedBuildPath
+		File = $true
+		ErrorAction = 'SilentlyContinue'
+	}
+	if ($Recurse) {
+		$searchArgs.Recurse = $true
+	}
+	$staleTests = @(Get-ChildItem @searchArgs | Where-Object {
+		$_.BaseName -like 'fnql*_tests' -and $_.Extension -in @('.exe', '.pdb')
+	})
+	foreach ($staleTest in $staleTests) {
+		Remove-Item -LiteralPath $staleTest.FullName -Force
+	}
+	if ($staleTests) {
+		Write-Host "Removed $($staleTests.Count) stale native test artifact(s) from $SelectedBuildPath"
+	}
+}
+
 function Invoke-MesonInstall {
 	param(
 		[string]$MesonPath,
@@ -249,20 +271,24 @@ function Invoke-FnQLSteamBuild {
 		[string]$BuildPath
 	)
 
-	if ($SelectedPlatform -notin @('Win32', 'x64')) {
-		throw "FnQL-Steam currently supports Win32 and x64 provider builds, not $SelectedPlatform."
+	if ($SelectedPlatform -ne 'Win32') {
+		throw "The VS Code Steam build supports only the retail-compatible Win32 target."
 	}
 	$repositoryPath = (Resolve-Path $Repository -ErrorAction Stop).Path
-	$buildScript = Join-Path $repositoryPath 'scripts\build.ps1'
-	if (-not (Test-Path -LiteralPath $buildScript)) {
-		throw "FnQL-Steam build script was not found: $buildScript"
-	}
+	$cmakePath = Resolve-CommandPath -Name 'cmake' -Override ''
+	$providerBuildPath = Join-Path $repositoryPath 'build\vscode-win32'
+	Remove-StaleNativeTestBinaries -SelectedBuildPath $providerBuildPath -Recurse
 	Write-Host "==> FnQL-Steam $SelectedPlatform $SelectedConfiguration"
-	& $buildScript -Platform $SelectedPlatform -Configuration $SelectedConfiguration -FnQLRoot $FnQLRoot
+	& $cmakePath -S $repositoryPath -B $providerBuildPath -A Win32 `
+		"-DFNQL_ROOT=$FnQLRoot" '-DBUILD_TESTING=OFF'
 	if ($LASTEXITCODE -ne 0) {
-		throw 'FnQL-Steam build failed.'
+		throw 'FnQL-Steam provider configuration failed.'
 	}
-	$provider = Join-Path $repositoryPath "out\$($SelectedPlatform.ToLowerInvariant())\$($SelectedConfiguration.ToLowerInvariant())\fnql_steam.dll"
+	& $cmakePath --build $providerBuildPath --config $SelectedConfiguration --target fnql_steam
+	if ($LASTEXITCODE -ne 0) {
+		throw 'FnQL-Steam provider build failed.'
+	}
+	$provider = Join-Path $providerBuildPath "$SelectedConfiguration\fnql_steam.dll"
 	if (-not (Test-Path -LiteralPath $provider)) {
 		throw "FnQL-Steam provider was not produced: $provider"
 	}
@@ -347,11 +373,32 @@ if ($SetupOnly) {
 
 Clear-StaleMesonArchive -BuildPath $buildPath -ArchiveName 'libbotlib.a'
 Clear-StaleMesonArchive -BuildPath $buildPath -ArchiveName $canonicalRootArchiveName
+Remove-StaleNativeTestBinaries -SelectedBuildPath $buildPath
 if ($RootArchiveName -ne $canonicalRootArchiveName) {
 	Clear-StaleMesonArchive -BuildPath $buildPath -ArchiveName $RootArchiveName
 }
 
 $compileArgs = @('compile', '-C', $buildPath)
+if (-not $RunTests) {
+	# Meson's default target includes every native test executable. VS Code
+	# builds only runtime/release products; tests remain available to explicit
+	# CI or command-line -RunTests builds.
+	$compileTargets = New-Object System.Collections.Generic.List[string]
+	if ($Target -in @('client', 'both')) {
+		$compileTargets.Add('fnql')
+		foreach ($rendererName in ($rendererCsv -split ',')) {
+			$compileTargets.Add("fnql_${rendererName}_x86")
+		}
+		$compileTargets.Add('fnql-web.pak')
+	}
+	if ($Target -in @('dedicated', 'both')) {
+		$compileTargets.Add('fnql.ded')
+	}
+	if ($Archive) {
+		$compileTargets.Add('FnQL-pkg.fnz')
+	}
+	$compileArgs += $compileTargets
+}
 Write-Host "==> $mesonPath $($compileArgs -join ' ')"
 & $mesonPath @compileArgs
 if ($LASTEXITCODE -ne 0) {

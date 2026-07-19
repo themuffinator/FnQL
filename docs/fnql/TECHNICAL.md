@@ -193,6 +193,12 @@ Expected behavior:
 - `main` pushes validate the main branch without publishing a release
 - manual `workflow_dispatch` runs publish a new version/date/commit release for the selected ref
 - published GitHub releases upload archives whose names match the release tag identity
+- release artifacts are 32-bit x86 only on Windows (MSYS2 and MSVC) and Linux,
+  matching the retail Quake Live native-module and Awesomium ABI; 64-bit and
+  ARM builds remain developer/verification targets outside the release flow
+- `scripts/release.py` rejects artifact-directory/file architecture markers
+  for 64-bit targets and verifies recognized PE, ELF, and Mach-O headers before
+  an archive is emitted, so a mislabeled 64-bit binary fails packaging
 - Linux release artifacts build inside an Ubuntu 20.04 userspace and run `scripts/check_elf_glibc.py --max-glibc 2.31` before upload so hosted runner image changes do not raise the packaged glibc requirement unexpectedly.
 
 Renderer-focused verification lives beside the release packaging flow:

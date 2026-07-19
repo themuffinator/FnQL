@@ -17,6 +17,15 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
   optional dedicated-server services.
 
 ### Compatibility
+- Matched retail console-notify behavior by removing the non-retail
+  `con_notifytime` registration and general-print overlay while retaining the
+  retail timestamp ring and live chat-entry strip.
+- Fixed WebUI quit handling: top-right power requests now drain during the
+  document-loading handoff, and Awesomium shutdown leaves WebSession ownership
+  with WebCore so clean exit no longer raises an access violation.
+- Seeded the retail Start Match cvar snapshot so range controls no longer show
+  `NaN`, and kept the WebUI paused across local map transitions so connection
+  and loading screens hand off cleanly to unobscured gameplay.
 - Completed the retail client `cl_*` contract: restored the missing console,
   timing, avidemo, demo-lifecycle, recording-HUD, platform, and download
   controls while preserving FnQL aliases and modern client extensions.
@@ -84,6 +93,10 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
 - _None yet._
 
 ### Builds and Packaging
+- Made every VS Code build/launch task Win32-only and changed normal builds to
+  compile only runtime/package targets, excluding all native test executables.
+- Restricted release builds and packages to retail-compatible 32-bit x86 and
+  added artifact-name plus executable-header gates that reject 64-bit inputs.
 - Made `curl-dlopen` an `auto|true|false` Meson option so Windows links the
   bundled libcurl fallback by default while supported Unix builds retain
   runtime resolution; stale Meson option metadata now gets one `--wipe` retry.

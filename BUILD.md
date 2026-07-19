@@ -105,8 +105,12 @@ VS Code's default Steam build and the launch configurations labelled
 `Retail QL / Win32` both use `meson/build/win32` (Release), so a manual launch
 cannot accidentally run an older Debug binary. The separate
 `meson: build Win32 debug (Steam)` task remains available for source-level
-debugging. The x64 tasks and launch entries are retained explicitly as
-engine-only checks.
+debugging. All VS Code build and launch entry points are intentionally Win32
+only because retail Quake Live modules and Awesomium are 32-bit. The build
+helper compiles an explicit runtime-product list, so normal VS Code builds do
+not compile Meson's native test executables. Invoke the helper explicitly with
+`-RunTests` or use Meson directly for tests; use the maintained solution below
+for non-retail architecture work.
 
 Alternatively, open `code/win32/msvc2017/fnql.sln`. Its single maintained
 project delegates the selected Debug/Release and Win32/x64/ARM64 configuration

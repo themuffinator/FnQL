@@ -59,6 +59,17 @@ class WebUiBackendSourceTests(unittest.TestCase):
         self.assertIn("webPakPath_.clear();", adapter)
         self.assertNotIn("#include <Awesomium/", adapter)
 
+        shutdown = adapter[
+            adapter.index("void ShutdownRuntimeObjects() noexcept") :
+            adapter.index("struct PendingResource")
+        ]
+        self.assertLess(
+            shutdown.index("imports_.webViewDestroy"),
+            shutdown.index("imports_.webCoreShutdown"),
+        )
+        self.assertNotIn("webSessionRelease", adapter)
+        self.assertNotIn("_Awe_WebSession_Release@4", adapter)
+
     def test_native_requests_are_origin_locked_and_losslessly_decoded(self) -> None:
         header = (ROOT / "code" / "client" / "webui_backend.hpp").read_text(
             encoding="utf-8"

@@ -108,8 +108,7 @@ struct console_t {
 	float	displayWidth;
 	float	displayLine;
 
-	std::array<int, NUM_CON_TIMES> times;	// cls.realtime time the line was generated
-								// for transparent notify lines
+	std::array<int, NUM_CON_TIMES> times;	// retail four-entry print timestamp ring
 	vec4_t	color;
 
 	int		viswidth;
@@ -169,7 +168,6 @@ console_t	con;
 
 cvar_t		*con_conspeed;
 cvar_t		*con_autoClear;
-cvar_t		*con_notifytime;
 cvar_t		*con_scale;
 cvar_t		*con_scaleUniform;
 cvar_t		*con_screenExtents;
@@ -4427,8 +4425,6 @@ void Con_Init( void )
 {
 	const char *speedValue;
 
-	con_notifytime = Cvar_Get( "con_notifytime", "3", 0 );
-	Cvar_SetDescription( con_notifytime, "Defines how long messages (from players or the system) are on the screen (in seconds)." );
 	speedValue = Cvar_VariableString( "con_speed" );
 	if ( !speedValue[ 0 ] ) {
 		speedValue = Cvar_VariableString( "scr_conspeed" );
@@ -4455,7 +4451,7 @@ void Con_Init( void )
 		" 0 - use the full screen width\n"
 		" 1 - keep the console display in centered 4:3 space" );
 	con_timestamps = Cvar_Get( "con_timestamps", "0", CVAR_ARCHIVE_ND | CVAR_PROTECTED );
-	Cvar_SetDescription( con_timestamps, "Show Quake Live style elapsed-time prefixes on console and notify lines." );
+	Cvar_SetDescription( con_timestamps, "Show Quake Live style elapsed-time prefixes on console lines." );
 	con_scrollLines = Cvar_Get( "con_scrollLines", "8", CVAR_ARCHIVE_ND );
 	Cvar_CheckRange( con_scrollLines, "1", "256", CV_INTEGER );
 	Cvar_SetDescription( con_scrollLines, "Number of console lines scrolled per step, clamped to the current visible console page." );
@@ -4621,7 +4617,7 @@ Con_Linefeed
 */
 static void Con_Linefeed( bool skipnotify )
 {
-	// mark time for transparent overlay
+	// Preserve the retail four-entry print timestamp ring and [skipnotify].
 	if ( con.current >= 0 )	{
 		if ( skipnotify )
 			con.times[ con.current % NUM_CON_TIMES ] = 0;
@@ -4799,7 +4795,7 @@ void CL_ConsolePrint( const char *txt ) {
 		}
 	}
 
-	// mark time for transparent overlay
+	// Preserve the retail four-entry print timestamp ring and [skipnotify].
 	if ( con.current >= 0 ) {
 		if ( skipnotify ) {
 			prev = con.current % NUM_CON_TIMES - 1;
@@ -4859,58 +4855,14 @@ static void Con_DrawInput( float alphaScale, const vec4_t lineColor ) {
 ================
 Con_DrawNotify
 
-Draws the last few lines of output transparently over the game top
+Draws the retail live chat input overlay. Retail Quake Live 1.40.6 registers
+no con_notifytime and does not draw recent console lines here. Keep the
+con.times bookkeeping in the print path because that remains retail behavior.
 ================
 */
 static void Con_DrawNotify( void )
 {
-	int		x, v;
-	short	*text;
-	int		i;
-	int		time;
-	int		currentColorIndex;
-	int		colorIndex;
-
-	currentColorIndex = ColorIndex( COLOR_WHITE );
-	Con_SetScaledColor( g_color_table[ currentColorIndex ], 1.0f );
 	Con_UpdateTtfFontAvailability();
-
-	v = 0;
-	for (i= con.current-NUM_CON_TIMES+1 ; i<=con.current ; i++)
-	{
-		if (i < 0)
-			continue;
-		time = con.times[i % NUM_CON_TIMES];
-		if (time == 0)
-			continue;
-		time = cls.realtime - time;
-		if ( time >= con_notifytime->value*1000 )
-			continue;
-		text = con.text.data() + (i % con.totallines)*con.linewidth;
-
-		if (cl.snap.ps.pm_type != PM_INTERMISSION && Key_GetCatcher( ) & (KEYCATCH_UI | KEYCATCH_CGAME | KEYCATCH_BROWSER) ) {
-			continue;
-		}
-
-		if ( !Con_DrawConsoleLineText( cl_conXOffset->integer + con.xadjust + console_char_width,
-			v, text, con.linewidth, 1.0f ) ) {
-			for (x = 0 ; x < con.linewidth ; x++) {
-				if ( ( text[x] & 0xff ) == ' ' ) {
-					continue;
-				}
-				colorIndex = ( text[x] >> 8 ) & 63;
-				if ( currentColorIndex != colorIndex ) {
-					currentColorIndex = colorIndex;
-					Con_SetScaledColor( g_color_table[ colorIndex ], 1.0f );
-				}
-				Con_DrawSmallCharFloat( cl_conXOffset->integer + con.xadjust + (x+1)*console_char_width, v, text[x] & 0xff );
-			}
-		}
-
-		v += console_char_height;
-	}
-
-	re.SetColor( nullptr );
 
 	if ( Key_GetCatcher() & (KEYCATCH_UI | KEYCATCH_CGAME | KEYCATCH_BROWSER) ) {
 		return;
@@ -5143,7 +5095,7 @@ void Con_DrawConsole( void ) {
 	if ( con.displayFrac ) {
 		Con_DrawSolidConsole( con.displayFrac );
 	} else {
-		// draw notify lines
+		// Draw the retail live chat-entry overlay.
 		if ( cls.state == CA_ACTIVE ) {
 			Con_DrawNotify();
 		}

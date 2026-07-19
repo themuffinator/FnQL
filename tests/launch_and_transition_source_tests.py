@@ -37,14 +37,13 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
             self.assertEqual(args[steam_index + 1], "1", configuration["name"])
             if configuration["name"].startswith("RTX "):
                 expected_task = "meson: build RTX (Steam)"
-            elif "Win32" in configuration["name"]:
-                expected_task = "meson: build (Steam)"
             else:
-                expected_task = "meson: build x64 (Steam)"
+                expected_task = "meson: build (Steam)"
             self.assertEqual(
                 configuration.get("preLaunchTask"), expected_task, configuration["name"]
             )
             self.assertNotIn("disabled", configuration["name"].lower())
+            self.assertIn("Retail QL / Win32", configuration["name"])
 
             if "Retail QL / Win32" in configuration["name"]:
                 expected_build_dir = (
@@ -65,6 +64,11 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
         self.assertTrue(build_tasks)
         for task in build_tasks:
             self.assertIn("-WithSteam", task["args"], task["label"])
+            platform_index = task["args"].index("-Platform")
+            self.assertEqual(task["args"][platform_index + 1], "Win32")
+            self.assertNotIn("-RunTests", task["args"])
+
+        self.assertNotIn("meson: test", {task.get("label") for task in tasks})
 
     def test_game_transitions_release_the_browser_without_shutting_down_the_host(self) -> None:
         main = read_source("code/client/cl_main.cpp")
@@ -74,6 +78,8 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
 
         self.assertIn("CL_WebHost_HideForGameTransition();", map_loading)
         self.assertNotIn("CL_WebHost_Shutdown();", map_loading)
+        self.assertIn("CL_Disconnect( qfalse );", map_loading)
+        self.assertNotIn("CL_Disconnect( qtrue );", map_loading)
         self.assertIn("CL_WebHost_HideForGameTransition();", connect)
         self.assertLess(
             connect.index("CL_WebView_PublishGameStartForAddress"),

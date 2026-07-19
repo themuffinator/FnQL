@@ -2879,23 +2879,29 @@ static void CL_WebHost_UpdateBrowserNativeState( void ) {
 	CL_Awesomium_ExecuteJavascript( script, "" );
 }
 
-static qboolean CL_WebHost_AppendConfigCvar( char *buffer, size_t bufferSize, const char *name, qboolean *first ) {
+static qboolean CL_WebHost_AppendConfigCvar( char *buffer, size_t bufferSize,
+		const char *name, const char *fallbackValue, qboolean *first ) {
 	char value[MAX_CVAR_VALUE_STRING];
 	char escapedName[MAX_CVAR_VALUE_STRING * 2];
 	char escapedValue[MAX_CVAR_VALUE_STRING * 2];
+	int flags;
 
 	if ( !buffer || bufferSize == 0 || !name || !name[0] || !first ) {
 		return qfalse;
 	}
 
-	if ( Cvar_Flags( name ) == CVAR_NONEXISTENT ) {
+	flags = Cvar_Flags( name );
+	if ( flags == CVAR_NONEXISTENT ) {
+		if ( !fallbackValue ) {
+			return qtrue;
+		}
+		Q_strncpyz( value, fallbackValue, sizeof( value ) );
+	} else if ( flags & CVAR_PRIVATE ) {
 		return qtrue;
-	}
-	if ( Cvar_Flags( name ) & CVAR_PRIVATE ) {
-		return qtrue;
+	} else {
+		Cvar_VariableStringBuffer( name, value, sizeof( value ) );
 	}
 
-	Cvar_VariableStringBuffer( name, value, sizeof( value ) );
 	CL_WebUI_JsonEscape( name, escapedName, sizeof( escapedName ) );
 	CL_WebUI_JsonEscape( value, escapedValue, sizeof( escapedValue ) );
 	if ( !CL_WebUI_AppendJsonFormattedIfFits( buffer, bufferSize, "%s\"%s\":\"%s\"", *first ? "" : ",", escapedName, escapedValue ) ) {
@@ -2907,6 +2913,10 @@ static qboolean CL_WebHost_AppendConfigCvar( char *buffer, size_t bufferSize, co
 }
 
 static void CL_WebHost_BuildConfigCvarJson( char *buffer, size_t bufferSize ) {
+	struct clWebConfigCvarDefault_t {
+		const char *name;
+		const char *value;
+	};
 	static const char *const configCvars[] = {
 		"name",
 		"version",
@@ -2994,6 +3004,24 @@ static void CL_WebHost_BuildConfigCvarJson( char *buffer, size_t bufferSize ) {
 		"s_muteWhenMinimized",
 		NULL
 	};
+	// The retail Start Match component consumes GetConfig().cvars once while it
+	// mounts. These values therefore need to exist in the initial synchronous
+	// snapshot, before its later cvar.* subscriptions can observe native state.
+	// Keep absent module-owned cvars as bridge defaults rather than registering
+	// them on the client; qagame remains authoritative once a match starts.
+	static const clWebConfigCvarDefault_t startMatchCvars[] = {
+		{ "sv_hostname", "noname" },
+		{ "sv_serverType", "0" },
+		{ "net_port", "27960" },
+		{ "sv_maxclients", "8" },
+		{ "bot_minplayers", "0" },
+		{ "g_spSkill", "2" },
+		{ "teamsize", "0" },
+		{ "g_password", "" },
+		{ "sv_warmupReadyPercentage", "0.51" },
+		{ "sv_mapPoolFile", "mappool.txt" },
+		{ NULL, NULL }
+	};
 	qboolean first;
 
 	if ( !buffer || bufferSize == 0 ) {
@@ -3003,7 +3031,14 @@ static void CL_WebHost_BuildConfigCvarJson( char *buffer, size_t bufferSize ) {
 	buffer[0] = '\0';
 	first = qtrue;
 	for ( int i = 0; configCvars[i]; ++i ) {
-		if ( !CL_WebHost_AppendConfigCvar( buffer, bufferSize, configCvars[i], &first ) ) {
+		if ( !CL_WebHost_AppendConfigCvar( buffer, bufferSize,
+			configCvars[i], NULL, &first ) ) {
+			break;
+		}
+	}
+	for ( int i = 0; startMatchCvars[i].name; ++i ) {
+		if ( !CL_WebHost_AppendConfigCvar( buffer, bufferSize,
+			startMatchCvars[i].name, startMatchCvars[i].value, &first ) ) {
 			break;
 		}
 	}
@@ -6129,11 +6164,10 @@ static void CL_WebHost_PumpNativeJavascriptRequests( void ) {
 		return;
 	}
 
-	if ( CL_Awesomium_IsLoading() ) {
-		cl_webui.nextNativeRequestPollFrame = cl_webui.frameSequence + CL_WEB_NATIVE_REQUEST_LOADING_POLL_FRAMES;
-		return;
-	}
-
+	// Retail can queue SendGameCommand("quit") from the preload shell while the
+	// final document is still loading. The native request queue remains safe to
+	// drain during that handoff; snapshot/live-event synchronization is gated
+	// separately.
 	handledRequest = qfalse;
 	for ( int i = 0; i < CL_WEB_NATIVE_REQUESTS_PER_FRAME; ++i ) {
 		char request[MAX_STRING_CHARS];
