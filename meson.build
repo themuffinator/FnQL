@@ -1163,6 +1163,16 @@ ql_bsp_contract_tests = executable('fnql_ql_bsp_contract_tests',
   cpp_args: common_cpp_args,
 )
 test('fnql_ql_bsp_contract', ql_bsp_contract_tests)
+
+collision_model_parity_tests = executable('fnql_collision_model_parity_tests',
+  'tests/collision_model_parity_tests.cpp',
+  cpp_args: common_cpp_args,
+)
+test('fnql_collision_model_parity', collision_model_parity_tests)
+test('fnql_collision_model_parity_source', python,
+  args: files('tests/collision_model_parity_source_tests.py'),
+)
+
 test('fnql_ql_services_source', python,
   args: files('tests/ql_services_source_tests.py'),
 )

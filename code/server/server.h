@@ -580,7 +580,7 @@ void SV_LinkEntity( sharedEntity_t *ent );
 // is not solid
 
 
-clipHandle_t SV_ClipHandleForEntity( const sharedEntity_t *ent );
+clipHandle_t SV_ClipHandleForEntity( const sharedEntity_t *ent, qboolean capsule );
 
 
 void SV_SectorList_f( void );

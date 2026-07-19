@@ -23,6 +23,7 @@ Compatibility-sensitive areas include:
 
 - demo parsing and recording
 - network protocol behavior
+- collision-model handles and server trace hull selection
 - filesystem search order and pak/pk3 loading
 - VM ABI and bytecode execution
 - native module ABI and loader behavior
@@ -51,6 +52,17 @@ so this maintainer document stays portable.
 
 Current migration rule: compare first, reconstruct second, validate third.
 Keep observed QLSRP or retail facts distinct from inferred design intent.
+
+The collision-model parity contract reserves handles 254 and 255 for the
+temporary capsule and box hulls, respectively. Both handles resolve to the
+shared temporary model that owns their bounds; the trace path uses the handle
+to choose the shape-specific math. QLSRP records that retail QL additionally
+gates an entity's `SVF_CAPSULE` hull on the incoming trace type. Ordinary
+`G_TRACE` calls such as shotgun pellets therefore test the entity box, while
+`G_TRACECAPSULE` may select the capsule. A reported retail-module server run
+exposed the previous FnQL mismatch as `14 < 254 < 256`: the map had 14 inline
+models, and FnQL rejected the reserved capsule handle as though it were an
+invalid inline-model index.
 
 The subsystem inventory, execution order, and non-regression gates for the
 native API, WebUI/Awesomium, protocol/demos, BSP/advertisements, ZMQ, and

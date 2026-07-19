@@ -23,10 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "q_shared.h"
 #include "qcommon.h"
 #include "cm_polylib.h"
-
-#define	MAX_SUBMODELS			256
-#define	BOX_MODEL_HANDLE		255
-#define CAPSULE_MODEL_HANDLE	254
+#include "cm_model_handles.h"
 
 
 // forced double-precison functions

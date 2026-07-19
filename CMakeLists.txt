@@ -352,6 +352,10 @@ target_compile_features(fnql_ql_bsp_contract_tests PRIVATE cxx_std_17)
 target_include_directories(fnql_ql_bsp_contract_tests PRIVATE code/qcommon)
 add_test(NAME fnql_ql_bsp_contract COMMAND fnql_ql_bsp_contract_tests)
 
+ADD_EXECUTABLE(fnql_collision_model_parity_tests tests/collision_model_parity_tests.cpp)
+target_compile_features(fnql_collision_model_parity_tests PRIVATE cxx_std_17)
+add_test(NAME fnql_collision_model_parity COMMAND fnql_collision_model_parity_tests)
+
 ADD_EXECUTABLE(fnql_netchan_profile_tests tests/netchan_profile_tests.cpp)
 target_compile_features(fnql_netchan_profile_tests PRIVATE cxx_std_17)
 target_include_directories(fnql_netchan_profile_tests PRIVATE code/qcommon)
@@ -422,6 +426,8 @@ IF(Python3_Interpreter_FOUND)
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/client_cvar_compat_source_tests.py")
 	add_test(NAME fnql_server_cvar_compat_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/server_cvar_compat_source_tests.py")
+	add_test(NAME fnql_collision_model_parity_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/collision_model_parity_source_tests.py")
 	add_test(NAME fnql_ql_services_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/ql_services_source_tests.py")
 	add_test(NAME fnql_ql_cvar_configstring_source

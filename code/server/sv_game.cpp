@@ -319,7 +319,7 @@ static bool SV_EntityContact( const vec3_t mins, const vec3_t maxs, const shared
 	origin = gEnt->r.currentOrigin;
 	angles = gEnt->r.currentAngles;
 
-	ch = SV_ClipHandleForEntity( gEnt );
+	ch = SV_ClipHandleForEntity( gEnt, SV_QBool( capsule ) );
 	CM_TransformedBoxTrace( &trace, vec3_origin, vec3_origin, mins, maxs, ch, -1, origin, angles, SV_QBool( capsule ) );
 
 	return trace.startsolid;

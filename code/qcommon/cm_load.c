@@ -784,7 +784,7 @@ cmodel_t *CM_ClipHandleToModel( clipHandle_t handle ) {
 	if ( handle < cm.numSubModels ) {
 		return &cm.cmodels[handle];
 	}
-	if ( handle == BOX_MODEL_HANDLE ) {
+	if ( CM_IsTemporaryModelHandle( handle ) ) {
 		return &box_model;
 	}
 	if ( handle < MAX_SUBMODELS ) {
@@ -912,7 +912,7 @@ clipHandle_t CM_TempBoxModel( const vec3_t mins, const vec3_t maxs, int capsule 
 	VectorCopy( maxs, box_model.maxs );
 
 	if ( capsule ) {
-		return CAPSULE_MODEL_HANDLE;
+		return CM_TemporaryModelHandle( qtrue );
 	}
 
 	box_planes[0].dist = maxs[0];
@@ -931,7 +931,7 @@ clipHandle_t CM_TempBoxModel( const vec3_t mins, const vec3_t maxs, int capsule 
 	VectorCopy( mins, box_brush->bounds[0] );
 	VectorCopy( maxs, box_brush->bounds[1] );
 
-	return BOX_MODEL_HANDLE;
+	return CM_TemporaryModelHandle( qfalse );
 }
 
 
