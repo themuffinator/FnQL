@@ -55,7 +55,8 @@ BackendHost &ClientBackendHost() noexcept {
 
 #define CL_WEB_DEFAULT_URL "asset://ql/index.html"
 // Reserve the retail DataPak before renderer/driver startup; the view is
-// resized to the authoritative renderer dimensions on the first client frame.
+// resized to renderer-compatible, aspect-preserving dimensions on the first
+// client frame.
 #define CL_WEB_BOOTSTRAP_WIDTH 1280
 #define CL_WEB_BOOTSTRAP_HEIGHT 720
 #define CL_WEB_BROWSER_EVENT_COUNT 32
@@ -109,6 +110,9 @@ typedef struct {
 	qboolean	appActive;
 	qboolean	reportedUnavailable;
 	qboolean	startupBridgeInjected;
+	qboolean	fnqlOverlayChecked;
+	qboolean	fnqlOverlayAvailable;
+	qboolean	fnqlOverlayInjected;
 	qboolean	keyCaptureArmed;
 	char		pendingHash[MAX_STRING_CHARS];
 	char		currentUrl[MAX_STRING_CHARS];
@@ -180,6 +184,7 @@ void CL_WebHost_InvalidateFactoryCatalog( void ) {
 
 static void CL_WebHost_UpdateOverlayOwnership( void );
 static void CL_WebHost_EnsureStartupBridge( void );
+static void CL_WebHost_EnsureFnqlOverlay( void );
 static void CL_WebHost_UpdateBrowserNativeState( void );
 static void CL_WebHost_PumpNativeJavascriptRequests( void );
 static void CL_WebHost_SyncNativeSnapshots( qboolean force );
@@ -777,6 +782,22 @@ static void CL_Steam_GetLocalDisplayName( char *buffer, size_t bufferSize ) {
 	Cvar_VariableStringBuffer( "name", buffer, (int)bufferSize );
 }
 
+static fnql::webui::SurfaceSize CL_WebUI_SurfaceSizeForViewport(
+	int width, int height ) {
+	const fnql::webui::SurfaceSize viewport = {
+		width > 0 ? width : CL_WEB_BOOTSTRAP_WIDTH,
+		height > 0 ? height : CL_WEB_BOOTSTRAP_HEIGHT
+	};
+
+	// The inherited renderer image pipeline caps dynamic textures at the
+	// reported maximum texture dimension. If the Awesomium surface is larger,
+	// its first paint is downscaled but later full-size sub-image updates are
+	// rejected, leaving the bootstrap-black texture on screen. Render the
+	// offscreen document within that limit and scale its quad to the viewport;
+	// browser input already maps between the two coordinate spaces.
+	return viewport.ConstrainedTo( cls.glconfig.maxTextureSize );
+}
+
 static qboolean CL_WebUI_EnsureBackendStarted( void ) {
 	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
 	char runtimePath[MAX_OSPATH];
@@ -791,8 +812,7 @@ static qboolean CL_WebUI_EnsureBackendStarted( void ) {
 	char *mapJson;
 	char *factoryJson;
 	qboolean started;
-	int initialWidth;
-	int initialHeight;
+	fnql::webui::SurfaceSize initialSurfaceSize;
 
 	if ( host.IsRunning() ) {
 		return qtrue;
@@ -800,10 +820,8 @@ static qboolean CL_WebUI_EnsureBackendStarted( void ) {
 	if ( !CL_WebUI_RuntimeRequested() || !host.IsAvailable() ) {
 		return qfalse;
 	}
-	initialWidth = cls.glconfig.vidWidth > 0
-		? cls.glconfig.vidWidth : CL_WEB_BOOTSTRAP_WIDTH;
-	initialHeight = cls.glconfig.vidHeight > 0
-		? cls.glconfig.vidHeight : CL_WEB_BOOTSTRAP_HEIGHT;
+	initialSurfaceSize = CL_WebUI_SurfaceSizeForViewport(
+		cls.glconfig.vidWidth, cls.glconfig.vidHeight );
 
 	runtimePath[0] = '\0';
 	basePath[0] = '\0';
@@ -856,8 +874,8 @@ static qboolean CL_WebUI_EnsureBackendStarted( void ) {
 		(unsigned int)atoi( STEAMPATH_APPID ),
 		identityLow,
 		identityHigh,
-		initialWidth,
-		initialHeight,
+		initialSurfaceSize.width,
+		initialSurfaceSize.height,
 		configJson,
 		mapJson,
 		factoryJson,
@@ -903,6 +921,9 @@ static void CL_WebHost_ClearTooltip( void ) {
 
 static void CL_WebHost_InvalidateDocumentSnapshots( void ) {
 	cl_webui.startupBridgeInjected = qfalse;
+	cl_webui.fnqlOverlayChecked = qfalse;
+	cl_webui.fnqlOverlayAvailable = qfalse;
+	cl_webui.fnqlOverlayInjected = qfalse;
 	cl_webui.nextBridgeRetryFrame = 0;
 	cl_webui.nextNativeRequestPollFrame = 0;
 	cl_webui.nextConfigSnapshotFrame = 0;
@@ -1441,7 +1462,10 @@ static void CL_Web_Status_f( void ) {
 		{ "qzPlayerNameLength", "(function(){return window.qz_instance?String(window.qz_instance.playerName||'').length:-1;})()" },
 		{ "qzFriendCount", "(function(){try{var f=window.qz_instance&&window.qz_instance.GetFriendList?window.qz_instance.GetFriendList():null;return f&&typeof f.length!=='undefined'?f.length:-1;}catch(e){return -2;}})()" },
 		{ "steamAvatarImages", "(function(){var n=0,a=document.images;for(var i=0;i<a.length;i++){if(String(a[i].src||'').indexOf('asset://steam/avatar/')===0){n++;}}return n;})()" },
-		{ "mainHook", "(function(){return typeof window.main_hook_v2==='function'?1:0;})()" }
+		{ "mainHook", "(function(){return typeof window.main_hook_v2==='function'?1:0;})()" },
+		{ "fnqlStyle", "(function(){return document.getElementById('fnql-settings-style')?1:0;})()" },
+		{ "fnqlScript", "(function(){return window.__fnql_settings_script_loaded?1:0;})()" },
+		{ "fnqlTab", "(function(){return document.querySelector('.fnql-settings-tab')?1:0;})()" }
 	};
 
 	if ( !CL_WebHost_HasLiveView() ) {
@@ -1685,9 +1709,8 @@ void CL_WebHost_RefreshSurfaceSize( void ) {
 
 	const fnql::webui::BackendStatus backendStatus =
 		fnql::webui::ClientBackendHost().Status();
-	const fnql::webui::SurfaceSize desired = {
-		cls.glconfig.vidWidth, cls.glconfig.vidHeight
-	};
+	const fnql::webui::SurfaceSize desired = CL_WebUI_SurfaceSizeForViewport(
+		cls.glconfig.vidWidth, cls.glconfig.vidHeight );
 	if ( backendStatus.surface == desired ) {
 		cl_webui.requestedSurfaceSize = desired;
 		return;
@@ -1727,6 +1750,7 @@ void CL_WebHost_Frame( void ) {
 			if ( !CL_WebHost_HasLiveView() ) {
 				CL_WebHost_MarkBrowserUnavailable();
 			} else {
+				CL_WebHost_EnsureFnqlOverlay();
 				CL_WebHost_EnsureStartupBridge();
 				CL_WebHost_UpdateBrowserNativeState();
 				CL_WebHost_SyncNativeSnapshots( qfalse );
@@ -2316,6 +2340,80 @@ static void CL_WebHost_EnsureStartupBridge( void ) {
 
 	if ( cl_webui.frameSequence >= cl_webui.nextBridgeRetryFrame ) {
 		CL_WebHost_InjectStartupBridge( qtrue );
+	}
+}
+
+static qboolean CL_WebHost_InjectFnqlOverlayAssets( void ) {
+	void *settingsBuffer = NULL;
+	void *styleBuffer = NULL;
+	int settingsLength = 0;
+	int styleLength = 0;
+	char *escapedStyle = NULL;
+	char *styleScript = NULL;
+	qboolean result = qfalse;
+	int styleInjected = 0;
+
+	if ( !CL_LauncherRequestData( "asset://ql/fnql-settings.js",
+		&settingsBuffer, &settingsLength ) || !settingsBuffer || settingsLength <= 0
+		|| !CL_LauncherRequestData( "asset://ql/css/fnql-settings.css",
+			&styleBuffer, &styleLength ) || !styleBuffer || styleLength <= 0
+		|| styleLength > ( ( std::numeric_limits<int>::max )() - 512 ) / 2 ) {
+		goto cleanup;
+	}
+
+	{
+		const int escapedSize = styleLength * 2 + 1;
+		const int scriptSize = escapedSize + 511;
+		escapedStyle = static_cast<char *>( Z_Malloc( escapedSize ) );
+		styleScript = static_cast<char *>( Z_Malloc( scriptSize ) );
+		if ( !escapedStyle || !styleScript ) {
+			goto cleanup;
+		}
+		CL_WebUI_JsonEscape( static_cast<const char *>( styleBuffer ),
+			escapedStyle, static_cast<size_t>( escapedSize ) );
+		Com_sprintf( styleScript, scriptSize,
+			"(function(){var h=document.head;if(!h){return 0;}"
+			"var s=document.getElementById('fnql-settings-style');"
+			"if(!s){s=document.createElement('style');s.id='fnql-settings-style';"
+			"s.type='text/css';h.appendChild(s);}s.textContent=\"%s\";return 1;})()",
+			escapedStyle );
+	}
+
+	if ( !CL_Awesomium_ExecuteJavascriptInteger( styleScript, "", &styleInjected )
+		|| !styleInjected
+		|| !CL_Awesomium_ExecuteJavascript(
+			static_cast<const char *>( settingsBuffer ), "" ) ) {
+		goto cleanup;
+	}
+	result = qtrue;
+
+cleanup:
+	if ( styleScript ) Z_Free( styleScript );
+	if ( escapedStyle ) Z_Free( escapedStyle );
+	if ( styleBuffer ) Z_Free( styleBuffer );
+	if ( settingsBuffer ) Z_Free( settingsBuffer );
+	return result;
+}
+
+static void CL_WebHost_EnsureFnqlOverlay( void ) {
+	int documentReady = 0;
+
+	if ( cl_webui.fnqlOverlayInjected || !CL_WebHost_HasLiveView()
+		|| !CL_WebHost_HasBoundWindowObject() ) {
+		return;
+	}
+	if ( !CL_Awesomium_ExecuteJavascriptInteger(
+		"(function(){return document.readyState!=='loading'&&String(window.location.href).indexOf('asset://ql/index.html')===0?1:0;})()",
+		"", &documentReady ) || !documentReady ) {
+		return;
+	}
+	if ( cl_webui.fnqlOverlayChecked && !cl_webui.fnqlOverlayAvailable ) {
+		return;
+	}
+	cl_webui.fnqlOverlayChecked = qtrue;
+	cl_webui.fnqlOverlayAvailable = CL_WebHost_InjectFnqlOverlayAssets();
+	if ( cl_webui.fnqlOverlayAvailable ) {
+		cl_webui.fnqlOverlayInjected = qtrue;
 	}
 }
 

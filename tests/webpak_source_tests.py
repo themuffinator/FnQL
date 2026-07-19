@@ -54,6 +54,7 @@ class WebPakSourceTests(unittest.TestCase):
 
         self.assertIn('"fnql-web.pak"', source)
         self.assertIn("cl_fnqlWebDataPak", source)
+        self.assertIn('CL_WebPak_BuildStandalonePath( Sys_Pwd(), "fnql-web.pak"', source)
         overlay_fetch = source.index("CL_WebDataPak_Fetch( &cl_fnqlWebDataPak")
         retail_fetch = source.index("CL_WebDataPak_Fetch( &cl_webDataPak", overlay_fetch)
         loose_fetch = source.index("CL_WebPak_ReadLooseFallback", retail_fetch)

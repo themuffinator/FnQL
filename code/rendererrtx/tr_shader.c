@@ -3915,18 +3915,18 @@ static shader_t *FinishShader( void ) {
 
 #ifdef USE_FOG_COLLAPSE
 			if ( fogCollapse && tr.numFogs > 0 ) {
-				Vk_Pipeline_Def def;
+				Vk_Pipeline_Def fogDef;
 				Vk_Pipeline_Def def_mirror;
 
-				vk_get_pipeline_def( pStage->vk_pipeline[0], &def );
+				vk_get_pipeline_def( pStage->vk_pipeline[0], &fogDef );
 				vk_get_pipeline_def( pStage->vk_mirror_pipeline[0], &def_mirror );
 
-				def.fog_stage = 1;
+				fogDef.fog_stage = 1;
 				def_mirror.fog_stage = 1;
-				def.acff = pStage->bundle[0].adjustColorsForFog;
+				fogDef.acff = pStage->bundle[0].adjustColorsForFog;
 				def_mirror.acff = pStage->bundle[0].adjustColorsForFog;
 
-				pStage->vk_pipeline[1] = vk_find_pipeline_ext( 0, &def, qfalse );
+				pStage->vk_pipeline[1] = vk_find_pipeline_ext( 0, &fogDef, qfalse );
 				pStage->vk_mirror_pipeline[1] = vk_find_pipeline_ext( 0, &def_mirror, qfalse );
 
 				pStage->bundle[0].adjustColorsForFog = ACFF_NONE; // will be handled in shader from now
@@ -4024,15 +4024,15 @@ static const char *FindShaderInShaderText( const char *shadername ) {
 	return NULL;
 }
 
-qboolean R_LiquidShaderSupported( const shader_t *shader )
+qboolean R_LiquidShaderSupported( const shader_t *materialShader )
 {
 	int i;
 
-	if ( !shader || shader->numUnfoggedPasses <= 0 ) {
+	if ( !materialShader || materialShader->numUnfoggedPasses <= 0 ) {
 		return qfalse;
 	}
-	for ( i = 0; i < shader->numUnfoggedPasses; i++ ) {
-		const shaderStage_t *stage = shader->stages[i];
+	for ( i = 0; i < materialShader->numUnfoggedPasses; i++ ) {
+		const shaderStage_t *stage = materialShader->stages[i];
 
 		/*
 		 * The synthetic pass has ordinary geometry coverage and LEQUAL depth.
@@ -4048,7 +4048,7 @@ qboolean R_LiquidShaderSupported( const shader_t *shader )
 	return qtrue;
 }
 
-qboolean R_RtShaderNativeSupported( const shader_t *shader )
+qboolean R_RtShaderNativeSupported( const shader_t *materialShader )
 {
 #ifdef USE_VULKAN
 	const shaderStage_t *stage;
@@ -4064,19 +4064,19 @@ qboolean R_RtShaderNativeSupported( const shader_t *shader )
 	 * deformation.  Everything else remains a raster overlay while its
 	 * opaque geometry can still participate in RT visibility.
 	 */
-	if ( !shader ||
-		shader->remappedShader ||
-		shader->sort != SS_OPAQUE ||
-		shader->isSky ||
-		( shader->surfaceFlags & SURF_SKY ) ||
-		shader->polygonOffset ||
-		shader->numDeforms != 0 ||
-		shader->hasScreenMap ||
-		shader->numUnfoggedPasses != 1 ) {
+	if ( !materialShader ||
+		materialShader->remappedShader ||
+		materialShader->sort != SS_OPAQUE ||
+		materialShader->isSky ||
+		( materialShader->surfaceFlags & SURF_SKY ) ||
+		materialShader->polygonOffset ||
+		materialShader->numDeforms != 0 ||
+		materialShader->hasScreenMap ||
+		materialShader->numUnfoggedPasses != 1 ) {
 		return qfalse;
 	}
 
-	stage = shader->stages[0];
+	stage = materialShader->stages[0];
 	if ( !stage ||
 		!stage->active ||
 		stage->depthFragment ||
@@ -4143,7 +4143,7 @@ qboolean R_RtShaderNativeSupported( const shader_t *shader )
 	return ( baseBundleCount == 1 && lightmapBundleCount == 0 ) ?
 		qtrue : qfalse;
 #else
-	(void)shader;
+	(void)materialShader;
 	return qfalse;
 #endif
 }

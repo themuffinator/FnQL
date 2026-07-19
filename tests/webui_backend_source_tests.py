@@ -49,11 +49,11 @@ class WebUiBackendSourceTests(unittest.TestCase):
         self.assertIn("GetProcAddress( module_, name )", adapter)
         self.assertIn("_Awe_WebCore_Initialize@4", adapter)
         self.assertIn("newDataPakSource( webPakPath_.c_str() )", adapter)
-        self.assertIn("OnQlResourceRequest", adapter)
-        self.assertIn("qlDataSource_ = imports_.newDataSource()", adapter)
-        self.assertIn('webSessionAddDataSource( session_, L"QL", qlDataSource_ )', adapter)
-        self.assertIn('"asset://ql/%s"', adapter)
-        self.assertIn("ResourceMimeType", adapter)
+        self.assertIn('webSessionAddDataSource( session_, L"QL", dataPakSource_ )', adapter)
+        self.assertIn("CL_WebHost_EnsureFnqlOverlay", source)
+        self.assertIn("CL_WebHost_InjectFnqlOverlayAssets", source)
+        self.assertIn('"asset://ql/fnql-settings.js"', source)
+        self.assertNotIn("OnFnqlResourceRequest", adapter)
         self.assertIn("FNQL_WEBUI_VERBOSE_LOG", adapter)
         self.assertIn("if ( module_ )", adapter)
         self.assertIn("webPakPath_.clear();", adapter)
@@ -135,11 +135,11 @@ class WebUiBackendSourceTests(unittest.TestCase):
             source,
         )
         self.assertIn(
-            "? cls.glconfig.vidWidth : CL_WEB_BOOTSTRAP_WIDTH", source
+            "CL_WebUI_SurfaceSizeForViewport(\n\t\tcls.glconfig.vidWidth, cls.glconfig.vidHeight )", source
         )
-        self.assertIn(
-            "? cls.glconfig.vidHeight : CL_WEB_BOOTSTRAP_HEIGHT", source
-        )
+        self.assertIn("viewport.ConstrainedTo( cls.glconfig.maxTextureSize )", source)
+        self.assertIn("initialSurfaceSize.width", source)
+        self.assertIn("initialSurfaceSize.height", source)
         bootstrap = source[
             source.index("void CL_WebHost_BootstrapAwesomiumMenu") :
             source.index("qboolean CL_WebHost_HasLiveView")
@@ -201,7 +201,7 @@ class WebUiBackendSourceTests(unittest.TestCase):
         self.assertIn("Verified retail runtime observations", plan)
         self.assertIn("Retail behavior remains authoritative", plan)
         self.assertIn("Runtime validation", plan)
-        self.assertIn("arbitrary-size RGBA", plan)
+        self.assertIn("bounded RGBA", plan)
 
 
 if __name__ == "__main__":

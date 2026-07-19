@@ -133,6 +133,23 @@ struct SurfaceSize {
 		return !( *this == other );
 	}
 
+	constexpr SurfaceSize ConstrainedTo( int maximumDimension ) const noexcept {
+		if ( !IsValid() || maximumDimension <= 0
+			|| ( width <= maximumDimension && height <= maximumDimension ) ) {
+			return *this;
+		}
+
+		if ( width >= height ) {
+			const int scaledHeight = static_cast<int>(
+				static_cast<std::int64_t>( height ) * maximumDimension / width );
+			return { maximumDimension, scaledHeight > 0 ? scaledHeight : 1 };
+		}
+
+		const int scaledWidth = static_cast<int>(
+			static_cast<std::int64_t>( width ) * maximumDimension / height );
+		return { scaledWidth > 0 ? scaledWidth : 1, maximumDimension };
+	}
+
 	bool MinimumRowBytes( std::size_t *bytes ) const noexcept {
 		if ( !bytes || !IsValid() ) {
 			return false;

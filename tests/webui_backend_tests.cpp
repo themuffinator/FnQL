@@ -415,6 +415,20 @@ bool ValidatesAndCopiesSoftwareSurfaces() {
 	return true;
 }
 
+bool ConstrainsBrowserSurfacesWithoutChangingAspectRatio() {
+	CHECK( ( SurfaceSize{ 1280, 720 }.ConstrainedTo( 2048 )
+		== SurfaceSize{ 1280, 720 } ) );
+	CHECK( ( SurfaceSize{ 2560, 1440 }.ConstrainedTo( 2048 )
+		== SurfaceSize{ 2048, 1152 } ) );
+	CHECK( ( SurfaceSize{ 1440, 2560 }.ConstrainedTo( 2048 )
+		== SurfaceSize{ 1152, 2048 } ) );
+	CHECK( ( SurfaceSize{ 1, 4096 }.ConstrainedTo( 2048 )
+		== SurfaceSize{ 1, 2048 } ) );
+	CHECK( ( SurfaceSize{ 2560, 1440 }.ConstrainedTo( 0 )
+		== SurfaceSize{ 2560, 1440 } ) );
+	return true;
+}
+
 bool ForwardsTypedNavigationScriptAndInput() {
 	FakeBackend fake;
 	BackendHost host;
@@ -489,6 +503,7 @@ int main() {
 		&& CleansUpPartialStartupFailures()
 		&& ProvidesBalancedHostResourceServices()
 		&& ValidatesAndCopiesSoftwareSurfaces()
+		&& ConstrainsBrowserSurfacesWithoutChangingAspectRatio()
 		&& ForwardsTypedNavigationScriptAndInput()
 		&& RestrictsPrivilegedNavigationToRetailAssetOrigin();
 	return passed ? 0 : 1;

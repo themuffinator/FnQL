@@ -77,6 +77,8 @@ class WebPakBuilderTests(unittest.TestCase):
             b"panel.__fnqlSettingsSignature !== settingsSignature(cvarCache())",
             decoded["fnql-settings.js"],
         )
+        self.assertIn(b"window.addEventListener('hashchange'", decoded["fnql-settings.js"])
+        self.assertIn(b"window.setInterval(attach, 1000)", decoded["fnql-settings.js"])
         source_paths = {
             resource.virtual_path
             for resource in build_webpak.collect_resources(

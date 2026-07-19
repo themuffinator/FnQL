@@ -940,10 +940,10 @@ static qboolean RB_DrawSurfListNeedsLiquidSnapshot( drawSurf_t *drawSurfs,
 #endif
 
 static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs, rbDrawSurfsMode_t mode ) {
-	shader_t		*shader, *oldShader;
-	int				fogNum;
-	int				entityNum, oldEntityNum;
-	int				dlighted;
+	shader_t		*shader = NULL, *oldShader;
+	int				fogNum = 0;
+	int				entityNum = REFENTITYNUM_WORLD, oldEntityNum;
+	int				dlighted = 0;
 	qboolean		depthRange, isCrosshair;
 #ifndef USE_VULKAN
 	qboolean		oldDepthRange, wasCrosshair;
@@ -1272,9 +1272,9 @@ RB_RenderLitSurfList
 ==================
 */
 static void RB_RenderLitSurfList( dlight_t* dl, rbDrawSurfsMode_t mode ) {
-	shader_t		*shader, *oldShader;
-	int				fogNum;
-	int				entityNum, oldEntityNum;
+	shader_t		*shader = NULL, *oldShader;
+	int				fogNum = 0;
+	int				entityNum = REFENTITYNUM_WORLD, oldEntityNum;
 #ifndef USE_VULKAN
 	qboolean		oldDepthRange, wasCrosshair;
 #endif

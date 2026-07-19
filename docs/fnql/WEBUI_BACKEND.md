@@ -43,6 +43,14 @@ user's legitimate Steam installation; they are not inferred from QLSRP:
   process. Starting WebCore and the DataPak source during the existing
   pre-renderer client bootstrap loaded the same package successfully; the
   provisional 1280x720 view then resized to the renderer dimensions.
+- A 2026-07-19 windowed GLx probe at 2560x1440 showed a complete Awesomium CPU
+  surface but an all-black renderer screenshot. The identical launch at
+  640x480 presented the CPU surface exactly in the renderer screenshot.
+
+Static inspection explained the resolution-dependent result: the inherited
+dynamic-image path reports a 2048-pixel texture limit, reduces the initial
+upload to that limit, then attempts later sub-image updates with the original
+larger dimensions. Those updates cannot fit the allocated renderer image.
 
 QLSRP was used separately as behavioral and ABI evidence for the expected
 core/session/view lifecycle and generated export names. The FnQL adapter is an
@@ -60,11 +68,12 @@ Windows x86 adapter around the runtime's generated stdcall C exports:
 - exact required-export validation before any runtime object is created;
 - owned UTF-8/UTF-16 conversion and copied diagnostics;
 - reverse-order cleanup of partial or complete startup;
-- WebCore, bitmap factory, WebSession, engine-routed `QL` data source, native
-  retail-DataPak fallback, and offscreen WebView ownership;
+- WebCore, bitmap factory, WebSession, authoritative native retail `QL`
+  DataPak source, and offscreen WebView ownership;
 - pre-renderer WebUI startup with a bounded provisional surface, followed by
-  normal renderer-driven resize, so the 32-bit Vulkan path does not contend
-  with the legacy package loader during its initial reservation;
+  an aspect-preserving resize constrained to the renderer's reported texture
+  limit, so high-resolution viewports remain updateable and the 32-bit Vulkan
+  path does not contend with the legacy package loader during startup;
 - pre-document and post-navigation qz bridge injection;
 - bounded script results and software-surface copies;
 - resize, focus, pause, mouse, wheel, keyboard, cache, reload, crash, and
@@ -77,14 +86,23 @@ Windows x86 adapter around the runtime's generated stdcall C exports:
 FnQL builds and ships `fnql-web.pak`, a deterministic Chromium DataPack v4
 sidecar containing only three project-owned resources: `index.html`,
 `fnql-settings.js`, and `css/fnql-settings.css`. It does not contain retail
-`bundle.js`, fonts, images, or styles. The replacement bootstrap references the
-unchanged retail files by their original paths.
+`bundle.js`, fonts, images, or styles.
 
-The engine-owned resolver applies this order for the `asset://ql/` host:
+The live browser keeps Awesomium's native retail DataPak source authoritative
+for `asset://ql/`; replacing that reserved host with a generic DataSource was
+observed to leave navigation at `about:blank` without dispatching a resource
+request. Once the retail document is interactive, FnQL reads the project-owned
+settings script and stylesheet through its bounded engine resolver and injects
+their contents directly. The resolver applies:
 
 1. matching resources from `fnql-web.pak`;
 2. all remaining resources from the user's external retail `web.pak`; and
 3. the established bounded loose-file fallback.
+
+The packaged `index.html` remains part of the deterministic sparse-overlay
+fixture, but the live runtime never replaces the retail navigation document
+with it. This keeps retail bootstrap behavior authoritative while preserving
+the FnQL settings extension.
 
 The settings script inserts an FnQL tab beside the retail Video tab and builds
 controls only for cvars present in the engine's allowlisted configuration
@@ -94,7 +112,9 @@ post-processing column and replaces its duplicated mode/fullscreen controls;
 the corresponding FnQL controls own `r_mode`, `r_modeFullscreen`, renderer
 selection, and the supported post-processing cvars.
 
-Build systems generate the sidecar alongside the executable, installation and
+Build systems generate the sidecar alongside the executable, and the runtime
+checks the executable directory first so VS Code/Meson build trees discover it
+on Windows even though `fs_apppath` is not registered there. Installation and
 release-layout checks require it, and release packaging rebuilds it from source
 instead of trusting an artifact copy. Maintainers can reproduce it directly:
 
@@ -114,10 +134,13 @@ load can leave Chromium's `chrome://chromewebdata/` error document active.
 Bridge retries use a private lightweight qz synchronizer rather than calling a
 page-owned `main_hook_v2` repeatedly after startup.
 
-The renderer API owns a dedicated arbitrary-size RGBA WebUI image and shader in
+The renderer API owns a dedicated bounded RGBA WebUI image and shader in
 OpenGL, OpenGL2, GLx, and Vulkan. It does not consume cinematic handles or
-inherit the cinematic power-of-two restriction. Native UI ownership transfers
-only after a live Awesomium bitmap surface and renderer presenter both exist.
+inherit the cinematic power-of-two restriction. The offscreen document is
+aspect-preservingly constrained to the renderer's maximum texture dimension,
+then drawn across the full viewport; browser input uses the same coordinate
+mapping. Native UI ownership transfers only after a live Awesomium bitmap
+surface and renderer presenter both exist.
 
 ## Safety and non-regression
 

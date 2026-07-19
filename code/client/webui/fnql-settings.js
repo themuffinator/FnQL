@@ -1,6 +1,8 @@
 (function () {
   'use strict';
 
+  window.__fnql_settings_script_loaded = true;
+
   var active = false;
   var currentRoot = null;
   var refreshTimer = null;
@@ -397,9 +399,13 @@
       observer = new MutationObserver(attach);
       observer.observe(document.body, { childList: true, subtree: true });
     }
-    refreshTimer = window.setInterval(function () {
-      if (active) { attach(); }
-    }, 1000);
+    window.addEventListener('hashchange', function () {
+      window.setTimeout(attach, 0);
+    }, false);
+    // Awesomium's Chromium build does not reliably deliver MutationObserver
+    // callbacks for every React route replacement. Keep a cheap periodic attach
+    // so the tab appears after navigation even while it is not yet active.
+    refreshTimer = window.setInterval(attach, 1000);
   }
 
   if (document.readyState === 'loading') {
