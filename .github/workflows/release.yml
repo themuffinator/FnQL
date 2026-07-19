@@ -85,11 +85,11 @@ jobs:
             -Dglx-tests=false \
             -Dlibjpeg-turbo:simd=disabled
           meson compile -C meson/build-x86
-          meson install -C meson/build-x86 --no-rebuild
+          meson install -C meson/build-x86 --no-rebuild --skip-subprojects
 
       - name: Verify release layout
         shell: msys2 {0}
-        run: python scripts/verify_release_layout.py bin
+        run: python scripts/verify_release_layout.py bin/FnQL-pkg.fnz
 
       - uses: actions/upload-artifact@v7
         with:
@@ -124,10 +124,10 @@ jobs:
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x86 -host_arch=x64 || exit /b
           meson setup meson\build-x86 --buildtype=release --prefix "%CD%\bin" -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=glx,vk,rtx -Drenderer-default=glx -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
           meson compile -C meson\build-x86 || exit /b
-          meson install -C meson\build-x86 --no-rebuild || exit /b
+          meson install -C meson\build-x86 --no-rebuild --skip-subprojects || exit /b
 
       - name: Verify release layout
-        run: python scripts/verify_release_layout.py bin
+        run: python scripts/verify_release_layout.py bin/FnQL-pkg.fnz
 
       - uses: actions/upload-artifact@v7
         with:
@@ -184,7 +184,7 @@ jobs:
         run: python3 scripts/check_elf_glibc.py --max-glibc "$FNQ3_LINUX_GLIBC_MAX" --require-elf bin
 
       - name: Verify release layout
-        run: python3 scripts/verify_release_layout.py bin
+        run: python3 scripts/verify_release_layout.py bin/FnQL-pkg.fnz
 
       - uses: actions/upload-artifact@v7
         with:

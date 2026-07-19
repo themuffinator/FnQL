@@ -374,6 +374,12 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertIn("name: windows-msvc-x86", workflow)
         self.assertIn("name: linux-x86", workflow)
         self.assertIn("ARCH=x86 COMPILE_ARCH=x86", workflow)
+        self.assertEqual(
+            workflow.count("verify_release_layout.py bin/FnQL-pkg.fnz"),
+            3,
+        )
+        self.assertEqual(workflow.count("--skip-subprojects"), 2)
+        self.assertNotIn("verify_release_layout.py bin\n", workflow)
         self.assertNotIn("ubuntu-arm64:", workflow)
         self.assertNotIn("macos-x86:", workflow)
         self.assertNotIn("arch: [x86, x86_64]", workflow)
