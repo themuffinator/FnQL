@@ -74,6 +74,7 @@ jobs:
           mkdir -p bin
           meson setup meson/build-x86 \
             --buildtype=release \
+            --wrap-mode=forcefallback \
             --prefix "$PWD/bin" \
             -Dc_link_args=-static \
             -Dcpp_link_args=-static \
@@ -133,7 +134,7 @@ jobs:
 
           for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x86 -host_arch=x64 || exit /b
-          meson setup meson\build-x86 --buildtype=release --prefix "%CD%\bin" -Db_vscrt=static_from_buildtype -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=glx,vk,rtx -Drenderer-default=glx -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
+          meson setup meson\build-x86 --buildtype=release --wrap-mode=forcefallback --prefix "%CD%\bin" -Db_vscrt=static_from_buildtype -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=glx,vk,rtx -Drenderer-default=glx -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
           meson compile -C meson\build-x86 || exit /b
           meson install -C meson\build-x86 --no-rebuild --skip-subprojects || exit /b
 

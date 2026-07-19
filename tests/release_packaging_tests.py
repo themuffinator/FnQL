@@ -492,6 +492,7 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertIn("-Dcpp_link_args=-static", workflow)
         self.assertIn("-Dzlib:default_library=static", workflow)
         self.assertIn("-Db_vscrt=static_from_buildtype", workflow)
+        self.assertEqual(workflow.count("--wrap-mode=forcefallback"), 2)
         self.assertNotIn("verify_release_layout.py bin\n", workflow)
         self.assertNotIn("FNQ3_", workflow)
         self.assertNotIn("docs/fnquake3/", workflow)
