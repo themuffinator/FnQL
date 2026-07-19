@@ -23,7 +23,25 @@ cpp = meson.get_compiler('cpp')
 
 fallback_defaults = ['default_library=static']
 quiet_fallback_defaults = fallback_defaults + ['warning_level=0']
-curl_fallback_defaults = quiet_fallback_defaults + ['tests=disabled']
+curl_fallback_defaults = quiet_fallback_defaults + [
+  'tests=disabled',
+  'tool=disabled',
+  'unittests=disabled',
+  # Windows releases use Schannel and the built-in resolver. Keep optional
+  # transfer encodings and protocols from silently linking runner-installed
+  # DLLs into an otherwise self-contained package.
+  'brotli=disabled',
+  'gsasl=disabled',
+  'gss-api=disabled',
+  'http2=disabled',
+  'idn=disabled',
+  'libuv=disabled',
+  'openssl=disabled',
+  'psl=disabled',
+  'rtmp=disabled',
+  'ssh=disabled',
+  'zstd=disabled',
+]
 openal_fallback_defaults = quiet_fallback_defaults
 vorbis_fallback_defaults = quiet_fallback_defaults + [
   'tests=false',
