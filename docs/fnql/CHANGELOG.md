@@ -7,9 +7,7 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
 ## [Unreleased]
 
 ### Highlights
-- Official Windows packages now include the compiled Win32 FnQL Steam provider,
-  enabling the legitimate retail Steam service path without publishing its
-  proprietary source or Valve's Steam redistributable.
+- _None yet._
 
 ### Compatibility
 - _None yet._
@@ -21,15 +19,10 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
 - _None yet._
 
 ### Builds and Packaging
-- Made MSYS2, MSVC, and provider binaries self-contained with static compiler
-  runtimes, and added a PE import audit for unshipped runtime dependencies.
-- Pinned the binary-only Steam provider release by version, SHA-256, and PE i386
-  identity in both Windows release jobs.
+- _None yet._
 
 ### Fixes
-- Fixed released MinGW executables failing at startup because
-  `libgcc_s_dw2-1.dll` and related runtime DLLs were not packaged.
+- _None yet._
 
 ### Documentation and Tooling
-- Documented that official compiled provider binaries may be released while
-  FnQL-Steam source remains closed and non-redistributable.
+- _None yet._
