@@ -68,21 +68,29 @@ class RendererCvarCompatibilitySourceTests(unittest.TestCase):
         self.assertIn('"r_bloomSceneIntensity", "1.0"', contract)
         self.assertIn('"r_bloomSceneSaturation", "1.0"', contract)
 
-    def test_retail_postprocess_defaults_do_not_preempt_fnql_defaults(self) -> None:
+    def test_retail_postprocess_never_preempts_fnq3_renderer_controls(self) -> None:
         contract = read("code/renderercommon/tr_ql_cvars.h")
-        self.assertIn("bridgeMarkerExisted", contract)
-        self.assertIn("retailPostProcessExisted", contract)
-        self.assertIn("useRetailPostProcess", contract)
+        self.assertNotIn("bridgeMarkerExisted", contract)
+        self.assertNotIn("retailPostProcessExisted", contract)
+        self.assertNotIn("useRetailPostProcess", contract)
         self.assertIn(
-            '"r_qlRetailPostProcessBridge", "0",\n\t\tCVAR_ARCHIVE | CVAR_PROTECTED',
+            '"r_qlRetailPostProcessBridge", "0",\n\t\tCVAR_ROM',
             contract,
         )
-        self.assertIn('ri.Cvar_Set( "r_qlRetailPostProcessBridge", "1" )', contract)
-        self.assertIn("R_QLPostParameterModificationCount", contract)
-        self.assertIn("postParameterModificationCount", contract)
-        self.assertIn('R_QLBridgeCvar( "r_bloom_intensity"', contract)
-        self.assertIn('R_QLBridgeCvar( "r_bloom_threshold"', contract)
-        self.assertNotIn('R_QLBridgeCvar( "r_hdr"', contract)
+        self.assertIn('ri.Cvar_Set( "r_qlRetailPostProcessBridge", "0" )', contract)
+        self.assertNotIn("R_QLPostParameterModificationCount", contract)
+        self.assertNotIn("postParameterModificationCount", contract)
+        self.assertNotIn("R_QLBridgeCvar", contract)
+        self.assertNotIn('ri.Cvar_Set( "r_bloom"', contract)
+        self.assertNotIn('ri.Cvar_Set( "r_bloom_', contract)
+        self.assertNotIn('ri.Cvar_Set( "r_colorGrade"', contract)
+
+        contrast = contract[
+            contract.index("static ID_INLINE float R_QLRetailContrast") :
+            contract.index("#endif /* TR_QL_CVARS_H */")
+        ]
+        self.assertIn("return 1.0f;", contrast)
+        self.assertNotIn("qlRendererCvars.contrast->value", contrast)
 
     def test_all_renderers_register_update_and_consume_operational_controls(self) -> None:
         for renderer, backend in RENDERERS.items():

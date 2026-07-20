@@ -515,7 +515,7 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
         self.assertNotIn("UI_Import_Call( UI_CM_LOADMODEL", cm_load_model)
         self.assertIn("ql_ui_imports[UI_QL_IMPORT_CM_LOADMODEL] = (ql_import_f)QL_UI_trap_CM_LoadModel;", cl_ui)
 
-    def test_ui_registersound_import_normalizes_retail_boolean_argument(self) -> None:
+    def test_ui_registersound_import_matches_retail_one_argument_abi(self) -> None:
         cl_ui = read_repo_file("code/client/cl_ui.cpp")
 
         register_sound = cl_ui[
@@ -523,9 +523,12 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
             cl_ui.index("static void QDECL QL_UI_trap_Key_KeynumToStringBuf")
         ]
 
-        self.assertIn("if ( compressed != qfalse && compressed != qtrue )", register_sound)
-        self.assertIn("compressed = ( compressed != 0 ) ? qtrue : qfalse;", register_sound)
-        self.assertIn("return S_RegisterSound( sample, static_cast<qboolean>( compressed ) );", register_sound)
+        self.assertIn(
+            "QL_UI_trap_S_RegisterSound_QL( const char *sample )",
+            register_sound,
+        )
+        self.assertNotIn("compressed", register_sound.split("{", 1)[0])
+        self.assertIn("return S_RegisterSound( sample, qfalse );", register_sound)
 
     def test_ui_cursor_imports_share_webui_host_cursor_state(self) -> None:
         client_h = read_repo_file("code/client/client.h")
@@ -569,10 +572,15 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
         self.assertNotIn("Field_AutoComplete", console_key)
         self.assertIn("if ( Con_InputKey( key ) )", console_key)
 
-    def test_ui_key_events_pass_retail_timestamp_argument(self) -> None:
+    def test_ui_key_events_translate_legacy_tuple_to_retail_native_abi(self) -> None:
         cl_keys = read_repo_file("code/client/cl_keys.cpp")
+        vm = read_repo_file("code/qcommon/vm.c")
 
-        self.assertIn("((void (QDECL *)( int, qboolean, int ))exportFunc)", read_repo_file("code/qcommon/vm.c"))
+        self.assertIn("const qboolean characterEvent = ( key & K_CHAR_FLAG ) ? qtrue : qfalse;", vm)
+        self.assertIn("const int nativeKey = key & ~K_CHAR_FLAG;", vm)
+        self.assertIn("((void (QDECL *)( int, qboolean, qboolean ))exportFunc)", vm)
+        self.assertIn("characterEvent, VM_NormalizeQbooleanArg( args[1] )", vm)
+        self.assertNotIn("VM_NormalizeQbooleanArg( args[1] ), (int)args[2]", vm)
         self.assertIn("VM_Call( uivm, 3, UI_KEY_EVENT, key, qtrue, time );", cl_keys)
         self.assertIn("VM_Call( uivm, 3, UI_KEY_EVENT, key, qfalse, time );", cl_keys)
         self.assertIn("VM_Call( uivm, 3, UI_KEY_EVENT, utf8Byte | K_CHAR_FLAG, qtrue, cls.realtime );", cl_keys)

@@ -1474,11 +1474,10 @@ static void QDECL QL_UI_trap_S_StartLocalSound( sfxHandle_t sfx, int channelNum 
 	UI_Import_Call( UI_S_STARTLOCALSOUND, { sfx, channelNum } );
 }
 
-static sfxHandle_t QDECL QL_UI_trap_S_RegisterSound_QL( const char *sample, int compressed ) {
-	if ( compressed != qfalse && compressed != qtrue ) {
-		compressed = ( compressed != 0 ) ? qtrue : qfalse;
-	}
-	return S_RegisterSound( sample, static_cast<qboolean>( compressed ) );
+static sfxHandle_t QDECL QL_UI_trap_S_RegisterSound_QL( const char *sample ) {
+	// Retail uix86.dll import 35 passes only the sample path. Compression is
+	// an engine-side detail and must not consume an unprovided stack argument.
+	return S_RegisterSound( sample, qfalse );
 }
 
 static void QDECL QL_UI_trap_Key_KeynumToStringBuf( int keynum, char *buf, int buflen ) {

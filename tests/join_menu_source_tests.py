@@ -60,6 +60,12 @@ class JoinMenuSourceTests(unittest.TestCase):
         body = function_body(read_source(), "CL_ActivateNativeMenu")
 
         self.assertIn("UI_SET_ACTIVE_MENU, menu", body)
+        self.assertIn("if ( menu == UIMENU_TEAM )", body)
+        self.assertIn("UI_SET_ACTIVE_MENU, UIMENU_INGAME", body)
+        self.assertLess(
+            body.index("UI_SET_ACTIVE_MENU, UIMENU_INGAME"),
+            body.index("UI_SET_ACTIVE_MENU, menu"),
+        )
         self.assertIn("CL_WebHost_HideForGameTransition();", body)
         self.assertIn("KEYCATCH_CGAME | KEYCATCH_BROWSER", body)
         self.assertIn("| KEYCATCH_UI", body)
@@ -70,11 +76,10 @@ class JoinMenuSourceTests(unittest.TestCase):
         self.assertIn("const qboolean openJoinMenu = CL_ShouldOpenJoinMenu();", body)
         self.assertIn("if ( cls.state != CA_ACTIVE || clc.demoplaying )", body)
         self.assertIn("CL_WebHost_HideForGameTransition();", body)
-        self.assertIn("CG_EVENT_HANDLING, CGAME_EVENT_TEAMMENU", body)
-        self.assertIn("| KEYCATCH_CGAME", body)
+        self.assertNotIn("CG_EVENT_HANDLING, CGAME_EVENT_TEAMMENU", body)
         self.assertIn("if ( !openJoinMenu )", body)
         self.assertIn(
-            "CL_ActivateNativeMenu( UIMENU_INGAME );",
+            "CL_ActivateNativeMenu( openJoinMenu ? UIMENU_TEAM : UIMENU_INGAME );",
             body,
         )
 

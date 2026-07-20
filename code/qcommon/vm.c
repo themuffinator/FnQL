@@ -40,6 +40,7 @@ and one exported function: Perform
 #include "../renderercommon/tr_types.h"
 #ifndef USE_DEDICATED
 #include "../cgame/cg_public.h"
+#include "../client/keycodes.h"
 #endif
 
 opcode_info_t ops[ OP_MAX ] =
@@ -2528,13 +2529,24 @@ static intptr_t VM_CallNativeExports( vm_t *vm, int callnum, const intptr_t *arg
 			}
 			((void (QDECL *)( void ))exportFunc)();
 			return 0;
-		case UI_KEY_EVENT:
+		case UI_KEY_EVENT: {
+			const int key = (int)args[0];
+			const qboolean characterEvent = ( key & K_CHAR_FLAG ) ? qtrue : qfalse;
+			const int nativeKey = key & ~K_CHAR_FLAG;
+
 			exportFunc = dllExports[uiExportIndex];
 			if ( !exportFunc ) {
 				break;
 			}
-			((void (QDECL *)( int, qboolean, int ))exportFunc)( (int)args[0], VM_NormalizeQbooleanArg( args[1] ), (int)args[2] );
+			/* Retail quakelive_steam.exe calls this native slot as
+			 * (key, characterEvent, down): ordinary keys use (key, 0, down)
+			 * and CL_CharEvent uses (byte, 1, 1).  The legacy VM_Call tuple is
+			 * (key | K_CHAR_FLAG, down, time), so translate only at the native
+			 * boundary instead of exposing key-up time as a second key press. */
+			((void (QDECL *)( int, qboolean, qboolean ))exportFunc)( nativeKey,
+				characterEvent, VM_NormalizeQbooleanArg( args[1] ) );
 			return 0;
+		}
 		case UI_MOUSE_EVENT:
 			exportFunc = dllExports[uiExportIndex];
 			if ( !exportFunc ) {

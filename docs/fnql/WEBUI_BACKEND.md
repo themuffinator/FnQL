@@ -91,9 +91,10 @@ Windows x86 adapter around the runtime's generated stdcall C exports:
 - WebCore, bitmap factory, WebSession, authoritative native retail `QL`
   DataPak source, and offscreen WebView ownership;
 - pre-renderer WebUI startup with a bounded provisional surface, followed by
-  an aspect-preserving resize constrained to the renderer's reported texture
-  limit, so high-resolution viewports remain updateable and the 32-bit Vulkan
-  path does not contend with the legacy package loader during startup;
+  a retail-height surface whose width matches the viewport aspect and whose
+  final dimensions are constrained together to the renderer's texture limit,
+  so 4:3 and widescreen views remain undistorted and the 32-bit Vulkan path
+  does not contend with the legacy package loader during startup;
 - pre-document and post-navigation qz bridge injection;
 - bounded script results and software-surface copies;
 - resize, focus, pause, mouse, wheel, keyboard, cache, reload, crash, and
@@ -164,11 +165,23 @@ restore WebUI input, with the native menu as fallback.
 
 The renderer API owns a dedicated bounded RGBA WebUI image and shader in
 OpenGL, OpenGL2, GLx, and Vulkan. It does not consume cinematic handles or
-inherit the cinematic power-of-two restriction. The offscreen document is
-aspect-preservingly constrained to the renderer's maximum texture dimension,
-then drawn across the full viewport; browser input uses the same coordinate
-mapping. Native UI ownership transfers only after a live Awesomium bitmap
-surface and renderer presenter both exist.
+inherit the cinematic power-of-two restriction. The offscreen document keeps
+retail's 1080-line logical height and derives its width from the viewport
+aspect before both axes are constrained together to the renderer's maximum
+texture dimension. It can therefore fill 4:3, 16:10, 16:9, and ultrawide
+viewports without stretching; browser input uses the same coordinate mapping.
+Native UI ownership transfers only after a live Awesomium bitmap surface and
+renderer presenter both exist.
+
+Once play is active, Escape transfers ownership from the browser/cgame catcher
+to the retail native UI and activates its in-game menu. The native import slab
+matches retail `uix86.dll` at this boundary: sound-registration slot 35 accepts
+only the sample path. Treating it as the legacy two-argument QVM call corrupts
+the call boundary and stops `ui/ingame.menu` parsing at `itemFocusSound`, which
+leaves Escape with no visible menu. Native key-event slot 2 likewise translates
+the legacy `(key | K_CHAR_FLAG, down, time)` tuple to retail's observed
+`(key, characterEvent, down)` ABI. Passing the timestamp as retail's `down`
+argument makes Escape's key-up close the menu immediately after it opens.
 
 ## Safety and non-regression
 

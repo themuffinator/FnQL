@@ -571,6 +571,7 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("static void CL_WebHost_PublishUnresponsiveServerRows", source)
         self.assertIn("static void CL_WebHost_PublishServerDetailResponse", source)
         self.assertIn("static void CL_WebHost_PublishServerDetailFailed", source)
+        self.assertIn("static void CL_WebHost_BuildServerDetailEndpointPayload", source)
         self.assertIn("static void CL_WebHost_PublishServerDetailRulesEnd", source)
         self.assertIn("static void CL_WebHost_PublishServerDetailPlayersEnd", source)
         self.assertIn("static void CL_WebHost_PublishServerDetailRulesFailed", source)
@@ -588,6 +589,30 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn('Com_sprintf( eventName, sizeof( eventName ), "servers.rules.%s.end", cl_webui.serverDetailId );', source)
         self.assertIn('Com_sprintf( eventName, sizeof( eventName ), "servers.players.%s.response", cl_webui.serverDetailId );', source)
         self.assertIn('Com_sprintf( eventName, sizeof( eventName ), "servers.players.%s.end", cl_webui.serverDetailId );', source)
+        self.assertIn('{\\"id\\":\\"%s\\",\\"ip\\":%u,\\"port\\":%u}', source)
+        rules_end = source[
+            source.index("static void CL_WebHost_PublishServerDetailRulesEnd") :
+            source.index("static void CL_WebHost_PublishServerDetailPlayersEnd")
+        ]
+        players_end = source[
+            source.index("static void CL_WebHost_PublishServerDetailPlayersEnd") :
+            source.index("static void CL_WebHost_PublishServerDetailRulesFailed")
+        ]
+        for terminal_event in (rules_end, players_end):
+            self.assertIn("CL_WebHost_BuildServerDetailEndpointPayload", terminal_event)
+            self.assertNotIn("CL_WebView_PublishEvent( eventName, NULL )", terminal_event)
+        udp_complete = source[
+            source.index("void CL_WebHost_OnServerStatusResponseComplete") :
+            source.index("static const char *CL_WebHost_ServerSourceLabel")
+        ]
+        self.assertLess(
+            udp_complete.index("CL_WebHost_PublishServerDetailRulesEnd();"),
+            udp_complete.index("CL_WebHost_PublishServerDetailPlayersEnd();"),
+        )
+        self.assertLess(
+            udp_complete.index("CL_WebHost_PublishServerDetailPlayersEnd();"),
+            udp_complete.index("CL_WebHost_ClearServerDetailRequest();"),
+        )
         self.assertIn('\\"numPlayers\\":%d', source)
         self.assertIn('\\"steam_id\\":\\"%s\\"', source)
         self.assertIn('\\"rule\\":\\"%s\\",\\"value\\":\\"%s\\"', source)

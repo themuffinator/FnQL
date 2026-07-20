@@ -148,7 +148,26 @@ class WebUiBackendSourceTests(unittest.TestCase):
         self.assertIn(
             "CL_WebUI_SurfaceSizeForViewport(\n\t\tcls.glconfig.vidWidth, cls.glconfig.vidHeight )", source
         )
-        self.assertIn("retailDocument.ConstrainedTo( cls.glconfig.maxTextureSize )", source)
+        surface_start = source.index(
+            "static fnql::webui::SurfaceSize CL_WebUI_SurfaceSizeForViewport"
+        )
+        surface_size = source[
+            surface_start :
+            source.index("static qboolean CL_WebUI_EnsureBackendStarted", surface_start)
+        ]
+        self.assertIn(
+            "static_cast<long long>( width ) * CL_WEB_RETAIL_DOCUMENT_HEIGHT",
+            surface_size,
+        )
+        self.assertIn("( scaledWidth + height / 2 ) / height", surface_size)
+        self.assertIn("documentWidth", surface_size)
+        self.assertIn("CL_WEB_RETAIL_DOCUMENT_HEIGHT", surface_size)
+        self.assertIn(
+            "retailViewport.ConstrainedTo( cls.glconfig.maxTextureSize )",
+            surface_size,
+        )
+        self.assertNotIn("(void)width", surface_size)
+        self.assertNotIn("(void)height", surface_size)
         self.assertIn("initialSurfaceSize.width", source)
         self.assertIn("initialSurfaceSize.height", source)
         bootstrap = source[

@@ -789,21 +789,34 @@ static void CL_Steam_GetLocalDisplayName( char *buffer, size_t bufferSize ) {
 
 static fnql::webui::SurfaceSize CL_WebUI_SurfaceSizeForViewport(
 	int width, int height ) {
-	(void)width;
-	(void)height;
-	const fnql::webui::SurfaceSize retailDocument = {
-		CL_WEB_RETAIL_DOCUMENT_WIDTH,
+	int documentWidth = CL_WEB_RETAIL_DOCUMENT_WIDTH;
+
+	if ( width > 0 && height > 0 ) {
+		const long long scaledWidth =
+			static_cast<long long>( width ) * CL_WEB_RETAIL_DOCUMENT_HEIGHT;
+		const long long roundedWidth =
+			( scaledWidth + height / 2 ) / height;
+		if ( roundedWidth < 1 ) {
+			documentWidth = 1;
+		} else if ( roundedWidth > ( std::numeric_limits<int>::max )() ) {
+			documentWidth = ( std::numeric_limits<int>::max )();
+		} else {
+			documentWidth = static_cast<int>( roundedWidth );
+		}
+	}
+
+	const fnql::webui::SurfaceSize retailViewport = {
+		documentWidth,
 		CL_WEB_RETAIL_DOCUMENT_HEIGHT
 	};
 
 	// Retail web.pak is authored around a 1920x1080 document and applies old
-	// Chromium CSS zoom when innerHeight differs. Awesomium 1.7 does not apply
-	// that zoom consistently to injected pointer hit-testing, which makes narrow
-	// controls such as react-select dropdowns miss at non-1080p window sizes.
-	// Keep the offscreen document at its retail logical size and scale its quad
-	// plus pointer coordinates at the engine boundary. The inherited renderer
-	// cap remains authoritative for hardware that cannot host the full texture.
-	return retailDocument.ConstrainedTo( cls.glconfig.maxTextureSize );
+	// Chromium CSS zoom when innerHeight differs. Keep the offscreen height at
+	// that retail baseline so narrow controls retain reliable hit-testing, but
+	// derive its width from the actual viewport. This preserves 4:3, 16:10,
+	// 16:9, and ultrawide geometry when the quad fills the window instead of
+	// stretching a fixed 16:9 bitmap. The renderer cap scales both axes together.
+	return retailViewport.ConstrainedTo( cls.glconfig.maxTextureSize );
 }
 
 static qboolean CL_WebUI_EnsureBackendStarted( void ) {
@@ -4154,18 +4167,36 @@ static qboolean CL_WebHost_DetailMatchesAddress( const netadr_t *address ) {
 	return NET_CompareAdr( address, &cl_webui.serverDetailAddress ) ? qtrue : qfalse;
 }
 
+static void CL_WebHost_BuildServerDetailEndpointPayload( char *payload, size_t payloadSize ) {
+	if ( !payload || payloadSize == 0 ) {
+		return;
+	}
+
+	Com_sprintf(
+		payload,
+		(int)payloadSize,
+		"{\"id\":\"%s\",\"ip\":%u,\"port\":%u}",
+		cl_webui.serverDetailId,
+		cl_webui.serverDetailIp,
+		(unsigned int)cl_webui.serverDetailPort );
+}
+
 static void CL_WebHost_PublishServerDetailRulesEnd( void ) {
 	char eventName[CL_WEB_EVENT_NAME_LENGTH];
+	char payload[CL_WEB_EVENT_PAYLOAD_LENGTH];
 
 	Com_sprintf( eventName, sizeof( eventName ), "servers.rules.%s.end", cl_webui.serverDetailId );
-	CL_WebView_PublishEvent( eventName, NULL );
+	CL_WebHost_BuildServerDetailEndpointPayload( payload, sizeof( payload ) );
+	CL_WebView_PublishEvent( eventName, payload );
 }
 
 static void CL_WebHost_PublishServerDetailPlayersEnd( void ) {
 	char eventName[CL_WEB_EVENT_NAME_LENGTH];
+	char payload[CL_WEB_EVENT_PAYLOAD_LENGTH];
 
 	Com_sprintf( eventName, sizeof( eventName ), "servers.players.%s.end", cl_webui.serverDetailId );
-	CL_WebView_PublishEvent( eventName, NULL );
+	CL_WebHost_BuildServerDetailEndpointPayload( payload, sizeof( payload ) );
+	CL_WebView_PublishEvent( eventName, payload );
 }
 
 static void CL_WebHost_PublishServerDetailRulesFailed( void ) {
@@ -4615,6 +4646,10 @@ void CL_WebHost_OnServerStatusResponseComplete( const netadr_t *address ) {
 		return;
 	}
 
+	/* A statusResponse contains one complete rule section followed by its
+	 * player section. Retail web.pak waits for both terminal events and reads
+	 * their endpoint payloads before it clears the detail spinner. */
+	CL_WebHost_PublishServerDetailRulesEnd();
 	CL_WebHost_PublishServerDetailPlayersEnd();
 	CL_WebHost_ClearServerDetailRequest();
 }

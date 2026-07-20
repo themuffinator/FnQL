@@ -705,6 +705,12 @@ static void CL_ActivateNativeMenu( uiMenuCommand_t menu ) {
 	// and can draw its own cursor.
 	CL_WebHost_HideForGameTransition();
 
+	/* Retail primes the in-game root before activating its team/join page.
+	 * Sending CGAME_EVENT_TEAMMENU here targets a different owner and leaves
+	 * the warmup/join Escape path with no visible menu. */
+	if ( menu == UIMENU_TEAM ) {
+		VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_INGAME );
+	}
 	VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, menu );
 	Key_SetCatcher( ( Key_GetCatcher() & ~( KEYCATCH_CGAME | KEYCATCH_BROWSER ) )
 		| KEYCATCH_UI );
@@ -752,17 +758,6 @@ static void CL_ToggleMenuInternal( int key, qboolean sendKeyUp, unsigned time ) 
 		return;
 	}
 
-	// Retail's large JOIN MATCH overlay is the cgame HUD root
-	// "joingame_menu". The UI module's packaged team menu is a different,
-	// legacy asset, so cgame must retain both the event state and input.
-	if ( openJoinMenu && cgvm ) {
-		CL_WebHost_HideForGameTransition();
-		VM_Call( cgvm, 1, CG_EVENT_HANDLING, CGAME_EVENT_TEAMMENU );
-		Key_SetCatcher( ( Key_GetCatcher() & ~( KEYCATCH_UI | KEYCATCH_BROWSER ) )
-			| KEYCATCH_CGAME );
-		return;
-	}
-
 	// escape always gets out of CGAME stuff
 	if ( Key_GetCatcher( ) & KEYCATCH_CGAME ) {
 		Key_SetCatcher( Key_GetCatcher( ) & ~KEYCATCH_CGAME );
@@ -781,7 +776,7 @@ static void CL_ToggleMenuInternal( int key, qboolean sendKeyUp, unsigned time ) 
 		}
 
 		if ( cls.state == CA_ACTIVE && !clc.demoplaying ) {
-			CL_ActivateNativeMenu( UIMENU_INGAME );
+			CL_ActivateNativeMenu( openJoinMenu ? UIMENU_TEAM : UIMENU_INGAME );
 		}
 		else if ( cls.state != CA_DISCONNECTED ) {
 #if 0

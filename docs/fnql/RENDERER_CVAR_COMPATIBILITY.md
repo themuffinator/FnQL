@@ -49,26 +49,17 @@ that retail evidence does not establish.
 ## Non-Regression Ownership
 
 FnQL's established cvars remain canonical for its modern bloom, color-grade,
-HDR, tone-map, mode, custom-size, stereo, and hardware-gamma paths. A retail
-alias takes ownership only when one of these conditions is true:
+HDR, tone-map, mode, custom-size, stereo, and hardware-gamma paths. Retail
+post-process cvars remain registered and bounded because retail modules and
+profiles query them, but they never write `r_bloom`, `r_bloom_*`, or
+`r_colorGrade`. This prevents retail's lower `r_bloomBrightThreshold` default
+from silently replacing FnQ3's bloom extraction threshold and keeps exactly
+one bloom owner across every renderer backend.
 
-1. the alias existed before compatibility registration, normally because a
-   retail-style configuration supplied it;
-2. its value differs from the retail default; or
-3. the user changes it after registration.
-
-A protected ownership marker is persisted with the generated aliases so an
-untouched default cannot masquerade as an imported retail setting on the next
-process launch. Consequently, retail's default `r_enableBloom 1` cannot turn on
-FnQL bloom in a fresh profile, while an imported QL configuration behaves as
-requested. Live changes to every retail post-process parameter activate the
-same bridge.
-
-Where a modern backend supports the requested effect, the bridge maps retail
-gates and the directly corresponding intensity/threshold controls into its
-existing pipeline. `r_contrast` is applied as centered contrast in each final
-output path. Each renderer family preserves its existing bloom and color-grade
-implementation.
+`r_qlRetailPostProcessBridge` is a read-only zero status value. It also retires
+the ownership marker written by older FnQL builds, so renderer restarts cannot
+resume the former alias bridge. `r_contrast` remains queryable but neutral in
+the FnQ3 final-output paths.
 Active-state mirrors report the path actually running rather than merely
 echoing requested values.
 

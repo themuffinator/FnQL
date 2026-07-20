@@ -337,6 +337,7 @@ typedef enum {
 typedef enum {
 	UI_NATIVE_EXPORT_INIT,
 	UI_NATIVE_EXPORT_SHUTDOWN,
+	// Retail slot ABI: (key, characterEvent, down), not the legacy VM tuple.
 	UI_NATIVE_EXPORT_KEY_EVENT,
 	UI_NATIVE_EXPORT_MOUSE_EVENT,
 	UI_NATIVE_EXPORT_REFRESH,
