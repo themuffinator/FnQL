@@ -91,6 +91,10 @@ jobs:
           meson compile -C meson/build-x86
           meson install -C meson/build-x86 --no-rebuild --skip-subprojects
 
+      - name: Test retail map-pool serialization
+        shell: msys2 {0}
+        run: meson test -C meson/build-x86 fnql_factory_rotation --print-errorlogs
+
       - name: Stage pinned Steam provider
         shell: msys2 {0}
         run: python scripts/fetch_steam_provider.py --output bin/fnql_steam.dll
@@ -134,9 +138,12 @@ jobs:
 
           for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x86 -host_arch=x64 || exit /b
-          meson setup meson\build-x86 --buildtype=release --wrap-mode=forcefallback --prefix "%CD%\bin" -Db_vscrt=static_from_buildtype -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=glx,vk,rtx -Drenderer-default=glx -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
+          meson setup meson\build-x86 --buildtype=release --wrap-mode=forcefallback --prefix "%CD%\bin" -Db_vscrt=static_from_buildtype -Dzlib:default_library=static -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=glx,vk,rtx -Drenderer-default=glx -Daudio-tests=false -Dglx-tests=false -Dlibjpeg-turbo:simd=disabled || exit /b
           meson compile -C meson\build-x86 || exit /b
           meson install -C meson\build-x86 --no-rebuild --skip-subprojects || exit /b
+
+      - name: Test retail map-pool serialization
+        run: meson test -C meson\build-x86 fnql_factory_rotation --print-errorlogs
 
       - name: Stage pinned Steam provider
         run: python scripts/fetch_steam_provider.py --output bin/fnql_steam.dll
@@ -166,6 +173,8 @@ jobs:
           python tests/release_packaging_tests.py
           python tests/webui_wiring_tests.py
           python tests/webui_backend_source_tests.py
+          python tests/launch_and_transition_source_tests.py
+          python tests/windowed_mouse_source_tests.py
           python tests/client_cvar_compat_source_tests.py
           python tests/steam_provider_source_tests.py
 

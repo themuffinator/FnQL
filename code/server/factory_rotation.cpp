@@ -20,6 +20,76 @@ namespace fnql::server::rotation {
 
 namespace {
 
+class BoundedJsonWriter {
+public:
+	explicit BoundedJsonWriter( std::size_t byteCap ) noexcept
+		: byteCap_( byteCap ) {}
+
+	[[nodiscard]] bool Append( std::string_view text ) {
+		if ( failed_ || text.size() > byteCap_ ||
+			output_.size() > byteCap_ - text.size() ) {
+			failed_ = true;
+			return false;
+		}
+		output_.append( text.data(), text.size() );
+		return true;
+	}
+
+	[[nodiscard]] bool Character( char value ) {
+		return Append( std::string_view( &value, 1 ) );
+	}
+
+	[[nodiscard]] bool JsonString( std::string_view value ) {
+		static constexpr char Hex[] = "0123456789abcdef";
+		if ( !Character( '"' ) ) {
+			return false;
+		}
+		for ( std::size_t index = 0; index < value.size(); ++index ) {
+			const unsigned char byte = static_cast<unsigned char>( value[index] );
+			if ( byte == 0xe2u && index + 2 < value.size() &&
+				static_cast<unsigned char>( value[index + 1] ) == 0x80u &&
+				( static_cast<unsigned char>( value[index + 2] ) == 0xa8u ||
+					static_cast<unsigned char>( value[index + 2] ) == 0xa9u ) ) {
+				if ( !Append( static_cast<unsigned char>( value[index + 2] ) == 0xa8u
+					? "\\u2028" : "\\u2029" ) ) {
+					return false;
+				}
+				index += 2;
+				continue;
+			}
+			switch ( byte ) {
+			case '"': if ( !Append( "\\\"" ) ) return false; break;
+			case '\\': if ( !Append( "\\\\" ) ) return false; break;
+			case '\b': if ( !Append( "\\b" ) ) return false; break;
+			case '\f': if ( !Append( "\\f" ) ) return false; break;
+			case '\n': if ( !Append( "\\n" ) ) return false; break;
+			case '\r': if ( !Append( "\\r" ) ) return false; break;
+			case '\t': if ( !Append( "\\t" ) ) return false; break;
+			default:
+				if ( byte < 0x20u ) {
+					const char escape[6] = { '\\', 'u', '0', '0',
+						Hex[( byte >> 4u ) & 0x0fu], Hex[byte & 0x0fu] };
+					if ( !Append( std::string_view( escape, sizeof( escape ) ) ) ) {
+						return false;
+					}
+				} else if ( !Character( static_cast<char>( byte ) ) ) {
+					return false;
+				}
+				break;
+			}
+		}
+		return Character( '"' );
+	}
+
+	[[nodiscard]] bool Failed() const noexcept { return failed_; }
+	[[nodiscard]] std::string Take() { return std::move( output_ ); }
+
+private:
+	std::size_t byteCap_ = 0;
+	bool failed_ = false;
+	std::string output_;
+};
+
 [[nodiscard]] constexpr char AsciiLower( char value ) noexcept {
 	return value >= 'A' && value <= 'Z'
 		? static_cast<char>( value + ( 'a' - 'A' ) ) : value;
@@ -566,6 +636,66 @@ ProcessingReport ResolveMapPool( const std::vector<MapPoolRow> &rows,
 		++report.accepted;
 	}
 	return report;
+}
+
+WebMapCatalogResult SerializeWebMapCatalog(
+		const std::vector<RotationEntry> &entries, std::size_t outputByteCap ) {
+	struct MapDescriptor {
+		std::string map;
+		std::string title;
+		std::array<bool, MaximumRetailBaseGameType + 1> gametypes{};
+	};
+
+	std::vector<MapDescriptor> maps;
+	maps.reserve( entries.size() );
+	for ( const RotationEntry &entry : entries ) {
+		if ( !IdentifierIsValid( entry.map ) ||
+			entry.baseGameType < MinimumRetailBaseGameType ||
+			entry.baseGameType > MaximumRetailBaseGameType ) {
+			continue;
+		}
+		auto existing = std::find_if( maps.begin(), maps.end(),
+			[&entry]( const MapDescriptor &candidate ) {
+				return AsciiEqualNoCase( candidate.map, entry.map );
+			} );
+		if ( existing == maps.end() ) {
+			MapDescriptor descriptor;
+			descriptor.map = entry.map;
+			descriptor.title = entry.mapTitle.empty() ? entry.map : entry.mapTitle;
+			maps.push_back( std::move( descriptor ) );
+			existing = maps.end() - 1;
+		}
+		existing->gametypes[static_cast<std::size_t>( entry.baseGameType )] = true;
+	}
+
+	BoundedJsonWriter writer( outputByteCap );
+	(void)writer.Character( '[' );
+	for ( std::size_t index = 0; index < maps.size(); ++index ) {
+		const MapDescriptor &map = maps[index];
+		if ( index > 0 ) {
+			(void)writer.Character( ',' );
+		}
+		(void)writer.Append( "{\"id\":" );
+		(void)writer.JsonString( map.map );
+		(void)writer.Append( ",\"sysname\":" );
+		(void)writer.JsonString( map.map );
+		(void)writer.Append( ",\"name\":" );
+		(void)writer.JsonString( map.title );
+		(void)writer.Append( ",\"gametypes\":[" );
+		for ( std::size_t gametype = 0; gametype < map.gametypes.size(); ++gametype ) {
+			if ( gametype > 0 ) {
+				(void)writer.Character( ',' );
+			}
+			(void)writer.Append( map.gametypes[gametype] ? "true" : "false" );
+		}
+		(void)writer.Append( "]}" );
+	}
+	(void)writer.Character( ']' );
+
+	WebMapCatalogResult result;
+	result.success = !writer.Failed();
+	result.json = result.success ? writer.Take() : "[]";
+	return result;
 }
 
 std::optional<std::size_t> SelectRotationIndex(

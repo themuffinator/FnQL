@@ -439,6 +439,8 @@ qboolean SV_FactoryPrepareMap( const char *mapName, const char *factoryName,
 void SV_FactoryPrintMapUsage( const char *commandName );
 int SV_FactoryWebCatalogJsonSize( void );
 qboolean SV_FactoryBuildWebCatalogJson( char *buffer, int bufferSize );
+int SV_MapPoolWebCatalogJsonSize( void );
+qboolean SV_MapPoolBuildWebCatalogJson( char *buffer, int bufferSize );
 void SV_MapPoolRefreshCvars( void );
 void SV_FactoryRefreshMountedContent( void );
 

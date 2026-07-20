@@ -705,6 +705,7 @@ void CL_WebHost_Shutdown( void );
 void CL_WebHost_Frame( void );
 void CL_WebHost_RefreshSurfaceSize( void );
 void CL_WebHost_InvalidateFactoryCatalog( void );
+void CL_WebHost_InvalidateMapCatalog( void );
 void CL_WebHost_BootstrapAwesomiumMenu( void );
 qboolean CL_WebHost_HasLiveView( void );
 qboolean CL_WebHost_HasBoundWindowObject( void );

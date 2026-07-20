@@ -195,6 +195,14 @@ void GLimp_SetGamma( unsigned char red[256], unsigned char green[256], unsigned 
 	int		i, j;
 	BOOL	ret;
 
+	// A device gamma ramp is desktop-global on Windows. Retail rendering in a
+	// window must stay on the shader/FBO color path so an abnormal process exit
+	// cannot leave the user's desktop or ICC calibration altered.
+	if ( !glw_state.cdsFullscreen ) {
+		GLW_RestoreGamma();
+		return;
+	}
+
 	if ( /*!glw_state.hDC* ||*/ !gw_active )
 		return;
 

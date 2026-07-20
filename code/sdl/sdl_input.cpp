@@ -450,14 +450,36 @@ capture transition, then only changes, so a join menu opened under a stationary
 pointer receives deterministic coordinates and can activate its drawn cursor.
 ===============
 */
+static void IN_ProjectBrowserMousePosition( float windowX, float windowY,
+	int *positionX, int *positionY )
+{
+	float scaleX = 1.0f;
+	float scaleY = 1.0f;
+
+	if ( glw_state.window_width > 0 && cls.glconfig.vidWidth > 0 ) {
+		scaleX = (float)cls.glconfig.vidWidth / (float)glw_state.window_width;
+	}
+	if ( glw_state.window_height > 0 && cls.glconfig.vidHeight > 0 ) {
+		scaleY = (float)cls.glconfig.vidHeight / (float)glw_state.window_height;
+	}
+
+	*positionX = static_cast<int>( windowX * scaleX );
+	*positionY = static_cast<int>( windowY * scaleY );
+}
+
 static void IN_QueueAbsoluteMousePosition( void )
 {
 	float x;
 	float y;
 
 	SDL_GetMouseState( &x, &y );
-	const int positionX = static_cast<int>( x );
-	const int positionY = static_cast<int>( y );
+	int positionX = static_cast<int>( x );
+	int positionY = static_cast<int>( y );
+	if ( Key_GetCatcher() & KEYCATCH_BROWSER ) {
+		// SDL reports logical window coordinates while the renderer and WebUI
+		// projection use drawable pixels. These differ on a scaled desktop.
+		IN_ProjectBrowserMousePosition( x, y, &positionX, &positionY );
+	}
 	if ( mouseAbsolutePositionValid
 		&& positionX == mouseAbsoluteX && positionY == mouseAbsoluteY ) {
 		return;
@@ -1639,7 +1661,15 @@ void HandleEvents( void )
 						Com_QueueEvent( in_eventTime, SE_MOUSE,
 							(int)e.motion.xrel, (int)e.motion.yrel, 0, NULL );
 					}
-				} else if ( catcher & ( KEYCATCH_BROWSER | KEYCATCH_UI | KEYCATCH_CGAME ) ) {
+				} else if ( catcher & KEYCATCH_BROWSER ) {
+					int browserX;
+					int browserY;
+
+					IN_ProjectBrowserMousePosition( e.motion.x, e.motion.y,
+						&browserX, &browserY );
+					Com_QueueEvent( in_eventTime, SE_MOUSE_ABSOLUTE,
+						browserX, browserY, 0, NULL );
+				} else if ( catcher & ( KEYCATCH_UI | KEYCATCH_CGAME ) ) {
 					// Preserve SDL's raw host-window coordinates for retail
 					// UI_MOUSE_EVENT and CG_MOUSE_EVENT projection.
 					Com_QueueEvent( in_eventTime, SE_MOUSE_ABSOLUTE,
@@ -1655,6 +1685,7 @@ void HandleEvents( void )
 			case SDL_EVENT_MOUSE_BUTTON_UP:
 				{
 					int b;
+					const int catcher = Key_GetCatcher();
 					if ( s_absCursor ) {
 						const Uint32 buttonMask = ( e.button.button > 0 && e.button.button <= 32 ) ?
 							( (Uint32)1u << ( e.button.button - 1 ) ) : 0;
@@ -1673,6 +1704,17 @@ void HandleEvents( void )
 								SDL_CaptureMouse( false );
 							}
 						}
+					} else if ( catcher & KEYCATCH_BROWSER ) {
+						int browserX;
+						int browserY;
+
+						// Button events carry their own position. Project and queue it
+						// before the key so stationary-pointer clicks hit the same
+						// element that the browser draws on high-DPI desktops.
+						IN_ProjectBrowserMousePosition( e.button.x, e.button.y,
+							&browserX, &browserY );
+						Com_QueueEvent( in_eventTime, SE_MOUSE_ABSOLUTE,
+							browserX, browserY, 0, NULL );
 					}
 					switch( e.button.button )
 					{

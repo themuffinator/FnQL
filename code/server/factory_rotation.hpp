@@ -179,6 +179,20 @@ struct RotationEntry {
 	std::size_t sourceLine = 0;
 };
 
+struct WebMapCatalogResult {
+	bool success = false;
+	std::string json;
+
+	[[nodiscard]] explicit operator bool() const noexcept { return success; }
+};
+
+// The retail Start Match document indexes this array by map sysname and filters
+// it by the 13 base-gametype flags. Pool rows may repeat a map for different
+// factories, so serialization folds those rows into one descriptor while
+// preserving first appearance order and title.
+[[nodiscard]] WebMapCatalogResult SerializeWebMapCatalog(
+	const std::vector<RotationEntry> &entries, std::size_t outputByteCap );
+
 // Resolution represents one snapshot and clears entries before processing.
 // Valid entries retain file order. Unknown arena metadata is accepted by
 // default because retail permits a BSP with no arena record; an existing

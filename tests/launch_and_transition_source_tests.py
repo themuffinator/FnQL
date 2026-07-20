@@ -90,6 +90,12 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
         self.assertIn("cl_webui.keyCaptureArmed = qfalse;", transition)
         self.assertIn("CL_WebHost_HideBrowser();", transition)
 
+        self.assertIn("static qboolean CL_WebHost_CommandStartsGameTransition", webui)
+        native_request = webui[webui.index("static void CL_WebHost_ProcessNativeJavascriptRequest") :]
+        hide = native_request.index("CL_WebHost_HideForGameTransition();")
+        queue = native_request.index("Cbuf_ExecuteText( EXEC_APPEND")
+        self.assertLess(hide, queue)
+
     def test_connection_and_level_load_screens_redraw_after_browser_release(self) -> None:
         screen = read_source("code/client/cl_scrn.cpp")
         main = read_source("code/client/cl_main.cpp")
@@ -233,6 +239,21 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
         self.assertIn("if ( !com_fullyInitialized && s_wcd.hwndBuffer && conBufPos )", console)
         self.assertIn("AddBufferText( conBuffer, conBufPos );", console)
         self.assertIn("UpdateWindow( s_wcd.hwndBuffer );", console)
+
+    def test_windowed_windows_rendering_never_changes_the_desktop_gamma_ramp(self) -> None:
+        gamma = read_source("code/win32/win_gamma.cpp")
+        wndproc = read_source("code/win32/win_wndproc.cpp")
+
+        start = gamma.index("void GLimp_SetGamma(")
+        end = gamma.index("void GLW_RestoreGamma(", start)
+        setter = gamma[start:end]
+        guard = setter.index("if ( !glw_state.cdsFullscreen )")
+        ramp = setter.index("SetDeviceGammaRamp")
+        self.assertLess(guard, ramp)
+        self.assertIn("GLW_RestoreGamma();", setter[guard:ramp])
+
+        close = wndproc[wndproc.index("case WM_CLOSE:") :]
+        self.assertLess(close.index("GLW_RestoreGamma();"), close.index('"quit\\n"'))
 
     def test_webui_searches_the_detected_retail_steam_install(self) -> None:
         webui = read_source("code/client/cl_webui.cpp")

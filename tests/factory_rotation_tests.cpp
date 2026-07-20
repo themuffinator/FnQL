@@ -681,6 +681,47 @@ bool PreservesRawRowsAndTruncatesResolverMetadataLikeRetail() {
 	return true;
 }
 
+bool SerializesTheResolvedMapPoolForRetailStartMatchFiltering() {
+	rotation::RotationEntry campgroundsFfa;
+	campgroundsFfa.map = "campgrounds";
+	campgroundsFfa.mapTitle = "Campgrounds";
+	campgroundsFfa.baseGameType = 0;
+	rotation::RotationEntry bloodrunDuel;
+	bloodrunDuel.map = "bloodrun";
+	bloodrunDuel.mapTitle = "Blood Run";
+	bloodrunDuel.baseGameType = 1;
+	rotation::RotationEntry campgroundsCa = campgroundsFfa;
+	campgroundsCa.map = "CAMPGROUNDS";
+	campgroundsCa.mapTitle = "Ignored duplicate title";
+	campgroundsCa.baseGameType = 4;
+	rotation::RotationEntry special;
+	special.map = "special";
+	special.mapTitle = "Quote \" slash \\ line\nend";
+	special.baseGameType = 12;
+
+	const std::vector<rotation::RotationEntry> entries{
+		campgroundsFfa, bloodrunDuel, campgroundsCa, special
+	};
+	const std::string expected =
+		"[{\"id\":\"campgrounds\",\"sysname\":\"campgrounds\",\"name\":\"Campgrounds\","
+		"\"gametypes\":[true,false,false,false,true,false,false,false,false,false,false,false,false]},"
+		"{\"id\":\"bloodrun\",\"sysname\":\"bloodrun\",\"name\":\"Blood Run\","
+		"\"gametypes\":[false,true,false,false,false,false,false,false,false,false,false,false,false]},"
+		"{\"id\":\"special\",\"sysname\":\"special\",\"name\":\"Quote \\\" slash \\\\ line\\nend\","
+		"\"gametypes\":[false,false,false,false,false,false,false,false,false,false,false,false,true]}]";
+	const rotation::WebMapCatalogResult serialized =
+		rotation::SerializeWebMapCatalog( entries, expected.size() );
+	CHECK( serialized && serialized.json == expected );
+
+	const rotation::WebMapCatalogResult capped =
+		rotation::SerializeWebMapCatalog( entries, expected.size() - 1 );
+	CHECK( !capped && capped.json == "[]" );
+	const rotation::WebMapCatalogResult empty =
+		rotation::SerializeWebMapCatalog( {}, 2 );
+	CHECK( empty && empty.json == "[]" );
+	return true;
+}
+
 rotation::RotationEntry Entry( std::string map ) {
 	rotation::RotationEntry entry;
 	entry.map = std::move( map );
@@ -770,6 +811,7 @@ int main() {
 		RequiresAllResolversAndHandlesResolverFailureDeterministically() &&
 		CapsAcceptedResolverEntriesAndValidatesFactoryFirst() &&
 		PreservesRawRowsAndTruncatesResolverMetadataLikeRetail() &&
+		SerializesTheResolvedMapPoolForRetailStartMatchFiltering() &&
 		SelectsDeterministicallyAndExcludesTheCurrentMapWhenPossible() &&
 		BuildsRetailSlotsWithCurrentOffsetAndCollisionRerolls() ? 0 : 1;
 }

@@ -29,6 +29,7 @@ version.
 
 #ifndef DEDICATED
 extern "C" void CL_WebHost_InvalidateFactoryCatalog( void );
+extern "C" void CL_WebHost_InvalidateMapCatalog( void );
 #endif
 
 namespace {
@@ -342,6 +343,10 @@ void LoadMapPool() {
 		? svMapPoolFile->string : "mappool.txt";
 	const int length = FS_FOpenFileRead( path, nullptr, qfalse );
 
+#ifndef DEDICATED
+	CL_WebHost_InvalidateMapCatalog();
+#endif
+
 	if ( length < 0 ) {
 		Com_Printf( S_COLOR_RED "rotation file not found: %s\n" S_COLOR_WHITE,
 			path );
@@ -651,6 +656,40 @@ int SV_FactoryWebCatalogJsonSize( void ) {
 	}
 	const factory::SerializeResult serialized = factoryCatalog.SerializeWebUi(
 		static_cast<std::size_t>( ( std::numeric_limits<int>::max )() - 1 ) );
+	if ( !serialized || serialized.json.size() >=
+		static_cast<std::size_t>( ( std::numeric_limits<int>::max )() ) ) {
+		return 0;
+	}
+	return static_cast<int>( serialized.json.size() + 1 );
+}
+
+qboolean SV_MapPoolBuildWebCatalogJson( char *buffer, int bufferSize ) {
+	if ( !buffer || bufferSize < 3 ) {
+		return qfalse;
+	}
+	if ( !factoryRuntimeInitialized ) {
+		SV_FactoryInit();
+	}
+	const rotation::WebMapCatalogResult serialized =
+		rotation::SerializeWebMapCatalog( mapPool,
+			static_cast<std::size_t>( bufferSize - 1 ) );
+	if ( !serialized || serialized.json.size() >=
+		static_cast<std::size_t>( bufferSize ) ) {
+		Q_strncpyz( buffer, "[]", bufferSize );
+		return qfalse;
+	}
+	memcpy( buffer, serialized.json.data(), serialized.json.size() );
+	buffer[serialized.json.size()] = '\0';
+	return qtrue;
+}
+
+int SV_MapPoolWebCatalogJsonSize( void ) {
+	if ( !factoryRuntimeInitialized ) {
+		SV_FactoryInit();
+	}
+	const rotation::WebMapCatalogResult serialized =
+		rotation::SerializeWebMapCatalog( mapPool,
+			static_cast<std::size_t>( ( std::numeric_limits<int>::max )() - 1 ) );
 	if ( !serialized || serialized.json.size() >=
 		static_cast<std::size_t>( ( std::numeric_limits<int>::max )() ) ) {
 		return 0;

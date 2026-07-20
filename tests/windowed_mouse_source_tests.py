@@ -43,13 +43,16 @@ class WindowedMouseSourceTests(unittest.TestCase):
         self.assertIn("UI_MOUSE_EVENT, x, y", client_input)
         self.assertIn("CG_MOUSE_EVENT, x, y", client_input)
 
-    def test_sdl_console_motion_precedes_click_and_scales_only_console_coordinates(self) -> None:
+    def test_sdl_console_and_browser_motion_use_their_drawable_coordinate_spaces(self) -> None:
         source = read_text("code/sdl/sdl_input.cpp")
         queue_body = function_body(source, "IN_QueueConsoleAbsolutePosition")
+        browser_projection = function_body(source, "IN_ProjectBrowserMousePosition")
         events = function_body(source, "HandleEvents")
 
         self.assertIn("cls.glconfig.vidWidth / (float)glw_state.window_width", queue_body)
         self.assertIn("cls.glconfig.vidHeight / (float)glw_state.window_height", queue_body)
+        self.assertIn("cls.glconfig.vidWidth / (float)glw_state.window_width", browser_projection)
+        self.assertIn("cls.glconfig.vidHeight / (float)glw_state.window_height", browser_projection)
         self.assertIn(
             "IN_QueueConsoleAbsolutePosition( e.motion.x, e.motion.y, in_eventTime );",
             events,
@@ -61,7 +64,20 @@ class WindowedMouseSourceTests(unittest.TestCase):
             button_block.index("IN_QueueConsoleAbsolutePosition( e.button.x, e.button.y"),
             button_block.index("SE_KEY"),
         )
-        # The established retail lane continues to forward raw SDL host coordinates.
+        self.assertIn("catcher & KEYCATCH_BROWSER", events)
+        self.assertIn(
+            "IN_ProjectBrowserMousePosition( e.motion.x, e.motion.y",
+            events,
+        )
+        self.assertIn(
+            "IN_ProjectBrowserMousePosition( e.button.x, e.button.y",
+            button_block,
+        )
+        self.assertLess(
+            button_block.index("IN_ProjectBrowserMousePosition( e.button.x, e.button.y"),
+            button_block.index("SE_KEY"),
+        )
+        # Native UI/cgame retain the established raw SDL logical-coordinate lane.
         self.assertIn("(int)e.motion.x, (int)e.motion.y", events)
 
     def test_sdl_transitions_discard_relative_spikes_and_never_warp_absolute_owners(self) -> None:

@@ -361,16 +361,17 @@ class ReleasePackagingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "must not redistribute"):
                 release.validate_stage_tree(root)
 
-    def test_windows_release_rejects_unshipped_compiler_runtime_imports(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "fnql.exe").write_bytes(
-                make_pe(dll=False, imports=("KERNEL32.dll", "libgcc_s_dw2-1.dll"))
-            )
-            (root / "fnql_steam.dll").write_bytes(make_pe(dll=True))
+    def test_windows_release_rejects_unshipped_runtime_imports(self) -> None:
+        for runtime in ("libgcc_s_dw2-1.dll", "z-1.dll"):
+            with self.subTest(runtime=runtime), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "fnql.exe").write_bytes(
+                    make_pe(dll=False, imports=("KERNEL32.dll", runtime))
+                )
+                (root / "fnql_steam.dll").write_bytes(make_pe(dll=True))
 
-            with self.assertRaisesRegex(ValueError, "unshipped Windows runtime DLLs"):
-                release.validate_stage_tree(root)
+                with self.assertRaisesRegex(ValueError, "unshipped Windows runtime DLLs"):
+                    release.validate_stage_tree(root)
 
     def test_pinned_provider_stager_checks_digest_and_i386_dll_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -490,7 +491,7 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertEqual(workflow.count("check_windows_runtime_deps.py --require-pe bin"), 2)
         self.assertIn("-Dc_link_args=-static", workflow)
         self.assertIn("-Dcpp_link_args=-static", workflow)
-        self.assertIn("-Dzlib:default_library=static", workflow)
+        self.assertEqual(workflow.count("-Dzlib:default_library=static"), 2)
         self.assertIn("-Db_vscrt=static_from_buildtype", workflow)
         self.assertEqual(workflow.count("--wrap-mode=forcefallback"), 2)
         meson = (ROOT / "meson.build").read_text(encoding="utf-8")

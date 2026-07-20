@@ -12,6 +12,7 @@ FORBIDDEN_WINDOWS_RUNTIME_DLLS = frozenset(
         "libstdc++-6.dll",
         "libwinpthread-1.dll",
         "libz-1.dll",
+        "z-1.dll",
         "zlib1.dll",
         "libzstd.dll",
         "msvcp140.dll",

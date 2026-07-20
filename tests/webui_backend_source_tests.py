@@ -120,8 +120,8 @@ class WebUiBackendSourceTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("#define CL_WEB_BOOTSTRAP_WIDTH 1280", source)
-        self.assertIn("#define CL_WEB_BOOTSTRAP_HEIGHT 720", source)
+        self.assertIn("#define CL_WEB_RETAIL_DOCUMENT_WIDTH 1920", source)
+        self.assertIn("#define CL_WEB_RETAIL_DOCUMENT_HEIGHT 1080", source)
         self.assertIn("#define CL_WEB_AWESOMIUM_PRELOAD_MAX_LENGTH 16384", source)
         self.assertIn("static char *CL_WebHost_AllocateStartupBridgeScript", source)
         self.assertIn(
@@ -148,7 +148,7 @@ class WebUiBackendSourceTests(unittest.TestCase):
         self.assertIn(
             "CL_WebUI_SurfaceSizeForViewport(\n\t\tcls.glconfig.vidWidth, cls.glconfig.vidHeight )", source
         )
-        self.assertIn("viewport.ConstrainedTo( cls.glconfig.maxTextureSize )", source)
+        self.assertIn("retailDocument.ConstrainedTo( cls.glconfig.maxTextureSize )", source)
         self.assertIn("initialSurfaceSize.width", source)
         self.assertIn("initialSurfaceSize.height", source)
         bootstrap = source[

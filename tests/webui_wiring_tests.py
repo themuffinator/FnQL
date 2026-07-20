@@ -148,6 +148,9 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("IN_ShowCursor( showCursor );", sdl_input)
         self.assertIn("mouseAbsoluteMode != retailAbsolute", sdl_input)
         self.assertIn("(int)e.motion.x, (int)e.motion.y", sdl_input)
+        self.assertIn("static void IN_ProjectBrowserMousePosition", sdl_input)
+        self.assertIn("cls.glconfig.vidWidth / (float)glw_state.window_width", sdl_input)
+        self.assertIn("IN_ProjectBrowserMousePosition( e.button.x, e.button.y", sdl_input)
         self.assertIn("static int CL_WebHost_MapCursorCoordinate", webui)
         self.assertIn("cls.glconfig.vidWidth", webui)
         self.assertIn("status.surface.width", webui)
@@ -816,7 +819,11 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertNotIn("CL_WebHost_UpdateBrowserCatalogCacheBatched( \"__qlr_begin_native_factories\"", source)
         self.assertIn("static void CL_WebHost_BuildMapListJson", source)
         self.assertIn('FS_GetFileList( "maps", ".bsp"', source)
-        self.assertIn('\\"gametypes\\":[0,0,0,0,0,0,0,0,0,0,0,0,0]', source)
+        self.assertIn("static char *CL_WebHost_AllocateMapListJson", source)
+        self.assertIn("SV_MapPoolWebCatalogJsonSize()", source)
+        self.assertIn("SV_MapPoolBuildWebCatalogJson( buffer, bufferSize )", source)
+        self.assertIn('\\"gametypes\\":[true,false,false,false,false,false,false,false,false,false,false,false,false]', source)
+        self.assertNotIn('\\"gametypes\\":[0,0,0,0,0,0,0,0,0,0,0,0,0]', source)
         self.assertIn("static char *CL_WebHost_AllocateFactoryListJson", source)
         self.assertIn("SV_FactoryWebCatalogJsonSize()", source)
         self.assertIn("SV_FactoryBuildWebCatalogJson( buffer, bufferSize )", source)
@@ -824,6 +831,8 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertNotIn("CL_WebHost_CopyFactoryJsonString", source)
         self.assertIn('Q_strncpyz( buffer, "{}", (int)bufferSize );', source)
         self.assertIn("for(k in factories){if(hasOwn(factories,k)){delete factories[k];}}", source)
+        self.assertIn("for(k in maps){if(hasOwn(maps,k)){delete maps[k];}}", source)
+        self.assertNotIn("maps=o;mapPrimed=true", source)
         self.assertIn("__qlr_set_native_maps", source)
         self.assertIn("__qlr_set_native_factories", source)
         self.assertIn('!Q_stricmp( kind, "maps" )', source)
@@ -833,6 +842,11 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("CL_WebHost_UpdateBrowserFactoryList( factoryJson );", source)
         self.assertIn("CL_WebHost_JsonParseExpression", source)
         self.assertIn("JSON.parse('", source)
+        self.assertIn('{ "mapCount",', source)
+        self.assertIn('{ "ffaMapCount",', source)
+        self.assertIn('{ "nanOutputs",', source)
+        self.assertIn('{ "openSelects",', source)
+        self.assertIn('{ "selectLeft",', source)
         self.assertIn("CL_WebHost_InvalidateDocumentSnapshots();\n\tCL_Awesomium_Reload", source)
         self.assertIn("!CL_WebHost_HasLiveView() || CL_Awesomium_IsLoading()", source)
         self.assertIn(
@@ -873,7 +887,10 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("const char *initialFriendJson", client_header)
         self.assertIn("CL_WebHost_BuildFriendListJson( friendJson, CL_WEB_FRIEND_JSON_LENGTH );", source)
         self.assertIn("#define CL_WEB_AWESOMIUM_PRELOAD_MAX_LENGTH 16384", source)
-        self.assertIn("char preloadConfigJson[1024];", source)
+        self.assertIn("char preloadCvarJson[2048];", source)
+        self.assertIn("char preloadConfigJson[3072];", source)
+        self.assertIn("CL_WebHost_BuildStartMatchCvarJson( preloadCvarJson", source)
+        self.assertIn('\\"cvars\\":{%s}', source)
         self.assertIn(
             "CL_WebHost_AllocateStartupBridgeScript( preloadConfigJson,\n\t\tNULL, NULL )",
             source,
@@ -882,7 +899,7 @@ class WebUiWiringTests(unittest.TestCase):
             "strlen( startupScript ) >= CL_WEB_AWESOMIUM_PRELOAD_MAX_LENGTH",
             source,
         )
-        self.assertIn("CL_WebHost_InjectStartupBridge once the document is live", source)
+        self.assertIn("capture both during their initial require()", source)
         self.assertIn("CL_WebHost_SyncNativeSnapshots( qtrue );", source)
         self.assertIn("window.__qlr_set_native_config", source)
         self.assertIn("window.__qlr_set_friend_list", source)
@@ -961,7 +978,7 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn('"cl_webuiEnable"', source)
         self.assertIn('"ui_browserAwesomiumProvider"', source)
         self.assertIn('"fs_game"', source)
-        self.assertIn("static const clWebConfigCvarDefault_t startMatchCvars[]", source)
+        self.assertIn("static const clWebConfigCvarDefault_t cl_webStartMatchCvars[]", source)
         for name, value in (
             ("sv_hostname", "noname"),
             ("sv_serverType", "0"),
@@ -975,7 +992,8 @@ class WebUiWiringTests(unittest.TestCase):
             ("sv_mapPoolFile", "mappool.txt"),
         ):
             self.assertIn(f'{{ "{name}", "{value}" }}', source)
-        self.assertIn("startMatchCvars[i].name, startMatchCvars[i].value", source)
+        self.assertIn("cl_webStartMatchCvars[i].name", source)
+        self.assertIn("cl_webStartMatchCvars[i].value", source)
         self.assertIn("for ( int i = 0; i < MAX_KEYS; ++i )", source)
         self.assertIn("binding = Key_GetBinding( i );", source)
         self.assertIn("keyName = Key_KeynumToString( i );", source)

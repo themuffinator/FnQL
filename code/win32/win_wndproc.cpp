@@ -875,6 +875,9 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 		return 0;
 
 	case WM_CLOSE:
+		// Restore the desktop before queuing shutdown. This also covers failures
+		// after the close request but before renderer teardown completes.
+		GLW_RestoreGamma();
 		Cbuf_ExecuteText( EXEC_APPEND, "quit\n" );
 		// filter this message or we may lose window before renderer shutdown ?
 		return 0;

@@ -57,8 +57,8 @@ BackendHost &ClientBackendHost() noexcept {
 // Reserve the retail DataPak before renderer/driver startup; the view is
 // resized to renderer-compatible, aspect-preserving dimensions on the first
 // client frame.
-#define CL_WEB_BOOTSTRAP_WIDTH 1280
-#define CL_WEB_BOOTSTRAP_HEIGHT 720
+#define CL_WEB_RETAIL_DOCUMENT_WIDTH 1920
+#define CL_WEB_RETAIL_DOCUMENT_HEIGHT 1080
 #define CL_WEB_BROWSER_EVENT_COUNT 32
 #define CL_WEB_EVENT_NAME_LENGTH 128
 #define CL_WEB_EVENT_PAYLOAD_LENGTH 4096
@@ -182,6 +182,10 @@ void CL_WebHost_InvalidateFactoryCatalog( void ) {
 	cl_webui.factoryCatalogSynced = qfalse;
 }
 
+void CL_WebHost_InvalidateMapCatalog( void ) {
+	cl_webui.mapCatalogSynced = qfalse;
+}
+
 static void CL_WebHost_UpdateOverlayOwnership( void );
 static void CL_WebHost_EnsureStartupBridge( void );
 static void CL_WebHost_EnsureFnqlOverlay( void );
@@ -202,6 +206,7 @@ static qboolean CL_Steam_ResultAccepted( fnqlSteamResult_t result );
 static qboolean CL_Steam_ParseIdentity( const char *text, uint64_t *identity );
 static void CL_WebHost_BuildConfigJson( char *buffer, size_t bufferSize );
 static void CL_WebHost_BuildMapListJson( char *buffer, size_t bufferSize );
+static char *CL_WebHost_AllocateMapListJson( void );
 static char *CL_WebHost_AllocateFactoryListJson( void );
 static void CL_WebHost_BuildDemoListJson( char *buffer, size_t bufferSize );
 static void CL_WebHost_BuildFriendListJson( char *buffer, size_t bufferSize );
@@ -784,18 +789,21 @@ static void CL_Steam_GetLocalDisplayName( char *buffer, size_t bufferSize ) {
 
 static fnql::webui::SurfaceSize CL_WebUI_SurfaceSizeForViewport(
 	int width, int height ) {
-	const fnql::webui::SurfaceSize viewport = {
-		width > 0 ? width : CL_WEB_BOOTSTRAP_WIDTH,
-		height > 0 ? height : CL_WEB_BOOTSTRAP_HEIGHT
+	(void)width;
+	(void)height;
+	const fnql::webui::SurfaceSize retailDocument = {
+		CL_WEB_RETAIL_DOCUMENT_WIDTH,
+		CL_WEB_RETAIL_DOCUMENT_HEIGHT
 	};
 
-	// The inherited renderer image pipeline caps dynamic textures at the
-	// reported maximum texture dimension. If the Awesomium surface is larger,
-	// its first paint is downscaled but later full-size sub-image updates are
-	// rejected, leaving the bootstrap-black texture on screen. Render the
-	// offscreen document within that limit and scale its quad to the viewport;
-	// browser input already maps between the two coordinate spaces.
-	return viewport.ConstrainedTo( cls.glconfig.maxTextureSize );
+	// Retail web.pak is authored around a 1920x1080 document and applies old
+	// Chromium CSS zoom when innerHeight differs. Awesomium 1.7 does not apply
+	// that zoom consistently to injected pointer hit-testing, which makes narrow
+	// controls such as react-select dropdowns miss at non-1080p window sizes.
+	// Keep the offscreen document at its retail logical size and scale its quad
+	// plus pointer coordinates at the engine boundary. The inherited renderer
+	// cap remains authoritative for hardware that cannot host the full texture.
+	return retailDocument.ConstrainedTo( cls.glconfig.maxTextureSize );
 }
 
 static qboolean CL_WebUI_EnsureBackendStarted( void ) {
@@ -840,7 +848,7 @@ static qboolean CL_WebUI_EnsureBackendStarted( void ) {
 
 	configJson = static_cast<char *>( Z_Malloc( CL_WEB_CONFIG_JSON_LENGTH ) );
 	friendJson = static_cast<char *>( Z_Malloc( CL_WEB_FRIEND_JSON_LENGTH ) );
-	mapJson = static_cast<char *>( Z_Malloc( CL_WEB_CATALOG_JSON_LENGTH ) );
+	mapJson = CL_WebHost_AllocateMapListJson();
 	factoryJson = CL_WebHost_AllocateFactoryListJson();
 	if ( !configJson || !friendJson || !mapJson || !factoryJson ) {
 		if ( configJson ) {
@@ -862,10 +870,8 @@ static qboolean CL_WebUI_EnsureBackendStarted( void ) {
 
 	configJson[0] = '\0';
 	friendJson[0] = '\0';
-	mapJson[0] = '\0';
 	CL_WebHost_BuildConfigJson( configJson, CL_WEB_CONFIG_JSON_LENGTH );
 	CL_WebHost_BuildFriendListJson( friendJson, CL_WEB_FRIEND_JSON_LENGTH );
-	CL_WebHost_BuildMapListJson( mapJson, CL_WEB_CATALOG_JSON_LENGTH );
 	started = CL_Awesomium_Startup(
 		runtimePath,
 		basePath,
@@ -1461,6 +1467,15 @@ static void CL_Web_Status_f( void ) {
 		{ "qzSteamId", "(function(){return window.qz_instance&&String(window.qz_instance.steamId||'0')!=='0'?1:0;})()" },
 		{ "qzPlayerNameLength", "(function(){return window.qz_instance?String(window.qz_instance.playerName||'').length:-1;})()" },
 		{ "qzFriendCount", "(function(){try{var f=window.qz_instance&&window.qz_instance.GetFriendList?window.qz_instance.GetFriendList():null;return f&&typeof f.length!=='undefined'?f.length:-1;}catch(e){return -2;}})()" },
+		{ "mapCount", "(function(){try{var m=window.qz_instance&&window.qz_instance.GetMapList?window.qz_instance.GetMapList():null,n=0;for(var k in m){if(Object.prototype.hasOwnProperty.call(m,k)){n++;}}return n;}catch(e){return -1;}})()" },
+		{ "ffaMapCount", "(function(){try{var m=window.qz_instance&&window.qz_instance.GetMapList?window.qz_instance.GetMapList():null,n=0;for(var k in m){if(Object.prototype.hasOwnProperty.call(m,k)&&m[k].gametypes&&m[k].gametypes[0]){n++;}}return n;}catch(e){return -1;}})()" },
+		{ "nanOutputs", "(function(){var a=document.querySelectorAll('output'),n=0;for(var i=0;i<a.length;i++){if(String(a[i].textContent).indexOf('NaN')>=0){n++;}}return n;})()" },
+		{ "selects", "(function(){return document.querySelectorAll('.Select-control').length;})()" },
+		{ "openSelects", "(function(){return document.querySelectorAll('.Select.is-open').length;})()" },
+		{ "selectLeft", "(function(){var e=document.querySelector('.Select-control'),r=e&&e.getBoundingClientRect();return r?Math.round(r.left):-1;})()" },
+		{ "selectTop", "(function(){var e=document.querySelector('.Select-control'),r=e&&e.getBoundingClientRect();return r?Math.round(r.top):-1;})()" },
+		{ "selectRight", "(function(){var e=document.querySelector('.Select-control'),r=e&&e.getBoundingClientRect();return r?Math.round(r.right):-1;})()" },
+		{ "selectBottom", "(function(){var e=document.querySelector('.Select-control'),r=e&&e.getBoundingClientRect();return r?Math.round(r.bottom):-1;})()" },
 		{ "steamAvatarImages", "(function(){var n=0,a=document.images;for(var i=0;i<a.length;i++){if(String(a[i].src||'').indexOf('asset://steam/avatar/')===0){n++;}}return n;})()" },
 		{ "mainHook", "(function(){return typeof window.main_hook_v2==='function'?1:0;})()" },
 		{ "fnqlStyle", "(function(){return document.getElementById('fnql-settings-style')?1:0;})()" },
@@ -1479,6 +1494,10 @@ static void CL_Web_Status_f( void ) {
 		backendStatus.loading ? 1 : 0,
 		backendStatus.crashed ? 1 : 0,
 		backendStatus.nativeErrorCode );
+	Com_Printf( " cursorValid=%d cursorX=%d cursorY=%d",
+		cl_webui.cursorPositionValid ? 1 : 0,
+		cl_webui.cursorX,
+		cl_webui.cursorY );
 	for ( const Query &query : queries ) {
 		int value = 0;
 		if ( CL_Awesomium_ExecuteJavascriptInteger( query.script, "", &value ) ) {
@@ -2177,7 +2196,7 @@ static void CL_WebHost_BuildStartupBridgeScript( char *buffer, size_t bufferSize
 		"var setDemoList=function(v){demoList=v||[];demoPrimed=true;return true;};"
 		"var setFriendList=function(v){friendList=v||[];friendPrimed=true;config.friends=friendList;return true;};"
 		"var setUGCList=function(v){ugcList=v||[];ugcPrimed=true;config.ugc=ugcList;return true;};"
-		"var setMapList=function(v){var o=catalogObject(v);if(!objectHasEntries(o)){return false;}maps=o;mapPrimed=true;config.maps=maps;return true;};"
+		"var setMapList=function(v){var o=catalogObject(v),k;if(!objectHasEntries(o)){return false;}for(k in maps){if(hasOwn(maps,k)){delete maps[k];}}for(k in o){if(hasOwn(o,k)){putOwn(maps,k,o[k]);}}mapPrimed=true;config.maps=maps;return true;};"
 		"var setFactoryList=function(v){var o=catalogObject(v),k;for(k in factories){if(hasOwn(factories,k)){delete factories[k];}}for(k in o){if(hasOwn(o,k)){putOwn(factories,k,o[k]);}}factoryPrimed=true;config.factories=factories;return true;};"
 		"var beginNativeMaps=function(){pendingNativeMaps={};return true;};var addNativeMaps=function(v){return addCatalogObjects(pendingNativeMaps,v);};var commitNativeMaps=function(){return setMapList(pendingNativeMaps);};"
 		"var beginNativeFactories=function(){pendingNativeFactories={};return true;};var addNativeFactories=function(v){return addFactoryObjects(pendingNativeFactories,v);};var commitNativeFactories=function(){return setFactoryList(pendingNativeFactories);};"
@@ -2912,11 +2931,46 @@ static qboolean CL_WebHost_AppendConfigCvar( char *buffer, size_t bufferSize,
 	return qtrue;
 }
 
+struct clWebConfigCvarDefault_t {
+	const char *name;
+	const char *value;
+};
+
+// The retail Start Match component consumes these synchronously while its
+// module mounts. Keep module-owned values as bridge defaults rather than
+// registering them on the client; qagame remains authoritative in a match.
+static const clWebConfigCvarDefault_t cl_webStartMatchCvars[] = {
+	{ "sv_hostname", "noname" },
+	{ "sv_serverType", "0" },
+	{ "net_port", "27960" },
+	{ "sv_maxclients", "8" },
+	{ "bot_minplayers", "0" },
+	{ "g_spSkill", "2" },
+	{ "teamsize", "0" },
+	{ "g_password", "" },
+	{ "sv_warmupReadyPercentage", "0.51" },
+	{ "sv_mapPoolFile", "mappool.txt" },
+	{ NULL, NULL }
+};
+
+static void CL_WebHost_BuildStartMatchCvarJson(
+		char *buffer, size_t bufferSize ) {
+	qboolean first = qtrue;
+
+	if ( !buffer || bufferSize == 0 ) {
+		return;
+	}
+	buffer[0] = '\0';
+	for ( int i = 0; cl_webStartMatchCvars[i].name; ++i ) {
+		if ( !CL_WebHost_AppendConfigCvar( buffer, bufferSize,
+			cl_webStartMatchCvars[i].name, cl_webStartMatchCvars[i].value,
+			&first ) ) {
+			break;
+		}
+	}
+}
+
 static void CL_WebHost_BuildConfigCvarJson( char *buffer, size_t bufferSize ) {
-	struct clWebConfigCvarDefault_t {
-		const char *name;
-		const char *value;
-	};
 	static const char *const configCvars[] = {
 		"name",
 		"version",
@@ -3004,24 +3058,6 @@ static void CL_WebHost_BuildConfigCvarJson( char *buffer, size_t bufferSize ) {
 		"s_muteWhenMinimized",
 		NULL
 	};
-	// The retail Start Match component consumes GetConfig().cvars once while it
-	// mounts. These values therefore need to exist in the initial synchronous
-	// snapshot, before its later cvar.* subscriptions can observe native state.
-	// Keep absent module-owned cvars as bridge defaults rather than registering
-	// them on the client; qagame remains authoritative once a match starts.
-	static const clWebConfigCvarDefault_t startMatchCvars[] = {
-		{ "sv_hostname", "noname" },
-		{ "sv_serverType", "0" },
-		{ "net_port", "27960" },
-		{ "sv_maxclients", "8" },
-		{ "bot_minplayers", "0" },
-		{ "g_spSkill", "2" },
-		{ "teamsize", "0" },
-		{ "g_password", "" },
-		{ "sv_warmupReadyPercentage", "0.51" },
-		{ "sv_mapPoolFile", "mappool.txt" },
-		{ NULL, NULL }
-	};
 	qboolean first;
 
 	if ( !buffer || bufferSize == 0 ) {
@@ -3036,9 +3072,10 @@ static void CL_WebHost_BuildConfigCvarJson( char *buffer, size_t bufferSize ) {
 			break;
 		}
 	}
-	for ( int i = 0; startMatchCvars[i].name; ++i ) {
+	for ( int i = 0; cl_webStartMatchCvars[i].name; ++i ) {
 		if ( !CL_WebHost_AppendConfigCvar( buffer, bufferSize,
-			startMatchCvars[i].name, startMatchCvars[i].value, &first ) ) {
+			cl_webStartMatchCvars[i].name,
+			cl_webStartMatchCvars[i].value, &first ) ) {
 			break;
 		}
 	}
@@ -3104,6 +3141,10 @@ static void CL_WebHost_BuildMapListJson( char *buffer, size_t bufferSize ) {
 	if ( !buffer || bufferSize == 0 ) {
 		return;
 	}
+	if ( bufferSize <= static_cast<size_t>( ( std::numeric_limits<int>::max )() ) &&
+		SV_MapPoolBuildWebCatalogJson( buffer, static_cast<int>( bufferSize ) ) ) {
+		return;
+	}
 
 	buffer[0] = '\0';
 	Q_strcat( buffer, (int)bufferSize, "[" );
@@ -3130,7 +3171,7 @@ static void CL_WebHost_BuildMapListJson( char *buffer, size_t bufferSize ) {
 			!CL_WebUI_AppendJsonFormattedIfFits(
 				buffer,
 				bufferSize,
-				"{\"id\":\"%s\",\"sysname\":\"%s\",\"name\":\"%s\",\"gametypes\":[0,0,0,0,0,0,0,0,0,0,0,0,0]}",
+				"{\"id\":\"%s\",\"sysname\":\"%s\",\"name\":\"%s\",\"gametypes\":[true,false,false,false,false,false,false,false,false,false,false,false,false]}",
 				escapedMapName,
 				escapedMapName,
 				escapedMapName ) ) {
@@ -3140,6 +3181,25 @@ static void CL_WebHost_BuildMapListJson( char *buffer, size_t bufferSize ) {
 		cursor += strlen( cursor ) + 1;
 	}
 	Q_strcat( buffer, (int)bufferSize, "]" );
+}
+
+static char *CL_WebHost_AllocateMapListJson( void ) {
+	const int bufferSize = SV_MapPoolWebCatalogJsonSize();
+	if ( bufferSize >= 3 ) {
+		char *buffer = static_cast<char *>( Z_Malloc( bufferSize ) );
+		if ( buffer && SV_MapPoolBuildWebCatalogJson( buffer, bufferSize ) ) {
+			return buffer;
+		}
+		if ( buffer ) {
+			Z_Free( buffer );
+		}
+	}
+
+	char *fallback = static_cast<char *>( Z_Malloc( CL_WEB_CATALOG_JSON_LENGTH ) );
+	if ( fallback ) {
+		CL_WebHost_BuildMapListJson( fallback, CL_WEB_CATALOG_JSON_LENGTH );
+	}
+	return fallback;
 }
 
 static char *CL_WebHost_AllocateFactoryListJson( void ) {
@@ -3562,11 +3622,12 @@ static void CL_WebHost_SyncNativeSnapshots( qboolean force ) {
 	}
 
 	if ( force || !cl_webui.mapCatalogSynced ) {
-		char mapJson[CL_WEB_CATALOG_JSON_LENGTH];
-
-		CL_WebHost_BuildMapListJson( mapJson, sizeof( mapJson ) );
-		CL_WebHost_UpdateBrowserMapList( mapJson );
-		cl_webui.mapCatalogSynced = qtrue;
+		char *mapJson = CL_WebHost_AllocateMapListJson();
+		if ( mapJson ) {
+			CL_WebHost_UpdateBrowserMapList( mapJson );
+			cl_webui.mapCatalogSynced = qtrue;
+			Z_Free( mapJson );
+		}
 	}
 
 	{
@@ -5927,6 +5988,35 @@ static qboolean CL_WebHost_HandleSocialBridgeRequest( const char *kind, const ch
 	return qtrue;
 }
 
+static qboolean CL_WebHost_CommandStartsGameTransition( const char *command ) {
+	static const char *const transitionCommands[] = {
+		"map", "devmap", "spmap", "connect", "reconnect", "demo",
+		"playdemo", "cinematic", NULL
+	};
+	const char *token;
+	size_t tokenLength;
+
+	if ( !command ) {
+		return qfalse;
+	}
+	while ( *command && static_cast<unsigned char>( *command ) <= ' ' ) {
+		++command;
+	}
+	token = command;
+	while ( *command && static_cast<unsigned char>( *command ) > ' ' &&
+		*command != ';' ) {
+		++command;
+	}
+	tokenLength = static_cast<size_t>( command - token );
+	for ( int i = 0; transitionCommands[i]; ++i ) {
+		if ( strlen( transitionCommands[i] ) == tokenLength &&
+			!Q_stricmpn( token, transitionCommands[i], static_cast<int>( tokenLength ) ) ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
 static void CL_WebHost_ProcessNativeJavascriptRequest( const char *request ) {
 	const char *payload;
 	char kind[64];
@@ -5954,6 +6044,9 @@ static void CL_WebHost_ProcessNativeJavascriptRequest( const char *request ) {
 
 	if ( !Q_stricmp( kind, "cmd" ) ) {
 		if ( payload[0] ) {
+			if ( CL_WebHost_CommandStartsGameTransition( payload ) ) {
+				CL_WebHost_HideForGameTransition();
+			}
 			Cbuf_ExecuteText( EXEC_APPEND, va( "%s\n", payload ) );
 		}
 		return;
@@ -6120,11 +6213,12 @@ static void CL_WebHost_ProcessNativeJavascriptRequest( const char *request ) {
 	}
 
 	if ( !Q_stricmp( kind, "maps" ) ) {
-		char mapJson[CL_WEB_CATALOG_JSON_LENGTH];
-
-		CL_WebHost_BuildMapListJson( mapJson, sizeof( mapJson ) );
-		CL_WebHost_UpdateBrowserMapList( mapJson );
-		cl_webui.mapCatalogSynced = qtrue;
+		char *mapJson = CL_WebHost_AllocateMapListJson();
+		if ( mapJson ) {
+			CL_WebHost_UpdateBrowserMapList( mapJson );
+			cl_webui.mapCatalogSynced = qtrue;
+			Z_Free( mapJson );
+		}
 		return;
 	}
 
@@ -6899,7 +6993,8 @@ static void CL_WebUI_BackendReleaseResource( void *,
 qboolean CL_Awesomium_Startup( const char *runtimePath, const char *basePath, const char *retailPath, const char *playerName, unsigned int appId, unsigned int steamIdLow, unsigned int steamIdHigh, int width, int height, const char *initialConfigJson, const char *initialMapJson, const char *initialFactoryJson, const char *initialFriendJson ) {
 	fnql::webui::StartupParameters parameters;
 	char escapedPlayerName[MAX_CVAR_VALUE_STRING * 2];
-	char preloadConfigJson[1024];
+	char preloadCvarJson[2048];
+	char preloadConfigJson[3072];
 	char *startupScript;
 	qboolean started;
 	const uint64_t steamId = ( static_cast<uint64_t>( steamIdHigh ) << 32 )
@@ -6919,16 +7014,21 @@ qboolean CL_Awesomium_Startup( const char *runtimePath, const char *basePath, co
 	parameters.initialFactoryJson = initialFactoryJson ? initialFactoryJson : "";
 
 	// Awesomium forwards this WebConfig script to its helper at process launch.
-	// Windows limits that command line to 32767 UTF-16 code units. Only seed the
-	// identity fields synchronously; config, catalog, and friend snapshots are
-	// delivered by CL_WebHost_InjectStartupBridge once the document is live.
+	// Windows limits that command line to 32767 UTF-16 code units. Seed identity
+	// plus the compact Start Match cvar set synchronously because retail modules
+	// capture both during their initial require(); larger snapshots follow once
+	// the document is live.
 	CL_WebUI_JsonEscape( playerName ? playerName : "", escapedPlayerName,
 		sizeof( escapedPlayerName ) );
+	CL_WebHost_BuildStartMatchCvarJson( preloadCvarJson,
+		sizeof( preloadCvarJson ) );
 	Com_sprintf( preloadConfigJson, sizeof( preloadConfigJson ),
 		"{\"appId\":%u,\"steamId\":\"%llu\",\"playerName\":\"%s\","
-		"\"playerProfile\":{\"id\":\"%llu\",\"name\":\"%s\"}}",
+		"\"playerProfile\":{\"id\":\"%llu\",\"name\":\"%s\"},"
+		"\"cvars\":{%s}}",
 		appId, static_cast<unsigned long long>( steamId ), escapedPlayerName,
-		static_cast<unsigned long long>( steamId ), escapedPlayerName );
+		static_cast<unsigned long long>( steamId ), escapedPlayerName,
+		preloadCvarJson );
 	startupScript = CL_WebHost_AllocateStartupBridgeScript( preloadConfigJson,
 		NULL, NULL );
 	if ( !startupScript
