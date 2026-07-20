@@ -81,9 +81,12 @@ class RendererCvarCompatibilitySourceTests(unittest.TestCase):
         self.assertNotIn("R_QLPostParameterModificationCount", contract)
         self.assertNotIn("postParameterModificationCount", contract)
         self.assertNotIn("R_QLBridgeCvar", contract)
-        self.assertNotIn('ri.Cvar_Set( "r_bloom"', contract)
-        self.assertNotIn('ri.Cvar_Set( "r_bloom_', contract)
-        self.assertNotIn('ri.Cvar_Set( "r_colorGrade"', contract)
+        migration_start = contract.index("if ( retiredBridgeOwnedPostProcess )")
+        migration_end = contract.index("/* The ROM registration pins")
+        normal_runtime = contract[:migration_start] + contract[migration_end:]
+        self.assertNotIn('ri.Cvar_Set( "r_bloom"', normal_runtime)
+        self.assertNotIn('ri.Cvar_Set( "r_bloom_', normal_runtime)
+        self.assertNotIn('ri.Cvar_Set( "r_colorGrade"', normal_runtime)
 
         contrast = contract[
             contract.index("static ID_INLINE float R_QLRetailContrast") :
@@ -91,6 +94,27 @@ class RendererCvarCompatibilitySourceTests(unittest.TestCase):
         ]
         self.assertIn("return 1.0f;", contrast)
         self.assertNotIn("qlRendererCvars.contrast->value", contrast)
+
+    def test_retired_bridge_profiles_restore_fnq3_bloom_defaults_once(self) -> None:
+        contract = read("code/renderercommon/tr_ql_cvars.h")
+
+        self.assertIn("retiredBridgeOwnedPostProcess", contract)
+        self.assertIn(
+            'atoi( ri.Cvar_VariableString( "r_qlRetailPostProcessBridge" ) ) != 0',
+            contract,
+        )
+        migration = contract[
+            contract.index("if ( retiredBridgeOwnedPostProcess )") :
+            contract.index("/* The ROM registration pins")
+        ]
+        for name, value in (
+            ("r_bloom", "0"),
+            ("r_bloom_intensity", "0.5"),
+            ("r_bloom_threshold", "0.75"),
+            ("r_colorGrade", "0"),
+            ("r_bloom_passes", "5"),
+        ):
+            self.assertIn(f'ri.Cvar_Set( "{name}", "{value}" )', migration)
 
     def test_all_renderers_register_update_and_consume_operational_controls(self) -> None:
         for renderer, backend in RENDERERS.items():
@@ -175,18 +199,26 @@ class RendererCvarCompatibilitySourceTests(unittest.TestCase):
         self.assertIn("retailContrast", rtx_shader)
         self.assertIn("frag_spec_data.retail_contrast = R_QLRetailContrast()", rtx)
 
-    def test_float_framebuffer_alias_has_capability_checked_fallbacks(self) -> None:
+    def test_retail_float_framebuffer_alias_cannot_change_fnq3_storage(self) -> None:
         classic = read("code/renderer/tr_arb.c")
         vulkan = read("code/renderervk/vk.c")
         rtx = read("code/rendererrtx/vk.c")
 
-        self.assertIn("qlRendererCvars.floatingPointFBOs->integer", classic)
-        self.assertIn("GL_RGBA16F", classic)
-        self.assertIn("VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT", vulkan)
-        self.assertIn("VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT", vulkan)
-        self.assertIn("using the SDR base format", vulkan)
-        self.assertIn("VK_FORMAT_R16G16B16A16_SFLOAT", rtx)
-        self.assertIn("floating-point scene storage", rtx)
+        contract = read("code/renderercommon/tr_ql_cvars.h")
+
+        self.assertIn('"r_floatingPointFBOs", "0"', contract)
+        self.assertIn("FnQ3 r_hdr and r_hdrPrecision own scene storage", contract)
+        for source in (classic, vulkan, rtx):
+            self.assertNotIn("qlRendererCvars.floatingPointFBOs", source)
+
+        fnq3_defaults = read("code/renderer/tr_init.c")
+        for registration in (
+            'Cvar_Get( "r_bloom", "0"',
+            'Cvar_Get( "r_bloom_threshold", "0.75"',
+            'Cvar_Get( "r_bloom_intensity", "0.5"',
+            'Cvar_Get( "r_bloom_passes", "5"',
+        ):
+            self.assertIn(registration, fnq3_defaults)
 
 
 if __name__ == "__main__":

@@ -43,7 +43,6 @@ typedef struct qlRendererCvars_s {
 	cvar_t *debugShaderIndex;
 	cvar_t *debugSortExcept;
 	cvar_t *debugAds;
-	cvar_t *floatingPointFBOs;
 	cvar_t *enablePostProcess;
 	cvar_t *enableBloom;
 	cvar_t *enableColorCorrect;
@@ -60,7 +59,6 @@ typedef struct qlRendererCvars_s {
 	cvar_t *bloomSceneIntensity;
 	cvar_t *bloomSceneSaturation;
 	cvar_t *contrast;
-	cvar_t *postProcessBridge;
 	qlRendererCvarBackend_t backend;
 } qlRendererCvars_t;
 
@@ -85,6 +83,9 @@ static ID_INLINE void R_QLRegisterRendererCvars( qlRendererCvarBackend_t backend
 	const int profileFlags = CVAR_ARCHIVE | CVAR_CLOUD;
 	const int boundedProfileFlags = profileFlags | CVAR_PROTECTED | CVAR_VM_CREATED;
 	const int postFlags = CVAR_ARCHIVE | CVAR_LATCH | CVAR_CLOUD;
+	const qboolean retiredBridgeOwnedPostProcess =
+		atoi( ri.Cvar_VariableString( "r_qlRetailPostProcessBridge" ) ) != 0
+			? qtrue : qfalse;
 	qlRendererCvars.backend = backend;
 
 	qlRendererCvars.fastSkyColor = R_QLRegisterCvar( "r_fastSkyColor", "0x000000",
@@ -126,9 +127,9 @@ static ID_INLINE void R_QLRegisterRendererCvars( qlRendererCvarBackend_t backend
 	qlRendererCvars.debugAds = R_QLRegisterCvar( "r_debugAds", "0", CVAR_TEMP,
 		NULL, NULL, CV_INTEGER,
 		"Print a bounded retail advertisement-surface diagnostic snapshot." );
-	qlRendererCvars.floatingPointFBOs = R_QLRegisterCvar( "r_floatingPointFBOs", "0",
+	(void)R_QLRegisterCvar( "r_floatingPointFBOs", "0",
 		CVAR_ARCHIVE | CVAR_LATCH, "0", "1", CV_INTEGER,
-		"Request retail floating-point scene storage independently of FnQL's HDR lighting mode." );
+		"Retail floating-point framebuffer selector; queryable for compatibility while FnQ3 r_hdr and r_hdrPrecision own scene storage." );
 
 	qlRendererCvars.enablePostProcess = R_QLRegisterCvar( "r_enablePostProcess", "1",
 		postFlags, "0", "1", CV_INTEGER,
@@ -171,16 +172,29 @@ static ID_INLINE void R_QLRegisterRendererCvars( qlRendererCvarBackend_t backend
 		boundedProfileFlags, "0", "10", CV_FLOAT, "Retail scene saturation during bloom combine." );
 	qlRendererCvars.contrast = R_QLRegisterCvar( "r_contrast", "1.0", profileFlags,
 		NULL, NULL, CV_FLOAT, "Retail color-correction contrast." );
-	qlRendererCvars.postProcessBridge = R_QLRegisterCvar( "r_qlRetailPostProcessBridge", "0",
+	(void)R_QLRegisterCvar( "r_qlRetailPostProcessBridge", "0",
 		CVAR_ROM, "0", "0", CV_INTEGER,
 		"Reports that retail post-process cvars do not own FnQ3 renderer effects." );
 	(void)R_QLRegisterCvar( "r_qlOcclusionQueries", "0", CVAR_TEMP | CVAR_PROTECTED,
 		"0", "1", CV_INTEGER,
 		"Internal common-backend occlusion-query capability status." );
 
-	/* Older FnQL builds persisted this as an ownership marker. The ROM
-	 * registration above pins it to zero so a retained profile cannot resume
-	 * the retired bridge and overwrite r_bloom_* on a later renderer restart. */
+	/* Older FnQL builds persisted this as an ownership marker after copying the
+	 * retail threshold, pass count, bloom enable, and color-grade enable into
+	 * FnQ3 cvars. Restore only bridge-owned profiles once; unmarked user tuning
+	 * remains untouched. These are the FnQ3 defaults used by FnQL. */
+	if ( retiredBridgeOwnedPostProcess ) {
+		ri.Cvar_Set( "r_bloom", "0" );
+		ri.Cvar_Set( "r_bloom_intensity", "0.5" );
+		ri.Cvar_Set( "r_bloom_threshold", "0.75" );
+		ri.Cvar_Set( "r_colorGrade", "0" );
+		if ( backend == QL_CVAR_BACKEND_GLX ) {
+			ri.Cvar_Set( "r_bloom_passes", "5" );
+		}
+	}
+
+	/* The ROM registration pins the retired ownership marker to zero so it
+	 * cannot resume the old retail-to-FnQ3 bridge on a renderer restart. */
 	ri.Cvar_Set( "r_qlRetailPostProcessBridge", "0" );
 }
 

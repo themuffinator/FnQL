@@ -10823,8 +10823,7 @@ static VkFormat get_hdr_format( VkPhysicalDevice physical_device,
 		return base_format;
 	}
 
-	if ( ( r_hdr && r_hdr->integer > 0 )
-		|| qlRendererCvars.floatingPointFBOs->integer ) {
+	if ( r_hdr && r_hdr->integer > 0 ) {
 		const VkFormat hdrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 
 		if ( vk_hdr_scene_format_supported( physical_device, hdrFormat ) ) {
@@ -10832,7 +10831,7 @@ static VkFormat get_hdr_format( VkPhysicalDevice physical_device,
 		}
 		if ( !warnedUnsupportedHdrFormat ) {
 			ri.Printf( PRINT_WARNING,
-				"RTX: floating-point scene storage requested but %s lacks the required color, sampling, transfer, and blit features; using %s SDR storage\n",
+				"RTX: r_hdr requested floating-point scene storage but %s lacks the required color, sampling, transfer, and blit features; using %s SDR storage\n",
 				vk_format_string( hdrFormat ), vk_format_string( base_format ) );
 			warnedUnsupportedHdrFormat = qtrue;
 		}

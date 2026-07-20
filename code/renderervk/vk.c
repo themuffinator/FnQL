@@ -2724,7 +2724,7 @@ static qboolean vk_blit_enabled( VkPhysicalDevice physical_device, const VkForma
 }
 
 
-static VkFormat get_hdr_format( VkPhysicalDevice physical_device, VkFormat base_format )
+static VkFormat get_hdr_format( VkFormat base_format )
 {
 	int precision;
 
@@ -2734,20 +2734,6 @@ static VkFormat get_hdr_format( VkPhysicalDevice physical_device, VkFormat base_
 
 	if ( vk.hdrDisplayActive ) {
 		return VK_FORMAT_R16G16B16A16_UNORM;
-	}
-
-	if ( qlRendererCvars.floatingPointFBOs->integer ) {
-		VkFormatProperties properties;
-		const VkFormat format = VK_FORMAT_R16G16B16A16_SFLOAT;
-		const VkFormatFeatureFlags required = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT
-			| VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
-
-		qvkGetPhysicalDeviceFormatProperties( physical_device, format, &properties );
-		if ( ( properties.optimalTilingFeatures & required ) == required ) {
-			return format;
-		}
-		ri.Printf( PRINT_WARNING,
-			"...r_floatingPointFBOs requested but RGBA16F color/sampling is unavailable; using the SDR base format\n" );
 	}
 
 	precision = r_hdrPrecision ? r_hdrPrecision->integer : 0;
@@ -2983,7 +2969,7 @@ static void setup_surface_formats( VkPhysicalDevice physical_device )
 {
 	vk.depth_format = get_depth_format( physical_device );
 
-	vk.color_format = get_hdr_format( physical_device, vk.base_format.format );
+	vk.color_format = get_hdr_format( vk.base_format.format );
 
 	vk.capture_format = VK_FORMAT_R8G8B8A8_UNORM;
 

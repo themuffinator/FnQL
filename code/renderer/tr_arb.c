@@ -217,10 +217,6 @@ static void FBO_PositiveIntermediateCandidates( qboolean rgb, GLint *formats, in
 	*count = 0;
 
 	if ( !FBO_HdrSceneLinearMode() ) {
-		if ( qlRendererCvars.floatingPointFBOs->integer ) {
-			FBO_AddFormatCandidate( formats, count, GL_RGBA16F );
-			return;
-		}
 		FBO_AddFormatCandidate( formats, count, GL_RGB10_A2 );
 		return;
 	}
@@ -256,7 +252,7 @@ static void FBO_FormatCandidatesForBuffer( const frameBuffer_t *fb, GLint *forma
 
 static GLint FBO_MainInternalFormat( void )
 {
-	if ( FBO_HdrSceneLinearMode() || qlRendererCvars.floatingPointFBOs->integer ) {
+	if ( FBO_HdrSceneLinearMode() ) {
 		return GL_RGBA16F;
 	}
 

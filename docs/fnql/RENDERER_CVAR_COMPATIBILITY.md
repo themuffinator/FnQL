@@ -65,11 +65,17 @@ echoing requested values.
 
 ## Capability and Fallback Rules
 
-`r_floatingPointFBOs` requests floating-point scene storage independently of
-FnQL's HDR lighting mode. GLx uses RGBA16F when the existing texture capability
-allows it. Vulkan and RTX validate the required color-attachment and
-sampling features before selecting RGBA16F and warn before falling back to the
-normal SDR format. A request never fabricates support.
+`r_floatingPointFBOs` remains queryable for retail modules and profiles but is
+not a second framebuffer-format owner. FnQ3's `r_hdr`, `r_hdrPrecision`, and
+`r_hdrBloomFormat` controls exclusively select scene and bloom storage on GLx,
+Vulkan, and RTX. This prevents a retail profile from preserving out-of-range
+SDR highlights that FnQ3 bloom would normally clamp before extraction.
+
+Profiles written by the short-lived retail post-process bridge are identified
+by its ownership marker and migrated once to the FnQ3 bloom defaults. This
+restores the FnQ3 `0.75` extraction threshold and five-pass GLx chain instead
+of retaining the retail `0.25` threshold and one-pass setting. Profiles without
+the marker retain their explicit user tuning.
 
 `r_gl_reserved` is similarly capability-shaped: it publishes `1` only when the
 active common renderer exposes the complete occlusion-query path, otherwise
@@ -86,8 +92,8 @@ inert is preferable to introducing a divergent submission path.
 
 `tests/renderer_cvar_compat_source_tests.py` guards registration, ownership,
 video publication, operational renderer consumers, post-process shader wiring,
-and capability fallback across every retained renderer. Compile validation
-must cover all three renderer modules plus the client translation unit. Runtime
-retail validation should use legitimate Steam assets, windowed mode, imported
-retail cvar presets, a fresh FnQL profile, and both supported and unsupported
-floating-point framebuffer hardware paths.
+the one-time bridge migration, and FnQ3 framebuffer ownership across every
+retained renderer. Compile validation must cover all three renderer modules
+plus the client translation unit. Runtime retail validation should use
+legitimate Steam assets, windowed mode, imported retail cvar presets, and a
+fresh FnQL profile.
