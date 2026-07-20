@@ -52,6 +52,10 @@ DEFAULT_DOCS = [
         ROOT / "docs" / "GLX.md",
         Path("docs") / "GLX.md",
     ),
+    (
+        ROOT / "docs" / "RTX.md",
+        Path("docs") / "RTX.md",
+    ),
     (ROOT / ".install" / "README.html", Path("README.html")),
 ]
 

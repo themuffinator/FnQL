@@ -5,8 +5,8 @@ places external renderer modules beside it, so renderer selection stays a
 runtime `\cl_renderer` choice instead of a reason to produce separate client
 executables.
 
-FnQL is currently an early Quake Live migration baseline. A successful build is
-not yet proof of full retail Quake Live compatibility; runtime work should be
+FnQL targets retail Quake Live compatibility. A successful build proves the
+engine compiled, but compatibility-sensitive runtime work should still be
 validated against a legitimate Steam installation.
 
 Steam service integration is optional and is never required to build FnQL.

@@ -115,6 +115,7 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertIn("docs/fnql/RTX_RENDERER.md", destinations)
         self.assertIn("docs/fnql/STEAM_PROVIDER_BINARY_NOTICE.txt", destinations)
         self.assertIn("docs/GLX.md", destinations)
+        self.assertIn("docs/RTX.md", destinations)
         self.assertNotIn("docs/fnql/GLX_PROMOTION.md", destinations)
         self.assertNotIn("docs/fnql/GLX_ROLLBACK_PACKAGE.md", destinations)
         self.assertNotIn("docs/fnql/GLX_VISUAL_DOSSIER.md", destinations)

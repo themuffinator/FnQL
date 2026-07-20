@@ -266,12 +266,11 @@
       <h1>${project_name_short}</h1>
       <p class="tagline">Fappin' Quake Live</p>
       <p class="subtitle">
-        <strong>${project_name_short}</strong> is the Quake Live branch of FnQ3: a modernized engine targeting retail <em>Quake Live</em> under Steam.
+        <strong>${project_name_short}</strong> brings FnQ3's modern rendering, audio, input, platform, and quality-of-life improvements to the retail Steam release of <em>Quake Live</em>.
       </p>
       <div class="buttons">
-        <a class="button button-primary" href="https://github.com/themuffinator/FnQL">Project home</a>
-        <a class="button button-secondary" href="#status">Status</a>
-        <a class="button button-secondary" href="#workflow">Workflow</a>
+        <a class="button button-primary" href="https://github.com/themuffinator/FnQL/releases/latest">Download latest release</a>
+        <a class="button button-secondary" href="#getting-started">Getting started</a>
         <a class="button button-secondary" href="#documentation">Documentation</a>
         <a class="button button-secondary" href="https://github.com/themuffinator/FnQL/blob/main/BUILD.md">Build guide</a>
         <a class="button button-secondary" href="LICENSE">License</a>
@@ -299,83 +298,97 @@
     <section class="section" id="introduction">
       <div class="section-header">
         <h2>1. Introduction</h2>
-        <p class="lead"><strong>${project_name_short}</strong> is an engine project for retail Quake Live compatibility. It uses FnQ3 as the imported technology baseline and QLSRP as the reconstruction reference.</p>
+        <p class="lead"><strong>${project_name_short}</strong> is a modernized Quake Live engine for players who want the retail Steam game to retain its familiar behavior while gaining faster rendering, modern audio and input, stronger platform support, and useful quality-of-life improvements.</p>
       </div>
-      <p class="lead">The goal is not to rebuild Quake Live game code. FnQL should load and serve retail-compatible content and module boundaries, preserve Quake Live engine behavior, and carry FnQ3's renderer, audio, platform, and tooling improvements forward where they remain compatible.</p>
+      <p class="lead">Retail Quake Live compatibility comes first. FnQL is engine-only and does not reconstruct or distribute Quake Live game code or assets, so a legitimate <a href="https://store.steampowered.com/app/282440/Quake_Live/">Quake Live installation on Steam</a> is required.</p>
+      <p class="footer">The official Windows package includes FnQL's open-source engine, its WebUI overlay, and the compiled closed-source Steam provider. It does not include Valve's <code>steam_api.dll</code> or any retail game content.</p>
     </section>
 
-    <section class="section" id="scope">
+    <section class="section" id="features">
       <div class="section-header">
-        <h2>2. Scope</h2>
-        <p class="lead">FnQL is scoped as a modern Quake Live engine, with retail assets and game modules remaining external.</p>
+        <h2>2. Features</h2>
+        <p class="lead">Extensive retail compatibility with the modern engine features players expect on current hardware.</p>
       </div>
       <div class="feature-grid">
         <article class="feature-group">
-          <h3>In scope</h3>
-          <ul>
-            <li>Retail Quake Live Steam installation compatibility, including practical default-path discovery and <code>baseq3</code> data expectations.</li>
-            <li>Engine compatibility reconstructed from QLSRP evidence: filesystem behavior, pak/pk3 loading, protocol and demo paths, VM/native module ABI, server and client glue, renderer data formats, platform services, and runtime identity.</li>
-            <li>A project-owned <code>fnql-web.pak</code> settings overlay that exposes FnQL engine controls and removes unsupported retail post-processing controls while leaving all untouched launcher resources in the legitimate retail <code>web.pak</code>.</li>
-            <li>Modernized engine features inherited from FnQ3, including SDL3, OpenAL, exactly three renderers (GLx, Vulkan raster <code>vk</code>, and ray-traced <code>rtx</code>), console and screenshot improvements, opt-in motion blur, enhanced map lens flares and liquids, optional per-map global fog, and deterministic release tooling.</li>
-            <li>Compatibility validation against a legitimate retail Quake Live installation.</li>
-          </ul>
+          <h3>Extensive Quake Live compatibility</h3>
+          <p>Built around the retail Steam release, with support for official assets and game modules, protocol 91 networking, <code>.dm_91</code> demos, BSP v47 maps, advertisements, factories, player profiles, the retail WebUI, Steam integration and Workshop content.</p>
         </article>
         <article class="feature-group">
-          <h3>Out of scope</h3>
-          <ul>
-            <li>Reconstructing or shipping Quake Live <code>qagame</code>, <code>cgame</code>, or UI game code in FnQL.</li>
-            <li>Bundling retail Quake Live assets.</li>
-            <li>Claiming live Quake Live online-service replacement before an explicit, documented, default-off compatibility path exists.</li>
-          </ul>
+          <h3>Fast, modern hardware rendering</h3>
+          <p>Choose between optimized <strong>GLx</strong>, <strong>Vulkan raster</strong> and <strong>Vulkan RTX</strong> renderers, with GPU-cached world geometry, optimized lightmaps, reduced rendering overhead, improved depth precision and better performance on large or demanding maps.</p>
+        </article>
+        <article class="feature-group">
+          <h3>Modern visual upgrades</h3>
+          <p>Optional HDR rendering and output, MSAA, supersampling, render scaling, anisotropic filtering, bloom, tone mapping, colour grading, high-quality dynamic lighting and shadows, motion blur, lens flares, soft particles, enhanced liquids and per-map fog.</p>
+        </article>
+        <article class="feature-group">
+          <h3>Improved player visibility</h3>
+          <p>Optional player rim lighting, stencil outlines or both, with configurable enemy, teammate, team and free-for-all colours, intensity and outline thickness. Cel shading, model outlines and world-edge outlines are also available.</p>
+        </article>
+        <article class="feature-group">
+          <h3>Better modern hardware and OS support</h3>
+          <p>SDL3-based video and input, OpenAL audio, modern graphics APIs, high-resolution and high-refresh displays, borderless/windowed/fullscreen modes, fast Alt+Enter switching, controller hotplugging and improved compatibility with current desktop systems.</p>
+        </article>
+        <article class="feature-group">
+          <h3>Low-latency, configurable controls</h3>
+          <p>Raw mouse input, Quake Live-accurate CPI scaling, signed acceleration, sensitivity caps and angle-history filtering, while retaining classic Quake3e/ioquake3 mouse styles. Modern gamepads and Unicode text input are also supported.</p>
+        </article>
+        <article class="feature-group">
+          <h3>Modern spatial audio</h3>
+          <p>OpenAL and HRTF headphone positioning, surround output, reverb, geometry-based occlusion, output-device selection, live device recovery and automatic fallback to the classic software mixer.</p>
+        </article>
+        <article class="feature-group">
+          <h3>Major quality-of-life improvements</h3>
+          <p>Scalable TTF console text, smooth scrolling, mouse selection, clipboard support, drag-and-drop editing, live command/CVar/map completion, minimize hotkeys, focus muting, lower background CPU usage and more flexible player configuration.</p>
+        </article>
+        <article class="feature-group">
+          <h3>Better screenshots, video and streaming tools</h3>
+          <p>PNG, TGA, JPEG and BMP capture, clipboard screenshots, custom filenames, camera metadata, configurable levelshots, watermarks, cubemap capture, arbitrary-resolution output and FFmpeg video piping.</p>
+        </article>
+        <article class="feature-group">
+          <h3>Faster content handling</h3>
+          <p>Quicker startup and map restarts with large PK3 libraries, raised filesystem and map limits, fast redirected downloads and automatic handling of server-required Workshop content.</p>
+        </article>
+        <article class="feature-group">
+          <h3>Greater stability and security</h3>
+          <p>Extensive Quake3e and FnQ3 bug fixes, improved memory management, lower memory usage, stronger network protection and graceful fallbacks when optional rendering, audio, WebUI or Steam functionality is unavailable.</p>
         </article>
       </div>
     </section>
 
-    <section class="section" id="status">
+    <section class="section" id="getting-started">
       <div class="section-header">
-        <h2>3. Development Status</h2>
-        <p class="lead">FnQL is at the initial migration stage.</p>
-      </div>
-      <ul>
-        <li>FnQ3 has been imported and rebranded to FnQL.</li>
-        <li>The canonical project identity now targets retail Quake Live on Steam.</li>
-        <li>Maintainer docs identify QLSRP and FnQ3 as the two primary reference repositories.</li>
-        <li>The next development phase is subsystem comparison against QLSRP, followed by focused compatibility reconstruction in modern C++.</li>
-      </ul>
-      <p class="footer">Keep <code>fnql-web.pak</code> beside the FnQL executable. It is a sparse settings override, not a replacement for the retail <code>web.pak</code>; the Windows x86 WebUI still requires a legitimate Quake Live installation.</p>
-      <p class="footer">Official Windows packages include the compiled closed-source <code>fnql_steam.dll</code> provider. Its source and Valve's <code>steam_api.dll</code> are not included; the provider loads the latter from the user's legitimate retail installation. See <code>docs/fnql/STEAM_PROVIDER_BINARY_NOTICE.txt</code>.</p>
-      <p class="footer">For build commands, use the <a href="https://github.com/themuffinator/FnQL/blob/main/BUILD.md">Build Guide</a>.</p>
-    </section>
-
-    <section class="section" id="workflow">
-      <div class="section-header">
-        <h2>4. Reference Workflow</h2>
-        <p class="lead">Use QLSRP before making compatibility claims.</p>
+        <h2>3. Getting Started</h2>
+        <p class="lead">Keep your legitimate retail installation, add FnQL beside it, and start playing.</p>
       </div>
       <ol>
-        <li>Locate the owning subsystem in the QLSRP reference checkout.</li>
-        <li>Compare FnQL's inherited FnQ3 implementation against QLSRP source and reference evidence.</li>
-        <li>Record observed behavior separately from inferred intent.</li>
-        <li>Reconstruct the engine-side compatibility needed by retail Quake Live.</li>
-        <li>Validate against a legitimate Steam install of Quake Live.</li>
+        <li>Install <a href="https://store.steampowered.com/app/282440/Quake_Live/">Quake Live through Steam</a> and launch the retail game once so Steam creates its normal files and player profile.</li>
+        <li>Download the current package from the <a href="https://github.com/themuffinator/FnQL/releases/latest">latest FnQL release</a>.</li>
+        <li>Extract the archive into the Quake Live installation folder. Keep <code>fnql-web.pak</code>, the renderer modules, and packaged runtime libraries beside the FnQL executable.</li>
+        <li>Leave Steam running and launch <code>fnql.exe</code>. The official Windows build is Win32/x86 so it can load the retail game modules and WebUI.</li>
+        <li>Open Settings in the retail WebUI or use the guides below to tune rendering, audio, controls, screenshots, and console behavior.</li>
       </ol>
+      <p class="footer">FnQL locates the normal Steam installation automatically. For an unusual location, start it with <code>+set fs_steampath "&lt;Quake Live folder&gt;"</code>. Steam and WebUI features fail safely when optional runtime components are unavailable.</p>
+      <p class="footer">To compile FnQL yourself, use the <a href="https://github.com/themuffinator/FnQL/blob/main/BUILD.md">Build Guide</a>.</p>
     </section>
 
     <section class="section" id="documentation">
       <div class="section-header">
-        <h2>5. Documentation</h2>
-        <p class="lead">The main guides are split between the current build and maintainer references, plus inherited FnQ3 feature docs that will be updated as Quake Live work lands.</p>
+        <h2>4. Documentation</h2>
+        <p class="lead">Start with the player guides for setup and tuning. Build, compatibility, and implementation details live in the technical references.</p>
       </div>
       <div class="doc-grid">
         <article class="doc-column">
-          <h3>Inherited feature guides</h3>
+          <h3>Player guides</h3>
           <ul>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/DISPLAY.md">Display Guide</a> for renderer choice, video modes, render scaling, HDR, bloom, motion blur, map lens flares, enhanced liquids, optional global fog, dynamic lighting, shadow maps, and cel shading.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/VISUALS.md">Visuals Guide</a> for player highlighting and other presentation controls.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/ASPECT_CORRECTION.md">Aspect Handling Guide</a> for menu and cinematic layout options.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/AUDIO.md">Audio Guide</a> for backend selection, devices, HRTF, fallback behavior, and troubleshooting.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/CONSOLE.md">Console Guide</a> for console layout, scaling, completion, and interaction.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/SCREENSHOTS.md">Screenshot Guide</a> for capture commands, naming, metadata sidecars, watermarks, and cube-map export.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/DISPLAY.md">Display Guide</a> for renderers, display modes, HDR, scaling, anti-aliasing, bloom, lighting, shadows, fog, liquids, lens flares, and motion blur.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/RTX.md">RTX Renderer Guide</a> for requirements, renderer selection, fallback behavior, safe settings, and troubleshooting.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/VISUALS.md">Visuals Guide</a> for player highlighting, colours, cel shading, and outlines.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/ASPECT_CORRECTION.md">Aspect Handling Guide</a> for the retail WebUI, menus, and cinematics.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/AUDIO.md">Audio Guide</a> for devices, HRTF, spatial effects, fallback behavior, and troubleshooting.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/CONSOLE.md">Console Guide</a> for layout, scaling, completion, clipboard use, and mouse interaction.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/SCREENSHOTS.md">Screenshot Guide</a> for formats, filenames, metadata, levelshots, watermarks, and cubemaps.</li>
             <li><a href="https://github.com/themuffinator/FnQL/releases">Release History</a> for published changelogs and downloads.</li>
           </ul>
         </article>
@@ -384,9 +397,11 @@
           <ul>
             <li><a href="https://github.com/themuffinator/FnQL/blob/main/BUILD.md">Build Guide</a> for compiling FnQL locally.</li>
             <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/GLX.md">GLx Renderer Guide</a> for the default OpenGL-lineage renderer, diagnostics, and troubleshooting.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/fnql/RTX_RENDERER.md">RTX Renderer Contract</a> for the hybrid renderer, conservative defaults, capability gates, and retail-safe smoke procedure.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/fnql/AUDIO_ENGINE.md">Modern Audio Engine Notes</a> for engine architecture and compatibility boundaries.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/fnql/TECHNICAL.md">Technical Notes</a> for repository structure, release flow, and maintainer conventions.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/fnql/INPUT_COMPATIBILITY.md">Input Compatibility Notes</a> for retail mouse math, text input, controllers, and legacy profiles.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/fnql/WEBUI_BACKEND.md">WebUI Backend Notes</a> for retail resources, platform boundaries, overlay order, and fallbacks.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/fnql/STEAM_PROVIDER.md">Steam Provider Notes</a> for the open loader ABI, provider distribution, and runtime policy.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/fnql/RTX_RENDERER.md">RTX Renderer Contract</a> for the Quake Live ABI boundary, conservative defaults, and runtime validation.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/fnql/TECHNICAL.md">Technical Notes</a> for repository structure, release flow, compatibility workflow, and maintainer conventions.</li>
           </ul>
         </article>
       </div>
@@ -394,7 +409,7 @@
 
     <section class="section" id="credits">
       <div class="section-header">
-        <h2>6. Credits</h2>
+        <h2>5. Credits</h2>
         <p class="lead">FnQL follows a clear upstream lineage from the Quake III Arena SDK, through ioquake3, Quake3e, FnQ3, and QLSRP.</p>
       </div>
       <p class="lead">Additional compatibility and feature work draws from projects and references such as <a href="https://bitbucket.org/CPMADevs/cnq3">CNQ3</a>, <a href="https://github.com/zturtleman/spearmint">Spearmint</a>, <a href="https://github.com/brugal/wolfcamql">WolfcamQL</a>, Luigi Auriemma's <a href="https://aluigi.altervista.org/papers.htm#qldec">qldec</a>, and <a href="https://github.com/Paril/DarkMatter-Q2">DarkMatter-Q2</a>.</p>
