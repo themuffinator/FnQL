@@ -8,7 +8,7 @@ For menu and cinematic layout on widescreen displays, use the separate [Aspect H
 
 `cl_renderer` selects the rendering backend and requires `vid_restart`.
 
-- `cl_renderer glx`: Default OpenGL-lineage renderer with compatibility tiers, streaming, static-world, material, postprocess, output, and profiling paths.
+- `cl_renderer glx`: Canonical OpenGL-lineage renderer and client default, with compatibility tiers, streaming, static-world, material, postprocess, output, and profiling paths.
 - `cl_renderer vk`: Vulkan raster renderer with FBO rendering, HDR, multisampling, supersampling, render scaling, shader-based SDR gamma/overbright, greyscale, and bloom.
 - `cl_renderer rtx`: Vulkan ray-tracing renderer; full RT mode requires a ray-tracing-capable Vulkan GPU. See the [RTX Renderer Guide](fnql/RTX_RENDERER.md).
 

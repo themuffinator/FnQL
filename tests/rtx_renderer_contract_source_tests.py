@@ -81,6 +81,10 @@ class RtxRendererContractSourceTests(unittest.TestCase):
         self.assertIn("-DRENDERER_RTX", meson)
         self.assertIn("renderer_default == 'rtx'", meson)
 
+        # The static RTX verification target links the complete Linux client,
+        # including its native ALSA backend, rather than only the renderer.
+        self.assertIn("libasound2-dev", workflow)
+
         # Static clients also provide ABI-level host-font fallbacks. Every
         # supported build frontend must keep the renderer's implementations
         # private so the two definitions cannot collide at final link time.
