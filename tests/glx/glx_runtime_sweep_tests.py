@@ -2836,6 +2836,7 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         renderer_doc = (ROOT / "docs" / "fnql" / "GLX_RENDERER.md").read_text(encoding="utf-8")
         readme_template = (ROOT / "docs" / "templates" / "README.md.in").read_text(encoding="utf-8")
         release_script = (ROOT / "scripts" / "release.py").read_text(encoding="utf-8")
+        workflow = (ROOT / ".github" / "workflows" / "glx-verification.yml").read_text(encoding="utf-8")
 
         self.assertRegex(makefile, r"(?m)^USE_GLX\s*=\s*1$")
         self.assertIn("'glx'", meson_options)
@@ -2850,6 +2851,8 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         self.assertIn("troubleshooting", glx_doc.lower())
         self.assertIn("Canonical OpenGL-lineage renderer", display_doc)
         self.assertIn("canonical OpenGL-lineage renderer", renderer_doc)
+        for path in ("docs/DISPLAY.md", "docs/GLX.md"):
+            self.assertEqual(2, workflow.count(f"- '{path}'"))
         self.assertIn("docs/GLX.md", readme_template)
         self.assertIn('ROOT / "docs" / "GLX.md"', release_script)
         for current_text in (build_doc, display_doc, screenshots_doc, renderer_doc, glx_doc):
