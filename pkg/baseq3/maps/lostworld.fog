@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail lostworld.bsp.
+color 0.493 0.480 0.472
+mode exp
+density 0.000557
+start 176
+opacity 0.24
+sky 1

@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail windsongkeep.bsp.
+color 0.489 0.484 0.478
+mode exp
+density 0.000437
+start 224
+opacity 0.24
+sky 1

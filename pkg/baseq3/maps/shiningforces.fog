@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail shiningforces.bsp.
+color 0.488 0.486 0.487
+mode exp
+density 0.000320
+start 320
+opacity 0.24
+sky 1

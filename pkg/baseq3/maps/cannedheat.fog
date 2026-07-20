@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail cannedheat.bsp.
+color 0.491 0.484 0.478
+mode exp
+density 0.000659
+start 160
+opacity 0.24
+sky 1

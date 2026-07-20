@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail silence.bsp.
+color 0.491 0.493 0.486
+mode exp
+density 0.000459
+start 224
+opacity 0.24
+sky 1

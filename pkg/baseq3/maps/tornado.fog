@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail tornado.bsp; 2 authored BSP fog volume(s) detected.
+color 0.488 0.480 0.476
+mode exp
+density 0.000303
+start 224
+opacity 0.14
+sky 1

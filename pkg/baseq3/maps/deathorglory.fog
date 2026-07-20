@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail deathorglory.bsp.
+color 0.490 0.486 0.481
+mode exp
+density 0.000481
+start 208
+opacity 0.24
+sky 1

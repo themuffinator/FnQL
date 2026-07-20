@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail electrichead.bsp.
+color 0.505 0.506 0.509
+mode exp
+density 0.000343
+start 288
+opacity 0.24
+sky 1

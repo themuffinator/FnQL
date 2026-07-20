@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail divineintermission.bsp.
+color 0.483 0.480 0.478
+mode exp
+density 0.000479
+start 208
+opacity 0.24
+sky 1

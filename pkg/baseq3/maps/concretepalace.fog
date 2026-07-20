@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail concretepalace.bsp.
+color 0.486 0.484 0.480
+mode exp
+density 0.000703
+start 144
+opacity 0.24
+sky 1

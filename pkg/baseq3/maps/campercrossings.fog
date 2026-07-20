@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail campercrossings.bsp.
+color 0.483 0.478 0.483
+mode exp
+density 0.000320
+start 368
+opacity 0.24
+sky 1

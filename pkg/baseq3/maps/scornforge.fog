@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail scornforge.bsp; 3 authored BSP fog volume(s) detected.
+color 0.488 0.483 0.482
+mode exp
+density 0.000208
+start 384
+opacity 0.14
+sky 1

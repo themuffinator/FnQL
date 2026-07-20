@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail leviathan.bsp; 3 authored BSP fog volume(s) detected.
+color 0.485 0.483 0.479
+mode exp
+density 0.000232
+start 288
+opacity 0.14
+sky 1

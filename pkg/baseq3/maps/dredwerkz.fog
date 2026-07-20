@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail dredwerkz.bsp; 2 authored BSP fog volume(s) detected.
+color 0.488 0.486 0.485
+mode exp
+density 0.000208
+start 368
+opacity 0.14
+sky 1

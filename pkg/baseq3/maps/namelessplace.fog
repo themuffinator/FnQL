@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail namelessplace.bsp.
+color 0.499 0.493 0.491
+mode exp
+density 0.000625
+start 160
+opacity 0.24
+sky 1

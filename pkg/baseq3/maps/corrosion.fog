@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail corrosion.bsp; 3 authored BSP fog volume(s) detected.
+color 0.483 0.481 0.476
+mode exp
+density 0.000231
+start 288
+opacity 0.14
+sky 1

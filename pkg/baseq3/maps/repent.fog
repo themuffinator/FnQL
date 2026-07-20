@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail repent.bsp.
+color 0.494 0.486 0.476
+mode exp
+density 0.000346
+start 288
+opacity 0.24
+sky 1

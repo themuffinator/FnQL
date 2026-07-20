@@ -1,0 +1,188 @@
+from __future__ import annotations
+
+import argparse
+from typing import Sequence
+
+
+# Observed from the maps/*.bsp members of the legitimate retail Quake Live
+# Steam pak00.pk3 on 2026-07-21. Arena metadata also advertises optional
+# extras/holiday Workshop maps that are not stock assets and are intentionally
+# excluded until their BSPs are installed by Steam Workshop.
+STOCK_QL_MAPS = (
+    "aerowalk",
+    "almostlost",
+    "arcanecitadel",
+    "arkinholm",
+    "asylum",
+    "basesiege",
+    "battleforged",
+    "beyondreality",
+    "bitterembrace",
+    "blackcathedral",
+    "bloodlust",
+    "bloodrun",
+    "brimstoneabbey",
+    "campercrossings",
+    "campgrounds",
+    "cannedheat",
+    "castledeathstalker",
+    "chemicalreaction",
+    "citycrossings",
+    "cliffside",
+    "coldcathode",
+    "coldwar",
+    "concretepalace",
+    "corrosion",
+    "courtyard",
+    "cure",
+    "cursed",
+    "deadandgone",
+    "deathorglory",
+    "deepinside",
+    "delirium",
+    "demonkeep",
+    "devilish",
+    "diesirae",
+    "dismemberment",
+    "dividedcrossings",
+    "divineintermission",
+    "doubleimpact",
+    "dreadfulplace",
+    "dredwerkz",
+    "drunkenmummy",
+    "duelingkeeps",
+    "elder",
+    "electrichead",
+    "electrocution",
+    "eviscerated",
+    "evolution",
+    "eyetoeye",
+    "falloutbunker",
+    "fatalinstinct",
+    "finnegans",
+    "fluorescent",
+    "foolishlegacy",
+    "furiousheights",
+    "fuse",
+    "futurecrossings",
+    "gospelcrossings",
+    "gothicrage",
+    "grimdungeons",
+    "hearth",
+    "hektik",
+    "hellsgate",
+    "henhouse",
+    "heroskeep",
+    "hiddenfortress",
+    "houseofdecay",
+    "industrialrevolution",
+    "infinity",
+    "innersanctums",
+    "intervention",
+    "ironworks",
+    "japanesecastles",
+    "jumpwerkz",
+    "leftbehind",
+    "leviathan",
+    "limbus",
+    "longestyard",
+    "lostparadise",
+    "lostworld",
+    "mcsarges",
+    "midlifecrisis",
+    "monastery",
+    "namelessplace",
+    "newcerberon",
+    "overgrowth",
+    "overkill",
+    "overlord",
+    "phrantic",
+    "pillbox",
+    "provinggrounds",
+    "pulpfriction",
+    "purgatory",
+    "quarantine",
+    "qzpractice1",
+    "qzpractice2",
+    "qztraining",
+    "ragnarok",
+    "railyard",
+    "realmofsteelrats",
+    "rebound",
+    "refinery",
+    "reflux",
+    "repent",
+    "retribution",
+    "revolver",
+    "satanic",
+    "scornforge",
+    "seamsandbolts",
+    "servitude",
+    "shakennotstirred",
+    "shiningforces",
+    "siberia",
+    "silence",
+    "sinister",
+    "skyward",
+    "smash",
+    "solarium",
+    "solid",
+    "somewhatdamaged",
+    "sorrow",
+    "spacechamber",
+    "spacectf",
+    "spidercrossings",
+    "spillway",
+    "stonekeep",
+    "stronghold",
+    "terminalheights",
+    "terminatria",
+    "terminus",
+    "theatreofpain",
+    "thedukesgarden",
+    "theedge",
+    "theepicenter",
+    "theoldendomain",
+    "threestory",
+    "thunderstruck",
+    "tornado",
+    "toxicity",
+    "trinity",
+    "troubledwaters",
+    "useandabuse",
+    "verticalvengeance",
+    "vortexportal",
+    "warehouse",
+    "wargrounds",
+    "wicked",
+    "windowpain",
+    "windsongkeep",
+    "zen",
+)
+
+
+def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Print the canonical stock Quake Live BSP map inventory."
+    )
+    parser.add_argument(
+        "--count",
+        action="store_true",
+        help="Print only the number of stock maps.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    import sys
+
+    args = parse_args(sys.argv[1:] if argv is None else argv)
+    if args.count:
+        print(len(STOCK_QL_MAPS))
+    else:
+        print("\n".join(STOCK_QL_MAPS))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

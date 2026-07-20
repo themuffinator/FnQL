@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail hellsgate.bsp; 3 authored BSP fog volume(s) detected.
+color 0.502 0.481 0.475
+mode exp
+density 0.000337
+start 192
+opacity 0.14
+sky 1

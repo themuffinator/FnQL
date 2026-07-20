@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Root-package map sidecars must be byte-stable across release hosts.
+pkg/baseq3/maps/*.azb binary
+pkg/baseq3/maps/*.fog text eol=lf

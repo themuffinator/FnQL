@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail warehouse.bsp.
+color 0.501 0.496 0.487
+mode exp
+density 0.000349
+start 288
+opacity 0.24
+sky 1

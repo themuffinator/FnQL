@@ -6,55 +6,26 @@ from pathlib import Path
 from typing import Iterable
 
 from fnql_meta import ROOT
+from stock_ql_maps import STOCK_QL_MAPS
 
 
 ROOT_ARCHIVE_NAME = "FnQL-pkg.fnz"
 PKG_ROOT = ROOT / "pkg"
-
-STANDARD_Q3A_AUDIO_ZONE_MAPS = (
-    "pro-q3dm13",
-    "pro-q3dm6",
-    "pro-q3tourney2",
-    "pro-q3tourney4",
-    "q3ctf1",
-    "q3ctf2",
-    "q3ctf3",
-    "q3ctf4",
-    "q3dm0",
-    "q3dm1",
-    "q3dm10",
-    "q3dm11",
-    "q3dm12",
-    "q3dm13",
-    "q3dm14",
-    "q3dm15",
-    "q3dm16",
-    "q3dm17",
-    "q3dm18",
-    "q3dm19",
-    "q3dm2",
-    "q3dm3",
-    "q3dm4",
-    "q3dm5",
-    "q3dm6",
-    "q3dm7",
-    "q3dm8",
-    "q3dm9",
-    "q3tourney1",
-    "q3tourney2",
-    "q3tourney3",
-    "q3tourney4",
-    "q3tourney5",
-    "q3tourney6",
-    "q3tourney6_ctf",
-)
 
 DEFAULT_AUDIO_ZONE_ASSETS = [
     (
         PKG_ROOT / "baseq3" / "maps" / f"{map_name}.azb",
         Path("baseq3") / "maps" / f"{map_name}.azb",
     )
-    for map_name in STANDARD_Q3A_AUDIO_ZONE_MAPS
+    for map_name in STOCK_QL_MAPS
+]
+
+DEFAULT_GLOBAL_FOG_ASSETS = [
+    (
+        PKG_ROOT / "baseq3" / "maps" / f"{map_name}.fog",
+        Path("baseq3") / "maps" / f"{map_name}.fog",
+    )
+    for map_name in STOCK_QL_MAPS
 ]
 
 DEFAULT_WEAPON_SOUND_SHADER_ASSETS = [
@@ -77,6 +48,7 @@ DEFAULT_RENDERER_SHADER_ASSETS = [
 
 DEFAULT_ROOT_ARCHIVE_REQUIRED_ASSETS = [
     *DEFAULT_AUDIO_ZONE_ASSETS,
+    *DEFAULT_GLOBAL_FOG_ASSETS,
     *DEFAULT_RENDERER_SHADER_ASSETS,
     *DEFAULT_WEAPON_SOUND_SHADER_ASSETS,
 ]
@@ -163,6 +135,12 @@ def required_root_archive_names(
 
 def required_audio_zone_archive_names(
     assets: Iterable[tuple[Path, Path]] = DEFAULT_AUDIO_ZONE_ASSETS,
+) -> list[str]:
+    return required_root_archive_names(assets)
+
+
+def required_global_fog_archive_names(
+    assets: Iterable[tuple[Path, Path]] = DEFAULT_GLOBAL_FOG_ASSETS,
 ) -> list[str]:
     return required_root_archive_names(assets)
 

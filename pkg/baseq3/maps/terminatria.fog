@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail terminatria.bsp.
+color 0.496 0.499 0.501
+mode exp
+density 0.000367
+start 272
+opacity 0.24
+sky 1

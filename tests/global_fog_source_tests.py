@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import re
+import sys
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+
+from stock_ql_maps import STOCK_QL_MAPS
 
 
 def read(relative_path: str) -> str:
@@ -90,8 +94,11 @@ class GlobalFogSourceTests(unittest.TestCase):
             read_file.index("FS_FOpenFileRead"),
         )
 
-        shipped_fog = [path for path in (ROOT / "pkg").rglob("*.fog") if path.is_file()]
-        self.assertEqual(shipped_fog, [])
+        shipped_fog = {
+            path.stem for path in (ROOT / "pkg" / "baseq3" / "maps").glob("*.fog")
+            if path.is_file()
+        }
+        self.assertEqual(shipped_fog, set(STOCK_QL_MAPS))
 
     def test_arb_program_failure_is_feature_local_and_compositor_is_ordered(self) -> None:
         arb = read("code/renderer/tr_arb.c")

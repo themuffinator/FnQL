@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail theepicenter.bsp.
+color 0.487 0.487 0.484
+mode exp
+density 0.000680
+start 144
+opacity 0.24
+sky 1

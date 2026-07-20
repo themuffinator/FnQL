@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail pillbox.bsp.
+color 0.497 0.488 0.488
+mode exp
+density 0.000320
+start 352
+opacity 0.24
+sky 1

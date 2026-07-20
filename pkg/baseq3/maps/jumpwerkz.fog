@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail jumpwerkz.bsp; 4 authored BSP fog volume(s) detected.
+color 0.499 0.496 0.494
+mode exp
+density 0.000208
+start 384
+opacity 0.14
+sky 1

@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail cliffside.bsp; 1 authored BSP fog volume(s) detected.
+color 0.503 0.505 0.503
+mode exp
+density 0.000208
+start 384
+opacity 0.14
+sky 1

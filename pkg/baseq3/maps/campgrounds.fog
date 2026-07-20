@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail campgrounds.bsp.
+color 0.503 0.499 0.498
+mode exp
+density 0.000469
+start 224
+opacity 0.24
+sky 1

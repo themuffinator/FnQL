@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail thunderstruck.bsp.
+color 0.519 0.516 0.517
+mode exp
+density 0.000620
+start 160
+opacity 0.24
+sky 1

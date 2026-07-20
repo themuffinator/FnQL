@@ -852,48 +852,19 @@ audiozonesc = executable('fnql-audiozonesc',
 )
 runtime_build_targets += audiozonesc
 
-standard_audio_zone_maps = [
-  'pro-q3dm13',
-  'pro-q3dm6',
-  'pro-q3tourney2',
-  'pro-q3tourney4',
-  'q3ctf1',
-  'q3ctf2',
-  'q3ctf3',
-  'q3ctf4',
-  'q3dm0',
-  'q3dm1',
-  'q3dm10',
-  'q3dm11',
-  'q3dm12',
-  'q3dm13',
-  'q3dm14',
-  'q3dm15',
-  'q3dm16',
-  'q3dm17',
-  'q3dm18',
-  'q3dm19',
-  'q3dm2',
-  'q3dm3',
-  'q3dm4',
-  'q3dm5',
-  'q3dm6',
-  'q3dm7',
-  'q3dm8',
-  'q3dm9',
-  'q3tourney1',
-  'q3tourney2',
-  'q3tourney3',
-  'q3tourney4',
-  'q3tourney5',
-  'q3tourney6',
-  'q3tourney6_ctf',
-]
-standard_audio_zone_sidecars = []
-foreach map_name : standard_audio_zone_maps
-  standard_audio_zone_sidecars += files('pkg/baseq3/maps/' + map_name + '.azb')
+stock_ql_maps_result = run_command(
+  python,
+  files('scripts/stock_ql_maps.py'),
+  check: true,
+)
+stock_ql_maps = stock_ql_maps_result.stdout().strip().split('\n')
+stock_audio_zone_sidecars = []
+stock_global_fog_sidecars = []
+foreach map_name : stock_ql_maps
+  stock_audio_zone_sidecars += files('pkg/baseq3/maps/' + map_name + '.azb')
+  stock_global_fog_sidecars += files('pkg/baseq3/maps/' + map_name + '.fog')
 endforeach
-root_package_assets = standard_audio_zone_sidecars + files(
+root_package_assets = stock_audio_zone_sidecars + stock_global_fog_sidecars + files(
   'pkg/baseq3/scripts/fnql.shader',
   'pkg/baseq3/sound/fnql-weapon-sounds.sndshd',
   'pkg/missionpack/sound/fnql-weapon-sounds.sndshd',
@@ -904,6 +875,7 @@ custom_target('FnQL-pkg.fnz',
     'scripts/build_root_archive.py',
     'scripts/fnql_meta.py',
     'scripts/root_archive.py',
+    'scripts/stock_ql_maps.py',
   ),
   output: 'FnQL-pkg.fnz',
   command: [

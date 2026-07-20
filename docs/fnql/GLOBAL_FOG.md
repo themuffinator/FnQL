@@ -25,8 +25,18 @@ files with the same deterministic source-port precedence already used for
 `maps/*.azb`. If the root archive has no matching entry, the active game,
 package, and loose-file search order remains the fallback.
 
-FnQL does not ship map fog sidecars. The allowlist does not expose arbitrary
-root-archive files, and it does not change retail package names or paths.
+`FnQL-pkg.fnz` ships one conservative fog sidecar for each of the 149 BSP maps
+actually present in the retail Steam `baseq3/pak00.pk3`. The presets are
+deterministically derived from each map's world bounds, average lightmap colour,
+and authored BSP-fog count. They remain opt-in because `r_globalFog` defaults to
+`0`, and maps with authored BSP fog receive a lower blend cap so the optional
+layer does not replace or double the map's native fog.
+
+Arena metadata for optional and holiday Workshop maps is not treated as stock
+map content when the corresponding BSP is absent from the retail package. Those
+maps, other Workshop maps, and custom maps retain the normal missing-sidecar
+fallback described above. The allowlist does not expose arbitrary root-archive
+files, and it does not change retail package names or paths.
 
 ## Format
 

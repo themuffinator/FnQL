@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from release import REQUIRED_RELEASE_ARCHIVE_ENTRIES, validate_release_archive_contents
 from root_archive import (
     DEFAULT_AUDIO_ZONE_ASSETS,
+    DEFAULT_GLOBAL_FOG_ASSETS,
     DEFAULT_WEAPON_SOUND_SHADER_ASSETS,
     ROOT_ARCHIVE_NAME,
     validate_root_archive,
@@ -71,7 +72,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             f"{archive_kind} layout ok: "
             f"{len(DEFAULT_AUDIO_ZONE_ASSETS)} audio-zone sidecars under "
-            f"{ROOT_ARCHIVE_NAME}/baseq3/maps and "
+            f"{ROOT_ARCHIVE_NAME}/baseq3/maps, "
+            f"{len(DEFAULT_GLOBAL_FOG_ASSETS)} fog sidecars, and "
             f"{len(DEFAULT_WEAPON_SOUND_SHADER_ASSETS)} sound shaders under "
             f"{ROOT_ARCHIVE_NAME}/<game>/sound"
         )
@@ -79,7 +81,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(
             "release layout ok: "
             f"{ROOT_ARCHIVE_NAME} contains {len(DEFAULT_AUDIO_ZONE_ASSETS)} "
-            "audio-zone sidecars under baseq3/maps and "
+            "audio-zone sidecars under baseq3/maps, "
+            f"{len(DEFAULT_GLOBAL_FOG_ASSETS)} fog sidecars, and "
             f"{len(DEFAULT_WEAPON_SOUND_SHADER_ASSETS)} sound shaders under <game>/sound"
         )
     return 0

@@ -25,9 +25,7 @@ from glx_promotion import (
     promotion_report,
 )
 from root_archive import (
-    DEFAULT_AUDIO_ZONE_ASSETS,
     ROOT_ARCHIVE_NAME,
-    STANDARD_Q3A_AUDIO_ZONE_MAPS,
     path_is_relative_to,
     validate_archive_member_names,
     validate_root_archive,
@@ -243,13 +241,6 @@ def copy_release_artifact_contents(source: Path, target: Path) -> list[str]:
 
 def copy_docs(stage_root: Path) -> None:
     for source, dest_relative in DEFAULT_DOCS:
-        destination = stage_root / dest_relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
-
-
-def copy_standard_audio_zone_assets(stage_root: Path) -> None:
-    for source, dest_relative in DEFAULT_AUDIO_ZONE_ASSETS:
         destination = stage_root / dest_relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)

@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail phrantic.bsp.
+color 0.498 0.500 0.499
+mode exp
+density 0.000413
+start 240
+opacity 0.24
+sky 1

@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail spacectf.bsp.
+color 0.496 0.493 0.495
+mode exp
+density 0.000320
+start 384
+opacity 0.24
+sky 1

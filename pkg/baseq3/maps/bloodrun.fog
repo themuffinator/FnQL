@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail bloodrun.bsp; 1 authored BSP fog volume(s) detected.
+color 0.500 0.489 0.476
+mode exp
+density 0.000352
+start 192
+opacity 0.14
+sky 1

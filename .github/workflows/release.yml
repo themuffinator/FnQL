@@ -171,6 +171,7 @@ jobs:
       - name: Check release and WebUI source contracts
         run: |
           python tests/release_packaging_tests.py
+          python tests/stock_ql_sidecar_tests.py
           python tests/webui_wiring_tests.py
           python tests/webui_backend_source_tests.py
           python tests/launch_and_transition_source_tests.py

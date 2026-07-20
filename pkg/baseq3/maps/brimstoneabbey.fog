@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail brimstoneabbey.bsp.
+color 0.497 0.492 0.486
+mode exp
+density 0.000485
+start 208
+opacity 0.24
+sky 1

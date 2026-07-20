@@ -280,13 +280,13 @@ FnQL uses a small set of EFX filter presets for source classes rather than a ful
 
 ### Optional Audio Zone Sidecars
 
-FnQL can read optional compiled audio-zone sidecars named `maps/<mapname>.azb`. These files are maintainer-authored tuning data for map-specific reverb, tone, occlusion multiplier, and transition behavior. They are never required for normal gameplay: if a sidecar is missing, invalid, disabled, or does not contain the listener's current position, the OpenAL backend keeps using the generic trace-based environment heuristics described above.
+FnQL can read optional compiled audio-zone sidecars named `maps/<mapname>.azb`. `FnQL-pkg.fnz` ships a geometry-derived sidecar for each of the 149 BSP maps actually present in the retail Quake Live Steam package. Sidecars can also contain maintainer-authored tuning data for map-specific reverb, tone, occlusion multiplier, and transition behavior. They are never required for normal gameplay: if a sidecar is missing, invalid, disabled, or does not contain the listener's current position, the OpenAL backend keeps using the generic trace-based environment heuristics described above. Menu-only optional/holiday Workshop entries whose BSPs are not installed, other Workshop maps, and custom maps use that fallback unless their own sidecar is supplied.
 
 - `s_alAudioZones 1`: Enable `.azb` sidecars when present. This is the default.
 - `s_alAudioZones 0`: Ignore sidecars and use generic environment heuristics only.
 - `s_info`: Reports whether audio zones are disabled, missing, loaded, and which zone is currently active.
 - `s_alDebugOverlay 2` and `s_alDebugDump`: Include active zone name, material metadata, portal blend target when one is active, plus the zone-adjusted wet, low/high-frequency, occlusion, and transition values.
-- FnQL checks `FnQL-pkg.fnz` next to the executable before normal game data for sidecars, using game-dir-prefixed entries such as `baseq3/maps/q3dm1.azb` or `missionpack/maps/<mapname>.azb`.
+- FnQL checks `FnQL-pkg.fnz` next to the executable before normal game data for sidecars, using game-dir-prefixed entries such as `baseq3/maps/campgrounds.azb` or `missionpack/maps/<mapname>.azb`.
 
 Sidecars are compiled with the repo tool target `fnql-audiozonesc`. Maintainers can write `maps/<mapname>.audiozones` by hand or generate a first-pass sidecar from an existing `.bsp`, then layer small overrides on top. Current sidecars can carry material metadata, portal hints, and optional per-portal blend tuning while older version 1 and version 2 sidecars remain readable. The compiler workflow and authoring syntax are documented in the maintainer notes and in `code/tools/audiozones/README.md`.
 

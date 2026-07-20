@@ -17,6 +17,7 @@ sys.path.insert(0, str(ROOT))
 from scripts import release
 from scripts import fetch_steam_provider
 from scripts import root_archive
+from scripts import stock_ql_maps
 from scripts import verify_release_layout
 from scripts import windows_pe
 
@@ -120,10 +121,14 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertNotIn("docs/fnql/GLX_ROLLBACK_PACKAGE.md", destinations)
         self.assertNotIn("docs/fnql/GLX_VISUAL_DOSSIER.md", destinations)
 
-    def test_standard_q3a_audio_zone_assets_are_packaged_in_root_archive(self) -> None:
-        destinations = {
+    def test_stock_ql_sidecars_are_packaged_in_root_archive(self) -> None:
+        audio_destinations = {
             destination.as_posix()
-            for _source, destination in release.DEFAULT_AUDIO_ZONE_ASSETS
+            for _source, destination in root_archive.DEFAULT_AUDIO_ZONE_ASSETS
+        }
+        fog_destinations = {
+            destination.as_posix()
+            for _source, destination in root_archive.DEFAULT_GLOBAL_FOG_ASSETS
         }
         required_destinations = {
             destination.as_posix()
@@ -131,20 +136,23 @@ class ReleasePackagingTests(unittest.TestCase):
         }
         sources = {
             source.relative_to(ROOT).as_posix()
-            for source, _destination in release.DEFAULT_AUDIO_ZONE_ASSETS
+            for source, _destination in root_archive.DEFAULT_AUDIO_ZONE_ASSETS
         }
 
-        self.assertEqual(len(destinations), 35)
-        self.assertEqual(len(required_destinations), 38)
-        self.assertIn("pkg/baseq3/maps/q3dm1.azb", sources)
-        self.assertIn("baseq3/maps/q3dm1.azb", destinations)
-        self.assertIn("baseq3/maps/q3dm17.azb", destinations)
-        self.assertIn("baseq3/maps/q3tourney6_ctf.azb", destinations)
-        self.assertIn("baseq3/maps/pro-q3dm6.azb", destinations)
+        self.assertEqual(len(stock_ql_maps.STOCK_QL_MAPS), 149)
+        self.assertEqual(len(audio_destinations), 149)
+        self.assertEqual(len(fog_destinations), 149)
+        self.assertEqual(len(required_destinations), 301)
+        self.assertIn("pkg/baseq3/maps/campgrounds.azb", sources)
+        self.assertIn("baseq3/maps/campgrounds.azb", audio_destinations)
+        self.assertIn("baseq3/maps/campgrounds.fog", fog_destinations)
+        self.assertIn("baseq3/maps/bloodrun.azb", audio_destinations)
+        self.assertIn("baseq3/maps/siberia.fog", fog_destinations)
+        self.assertNotIn("baseq3/maps/q3dm1.azb", audio_destinations)
         self.assertIn("baseq3/sound/fnql-weapon-sounds.sndshd", required_destinations)
         self.assertIn("missionpack/sound/fnql-weapon-sounds.sndshd", required_destinations)
         self.assertIn("baseq3/scripts/fnql.shader", required_destinations)
-        self.assertNotIn("baseq3/maps/test_bigbox.azb", destinations)
+        self.assertNotIn("baseq3/maps/test_bigbox.azb", audio_destinations)
 
         with tempfile.TemporaryDirectory() as tmp:
             archive_path = Path(tmp) / release.ROOT_ARCHIVE_NAME
@@ -167,6 +175,9 @@ class ReleasePackagingTests(unittest.TestCase):
         meson_build = (ROOT / "meson.build").read_text(encoding="utf-8")
 
         self.assertNotIn("'pkg/baseq3/fnql-hud.json'", meson_build)
+        self.assertIn("files('scripts/stock_ql_maps.py')", meson_build)
+        self.assertIn("map_name + '.azb'", meson_build)
+        self.assertIn("map_name + '.fog'", meson_build)
         self.assertIn("'pkg/baseq3/scripts/fnql.shader'", meson_build)
         self.assertIn("'pkg/baseq3/sound/fnql-weapon-sounds.sndshd'", meson_build)
         self.assertIn("'pkg/missionpack/sound/fnql-weapon-sounds.sndshd'", meson_build)
@@ -300,8 +311,11 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertIn(release.FNQL_WEBPAK_NAME, names)
         self.assertIn("missionpack/vm/cgame.qvm", names)
         self.assertNotIn("baseq3/maps/q3dm1.azb", names)
-        self.assertIn("baseq3/maps/q3dm1.azb", root_archive_names)
-        self.assertIn("baseq3/maps/q3dm17.azb", root_archive_names)
+        self.assertIn("baseq3/maps/campgrounds.azb", root_archive_names)
+        self.assertIn("baseq3/maps/campgrounds.fog", root_archive_names)
+        self.assertIn("baseq3/maps/bloodrun.azb", root_archive_names)
+        self.assertIn("baseq3/maps/bloodrun.fog", root_archive_names)
+        self.assertNotIn("baseq3/maps/q3dm1.azb", root_archive_names)
         self.assertIn("baseq3/sound/fnql-weapon-sounds.sndshd", root_archive_names)
         self.assertIn("missionpack/sound/fnql-weapon-sounds.sndshd", root_archive_names)
         self.assertNotIn("maps/q3dm1.azb", names)

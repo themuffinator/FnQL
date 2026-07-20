@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail mcsarges.bsp.
+color 0.489 0.487 0.483
+mode exp
+density 0.000527
+start 192
+opacity 0.24
+sky 1

@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail intervention.bsp; 1 authored BSP fog volume(s) detected.
+color 0.497 0.493 0.490
+mode exp
+density 0.000274
+start 240
+opacity 0.14
+sky 1

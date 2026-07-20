@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail foolishlegacy.bsp; 2 authored BSP fog volume(s) detected.
+color 0.494 0.490 0.488
+mode exp
+density 0.000213
+start 304
+opacity 0.14
+sky 1

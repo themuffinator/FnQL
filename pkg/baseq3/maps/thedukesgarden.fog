@@ -1,0 +1,7 @@
+// Subtle opt-in atmospheric depth derived from retail thedukesgarden.bsp.
+color 0.490 0.483 0.478
+mode exp
+density 0.000320
+start 384
+opacity 0.24
+sky 1
