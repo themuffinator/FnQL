@@ -7,25 +7,22 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
 ## [Unreleased]
 
 ### Highlights
-- Fixed the retail Start Match flow from menu selection through active gameplay.
+- _None yet._
 
 ### Compatibility
-- Populate the retail WebUI map catalog from the validated map pool, including per-gametype availability instead of exposing only Campgrounds.
-- Seed Start Match settings before the retail component mounts, eliminating `NaN` controls and preserving the expected defaults.
-- Release and pause the WebUI before map/connect transitions so loading and in-game rendering regain ownership immediately.
+- _None yet._
 
 ### Rendering and Display
-- Keep windowed gamma correction inside the renderer instead of changing the Windows desktop gamma ramp.
+- _None yet._
 
 ### Audio
 - _None yet._
 
 ### Builds and Packaging
-- Link zlib statically in MSVC release builds and reject packages that import `z-1.dll`.
+- _None yet._
 
 ### Fixes
-- Correct WebUI pointer projection on scaled Windows desktops so dropdowns and other controls receive clicks at their drawn positions.
-- Restore the native in-game menu on Escape after launching a match from the WebUI.
+- _None yet._
 
 ### Documentation and Tooling
 - _None yet._
