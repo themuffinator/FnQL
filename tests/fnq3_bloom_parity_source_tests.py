@@ -65,6 +65,47 @@ class FnQ3BloomParitySourceTests(unittest.TestCase):
                 with self.subTest(path=path):
                     self.assertEqual(expected_hash, digest(normalized_text(path)))
 
+    def test_renderer_bloom_defaults_match_fnq3(self) -> None:
+        glx = normalized_text("code/renderer/tr_init.c")
+        vulkan = normalized_text("code/renderervk/tr_init.c")
+        rtx = normalized_text("code/rendererrtx/tr_init.c")
+
+        for registration in (
+            'ri.Cvar_Get( "r_fbo", "1"',
+            'ri.Cvar_Get( "r_hdr", "0"',
+            'ri.Cvar_Get( "r_bloom", "0"',
+        ):
+            self.assertIn(registration, glx)
+
+        for name, renderer in (("vk", vulkan), ("rtx", rtx)):
+            with self.subTest(renderer=name):
+                for registration in (
+                    'ri.Cvar_Get( "r_fbo", "1"',
+                    'ri.Cvar_Get( "r_hdr", "1"',
+                    'ri.Cvar_Get( "r_bloom", "1"',
+                ):
+                    self.assertIn(registration, renderer)
+
+    def test_desktop_dynamic_light_default_matches_fnq3(self) -> None:
+        client = normalized_text("code/client/cl_cgame.cpp")
+        self.assertIn('Cvar_Get( "r_dlightMode", "2", 0 )', client)
+
+        for path in (
+            "code/renderer/tr_init.c",
+            "code/renderervk/tr_init.c",
+            "code/rendererrtx/tr_init.c",
+        ):
+            source = normalized_text(path)
+            with self.subTest(path=path):
+                self.assertIn(
+                    'r_dlightMode = ri.Cvar_Get( "r_dlightMode", "2", CVAR_ARCHIVE );',
+                    source,
+                )
+                self.assertIn(
+                    'r_dlightMode = ri.Cvar_Get( "r_dlightMode", "0", CVAR_ARCHIVE );',
+                    source,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -34,7 +34,7 @@ It is based on ioquake3-r1160 (latest non-SDL revision) with upstream patches an
 <li><b>\r_defaultImage</b> <font color=silver>&lt;filename&gt;|#rgb|#rrggbb</font> - replace default (missing) image texture by either exact file or solid #rgb|#rrggbb background color</li>
 <li><b>\r_vbo</b> <font color=silver><b>0</b>|1</font> - use Vertex Buffer Objects to cache static map geometry, may improve FPS on modern GPUs, increases hunk memory usage by 15-30MB (map-dependent)</li>
 <div id="r_fbo"></div>
-<li><b>\r_fbo</b> <font color=silver><b>0</b>|1</font> - use framebuffer objects, enables gamma correction in windowed mode and allows arbitrary size (i.e. greater than logical desktop resolution) screenshot/video capture, required for bloom, hdr rendering, anti-aliasing, greyscale effects, OpenGL 3.0+ required</li>
+<li><b>\r_fbo</b> <font color=silver>0|<b>1</b></font> - use framebuffer objects, enables gamma correction in windowed mode and allows arbitrary size (i.e. greater than logical desktop resolution) screenshot/video capture, required for bloom, hdr rendering, anti-aliasing, greyscale effects, OpenGL 3.0+ required</li>
 <li><b>\r_hdr</b> <font color=silver>-1|<b>0</b>|1</font> - select the HDR-capable FBO render pipeline: 0 keeps the display-referred SDR compatibility path, 1 uses high-precision FBO storage while legacy tone mapping preserves Quake III lighting, and -1 remains a legacy debug alias for <b>\r_hdrPrecision -1</b>.</li>
 <li><b>\r_hdrPrecision</b> <font color=silver>-1|<b>0</b>|8|16</font> - select internal FBO color storage independently from HDR semantics: 0 automatic, -1 debug 4-bit storage, 8 force 8-bit SDR storage, 16 force 16-bit normalized SDR storage; <b>\r_hdr 1</b> always uses <b>RGBA16F</b> floating-point scene storage.</li>
 <li><b>\r_hdrBloomFormat</b> <font color=silver><b>0</b>|1|2|3</font> - select HDR bloom/extract intermediate storage without changing the main scene target: 0 automatic compact positive RGB bloom with RGBA16F fallback, 1 force RGBA16F, 2 prefer R11G11B10F, 3 reserve RG16F for positive two-channel intermediates.</li>
@@ -45,7 +45,7 @@ It is based on ioquake3-r1160 (latest non-SDL revision) with upstream patches an
 <li><b>\r_colorGradeWhitePoint</b>, <b>\r_colorGradeAdaptWhitePoint</b> <font color=silver>1000..40000</font> - source and target white points in Kelvin for Bradford adaptation; both default to D65-ish <b>6504</b>.</li>
 <li><b>\r_colorGradeLUT</b>, <b>\r_colorGradeLUTScale</b> - optional 3D LUT atlas path and scene-linear range. LUT atlases use width <b>N*N</b>, height <b>N</b>, with blue slices laid out horizontally.</li>
 <li><b><a href="#r_bloom">\r_bloom</a></b> <font color=silver><b>0</b>|1|2</font> - high-quality light bloom postprocessing effect</li>
-<li><b>\r_dlightMode</b> <font color=silver>0|<b>1</b>|2</font> - dynamic light mode</li>
+<li><b>\r_dlightMode</b> <font color=silver>0|1|<b>2</b></font> - dynamic light mode</li>
 &nbsp;&nbsp; 0 - VQ3 'fake' dynamic lights<br>
 &nbsp;&nbsp; 1 - new high-quality per-pixel dynamic lights, slightly faster than VQ3's on modern hardware<br>
 &nbsp;&nbsp; 2 - same as 1 but applies to all MD3 models too<br>
@@ -238,7 +238,7 @@ Requires <b><a href="#r_fbo">\r_fbo 1</a></b>, available operation modes via <b>
 <li>1 - enabled</li>
 <li>2 - enabled + applies to 2D/HUD elements too</li>
 </ul>
-<b>\r_bloom_threshold</b> - color level to extract to bloom texture, default is 0.6<br>
+<b>\r_bloom_threshold</b> - color level to extract to bloom texture, default is 0.75<br>
 <br>
 <b>\r_bloom_threshold_mode</b> - color extraction mode:<br>
 <ul>

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 import unittest
 from pathlib import Path
@@ -147,6 +148,23 @@ def value_for(block: str, key: str) -> float:
 
 
 class WeaponSoundShaderTests(unittest.TestCase):
+    def test_shipped_tuning_matches_fnq3_reference_exactly(self) -> None:
+        expected = {
+            BASEQ3_SHADER_PATH:
+                "c2ed183785e01f227c4e59b5843f54f59b6bed1e5c4be569b39aae9971a61e29",
+            MISSIONPACK_SHADER_PATH:
+                "2f6fc1fb76414194d32ea4bba8f64d1ad4c3898a7e808e1959bc1762a77cb86e",
+        }
+
+        for path, expected_hash in expected.items():
+            with self.subTest(path=path):
+                text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+                fnq3_text = text.replace("FnQL", "FnQuake3").replace("fnql_", "fnq3_")
+                self.assertEqual(
+                    expected_hash,
+                    hashlib.sha256(fnq3_text.encode("utf-8")).hexdigest(),
+                )
+
     def test_shader_covers_all_standard_q3a_weapon_effects(self) -> None:
         self.assertEqual(shader_samples(BASEQ3_SHADER_PATH), Q3A_WEAPON_SOUNDS)
 

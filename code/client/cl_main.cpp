@@ -1387,6 +1387,7 @@ void CL_ShutdownAll( void ) {
 
 	// clear and mute all sounds until next registration
 	S_DisableSounds();
+	CL_WebHost_NotifySoundsStopped();
 
 	// shutdown VMs
 	CL_ShutdownVMs();
@@ -1966,6 +1967,7 @@ qboolean CL_Disconnect( qboolean showMainMenu ) {
 
 	SCR_StopCinematic();
 	S_StopAllSounds();
+	CL_WebHost_NotifySoundsStopped();
 	Key_ClearStates();
 
 	if ( uivm && showMainMenu ) {
@@ -2620,6 +2622,7 @@ static void CL_Vid_Restart( refShutdownCode_t shutdownCode ) {
 
 	// clear and mute all sounds until next registration
 	S_DisableSounds();
+	CL_WebHost_NotifySoundsStopped();
 
 	// shutdown VMs
 	CL_ShutdownVMs();
@@ -4018,6 +4021,7 @@ void CL_Frame( int msec, int realMsec ) {
 		VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_NEED_CD );
 	} else	if ( cls.state == CA_DISCONNECTED && !( Key_GetCatcher( ) & KEYCATCH_UI )
 		&& !( Key_GetCatcher() & KEYCATCH_BROWSER ) && !CL_UIMenusAreVisible()
+		&& !Cvar_VariableIntegerValue( "ui_browserAwesomiumPending" )
 		&& !com_sv_running->integer && uivm ) {
 		// Bring up the menu once.  UI_MENUS_ANY_VISIBLE covers menus whose input
 		// catcher was temporarily yielded during a renderer or browser transition.

@@ -292,7 +292,7 @@ Sidecars are compiled with the repo tool target `fnql-audiozonesc`. Maintainers 
 
 ### Weapon Sound Shaders
 
-The OpenAL backend also reads a small FnQL sound shader file, `sound/fnql-weapon-sounds.sndshd`, from `FnQL-pkg.fnz`. The format intentionally follows the idTech4/Quake 4 declaration style: `sound <name> { minDistance ... maxDistance ... volumeDb ... shakes ... sample }`. The shipped `baseq3` shader covers the standard Quake III Arena weapon effects, while the shipped `missionpack` shader covers Team Arena weapon firing and impacts. Both give the original retail samples a little more attack, longer distance throw, and modest reverb send without replacing them.
+The OpenAL backend also reads a small FnQL sound shader file, `sound/fnql-weapon-sounds.sndshd`, from `FnQL-pkg.fnz`. The format intentionally follows the idTech4/Quake 4 declaration style: `sound <name> { minDistance ... maxDistance ... volumeDb ... shakes ... sample }`. The shipped `baseq3` shader covers the standard Quake III Arena weapon effects, while the shipped `missionpack` shader covers Team Arena weapon firing and impacts. Their tuning is imported exactly from FnQ3 (apart from FnQL declaration names), preserving the same attack, distance, pitch, shake, and reverb treatment without replacing the retail samples.
 
 Like audio zones, the root package stores this with a game-dir prefix, for example `baseq3/sound/fnql-weapon-sounds.sndshd` or `missionpack/sound/fnql-weapon-sounds.sndshd`. Mods can ship their own game-dir entry in the root package source tree when they need different tuning.
 
@@ -360,6 +360,8 @@ snd_restart
 ## Useful Commands
 
 FnQL keeps the classic sound commands and adds a few OpenAL-oriented inspection tools.
+
+The retail WebUI automatically owns `music/fla_mp05` while the main menu is visible. Entering a match stops that menu-owned track so game and map music retain normal ownership; returning to the WebUI starts the menu track again.
 
 - `s_info`: Print the current backend, device, EFX support, reverb state, occlusion state, source counts, weapon sound shader rule count, sample counts, and background-track state.
 - On OpenAL, `s_info` also compares requested and active HRTF, output mode, distance model, mix frequency, refresh rate, source counts, output limiter state, and the stereo-spatialization request. It reports device clock and latency when OpenAL Soft exposes that timing extension.

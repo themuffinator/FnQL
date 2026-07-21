@@ -184,7 +184,7 @@ static ID_INLINE void R_QLRegisterRendererCvars( qlRendererCvarBackend_t backend
 	 * FnQ3 cvars. Restore only bridge-owned profiles once; unmarked user tuning
 	 * remains untouched. These are the FnQ3 defaults used by FnQL. */
 	if ( retiredBridgeOwnedPostProcess ) {
-		ri.Cvar_Set( "r_bloom", "0" );
+		ri.Cvar_Set( "r_bloom", backend == QL_CVAR_BACKEND_GLX ? "0" : "1" );
 		ri.Cvar_Set( "r_bloom_intensity", "0.5" );
 		ri.Cvar_Set( "r_bloom_threshold", "0.75" );
 		ri.Cvar_Set( "r_colorGrade", "0" );

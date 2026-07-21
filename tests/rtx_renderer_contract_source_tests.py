@@ -174,7 +174,9 @@ class RtxRendererContractSourceTests(unittest.TestCase):
         expected_defaults = {
             "r_globalFog": "0",
             "r_fogMode": "0",
-            "r_hdr": "0",
+            # FnQ3's RTX path enables its raster HDR staging by default; this
+            # is distinct from enabling ray tracing or HDR display output.
+            "r_hdr": "1",
             "r_liquid": "0",
             "r_surfaceLightProxies": "0",
             "rtx_rt_mode": "0",

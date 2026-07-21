@@ -206,6 +206,7 @@ Dynamic lighting controls:
   - `0`: Vanilla Quake III style dynamic lights.
   - `1`: High-quality per-pixel dynamic lights on world surfaces.
   - `2`: Same as `1`, and also applies dynamic lights to entity models.
+  - The desktop default is `2`; constrained ARM builds retain the compatibility default `0`.
 - `r_dlightScale`: Scales dynamic-light radius. Default is `0.5`.
 - `r_dlightIntensity`: Scales dynamic-light intensity without changing radius. Default is `1.0`.
 - `r_dlightFalloff`: Blends the high-quality dynamic-light attenuation toward a smoother edge falloff. Default is `1`.

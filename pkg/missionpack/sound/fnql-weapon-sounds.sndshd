@@ -5,9 +5,9 @@
 sound fnql_ta_bfg_fire
 {
 	description "BFG fire with a heavier attack and longer arena throw"
-	minDistance 112
-	maxDistance 1950
-	volumeDb 3.5
+	minDistance 144
+	maxDistance 2800
+	volumeDb 4.5
 	shakes 0.16
 	reverb 0.12, 1.0
 	frequencyShift 0.98 1.00
@@ -17,9 +17,9 @@ sound fnql_ta_bfg_fire
 sound fnql_ta_grenade_fire
 {
 	description "Grenade launcher fire with a firmer tube thump"
-	minDistance 100
-	maxDistance 1750
-	volumeDb 2.5
+	minDistance 128
+	maxDistance 2350
+	volumeDb 3.1
 	shakes 0.10
 	reverb 0.10, 1.0
 	sound/weapons/grenade/grenlf1a.wav
@@ -28,9 +28,9 @@ sound fnql_ta_grenade_fire
 sound fnql_ta_grenade_hit_dirt
 {
 	description "Grenade impact with broader explosive body"
-	minDistance 128
-	maxDistance 2050
-	volumeDb 3.5
+	minDistance 160
+	maxDistance 3200
+	volumeDb 4.5
 	shakes 0.18
 	reverb 0.16, 1.0
 	frequencyShift 0.97 1.00
@@ -40,9 +40,9 @@ sound fnql_ta_grenade_hit_dirt
 sound fnql_ta_grenade_hit_loud
 {
 	description "Grenade impact with broader explosive body"
-	minDistance 128
-	maxDistance 2050
-	volumeDb 3.5
+	minDistance 160
+	maxDistance 3200
+	volumeDb 4.5
 	shakes 0.18
 	reverb 0.16, 1.0
 	frequencyShift 0.97 1.00
@@ -52,9 +52,9 @@ sound fnql_ta_grenade_hit_loud
 sound fnql_ta_lightning_fire
 {
 	description "Lightning gun fire with a sharper electrical body"
-	minDistance 96
-	maxDistance 1700
-	volumeDb 2.0
+	minDistance 120
+	maxDistance 2300
+	volumeDb 2.6
 	shakes 0.08
 	reverb 0.10, 1.0
 	sound/weapons/lightning/lg_fire.wav
@@ -63,9 +63,9 @@ sound fnql_ta_lightning_fire
 sound fnql_ta_lightning_hit
 {
 	description "Lightning impact with brighter contact bite"
-	minDistance 104
-	maxDistance 1800
-	volumeDb 3.0
+	minDistance 120
+	maxDistance 2350
+	volumeDb 3.4
 	shakes 0.12
 	reverb 0.12, 1.0
 	sound/weapons/lightning/lg_hit.wav
@@ -74,9 +74,9 @@ sound fnql_ta_lightning_hit
 sound fnql_ta_lightning_hit2
 {
 	description "Lightning impact with brighter contact bite"
-	minDistance 104
-	maxDistance 1800
-	volumeDb 3.0
+	minDistance 120
+	maxDistance 2350
+	volumeDb 3.4
 	shakes 0.12
 	reverb 0.12, 1.0
 	sound/weapons/lightning/lg_hit2.wav
@@ -85,9 +85,9 @@ sound fnql_ta_lightning_hit2
 sound fnql_ta_lightning_hit3
 {
 	description "Lightning impact with brighter contact bite"
-	minDistance 104
-	maxDistance 1800
-	volumeDb 3.0
+	minDistance 120
+	maxDistance 2350
+	volumeDb 3.4
 	shakes 0.12
 	reverb 0.12, 1.0
 	sound/weapons/lightning/lg_hit3.wav
@@ -96,9 +96,9 @@ sound fnql_ta_lightning_hit3
 sound fnql_ta_machinegun_fire1
 {
 	description "Machinegun fire variant with extra crack and distance"
-	minDistance 104
-	maxDistance 1700
-	volumeDb 2.8
+	minDistance 128
+	maxDistance 2300
+	volumeDb 3.4
 	shakes 0.10
 	reverb 0.08, 1.0
 	sound/weapons/machinegun/machgf1b.wav
@@ -107,9 +107,9 @@ sound fnql_ta_machinegun_fire1
 sound fnql_ta_machinegun_fire2
 {
 	description "Machinegun fire variant with extra crack and distance"
-	minDistance 104
-	maxDistance 1700
-	volumeDb 2.8
+	minDistance 128
+	maxDistance 2300
+	volumeDb 3.4
 	shakes 0.10
 	reverb 0.08, 1.0
 	sound/weapons/machinegun/machgf2b.wav
@@ -118,9 +118,9 @@ sound fnql_ta_machinegun_fire2
 sound fnql_ta_machinegun_fire3
 {
 	description "Machinegun fire variant with extra crack and distance"
-	minDistance 104
-	maxDistance 1700
-	volumeDb 2.8
+	minDistance 128
+	maxDistance 2300
+	volumeDb 3.4
 	shakes 0.10
 	reverb 0.08, 1.0
 	sound/weapons/machinegun/machgf3b.wav
@@ -129,9 +129,9 @@ sound fnql_ta_machinegun_fire3
 sound fnql_ta_machinegun_fire4
 {
 	description "Machinegun fire variant with extra crack and distance"
-	minDistance 104
-	maxDistance 1700
-	volumeDb 2.8
+	minDistance 128
+	maxDistance 2300
+	volumeDb 3.4
 	shakes 0.10
 	reverb 0.08, 1.0
 	sound/weapons/machinegun/machgf4b.wav
@@ -140,9 +140,9 @@ sound fnql_ta_machinegun_fire4
 sound fnql_ta_machinegun_ricochet1_hit
 {
 	description "Machinegun ricochet with harder transient bite"
-	minDistance 96
-	maxDistance 1600
-	volumeDb 2.2
+	minDistance 112
+	maxDistance 2100
+	volumeDb 2.6
 	shakes 0.08
 	reverb 0.10, 1.0
 	sound/weapons/machinegun/ric1.wav
@@ -151,9 +151,9 @@ sound fnql_ta_machinegun_ricochet1_hit
 sound fnql_ta_machinegun_ricochet2_hit
 {
 	description "Machinegun ricochet with harder transient bite"
-	minDistance 96
-	maxDistance 1600
-	volumeDb 2.2
+	minDistance 112
+	maxDistance 2100
+	volumeDb 2.6
 	shakes 0.08
 	reverb 0.10, 1.0
 	sound/weapons/machinegun/ric2.wav
@@ -162,9 +162,9 @@ sound fnql_ta_machinegun_ricochet2_hit
 sound fnql_ta_machinegun_ricochet3_hit
 {
 	description "Machinegun ricochet with harder transient bite"
-	minDistance 96
-	maxDistance 1600
-	volumeDb 2.2
+	minDistance 112
+	maxDistance 2100
+	volumeDb 2.6
 	shakes 0.08
 	reverb 0.10, 1.0
 	sound/weapons/machinegun/ric3.wav
@@ -173,9 +173,9 @@ sound fnql_ta_machinegun_ricochet3_hit
 sound fnql_ta_gauntlet_attack
 {
 	description "Gauntlet attack with a close-range metal bite"
-	minDistance 96
-	maxDistance 1500
-	volumeDb 2.5
+	minDistance 120
+	maxDistance 2050
+	volumeDb 3.1
 	shakes 0.08
 	sound/weapons/melee/fstatck.wav
 }
@@ -183,9 +183,9 @@ sound fnql_ta_gauntlet_attack
 sound fnql_ta_nailgun_fire
 {
 	description "Nailgun fire with a dense pneumatic punch"
-	minDistance 112
-	maxDistance 1850
-	volumeDb 3.2
+	minDistance 144
+	maxDistance 2500
+	volumeDb 3.8
 	shakes 0.13
 	reverb 0.10, 1.0
 	frequencyShift 0.98 1.01
@@ -195,9 +195,9 @@ sound fnql_ta_nailgun_fire
 sound fnql_ta_nailgun_hit_dirt
 {
 	description "Nail impact with a sharper hard-surface snap"
-	minDistance 112
-	maxDistance 1850
-	volumeDb 3.2
+	minDistance 128
+	maxDistance 2400
+	volumeDb 3.6
 	shakes 0.14
 	reverb 0.12, 1.0
 	sound/weapons/nailgun/wnalimpd.wav
@@ -206,9 +206,9 @@ sound fnql_ta_nailgun_hit_dirt
 sound fnql_ta_nailgun_hit_loud
 {
 	description "Nail impact with a sharper hard-surface snap"
-	minDistance 112
-	maxDistance 1850
-	volumeDb 3.2
+	minDistance 128
+	maxDistance 2400
+	volumeDb 3.6
 	shakes 0.14
 	reverb 0.12, 1.0
 	sound/weapons/nailgun/wnalimpl.wav
@@ -217,9 +217,9 @@ sound fnql_ta_nailgun_hit_loud
 sound fnql_ta_nailgun_hit_metal
 {
 	description "Nail impact with a sharper hard-surface snap"
-	minDistance 112
-	maxDistance 1850
-	volumeDb 3.2
+	minDistance 128
+	maxDistance 2400
+	volumeDb 3.6
 	shakes 0.14
 	reverb 0.12, 1.0
 	sound/weapons/nailgun/wnalimpm.wav
@@ -228,9 +228,9 @@ sound fnql_ta_nailgun_hit_metal
 sound fnql_ta_plasma_fire
 {
 	description "Plasma gun fire with a brighter launch punch"
-	minDistance 96
-	maxDistance 1700
-	volumeDb 2.2
+	minDistance 120
+	maxDistance 2300
+	volumeDb 2.8
 	shakes 0.08
 	reverb 0.08, 1.0
 	sound/weapons/plasma/hyprbf1a.wav
@@ -239,9 +239,9 @@ sound fnql_ta_plasma_fire
 sound fnql_ta_plasma_hit
 {
 	description "Plasma impact with more electrical bloom"
-	minDistance 112
-	maxDistance 1900
-	volumeDb 3.2
+	minDistance 160
+	maxDistance 2950
+	volumeDb 4.2
 	shakes 0.14
 	reverb 0.12, 1.0
 	sound/weapons/plasma/plasmx1a.wav
@@ -250,9 +250,9 @@ sound fnql_ta_plasma_hit
 sound fnql_ta_proxmine_fire
 {
 	description "Prox launcher fire with a stronger mechanical launch"
-	minDistance 108
-	maxDistance 1800
-	volumeDb 3.0
+	minDistance 136
+	maxDistance 2450
+	volumeDb 3.6
 	shakes 0.12
 	reverb 0.10, 1.0
 	sound/weapons/proxmine/wstbfire.wav
@@ -261,9 +261,9 @@ sound fnql_ta_proxmine_fire
 sound fnql_ta_proxmine_hit_dirt
 {
 	description "Prox mine stick impact with a chunkier slap"
-	minDistance 104
-	maxDistance 1750
-	volumeDb 2.8
+	minDistance 120
+	maxDistance 2300
+	volumeDb 3.2
 	shakes 0.12
 	reverb 0.10, 1.0
 	sound/weapons/proxmine/wstbimpd.wav
@@ -272,9 +272,9 @@ sound fnql_ta_proxmine_hit_dirt
 sound fnql_ta_proxmine_hit_loud
 {
 	description "Prox mine stick impact with a chunkier slap"
-	minDistance 104
-	maxDistance 1750
-	volumeDb 2.8
+	minDistance 120
+	maxDistance 2300
+	volumeDb 3.2
 	shakes 0.12
 	reverb 0.10, 1.0
 	sound/weapons/proxmine/wstbimpl.wav
@@ -283,9 +283,9 @@ sound fnql_ta_proxmine_hit_loud
 sound fnql_ta_proxmine_hit_metal
 {
 	description "Prox mine stick impact with a chunkier slap"
-	minDistance 104
-	maxDistance 1750
-	volumeDb 2.8
+	minDistance 120
+	maxDistance 2300
+	volumeDb 3.2
 	shakes 0.12
 	reverb 0.10, 1.0
 	sound/weapons/proxmine/wstbimpm.wav
@@ -294,9 +294,9 @@ sound fnql_ta_proxmine_hit_metal
 sound fnql_ta_proxmine_hit_explode
 {
 	description "Prox mine detonation with heavier low-end and longer carry"
-	minDistance 132
-	maxDistance 2150
-	volumeDb 4.0
+	minDistance 160
+	maxDistance 3350
+	volumeDb 5.0
 	shakes 0.22
 	reverb 0.18, 1.0
 	frequencyShift 0.97 1.00
@@ -306,9 +306,9 @@ sound fnql_ta_proxmine_hit_explode
 sound fnql_ta_rail_fire
 {
 	description "Railgun fire with a heavy snap and long carry"
-	minDistance 128
-	maxDistance 2200
-	volumeDb 4.0
+	minDistance 160
+	maxDistance 3200
+	volumeDb 5.0
 	shakes 0.20
 	reverb 0.18, 1.0
 	frequencyShift 0.98 1.00
@@ -318,9 +318,9 @@ sound fnql_ta_rail_fire
 sound fnql_ta_rocket_fire
 {
 	description "Rocket launcher fire with a heavier shoulder thump"
-	minDistance 128
-	maxDistance 2050
-	volumeDb 3.5
+	minDistance 144
+	maxDistance 2850
+	volumeDb 4.5
 	shakes 0.16
 	reverb 0.14, 1.0
 	frequencyShift 0.98 1.00
@@ -330,9 +330,9 @@ sound fnql_ta_rocket_fire
 sound fnql_ta_rocket_hit
 {
 	description "Rocket impact with a wider explosive body"
-	minDistance 128
-	maxDistance 2200
-	volumeDb 4.0
+	minDistance 160
+	maxDistance 3400
+	volumeDb 5.0
 	shakes 0.20
 	reverb 0.18, 1.0
 	frequencyShift 0.97 1.00
@@ -342,9 +342,9 @@ sound fnql_ta_rocket_hit
 sound fnql_ta_shotgun_fire
 {
 	description "Shotgun fire with a wider, harder muzzle blast"
-	minDistance 128
-	maxDistance 1900
-	volumeDb 3.8
+	minDistance 144
+	maxDistance 2650
+	volumeDb 4.8
 	shakes 0.18
 	reverb 0.10, 1.0
 	frequencyShift 0.98 1.00
@@ -354,9 +354,9 @@ sound fnql_ta_shotgun_fire
 sound fnql_ta_chaingun_fire_loop
 {
 	description "Chaingun fire loop with more barrel pressure and range"
-	minDistance 112
-	maxDistance 1850
-	volumeDb 3.0
+	minDistance 144
+	maxDistance 2500
+	volumeDb 3.6
 	shakes 0.13
 	reverb 0.08, 1.0
 	sound/weapons/vulcan/wvulfire.wav
@@ -365,9 +365,9 @@ sound fnql_ta_chaingun_fire_loop
 sound fnql_ta_chaingun_fire1
 {
 	description "Chaingun muzzle burst with extra crack"
-	minDistance 112
-	maxDistance 1800
-	volumeDb 2.8
+	minDistance 144
+	maxDistance 2450
+	volumeDb 3.4
 	shakes 0.12
 	reverb 0.08, 1.0
 	sound/weapons/vulcan/vulcanf1b.wav
@@ -376,9 +376,9 @@ sound fnql_ta_chaingun_fire1
 sound fnql_ta_chaingun_fire2
 {
 	description "Chaingun muzzle burst with extra crack"
-	minDistance 112
-	maxDistance 1800
-	volumeDb 2.8
+	minDistance 144
+	maxDistance 2450
+	volumeDb 3.4
 	shakes 0.12
 	reverb 0.08, 1.0
 	sound/weapons/vulcan/vulcanf2b.wav
@@ -387,9 +387,9 @@ sound fnql_ta_chaingun_fire2
 sound fnql_ta_chaingun_fire3
 {
 	description "Chaingun muzzle burst with extra crack"
-	minDistance 112
-	maxDistance 1800
-	volumeDb 2.8
+	minDistance 144
+	maxDistance 2450
+	volumeDb 3.4
 	shakes 0.12
 	reverb 0.08, 1.0
 	sound/weapons/vulcan/vulcanf3b.wav
@@ -398,9 +398,9 @@ sound fnql_ta_chaingun_fire3
 sound fnql_ta_chaingun_fire4
 {
 	description "Chaingun muzzle burst with extra crack"
-	minDistance 112
-	maxDistance 1800
-	volumeDb 2.8
+	minDistance 144
+	maxDistance 2450
+	volumeDb 3.4
 	shakes 0.12
 	reverb 0.08, 1.0
 	sound/weapons/vulcan/vulcanf4b.wav
@@ -409,9 +409,9 @@ sound fnql_ta_chaingun_fire4
 sound fnql_ta_chaingun_hit_dirt
 {
 	description "Chaingun impact with a harder material slap"
-	minDistance 104
-	maxDistance 1750
-	volumeDb 3.0
+	minDistance 120
+	maxDistance 2300
+	volumeDb 3.4
 	shakes 0.12
 	reverb 0.11, 1.0
 	sound/weapons/vulcan/wvulimpd.wav
@@ -420,9 +420,9 @@ sound fnql_ta_chaingun_hit_dirt
 sound fnql_ta_chaingun_hit_loud
 {
 	description "Chaingun impact with a harder material slap"
-	minDistance 104
-	maxDistance 1750
-	volumeDb 3.0
+	minDistance 120
+	maxDistance 2300
+	volumeDb 3.4
 	shakes 0.12
 	reverb 0.11, 1.0
 	sound/weapons/vulcan/wvulimpl.wav
@@ -431,9 +431,9 @@ sound fnql_ta_chaingun_hit_loud
 sound fnql_ta_chaingun_hit_metal
 {
 	description "Chaingun impact with a harder material slap"
-	minDistance 104
-	maxDistance 1750
-	volumeDb 3.0
+	minDistance 120
+	maxDistance 2300
+	volumeDb 3.4
 	shakes 0.12
 	reverb 0.11, 1.0
 	sound/weapons/vulcan/wvulimpm.wav

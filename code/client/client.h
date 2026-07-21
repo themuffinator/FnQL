@@ -720,6 +720,7 @@ qboolean CL_WebHost_RequestCursorPosition( int *x, int *y );
 qboolean CL_WebHost_ShowAfterDisconnect( void );
 void CL_WebHost_HideBrowser( void );
 void CL_WebHost_HideForGameTransition( void );
+void CL_WebHost_NotifySoundsStopped( void );
 void CL_WebHost_NotifyAppActivation( qboolean active );
 void CL_WebHost_OnServerInfoResponse( const netadr_t *address, const char *infoString, int ping );
 qboolean CL_WebHost_OnServerStatusResponseInfo( const netadr_t *address, const char *infoString );

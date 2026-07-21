@@ -90,6 +90,7 @@ BackendHost &ClientBackendHost() noexcept {
 #define CL_WEB_KEYBOARD_EVENT_ACTIVATION_VIRTUAL_KEY 0x11u
 #define CL_WEB_KEYBOARD_EVENT_ACTIVATION_NATIVE_KEY 0x1d0001L
 #define CL_ADVERTISEMENT_DEBUG_LABEL_COUNT 2
+#define CL_WEBUI_MENU_MUSIC "music/fla_mp05"
 
 static cvar_t *cl_webuiEnable;
 static cvar_t *cl_webZoom;
@@ -114,6 +115,7 @@ typedef struct {
 	qboolean	fnqlOverlayAvailable;
 	qboolean	fnqlOverlayInjected;
 	qboolean	keyCaptureArmed;
+	qboolean	menuMusicOwned;
 	char		pendingHash[MAX_STRING_CHARS];
 	char		currentUrl[MAX_STRING_CHARS];
 	char		lastError[MAX_STRING_CHARS];
@@ -212,6 +214,30 @@ static void CL_WebHost_BuildDemoListJson( char *buffer, size_t bufferSize );
 static void CL_WebHost_BuildFriendListJson( char *buffer, size_t bufferSize );
 static void CL_WebHost_ReadClipboardText( char *buffer, size_t bufferSize );
 static qboolean CL_WebUI_EnsureBackendStarted( void );
+static qboolean CL_WebHost_SurfaceReadyForOverlay( void );
+
+/* Retail's native UI starts this track when UIMENU_MAIN becomes active. The
+ * WebUI is the primary menu in FnQL, so mirror that ownership without letting
+ * the browser stop music started later by cgame. */
+static void CL_WebHost_StopMenuMusic( void ) {
+	if ( !cl_webui.menuMusicOwned ) {
+		return;
+	}
+
+	S_StopBackgroundTrack();
+	cl_webui.menuMusicOwned = qfalse;
+}
+
+static void CL_WebHost_UpdateMenuMusic( void ) {
+	if ( cl_webui.menuMusicOwned || !cls.soundStarted
+		|| cls.state != CA_DISCONNECTED
+		|| !CL_WebHost_SurfaceReadyForOverlay() ) {
+		return;
+	}
+
+	S_StartBackgroundTrack( CL_WEBUI_MENU_MUSIC, NULL );
+	cl_webui.menuMusicOwned = qtrue;
+}
 
 static void CL_WebUI_FreeSurfaceBuffer( void ) {
 	if ( cl_webui.surfacePixels ) {
@@ -953,6 +979,7 @@ static void CL_WebHost_InvalidateDocumentSnapshots( void ) {
 }
 
 static void CL_WebUI_ClearBrowserState( void ) {
+	CL_WebHost_StopMenuMusic();
 	CL_WebHost_ClearTooltip();
 	CL_WebHost_ClearCursorOverride();
 	cl_webui.browserVisible = qfalse;
@@ -1793,6 +1820,7 @@ void CL_WebHost_Frame( void ) {
 
 	CL_WebHost_ServerBrowserFrame();
 	CL_WebHost_ServerDetailsFrame();
+	CL_WebHost_UpdateMenuMusic();
 	CL_RefreshOnlineServicesBridgeState();
 }
 
@@ -2148,6 +2176,12 @@ the browser surface or input while the native status screen is active.
 void CL_WebHost_HideForGameTransition( void ) {
 	cl_webui.keyCaptureArmed = qfalse;
 	CL_WebHost_HideBrowser();
+}
+
+void CL_WebHost_NotifySoundsStopped( void ) {
+	/* S_DisableSounds/S_Shutdown already stopped the stream. Relinquish the
+	 * stale token so the next disconnected WebUI frame starts retail music. */
+	cl_webui.menuMusicOwned = qfalse;
 }
 
 static std::string CL_WebHost_JsonParseExpression( const char *json ) {

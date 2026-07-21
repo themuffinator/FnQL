@@ -107,8 +107,11 @@ class RendererCvarCompatibilitySourceTests(unittest.TestCase):
             contract.index("if ( retiredBridgeOwnedPostProcess )") :
             contract.index("/* The ROM registration pins")
         ]
+        self.assertIn(
+            'ri.Cvar_Set( "r_bloom", backend == QL_CVAR_BACKEND_GLX ? "0" : "1" )',
+            migration,
+        )
         for name, value in (
-            ("r_bloom", "0"),
             ("r_bloom_intensity", "0.5"),
             ("r_bloom_threshold", "0.75"),
             ("r_colorGrade", "0"),

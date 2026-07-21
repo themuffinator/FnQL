@@ -488,12 +488,12 @@ class RtxRasterFeatureParitySourceTests(unittest.TestCase):
                     f"{label} alpha-test shader is missing A2C contracts {missing!r}",
                 )
 
-    def test_bloom_default_matches_current_fnql(self) -> None:
+    def test_bloom_default_matches_fnq3(self) -> None:
         init = read("code/rendererrtx/tr_init.c")
         self.assertEqual(
             cvar_default(init, "r_bloom"),
-            "0",
-            "selecting the optional RTX renderer must not enable bloom by default",
+            "1",
+            "the RTX renderer must retain FnQ3's bloom default",
         )
 
 

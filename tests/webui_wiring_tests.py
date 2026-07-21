@@ -111,6 +111,43 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("QLWebHost_UnregisterCommands();", client)
         self.assertIn("Cbuf_Execute();\n\n\t\tCL_WebHost_Frame();", common)
 
+    def test_webui_owns_retail_menu_music_without_stomping_game_music(self) -> None:
+        webui = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
+        client = (ROOT / "code" / "client" / "cl_main.cpp").read_text(encoding="utf-8")
+        header = (ROOT / "code" / "client" / "client.h").read_text(encoding="utf-8")
+
+        self.assertIn('#define CL_WEBUI_MENU_MUSIC "music/fla_mp05"', webui)
+        self.assertIn("qboolean\tmenuMusicOwned;", webui)
+        update = webui[
+            webui.index("static void CL_WebHost_UpdateMenuMusic"):
+            webui.index("static void CL_WebUI_FreeSurfaceBuffer")
+        ]
+        self.assertIn("cls.state != CA_DISCONNECTED", update)
+        self.assertIn("!CL_WebHost_SurfaceReadyForOverlay()", update)
+        self.assertIn("!cls.soundStarted", update)
+        self.assertIn("S_StartBackgroundTrack( CL_WEBUI_MENU_MUSIC, NULL );", update)
+        stop = webui[
+            webui.index("static void CL_WebHost_StopMenuMusic"):
+            webui.index("static void CL_WebHost_UpdateMenuMusic")
+        ]
+        self.assertIn("if ( !cl_webui.menuMusicOwned )", stop)
+        self.assertIn("S_StopBackgroundTrack();", stop)
+        self.assertIn("CL_WebHost_StopMenuMusic();", webui)
+        self.assertIn("CL_WebHost_UpdateMenuMusic();", webui)
+        self.assertIn("void CL_WebHost_NotifySoundsStopped( void );", header)
+        self.assertIn("CL_WebHost_NotifySoundsStopped();", client)
+
+        disconnect = client[
+            client.index("qboolean CL_Disconnect("):
+            client.index("void CL_Disconnect_f(")
+        ]
+        self.assertLess(disconnect.index("S_StopAllSounds();"),
+                        disconnect.index("CL_WebHost_NotifySoundsStopped();"))
+        self.assertIn(
+            '!Cvar_VariableIntegerValue( "ui_browserAwesomiumPending" )',
+            client,
+        )
+
     def test_browser_keycatcher_routes_input_to_webview(self) -> None:
         shared = (ROOT / "code" / "qcommon" / "q_shared.h").read_text(encoding="utf-8")
         keycodes = (ROOT / "code" / "client" / "keycodes.h").read_text(encoding="utf-8")

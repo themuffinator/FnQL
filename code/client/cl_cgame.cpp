@@ -1532,7 +1532,7 @@ static qboolean CL_GetValue( char* value, int valueSize, const char* key ) {
 static void CL_ForceFixedDlights( void ) {
 	cvar_t *cv;
 
-	cv = Cvar_Get( "r_dlightMode", "1", 0 );
+	cv = Cvar_Get( "r_dlightMode", "2", 0 );
 	if ( cv ) {
 		Cvar_CheckRange( cv, "1", "2", CV_INTEGER );
 	}
