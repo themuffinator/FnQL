@@ -35,20 +35,9 @@ class RendererCvarCompatibilitySourceTests(unittest.TestCase):
             "r_debugAds",
             "r_floatingPointFBOs",
             "r_enablePostProcess",
-            "r_enableBloom",
             "r_enableColorCorrect",
             "r_postProcessActive",
-            "r_bloomActive",
             "r_colorCorrectActive",
-            "r_bloomPasses",
-            "r_bloomIntensity",
-            "r_bloomBrightThreshold",
-            "r_bloomBlurScale",
-            "r_bloomBlurRadius",
-            "r_bloomBlurFalloff",
-            "r_bloomSaturation",
-            "r_bloomSceneIntensity",
-            "r_bloomSceneSaturation",
             "r_contrast",
         )
         for name in retail_only:
@@ -58,15 +47,32 @@ class RendererCvarCompatibilitySourceTests(unittest.TestCase):
         self.assertIn('"r_fastSkyColor", "0x000000"', contract)
         self.assertIn('"r_drawSkyFloor", "1"', contract)
         self.assertIn('"r_showSmp", "0", CVAR_CHEAT', contract)
-        self.assertIn('"r_enableBloom", "1"', contract)
-        self.assertIn('"r_bloomIntensity", "0.5"', contract)
-        self.assertIn('"r_bloomBrightThreshold", "0.25"', contract)
-        self.assertIn(
-            "const int boundedProfileFlags = profileFlags | CVAR_PROTECTED | CVAR_VM_CREATED",
-            contract,
+        self.assertIn('"r_enablePostProcess", "1"', contract)
+        self.assertIn('"r_enableColorCorrect", "1"', contract)
+
+    def test_retail_bloom_control_surface_is_not_renderer_owned(self) -> None:
+        contract = read("code/renderercommon/tr_ql_cvars.h")
+        retail_bloom_names = (
+            "r_enableBloom",
+            "r_bloomActive",
+            "r_bloomPasses",
+            "r_bloomIntensity",
+            "r_bloomBrightThreshold",
+            "r_bloomBlurScale",
+            "r_bloomBlurRadius",
+            "r_bloomBlurFalloff",
+            "r_bloomSaturation",
+            "r_bloomSceneIntensity",
+            "r_bloomSceneSaturation",
         )
-        self.assertIn('"r_bloomSceneIntensity", "1.0"', contract)
-        self.assertIn('"r_bloomSceneSaturation", "1.0"', contract)
+
+        for name in retail_bloom_names:
+            with self.subTest(name=name):
+                self.assertNotIn(f'"{name}"', contract)
+
+        self.assertNotIn("cvar_t *enableBloom", contract)
+        self.assertNotIn("cvar_t *bloomActive", contract)
+        self.assertNotIn("qlRendererCvars.bloom", contract)
 
     def test_retail_postprocess_never_preempts_fnq3_renderer_controls(self) -> None:
         contract = read("code/renderercommon/tr_ql_cvars.h")

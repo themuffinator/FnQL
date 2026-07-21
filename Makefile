@@ -79,8 +79,11 @@ endif
 
 ifeq ($(COMPILE_PLATFORM),darwin)
   USE_SDL=1
-  USE_LOCAL_HEADERS=1
-  USE_RENDERER_DLOPEN = 0
+  # The old in-tree SDL copy was intentionally removed.  Consume an installed
+  # SDL3 framework/pkg-config target and keep renderer dylibs beside the app
+  # executable, matching the maintained Meson package layout.
+  USE_LOCAL_HEADERS=0
+  USE_RENDERER_DLOPEN=1
 endif
 
 ifeq ($(COMPILE_PLATFORM),cygwin)
@@ -126,8 +129,11 @@ else
 endif
 export CROSS_COMPILING
 
-ifndef DESTDIR
-DESTDIR=/usr/local/games/quake3
+DESTDIR ?=
+ifneq ($(filter install,$(MAKECMDGOALS)),)
+  ifeq ($(strip $(DESTDIR)),)
+    $(error DESTDIR is required; choose an explicit FnQL staging or retail Quake Live directory)
+  endif
 endif
 
 ifndef MOUNT_DIR
@@ -608,19 +614,12 @@ ifeq ($(COMPILE_PLATFORM),darwin)
     LDFLAGS += -arch arm64
   endif
 
-  ifeq ($(USE_LOCAL_HEADERS),1)
-    MACLIBSDIR=$(MOUNT_DIR)/libsdl/macosx
-    BASE_CFLAGS += -I$(SDLHDIR)
-    CLIENT_LDFLAGS += $(MACLIBSDIR)/libSDL3.0.dylib
-    CLIENT_EXTRA_FILES += $(MACLIBSDIR)/libSDL3.0.dylib
-  else
   ifneq ($(SDL_INCLUDE),)
     BASE_CFLAGS += $(SDL_INCLUDE)
     CLIENT_LDFLAGS = $(SDL_LIBS)
   else
     BASE_CFLAGS += -F/Library/Frameworks
     CLIENT_LDFLAGS += -F/Library/Frameworks -framework SDL3
-  endif
   endif
 
   ifeq ($(USE_SYSTEM_JPEG),1)
@@ -1731,7 +1730,7 @@ distclean: clean
 # DEPENDENCIES
 #############################################################################
 
-D_FILES=$(shell find . -name '*.d')
+D_FILES=$(shell if [ -d "$(BUILD_DIR)" ]; then find "$(BUILD_DIR)" -type f -name '*.d'; fi)
 
 ifneq ($(strip $(D_FILES)),)
  include $(D_FILES)

@@ -54,11 +54,16 @@ class QLFontSourceTests(unittest.TestCase):
         meson = read("meson.build")
         self.assertIn("'png=disabled'", meson)
         self.assertIn("'zlib=disabled'", meson)
-        for name in ("libpng.wrap", "zlib.wrap"):
-            self.assertFalse(
-                (ROOT / "subprojects" / name).exists(),
-                f"{name} must not redirect into the unfetched Freetype source tree",
-            )
+        self.assertFalse(
+            (ROOT / "subprojects" / "libpng.wrap").exists(),
+            "libpng.wrap must not redirect into the unfetched Freetype source tree",
+        )
+
+        zlib_wrap = read("subprojects/zlib.wrap")
+        self.assertIn("[wrap-file]", zlib_wrap)
+        self.assertIn("directory = zlib-1.3.2", zlib_wrap)
+        self.assertNotIn("[wrap-redirect]", zlib_wrap)
+        self.assertNotIn("freetype-", zlib_wrap)
 
     def test_every_supported_build_graph_enables_the_host_font_lane(self) -> None:
         meson = read("meson.build")
@@ -86,8 +91,9 @@ class QLFontSourceTests(unittest.TestCase):
         self.assertIn("subprojects/fontstash/src", cmake)
         # Make needs an explicit prefetch in the Linux job. Both Windows jobs
         # use Meson, which resolves the pinned fallback during setup.
-        self.assertEqual(release.count("meson subprojects download fontstash"), 1)
-        self.assertEqual(release.count("meson setup"), 2)
+        self.assertIn("meson subprojects download fontstash", release)
+        self.assertIn("meson setup meson/build-x86", release)
+        self.assertIn(r"meson setup meson\build-x86", release)
 
     def test_host_text_service_is_exported_by_every_renderer(self) -> None:
         public = read("code/renderercommon/tr_public.h")

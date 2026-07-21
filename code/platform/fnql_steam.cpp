@@ -170,18 +170,41 @@ uint64_t FNQL_STEAM_CALL HostMilliseconds(void *) {
 	return static_cast<uint64_t>(Com_Milliseconds());
 }
 
-void BuildCandidatePath(const char *configured, char *target, size_t capacity) {
+void BuildCandidatePaths(const char *configured,
+	char *primary, size_t primaryCapacity,
+	char *fallback, size_t fallbackCapacity) {
+	fallback[0] = '\0';
 	const char *name = configured && configured[0] ? configured : kDefaultProviderName;
 	if (IsAbsolutePath(name)) {
-		CopyText(target, capacity, name);
+		CopyText(primary, primaryCapacity, name);
 		return;
 	}
 	if (!IsBareFileName(name)) {
-		target[0] = '\0';
+		primary[0] = '\0';
 		return;
 	}
-	Com_sprintf(target, static_cast<int>(capacity), "%s%c%s",
-		Sys_DefaultBasePath(), PATH_SEP, name);
+	const char *baseRoot = Sys_DefaultBasePath();
+	if (!baseRoot) {
+		baseRoot = "";
+	}
+#if defined(__APPLE__) || defined(__linux__)
+	/* App-local providers live beside the executable.  The default base path
+	 * may instead resolve to the retail asset directory or launch directory.
+	 * Probe beside the executable first without dropping the established base
+	 * path lookup used by unpackaged and legacy installations. */
+	const char *appRoot = Sys_DefaultAppPath();
+	if (appRoot && appRoot[0]) {
+		Com_sprintf(primary, static_cast<int>(primaryCapacity), "%s%c%s",
+			appRoot, PATH_SEP, name);
+		if (std::strcmp(appRoot, baseRoot) != 0) {
+			Com_sprintf(fallback, static_cast<int>(fallbackCapacity), "%s%c%s",
+				baseRoot, PATH_SEP, name);
+		}
+		return;
+	}
+#endif
+	Com_sprintf(primary, static_cast<int>(primaryCapacity), "%s%c%s",
+		baseRoot, PATH_SEP, name);
 }
 
 void BuildSteamApiPath(const char *configured, char *target, size_t capacity) {
@@ -465,14 +488,20 @@ void FNQL_Steam_Init(uint32_t roles) {
 		return;
 	}
 
-	BuildCandidatePath(providerName->string, state.providerPath,
-		sizeof(state.providerPath));
+	char providerFallbackPath[FNQL_STEAM_PATH_CAPACITY]{};
+	BuildCandidatePaths(providerName->string,
+		state.providerPath, sizeof(state.providerPath),
+		providerFallbackPath, sizeof(providerFallbackPath));
 	if (!state.providerPath[0]) {
 		EnterNonSteamFallback("rejected", "none", "none",
 			"com_steamProvider must be an absolute path or a bare library name.");
 		return;
 	}
 	state.library = OpenLibrary(state.providerPath);
+	if (!state.library && providerFallbackPath[0]) {
+		CopyText(state.providerPath, sizeof(state.providerPath), providerFallbackPath);
+		state.library = OpenLibrary(state.providerPath);
+	}
 	if (!state.library) {
 		EnterNonSteamFallback("unavailable", "none", "none",
 			va("Steam provider library was not found or could not be loaded: %s",

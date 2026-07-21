@@ -500,6 +500,9 @@ const char *Sys_SteamPath( void )
 	static char steamPath[ MAX_OSPATH ];
 	const char *home;
 	const char *steamRoot;
+#if !defined( MACOS_X )
+	const char *platformDataRoot;
+#endif
 
 	if ( steamPath[0] ) {
 		return steamPath;
@@ -515,6 +518,25 @@ const char *Sys_SteamPath( void )
 		return steamPath;
 	}
 
+#if !defined( MACOS_X )
+	/* Steam follows XDG_DATA_HOME when it is explicitly configured.  Check
+	 * that location before the conventional HOME-relative fallback. */
+	platformDataRoot = getenv( "XDG_DATA_HOME" );
+	if ( platformDataRoot && platformDataRoot[0] == '/'
+		&& Sys_TrySteamRootUnderHome( platformDataRoot, "Steam",
+			steamPath, sizeof( steamPath ) ) ) {
+		return steamPath;
+	}
+
+	/* The Steam Snap exposes its persistent per-user root here. */
+	platformDataRoot = getenv( "SNAP_USER_COMMON" );
+	if ( platformDataRoot && platformDataRoot[0] == '/'
+		&& Sys_TrySteamRootUnderHome( platformDataRoot, ".local/share/Steam",
+			steamPath, sizeof( steamPath ) ) ) {
+		return steamPath;
+	}
+#endif
+
 	home = getenv( "HOME" );
 	if ( home && home[0] ) {
 #ifdef MACOS_X
@@ -522,6 +544,12 @@ const char *Sys_SteamPath( void )
 			return steamPath;
 		}
 #else
+		/* Also cover discovery from outside the Steam Snap. */
+		if ( Sys_TrySteamRootUnderHome( home, "snap/steam/common/.local/share/Steam",
+			steamPath, sizeof( steamPath ) ) ) {
+			return steamPath;
+		}
+
 		if ( Sys_TrySteamRootUnderHome( home, ".steam/steam", steamPath, sizeof( steamPath ) ) ) {
 			return steamPath;
 		}

@@ -3002,7 +3002,18 @@ static int FS_RootArchiveBuildArchivePaths(
 {
 	int archivePathCount;
 
-	archivePathCount = FS_RootArchiveAddArchivePath( archivePaths, maxArchivePaths, 0, Sys_Pwd() );
+	archivePathCount = 0;
+
+#if defined( __APPLE__ ) || defined( __linux__ )
+	/* Project-owned engine data must match the executable that consumes it.
+	 * Prefer its adjacent archive, then retain the historical working/base path
+	 * locations as development and compatibility fallbacks. */
+	archivePathCount = FS_RootArchiveAddArchivePath(
+		archivePaths, maxArchivePaths, archivePathCount, Sys_DefaultAppPath() );
+#endif
+
+	archivePathCount = FS_RootArchiveAddArchivePath(
+		archivePaths, maxArchivePaths, archivePathCount, Sys_Pwd() );
 
 	if ( fs_basepath != NULL && fs_basepath->string[ 0 ] != '\0' ) {
 		archivePathCount = FS_RootArchiveAddArchivePath(
@@ -3014,9 +3025,6 @@ static int FS_RootArchiveBuildArchivePaths(
 		archivePathCount = FS_RootArchiveAddArchivePath(
 			archivePaths, maxArchivePaths, archivePathCount, fs_apppath->string );
 	}
-
-	archivePathCount = FS_RootArchiveAddArchivePath(
-		archivePaths, maxArchivePaths, archivePathCount, Sys_DefaultAppPath() );
 #endif
 
 	return archivePathCount;

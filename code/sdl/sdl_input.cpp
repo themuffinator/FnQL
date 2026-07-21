@@ -1435,6 +1435,9 @@ static void IN_SyncModifiers( void ) {
     keys[K_CTRL].down  = (mod & SDL_KMOD_CTRL)  ? qtrue : qfalse;
     keys[K_SHIFT].down = (mod & SDL_KMOD_SHIFT) ? qtrue : qfalse;
     keys[K_ALT].down   = (mod & SDL_KMOD_ALT)   ? qtrue : qfalse;
+#ifdef MACOS_X
+    keys[K_COMMAND].down = (mod & SDL_KMOD_GUI) ? qtrue : qfalse;
+#endif
 }
 
 

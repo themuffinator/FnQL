@@ -23,9 +23,8 @@ Retail-specific behavior covered by the common renderer contract includes:
   `r_debugSortExcept` for the observed diagnostic submission behavior;
 - `r_debugAds`, which publishes a bounded snapshot of loaded advertisement
   state plus retail bridge labels consistently on every backend;
-- `r_enablePostProcess`, the bloom and color-correction gates and status
-  mirrors, retail bloom parameters, `r_contrast`, and
-  `r_floatingPointFBOs`;
+- `r_enablePostProcess`, the color-correction gate and status mirrors,
+  `r_contrast`, and `r_floatingPointFBOs`;
 - `r_smp`, `r_showSmp`, `r_ignoreFastPath`, and `r_primitives`, whose retail
   selectors remain queryable even when a modern backend has only one safe
   implementation path;
@@ -40,28 +39,26 @@ classification uses the active drawable rather than assuming the requested
 window size. Window resize synchronization preserves FnQL's existing HiDPI
 logical-versus-drawable distinction.
 
-QLSRP's matrix records no renderer consumer for the retail bloom blur scale,
-radius, or falloff controls, and no runtime SMP path is retained in FnQL.
-Those cvars are intentionally registered, bounded, persistent where retail
-persists them, and safe to query; they do not invent effects or concurrency
-that retail evidence does not establish.
+QLSRP's matrix records a separate retail bloom pipeline and control family.
+FnQL deliberately does not register or implement that pipeline. Retail modules
+may create their own compatibility cvars, but the renderer never consumes or
+mirrors them. No runtime SMP path is retained in FnQL either.
 
 ## Non-Regression Ownership
 
 FnQL's established cvars remain canonical for its modern bloom, color-grade,
-HDR, tone-map, mode, custom-size, stereo, and hardware-gamma paths. Retail
-post-process cvars remain registered and bounded because retail modules and
-profiles query them, but they never write `r_bloom`, `r_bloom_*`, or
-`r_colorGrade`. This prevents retail's lower `r_bloomBrightThreshold` default
-from silently replacing FnQ3's bloom extraction threshold and keeps exactly
-one bloom owner across every renderer backend.
+HDR, tone-map, mode, custom-size, stereo, and hardware-gamma paths. The retail
+bloom cvar family is not renderer-owned and never writes `r_bloom` or
+`r_bloom_*`. This prevents retail's lower extraction threshold from silently
+replacing FnQ3's bloom threshold and keeps exactly one bloom owner across every
+renderer backend.
 
 `r_qlRetailPostProcessBridge` is a read-only zero status value. It also retires
 the ownership marker written by older FnQL builds, so renderer restarts cannot
 resume the former alias bridge. `r_contrast` remains queryable but neutral in
 the FnQ3 final-output paths.
-Active-state mirrors report the path actually running rather than merely
-echoing requested values.
+The remaining active-state mirrors report only the supported generic
+post-process and color-correction paths rather than inventing a QL bloom state.
 
 ## Capability and Fallback Rules
 
@@ -93,7 +90,9 @@ inert is preferable to introducing a divergent submission path.
 `tests/renderer_cvar_compat_source_tests.py` guards registration, ownership,
 video publication, operational renderer consumers, post-process shader wiring,
 the one-time bridge migration, and FnQ3 framebuffer ownership across every
-retained renderer. Compile validation must cover all three renderer modules
+retained renderer. `tests/fnq3_bloom_parity_source_tests.py` pins the FnQ3 bloom
+implementation and rejects QL bloom pipeline fingerprints and renderer-owned
+retail bloom controls. Compile validation must cover all three renderer modules
 plus the client translation unit. Runtime retail validation should use
 legitimate Steam assets, windowed mode, imported retail cvar presets, and a
 fresh FnQL profile.

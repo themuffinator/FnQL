@@ -13,6 +13,7 @@ output/
 __pycache__/
 *.pyc
 .tmp/
+make-macosx-values.local
 subprojects/*
 !subprojects/*.wrap
 !subprojects/packagefiles/

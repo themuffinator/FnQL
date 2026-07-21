@@ -19,9 +19,9 @@ version.
  * Quake III cvars.  Keep those controls in one renderer-neutral contract so
  * the GLx, Vulkan, and RTX backends cannot drift apart.
  *
- * These are compatibility controls, not replacements for FnQL's newer HDR,
- * color-grade, and bloom controls. They remain queryable for retail modules
- * and configurations, but the FnQ3 renderer controls stay authoritative.
+ * These are compatibility controls, not replacements for FnQL's newer HDR
+ * and color-grade controls. Bloom is deliberately excluded: the renderer has
+ * only the FnQ3 r_bloom control surface and implementation.
  */
 typedef enum qlRendererCvarBackend_e {
 	QL_CVAR_BACKEND_GLX,
@@ -44,20 +44,9 @@ typedef struct qlRendererCvars_s {
 	cvar_t *debugSortExcept;
 	cvar_t *debugAds;
 	cvar_t *enablePostProcess;
-	cvar_t *enableBloom;
 	cvar_t *enableColorCorrect;
 	cvar_t *postProcessActive;
-	cvar_t *bloomActive;
 	cvar_t *colorCorrectActive;
-	cvar_t *bloomPasses;
-	cvar_t *bloomIntensity;
-	cvar_t *bloomBrightThreshold;
-	cvar_t *bloomBlurScale;
-	cvar_t *bloomBlurRadius;
-	cvar_t *bloomBlurFalloff;
-	cvar_t *bloomSaturation;
-	cvar_t *bloomSceneIntensity;
-	cvar_t *bloomSceneSaturation;
 	cvar_t *contrast;
 	qlRendererCvarBackend_t backend;
 } qlRendererCvars_t;
@@ -81,7 +70,6 @@ static ID_INLINE cvar_t *R_QLRegisterCvar( const char *name,
 static ID_INLINE void R_QLRegisterRendererCvars( qlRendererCvarBackend_t backend )
 {
 	const int profileFlags = CVAR_ARCHIVE | CVAR_CLOUD;
-	const int boundedProfileFlags = profileFlags | CVAR_PROTECTED | CVAR_VM_CREATED;
 	const int postFlags = CVAR_ARCHIVE | CVAR_LATCH | CVAR_CLOUD;
 	const qboolean retiredBridgeOwnedPostProcess =
 		atoi( ri.Cvar_VariableString( "r_qlRetailPostProcessBridge" ) ) != 0
@@ -133,10 +121,7 @@ static ID_INLINE void R_QLRegisterRendererCvars( qlRendererCvarBackend_t backend
 
 	qlRendererCvars.enablePostProcess = R_QLRegisterCvar( "r_enablePostProcess", "1",
 		postFlags, "0", "1", CV_INTEGER,
-		"Retail post-process compatibility control; FnQ3 renderer controls remain authoritative." );
-	qlRendererCvars.enableBloom = R_QLRegisterCvar( "r_enableBloom", "1",
-		postFlags, "0", "2", CV_INTEGER,
-		"Retail bloom compatibility selector; r_bloom owns the FnQ3 bloom pass." );
+		"Retail post-process compatibility control; it does not gate the FnQ3 bloom path." );
 	qlRendererCvars.enableColorCorrect = R_QLRegisterCvar( "r_enableColorCorrect", "1",
 		postFlags, "0", "1", CV_INTEGER,
 		"Retail color-correction compatibility control; r_colorGrade owns FnQ3 color grading." );
@@ -144,32 +129,9 @@ static ID_INLINE void R_QLRegisterRendererCvars( qlRendererCvarBackend_t backend
 	qlRendererCvars.postProcessActive = R_QLRegisterCvar( "r_postProcessActive", "0",
 		CVAR_TEMP, "0", "1", CV_INTEGER,
 		"Reports whether the active renderer is running a post-process path." );
-	qlRendererCvars.bloomActive = R_QLRegisterCvar( "r_bloomActive", "0",
-		CVAR_TEMP | CVAR_CLOUD, "0", "1", CV_INTEGER,
-		"Reports whether bloom is active in the current renderer." );
 	qlRendererCvars.colorCorrectActive = R_QLRegisterCvar( "r_colorCorrectActive", "0",
 		CVAR_TEMP, "0", "1", CV_INTEGER,
 		"Reports whether color correction is active in the current renderer." );
-	qlRendererCvars.bloomPasses = R_QLRegisterCvar( "r_bloomPasses", "1",
-		postFlags | CVAR_PROTECTED | CVAR_VM_CREATED | CVAR_BOUNDED_DISCRETE,
-		"1", "2", CV_INTEGER,
-		"Retail bloom pass selector." );
-	qlRendererCvars.bloomIntensity = R_QLRegisterCvar( "r_bloomIntensity", "0.5",
-		boundedProfileFlags, "0", "10", CV_FLOAT, "Retail bloom blend intensity." );
-	qlRendererCvars.bloomBrightThreshold = R_QLRegisterCvar( "r_bloomBrightThreshold", "0.25",
-		boundedProfileFlags, "0", "1", CV_FLOAT, "Retail bloom extraction threshold." );
-	qlRendererCvars.bloomBlurScale = R_QLRegisterCvar( "r_bloomBlurScale", "0.0",
-		boundedProfileFlags, "1", "2", CV_FLOAT, "Retail bloom blur scale." );
-	qlRendererCvars.bloomBlurRadius = R_QLRegisterCvar( "r_bloomBlurRadius", "5",
-		boundedProfileFlags, "1", "12", CV_FLOAT, "Retail bloom blur radius." );
-	qlRendererCvars.bloomBlurFalloff = R_QLRegisterCvar( "r_bloomBlurFalloff", "0.0",
-		boundedProfileFlags, "0.75", "1", CV_FLOAT, "Retail bloom blur falloff." );
-	qlRendererCvars.bloomSaturation = R_QLRegisterCvar( "r_bloomSaturation", "0.8",
-		boundedProfileFlags, "0", "10", CV_FLOAT, "Retail bloom saturation." );
-	qlRendererCvars.bloomSceneIntensity = R_QLRegisterCvar( "r_bloomSceneIntensity", "1.0",
-		boundedProfileFlags, "0", "10", CV_FLOAT, "Retail scene intensity during bloom combine." );
-	qlRendererCvars.bloomSceneSaturation = R_QLRegisterCvar( "r_bloomSceneSaturation", "1.0",
-		boundedProfileFlags, "0", "10", CV_FLOAT, "Retail scene saturation during bloom combine." );
 	qlRendererCvars.contrast = R_QLRegisterCvar( "r_contrast", "1.0", profileFlags,
 		NULL, NULL, CV_FLOAT, "Retail color-correction contrast." );
 	(void)R_QLRegisterCvar( "r_qlRetailPostProcessBridge", "0",
@@ -203,14 +165,10 @@ static ID_INLINE void R_QLUpdateRendererCvars( const cvar_t *postProcess,
 {
 	const qboolean postActive = postProcess ? ( postProcess->integer != 0 )
 		: ( ( bloom && bloom->integer ) || ( colorCorrect && colorCorrect->integer ) );
-	const qboolean bloomActive = postActive && bloom && bloom->integer;
 	const qboolean colorActive = postActive && colorCorrect && colorCorrect->integer;
 
 	if ( qlRendererCvars.postProcessActive->integer != postActive ) {
 		ri.Cvar_Set( "r_postProcessActive", postActive ? "1" : "0" );
-	}
-	if ( qlRendererCvars.bloomActive->integer != bloomActive ) {
-		ri.Cvar_Set( "r_bloomActive", bloomActive ? "1" : "0" );
 	}
 	if ( qlRendererCvars.colorCorrectActive->integer != colorActive ) {
 		ri.Cvar_Set( "r_colorCorrectActive", colorActive ? "1" : "0" );

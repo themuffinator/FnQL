@@ -2070,7 +2070,7 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
         client_source = (ROOT / "code" / "client" / "cl_main.cpp").read_text(encoding="utf-8")
         start = client_source.index("static void CL_InitRef")
         failure_start = client_source.index("if ( !rendererLib )", start)
-        failure_end = client_source.index("rendererLib = Sys_LoadLibrary( ospath );", failure_start)
+        failure_end = client_source.index("rendererLib = CL_LoadRendererLibrary", failure_start)
         load_failure_body = client_source[failure_start:failure_end]
 
         self.assertIn("CL_RendererLoadFailureIsFatal", client_source)

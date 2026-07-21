@@ -1,3 +1,10 @@
+ARCHIVAL UPSTREAM DOCUMENT — NOT FNQL INSTALLATION INSTRUCTIONS
+
+This file describes the legacy Quake III Arena point release and is retained
+only for upstream provenance. Current FnQL Linux instructions are in
+../../README.md and ../../BUILD.md. Do not copy Quake III CD assets or use the
+installation paths below for FnQL.
+
                       Quake III Arena
                    Quake III: Team Arena
                  Installation instructions

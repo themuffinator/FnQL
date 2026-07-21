@@ -26,8 +26,9 @@ Retail Quake Live compatibility comes first. FnQL is engine-only: it does not
 reconstruct or distribute Quake Live game code or assets, so a legitimate
 [Quake Live installation on Steam](https://store.steampowered.com/app/282440/Quake_Live/)
 is required. The official Windows package includes FnQL's open-source engine,
-its WebUI overlay, and the compiled closed-source Steam provider; it does not
-include Valve's `steam_api.dll` or any retail game content.
+its WebUI overlay, and the compiled closed-source Steam provider. Linux
+packages contain only redistributable FnQL components. No package includes
+Valve's `steam_api.dll` or any retail game content.
 
 ## 2. Features
 
@@ -77,23 +78,60 @@ include Valve's `steam_api.dll` or any retail game content.
 
 ## 3. Getting Started
 
-1. Install [Quake Live through Steam](https://store.steampowered.com/app/282440/Quake_Live/)
-   and launch the retail game once so Steam creates its normal files and player
-   profile.
-2. Download the current package from the
-   [latest FnQL release](https://github.com/themuffinator/FnQL/releases/latest).
-3. Extract the archive into the Quake Live installation folder. Keep
-   `fnql-web.pak`, the renderer modules, and the packaged runtime libraries
-   beside the FnQL executable.
-4. Leave Steam running and launch `fnql.exe`. The official Windows build is
-   Win32/x86 so it can load the retail game modules and WebUI.
-5. Open Settings in the retail WebUI or use the guides below to tune rendering,
-   audio, controls, screenshots, and console behavior.
+First install [Quake Live through Steam](https://store.steampowered.com/app/282440/Quake_Live/)
+and launch the retail game once so Steam creates its normal files and player
+profile. Then download the package for your platform from the
+[latest FnQL release](https://github.com/themuffinator/FnQL/releases/latest).
 
-FnQL locates the normal Steam installation automatically. If yours is in an
-unusual location, start FnQL with `+set fs_steampath "<Quake Live folder>"`.
-Steam and WebUI features fail safely when their optional runtime components are
-unavailable. To compile FnQL yourself, use the [Build Guide](BUILD.md).
+### Windows retail client
+
+1. Extract the Windows `.zip` into the Quake Live installation folder.
+2. Keep `FnQL-pkg.fnz`, `fnql-web.pak`, the renderer modules, and packaged
+   runtime libraries beside `fnql.exe`.
+3. Leave Steam running and launch `fnql.exe`. The official Windows build is
+   Win32/x86 so it can load the retail game modules and WebUI.
+
+### Native Linux dedicated server
+
+1. Install the 32-bit runtime libraries reported by `ldd ./fnql.ded` on your
+   distribution. The release is i686 so it can load retail
+   `qagamei386.so` from `baseq3/bin.pk3`.
+2. Extract the Linux archive with
+   `tar -xzf fnql-*-linux-x86.tar.gz -C "<Quake Live folder>"`. The tarball
+   preserves the executable bits on the engine and renderer modules.
+3. From that folder, start the server with
+   `./fnql.ded +set fs_steampath "$PWD" +set dedicated 2 +map campgrounds`.
+   Keep the two FnQL package sidecars and renderer modules beside the binaries.
+
+### Native macOS engine and tools
+
+1. Download the ZIP matching Intel (`x86_64`) or Apple Silicon (`aarch64`) and
+   preserve the complete `FnQL.app` layout when extracting it.
+2. The application already contains its renderer dylibs and FnQL sidecars.
+   Standalone `fnql.ded` and `fnql-audiozonesc` are included beside the app.
+3. Release builds are produced and tested natively on both Apple architectures;
+   local and normal CI builds receive no project-applied app-bundle or Developer
+   ID signature by default. (Apple Silicon retains clang's required ad-hoc
+   Mach-O signature.) See the [Build Guide](BUILD.md) for opt-in signing,
+   notarization, and Universal 2 staging commands.
+
+CI covers native compilation, automated tests, packaging, and dependency
+audits; the explicit release lane also covers Developer ID signatures and
+notarization. A windowed renderer smoke test on physical Apple hardware is still
+a promotion gate, and the package intentionally includes no macOS Steam provider
+or Valve runtime.
+
+Retail Quake Live ships native Linux server modules, but its client and WebUI
+modules are Win32-only. The native Linux client executable is therefore an
+engine/platform development target, not a supported retail-play path. Use the
+Win32/x86 package for retail client play. Retail also ships no macOS game,
+client, UI, or QVM modules, so the native Mac package supports the engine and
+tools but cannot start a retail match. FnQL will not reconstruct those modules.
+FnQL discovers conventional Steam
+libraries on each supported OS; for a custom library use
+`+set fs_steampath "<Quake Live folder>"`. Optional Steam and WebUI services
+fail safely when unavailable. To compile FnQL yourself, including native
+x86_64 and ARM development builds, use the [Build Guide](BUILD.md).
 
 ## 4. Documentation
 

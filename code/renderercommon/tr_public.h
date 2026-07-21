@@ -139,6 +139,13 @@ typedef struct {
 	qhandle_t (*RegisterShaderFromRGBA)( const char *name, byte *rgba,
 		int width, int height );
 
+	// Retail Quake Live exposes the active view's projection helpers to native
+	// cgame.  In particular, its POI path uses these after RenderScene to place
+	// objective markers in the 640x480 HUD coordinate space. Keep these appended
+	// so existing FnQ3 renderer exports retain their offsets.
+	void	(*TransformModelToClip)( const vec3_t point, vec4_t eye, vec4_t clip );
+	void	(*TransformClipToWindow)( const vec4_t clip, vec4_t normalized, vec4_t window );
+
 
 } refexport_t;
 

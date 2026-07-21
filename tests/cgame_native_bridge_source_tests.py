@@ -133,8 +133,8 @@ RETAIL_CGAME_NATIVE_IMPORT_BINDINGS = tuple(
 117:CG_QL_IMPORT_RETAIL_RESERVED_117:QL_CG_trap_RetailReservedImport
 118:CG_QL_IMPORT_NULL_118:<null>
 119:CG_QL_IMPORT_NULL_119:<null>
-120:CG_QL_IMPORT_R_MIRROR_POINT:QL_CG_trap_R_MirrorPoint
-121:CG_QL_IMPORT_R_MIRROR_VECTOR:QL_CG_trap_R_MirrorVector
+120:CG_QL_IMPORT_R_TRANSFORM_MODEL_TO_CLIP:QL_CG_trap_R_TransformModelToClip
+121:CG_QL_IMPORT_R_TRANSFORM_CLIP_TO_WINDOW:QL_CG_trap_R_TransformClipToWindow
 122:CG_QL_IMPORT_IS_SUBSCRIBED_APP:QL_CG_trap_IsSubscribedApp
 123:CG_QL_IMPORT_DRAW_SCALED_TEXT:QL_CG_trap_DrawScaledText
 124:CG_QL_IMPORT_MEASURE_TEXT:QL_CG_trap_MeasureText
@@ -249,6 +249,42 @@ class CGameNativeBridgeSourceTests(unittest.TestCase):
                 self.assertIn(assignment, cl_cgame)
 
         self.assertEqual(observed_slots, set(range(128)))
+
+    def test_retail_projection_imports_use_renderer_backed_three_pointer_abi(self) -> None:
+        cl_cgame = read_repo_file("code/client/cl_cgame.cpp")
+        tr_public = read_repo_file("code/renderercommon/tr_public.h")
+
+        self.assertIn(
+            "static void QDECL QL_CG_trap_R_TransformModelToClip( const vec3_t point, vec4_t eye, vec4_t clip )",
+            cl_cgame,
+        )
+        self.assertIn(
+            "static void QDECL QL_CG_trap_R_TransformClipToWindow( const vec4_t clip, vec4_t normalized, vec4_t window )",
+            cl_cgame,
+        )
+        self.assertIn("re.TransformModelToClip( point, eye, clip );", cl_cgame)
+        self.assertIn("re.TransformClipToWindow( clip, normalized, window );", cl_cgame)
+        self.assertNotIn("QL_CG_trap_R_MirrorPoint", cl_cgame)
+        self.assertNotIn("QL_CG_trap_R_MirrorVector", cl_cgame)
+
+        self.assertIn(
+            "(*TransformModelToClip)( const vec3_t point, vec4_t eye, vec4_t clip );",
+            tr_public,
+        )
+        self.assertIn(
+            "(*TransformClipToWindow)( const vec4_t clip, vec4_t normalized, vec4_t window );",
+            tr_public,
+        )
+
+        for renderer in ("renderer", "renderervk", "rendererrtx"):
+            tr_init = read_repo_file(f"code/{renderer}/tr_init.c")
+            self.assertIn("tr.viewParms.world.modelMatrix", tr_init)
+            self.assertIn("tr.viewParms.projectionMatrix", tr_init)
+            self.assertIn("R_TransformClipToWindow( clip, &tr.viewParms", tr_init)
+            self.assertIn("window[2] = 0.5f * ( 1.0f + normalized[0] );", tr_init)
+            self.assertIn("window[3] = 0.5f * ( 1.0f + normalized[1] );", tr_init)
+            self.assertIn("re.TransformModelToClip = RE_TransformModelToClip;", tr_init)
+            self.assertIn("re.TransformClipToWindow = RE_TransformClipToWindow;", tr_init)
 
     def test_retail_cvar_numeric_lookup_uses_slot_ten(self) -> None:
         cg_public = read_repo_file("code/cgame/cg_public.h")

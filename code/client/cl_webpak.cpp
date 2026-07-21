@@ -844,6 +844,7 @@ void CL_WebPak_Init( void ) {
 	static const char *overlayPathCvars[] = { "fs_homepath", "fs_apppath", "fs_basepath", "fs_steampath" };
 	char rootPath[MAX_OSPATH];
 	char pakPath[MAX_OSPATH];
+	qboolean overlayLoaded = qfalse;
 	int i;
 
 	CL_WebPak_RegisterCvars();
@@ -859,11 +860,22 @@ void CL_WebPak_Init( void ) {
 		}
 	}
 
-	// Sys_Pwd is the executable directory on supported desktop platforms. It
-	// covers VS Code/Meson build trees on Windows, where fs_apppath is not
-	// registered, as well as installed layouts that keep the sidecar beside FnQL.
-	CL_WebPak_BuildStandalonePath( Sys_Pwd(), "fnql-web.pak", pakPath, sizeof( pakPath ) );
-	if ( CL_WebDataPak_Load( pakPath, &cl_fnqlWebDataPak ) ) {
+	// Prefer the resolved executable directory on packaged Unix builds.  The
+	// process working directory remains a fallback for development and Windows
+	// layouts that historically stage the sidecar there.
+#if defined( __APPLE__ ) || defined( __linux__ )
+	const char *appPath = Sys_DefaultAppPath();
+	if ( appPath && appPath[0] ) {
+		CL_WebPak_BuildStandalonePath( appPath, "fnql-web.pak", pakPath, sizeof( pakPath ) );
+		overlayLoaded = CL_WebDataPak_Load( pakPath, &cl_fnqlWebDataPak );
+	}
+#endif
+	if ( !overlayLoaded ) {
+		CL_WebPak_BuildStandalonePath( Sys_Pwd(), "fnql-web.pak", pakPath, sizeof( pakPath ) );
+		overlayLoaded = CL_WebDataPak_Load( pakPath, &cl_fnqlWebDataPak );
+	}
+
+	if ( overlayLoaded ) {
 		Com_Printf( "fnql-web.pak sparse overlay mounted from %s\n", pakPath );
 	} else {
 		for ( i = 0; i < (int)ARRAY_LEN( overlayPathCvars ); i++ ) {

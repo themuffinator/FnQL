@@ -55,17 +55,21 @@ darwin = host_machine.system() == 'darwin'
 cpu_family = host_machine.cpu_family()
 
 renderer_prefix = 'fnql'
+build_client = get_option('build-client')
+build_server = get_option('build-server')
 renderer_default = get_option('renderer-default')
 renderer_dlopen = get_option('renderer-dlopen')
 enabled_renderers = get_option('renderers')
 
 # A modular client must always include its default GLx module, even when a
 # developer requests only a Vulkan-family module in an explicit list.
-if renderer_default == 'glx' and 'glx' not in enabled_renderers
+if build_client and renderer_default == 'glx' and 'glx' not in enabled_renderers
   enabled_renderers += 'glx'
 endif
 
-if not renderer_dlopen
+if not build_client
+  enabled_renderers = []
+elif not renderer_dlopen
   enabled_renderers = [renderer_default]
 endif
 
@@ -174,8 +178,8 @@ if not ['x86', 'x86_64', 'aarch64', 'arm', 'ppc64le', 'ppc64'].contains(cpu_fami
   common_cpp_args += ['-DNO_VM_COMPILED']
 endif
 
-use_opengl_api = renderer_default == 'glx' or 'glx' in enabled_renderers
-use_vulkan_api = renderer_default in ['vk', 'rtx'] or 'vk' in enabled_renderers or 'rtx' in enabled_renderers
+use_opengl_api = build_client and (renderer_default == 'glx' or 'glx' in enabled_renderers)
+use_vulkan_api = build_client and (renderer_default in ['vk', 'rtx'] or 'vk' in enabled_renderers or 'rtx' in enabled_renderers)
 
 if use_opengl_api
   common_c_args += ['-DUSE_OPENGL_API']
@@ -425,10 +429,13 @@ thread_dep = dependency('threads')
 client_deps += thread_dep
 server_deps += thread_dep
 
-fontstash_dep = dependency('fontstash',
-  required: get_option('build-client'),
-  fallback: 'fontstash',
-)
+fontstash_dep = dependency('', required: false)
+if build_client
+  fontstash_dep = dependency('fontstash',
+    required: true,
+    fallback: 'fontstash',
+  )
+endif
 if fontstash_dep.found()
   # Retail Quake Live's retained host-text lane uses the 2014 FontStash/STB
   # implementation. Keep it separate from the classic FreeType fontInfo_t lane.
@@ -438,17 +445,20 @@ if fontstash_dep.found()
   client_deps += fontstash_dep
 endif
 
-freetype_dep = dependency('freetype2',
-  required: get_option('build-client'),
-  fallback: 'freetype2',
-  default_options: quiet_fallback_defaults + [
-    'brotli=disabled',
-    'bzip2=disabled',
-    'harfbuzz=disabled',
-    'png=disabled',
-    'zlib=disabled',
-  ],
-)
+freetype_dep = dependency('', required: false)
+if build_client
+  freetype_dep = dependency('freetype2',
+    required: true,
+    fallback: 'freetype2',
+    default_options: quiet_fallback_defaults + [
+      'brotli=disabled',
+      'bzip2=disabled',
+      'harfbuzz=disabled',
+      'png=disabled',
+      'zlib=disabled',
+    ],
+  )
+endif
 if freetype_dep.found()
   common_c_args += ['-DBUILD_FREETYPE']
   renderer_deps += freetype_dep
@@ -480,12 +490,15 @@ if win32
   endforeach
 endif
 
-openal_dep = dependency('openal',
-  method: 'pkg-config',
-  required: get_option('build-client') or get_option('audio-tests'),
-  fallback: 'openal-soft',
-  default_options: openal_fallback_defaults,
-)
+openal_dep = dependency('', required: false)
+if build_client or get_option('audio-tests')
+  openal_dep = dependency('openal',
+    method: 'pkg-config',
+    required: true,
+    fallback: 'openal-soft',
+    default_options: openal_fallback_defaults,
+  )
+endif
 openal_header_dep = dependency('', required: false)
 openal_source = 'disabled'
 if openal_dep.found()
@@ -497,7 +510,7 @@ endif
 sdl_opt = get_option('sdl')
 sdl_dep = dependency('', required: false)
 sdl_source = 'disabled'
-if not sdl_opt.disabled()
+if build_client and not sdl_opt.disabled()
   sdl_dep = dependency('sdl3',
     version: '>=3.2.0',
     required: false,
@@ -509,10 +522,17 @@ if not sdl_opt.disabled()
   endif
 endif
 
-if sdl_opt.enabled() and not sdl_dep.found()
+if build_client and sdl_opt.enabled() and not sdl_dep.found()
   error('SDL3 was enabled but no SDL3 dependency was found')
 endif
-use_sdl = not sdl_opt.disabled() and sdl_dep.found()
+
+# Cocoa window, input, audio, and Vulkan-surface integration are provided by
+# SDL3.  Falling through to the X11 backend on Darwin produces a configuration
+# that can never build, so reject it at configure time with a useful diagnosis.
+if darwin and build_client and not sdl_dep.found()
+  error('macOS client builds require SDL3; configure with -Dsdl=enabled')
+endif
+use_sdl = build_client and not sdl_opt.disabled() and sdl_dep.found()
 
 if use_sdl
   client_deps += sdl_dep
@@ -532,7 +552,7 @@ curl_header_dep = dependency('', required: false)
 curl_c_args = []
 curl_source = 'disabled'
 
-if not curl_opt.disabled()
+if build_client and not curl_opt.disabled()
   curl_dep = dependency('libcurl',
     required: curl_opt.enabled(),
     fallback: 'curl',
@@ -562,26 +582,30 @@ if use_curl
   endif
 endif
 
-jpeg_force_system = get_option('system-jpeg')
-if jpeg_force_system
-  jpeg_dep = dependency('libjpeg', required: false)
-  if not jpeg_dep.found()
-    jpeg_dep = dependency('jpeg', required: true)
+jpeg_dep = dependency('', required: false)
+jpeg_source = 'disabled'
+if build_client
+  jpeg_force_system = get_option('system-jpeg')
+  if jpeg_force_system
+    jpeg_dep = dependency('libjpeg', required: false)
+    if not jpeg_dep.found()
+      jpeg_dep = dependency('jpeg', required: true)
+    endif
+    jpeg_source = 'system'
+  else
+    jpeg_dep = dependency('libjpeg',
+      required: true,
+      fallback: 'libjpeg-turbo',
+      default_options: jpeg_fallback_defaults,
+    )
+    jpeg_source = jpeg_dep.type_name() == 'internal' ? 'subproject' : 'system'
   endif
-  jpeg_source = 'system'
-else
-  jpeg_dep = dependency('libjpeg',
-    required: true,
-    fallback: 'libjpeg-turbo',
-    default_options: jpeg_fallback_defaults,
-  )
-  jpeg_source = jpeg_dep.type_name() == 'internal' ? 'subproject' : 'system'
+  client_deps += jpeg_dep
+  common_c_args += ['-DUSE_SYSTEM_JPEG']
+  common_cpp_args += ['-DUSE_SYSTEM_JPEG']
 endif
-client_deps += jpeg_dep
-common_c_args += ['-DUSE_SYSTEM_JPEG']
-common_cpp_args += ['-DUSE_SYSTEM_JPEG']
 
-if get_option('ogg-vorbis')
+if build_client and get_option('ogg-vorbis')
   vorbisfile_dep = dependency('vorbisfile',
     required: false,
     fallback: 'vorbis',
@@ -624,14 +648,14 @@ if win32
     'code/win32/win_shared.cpp',
     'code/win32/win_syscon.cpp',
   ] + win_resource
-  if use_sdl
+  if build_client and use_sdl
     q3_ui_src = [
       'code/sdl/sdl_gamma.cpp',
       'code/sdl/sdl_glimp.cpp',
       'code/sdl/sdl_input.cpp',
       'code/sdl/sdl_snd.cpp',
     ]
-  else
+  elif build_client
     q3_ui_src = [
       'code/win32/win_gamma.cpp',
       'code/win32/win_glimp.cpp',
@@ -655,14 +679,14 @@ else
     'code/unix/unix_syscon.cpp',
     'code/unix/linux_signals.cpp',
   ]
-  if use_sdl
+  if build_client and use_sdl
     q3_ui_src = [
       'code/sdl/sdl_gamma.cpp',
       'code/sdl/sdl_glimp.cpp',
       'code/sdl/sdl_input.cpp',
       'code/sdl/sdl_snd.cpp',
     ]
-  else
+  elif build_client
     x11_dep = dependency('x11', required: true)
     client_deps += x11_dep
     q3_ui_src = [
@@ -701,7 +725,7 @@ botlib_objects = [botlib.extract_all_objects(recursive: false)]
 renderer_base_src = renderer_common_src + ['code/qcommon/q_shared.c', 'code/qcommon/puff.c', 'code/qcommon/q_math.c'] + platform_asm_src
 renderer_targets = []
 
-if renderer_dlopen
+if build_client and renderer_dlopen
   renderer_c_args = common_c_args + ['-DUSE_RENDERER_DLOPEN']
   renderer_cpp_args = common_cpp_args + ['-DUSE_RENDERER_DLOPEN']
 
@@ -753,7 +777,7 @@ if renderer_dlopen
 endif
 
 static_renderer_objects = []
-if not renderer_dlopen
+if build_client and not renderer_dlopen
   if renderer_default == 'glx'
     renderer_glx_static_c_args = common_c_args + [
       '-DRENDERER_CLASSIC',
@@ -811,7 +835,7 @@ endif
 
 runtime_build_targets = renderer_targets
 
-if get_option('build-client')
+if build_client
   client_exe = executable(client_binary_name,
     q3_platform_src + q3_ui_src + qcommon_src + server_src + client_src + platform_asm_src + client_asm_src,
     include_directories: include_dirs,
@@ -827,7 +851,7 @@ if get_option('build-client')
   runtime_build_targets += client_exe
 endif
 
-if get_option('build-server')
+if build_server
   server_exe = executable(server_binary_name,
     q3_platform_src + qcommon_src + server_src + platform_asm_src,
     include_directories: include_dirs,
@@ -1296,11 +1320,11 @@ if use_curl
 endif
 
 summary({
-  'client executable': get_option('build-client') ? client_binary_name : 'disabled',
-  'dedicated server': get_option('build-server') ? server_binary_name : 'disabled',
-  'renderer-dlopen': renderer_dlopen,
-  'renderer modules': renderer_dlopen ? ', '.join(enabled_renderers) : 'disabled',
-  'static renderer': renderer_dlopen ? 'disabled' : renderer_default,
+  'client executable': build_client ? client_binary_name : 'disabled',
+  'dedicated server': build_server ? server_binary_name : 'disabled',
+  'renderer-dlopen': build_client ? renderer_dlopen : false,
+  'renderer modules': build_client and renderer_dlopen ? ', '.join(enabled_renderers) : 'disabled',
+  'static renderer': build_client and not renderer_dlopen ? renderer_default : 'disabled',
   'renderer default': renderer_default,
   'renderer arch': renderer_arch,
   'SDL3': use_sdl ? sdl_source : 'disabled',

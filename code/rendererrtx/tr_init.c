@@ -3817,6 +3817,17 @@ static qhandle_t RE_RegisterShaderFromRGBA( const char *name, byte *rgba,
 GetRefAPI
 @@@@@@@@@@@@@@@@@@@@@
 */
+static void RE_TransformModelToClip( const vec3_t point, vec4_t eye, vec4_t clip ) {
+	R_TransformModelToClip( point, tr.viewParms.world.modelMatrix,
+		tr.viewParms.projectionMatrix, eye, clip );
+}
+
+static void RE_TransformClipToWindow( const vec4_t clip, vec4_t normalized, vec4_t window ) {
+	R_TransformClipToWindow( clip, &tr.viewParms, normalized, window );
+	window[2] = 0.5f * ( 1.0f + normalized[0] );
+	window[3] = 0.5f * ( 1.0f + normalized[1] );
+}
+
 #ifdef USE_RENDERER_DLOPEN
 Q_EXPORT refexport_t* QDECL GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 #else
@@ -3893,6 +3904,8 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 	re.GetConfig = RE_GetConfig;
 	re.VertexLighting = RE_VertexLighting;
 	re.SyncRender = RE_SyncRender;
+	re.TransformModelToClip = RE_TransformModelToClip;
+	re.TransformClipToWindow = RE_TransformClipToWindow;
 
 	return &re;
 }

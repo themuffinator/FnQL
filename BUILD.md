@@ -157,27 +157,115 @@ Build with either `make ARCH=x86` or `make ARCH=x86_64` depending on your target
 
 ---
 
-### generic/ubuntu linux/bsd
+### linux
 
-On a fresh Ubuntu-style install, you will likely need packages like these first:
+Linux has two distinct compatibility surfaces:
 
-* sudo apt install make gcc libcurl4-openssl-dev mesa-common-dev
-* sudo apt install libxxf86dga-dev libxrandr-dev libxxf86vm-dev libasound2-dev
-* sudo apt install libsdl3-dev
+- Native dedicated servers can load the retail `qagamei386.so` or
+  `qagamex64.so` from `baseq3/bin.pk3`. The official release is i686 and uses
+  the former so its ABI matches the other retail-facing release artifacts.
+- Retail Quake Live does not ship native Linux `cgame` or UI modules; those
+  modules and the retained Awesomium WebUI runtime are Win32-only. Native Linux
+  client builds are maintained engine/platform development targets, but are not
+  advertised as a retail-play path. Use the Win32/x86 release for retail client
+  play.
 
-Then build with: `make`
+Official Linux downloads are deterministic `.tar.gz` archives. Extract them
+with `tar`, rather than copying individual files out of a browser, so the
+executable modes on `fnql`, `fnql.ded`, and the renderer modules survive:
 
-After that, either copy the resulting binaries from the `build` directory or run:
+```sh
+ql_dir="$HOME/.local/share/Steam/steamapps/common/Quake Live"
+tar -xzf fnql-*-linux-x86.tar.gz -C "$ql_dir"
+cd "$ql_dir"
+ldd ./fnql.ded | grep 'not found' || true
+./fnql.ded +set fs_steampath "$ql_dir" +set dedicated 2 +map campgrounds
+```
 
-`make install DESTDIR=<path_to_quake_live_install>`
+Steam may instead use `~/.steam/steam/steamapps/common/Quake Live` or a custom
+library. Pass that exact directory through `fs_steampath`; do not copy retail
+assets into the repository or FnQL package.
 
-Current SDL backend dependency baseline: `SDL3 >= 3.2.0`
+#### Native development build
+
+Meson is the preferred path. On Debian or Ubuntu, this baseline builds the
+legacy X11 backend using system development packages while Meson fetches only
+missing wrap fallbacks (including the required pinned FontStash source):
+
+```sh
+sudo apt update
+sudo apt install build-essential git meson ninja-build pkg-config python3 \
+  libasound2-dev libcurl4-openssl-dev libfreetype6-dev libjpeg-dev \
+  libogg-dev libopenal-dev libvorbis-dev libx11-dev
+meson setup meson/build-linux --buildtype=debugoptimized -Dsdl=disabled
+meson compile -C meson/build-linux
+meson test -C meson/build-linux
+```
+
+For the SDL path, install SDL3 3.2.0 or newer and configure with
+`-Dsdl=enabled`. If the distribution does not yet package SDL3, the existing
+`subprojects/sdl3.wrap` fallback is the supported bundled source boundary; use
+`--wrap-mode=forcefallback` to exercise it explicitly. Meson prints whether
+SDL3, OpenAL, cURL, JPEG, and Ogg/Vorbis came from the system or a subproject at
+the end of configuration.
+
+Stage a build without writing into the Steam library, verify it, and then copy
+the whole flat runtime root together:
+
+```sh
+mkdir -p .tmp
+install_root="$(mktemp -d "$PWD/.tmp/linux-install.XXXXXX")"
+meson install -C meson/build-linux --destdir "$install_root"
+python3 scripts/verify_release_layout.py \
+  "$install_root/usr/local/FnQL-pkg.fnz"
+```
+
+The exact staging prefix follows Meson's configured `--prefix`. Keep
+`FnQL-pkg.fnz`, `fnql-web.pak`, and all selected renderer modules beside the
+client/server executables.
+
+#### Official-compatible i686 build
+
+A 64-bit Linux host needs multiarch development packages. Package names can
+vary by Debian/Ubuntu release; this is the release-builder baseline:
+
+```sh
+sudo dpkg --add-architecture i386
+sudo apt update
+sudo apt install gcc-multilib g++-multilib make python3 pkg-config \
+  libasound2-dev:i386 libcurl4-openssl-dev:i386 libjpeg-dev:i386 \
+  libogg-dev:i386 libopenal-dev:i386 libvorbis-dev:i386 libx11-dev:i386 \
+  libxrandr-dev:i386 libxxf86dga-dev:i386 libxxf86vm-dev:i386 \
+  mesa-common-dev:i386
+meson subprojects download fontstash
+make -j"$(nproc)" release ARCH=x86 COMPILE_ARCH=x86 USE_SDL=0 \
+  USE_RENDERER_DLOPEN=1 USE_GLX=1 USE_VK=1 USE_RTX=1
+make install ARCH=x86 COMPILE_ARCH=x86 USE_SDL=0 DESTDIR="$PWD/.tmp/linux-x86/"
+python3 scripts/verify_release_layout.py .tmp/linux-x86/FnQL-pkg.fnz
+file .tmp/linux-x86/fnql .tmp/linux-x86/fnql.ded
+```
+
+The release packager accepts a `linux-x86` artifact directory, restores
+canonical executable modes after CI artifact transfer, writes a deterministic
+`.tar.gz`, and reopens it to verify the client, dedicated server, all three
+renderer modules, package sidecars, ELF i386 identity, and safe archive paths.
 
 ---
 
-### Arch Linux
+### bsd
 
-Use the generic Linux instructions above. This repository does not currently document an official Arch package name under the FnQL branding.
+Use the native Meson workflow above as a starting point, substituting the
+platform package manager and dependencies. BSD remains a source-build target;
+the project does not currently publish BSD release archives or claim the Linux
+retail-module boundary there.
+
+---
+
+### arch linux
+
+Use the native Linux Meson workflow above with Arch package names. FnQL does
+not currently publish distro-native Arch package metadata; install into a
+staging directory and keep the flat runtime root together.
 
 ---
 
@@ -197,12 +285,96 @@ After that, either copy the resulting binaries from the `build` directory or run
 
 ### macos
 
-* install the official SDL3 framework to `/Library/Frameworks`
-* run `brew install molten-vk`, or install the Vulkan SDK if you want to use the MoltenVK library
+FnQL supports native Intel (`x86_64`) and Apple Silicon (`arm64`) engine builds
+on macOS 11 or newer. Meson is the maintained build path. It builds SDL3 and
+the other portable dependencies from the pinned wrap definitions, so a release
+does not acquire Homebrew or MacPorts library paths:
 
-Then build with: `make`
+```sh
+python3 -m pip install meson==1.9.1 ninja
+arch="$(uname -m)"
+test "$arch" = arm64 && input_arch=arm64 || input_arch=x86_64
+export MACOSX_DEPLOYMENT_TARGET=11.0
+meson setup ".tmp/meson-macos-$input_arch" \
+  --buildtype=release \
+  --wrap-mode=forcefallback \
+  --prefix "$PWD/.tmp/macos-install-$input_arch" \
+  -Ddefault_library=static \
+  -Dsdl=enabled \
+  -Dcurl=enabled \
+  -Dcurl-dlopen=false \
+  -Drenderer-dlopen=true \
+  -Drenderers=glx,vk,rtx \
+  -Drenderer-default=glx
+meson compile -C ".tmp/meson-macos-$input_arch"
+meson test -C ".tmp/meson-macos-$input_arch" --print-errorlogs
+meson install -C ".tmp/meson-macos-$input_arch" --no-rebuild --skip-subprojects
+python3 scripts/macos_bundle.py \
+  --input "$input_arch=$PWD/.tmp/macos-install-$input_arch" \
+  --output .tmp/FnQL-macOS
+```
 
-Copy the resulting binaries from the `build` directory.
+The staged distribution contains `FnQL.app`, `fnql.ded`, and
+`fnql-audiozonesc`. The app owns its renderer dylibs, `FnQL-pkg.fnz`, and
+`fnql-web.pak` under `Contents/MacOS`. CI verifies the plist, canonical layout,
+executable modes, and every Mach-O dependency on both native runner families;
+the explicit manual-release lane additionally verifies distribution signatures.
+Install MoltenVK (for example from the Vulkan SDK) only when testing the
+optional `vk` renderer; the default `glx` renderer uses Apple's OpenGL path.
+Meson install trees are the only supported input to the distribution packager.
+The Make and CMake paths remain useful compile-time developer checks, but they
+do not stage the audio-zone tool and complete relocatable app contract.
+Local and normal CI builds receive no project-applied app-bundle or Developer
+ID signature by default. Apple Silicon still carries the ad-hoc Mach-O
+signature that `clang` applies because arm64 code must be signed. Pass
+`--sign-identity -` with `--entitlements misc/macos/fnql.entitlements` only
+when an explicit ad-hoc app signature is specifically useful.
+
+To build Universal 2, first produce one staged Meson install on each native
+architecture, then pass both inputs to the packager. Client, server, and tool
+executables are merged with `lipo`; both architecture-named renderer dylibs are
+retained because renderer lookup is slice-specific:
+
+```sh
+python3 scripts/macos_bundle.py \
+  --input x86_64=/path/to/x86_64/install \
+  --input arm64=/path/to/arm64/install \
+  --output .tmp/FnQL-macOS-universal2
+```
+
+Signing is opt-in. For a public distribution, import a Developer ID Application
+certificate, create an App Store Connect profile with
+`xcrun notarytool store-credentials fnql-notary`, and replace the ad-hoc
+arguments with:
+
+```sh
+--sign-identity "Developer ID Application: Your Name (TEAMID)" \
+--entitlements misc/macos/fnql.entitlements \
+--notary-profile fnql-notary
+```
+
+The tool signs nested code inside-out with the hardened runtime, submits with
+`notarytool --wait`, staples the app, and verifies it with `codesign`,
+`stapler`, and Gatekeeper. It does not put credentials on the command line.
+
+Important retail boundary: the legitimate Steam `baseq3/bin.pk3` contains
+Win32 client/UI/game DLLs and Linux game SOs, but no macOS dylibs or QVMs.
+Consequently the native Mac engine, renderer modules, tools, bundle, input,
+audio, filesystem, networking, and fallback paths have native compile, unit,
+package, signature, and dependency coverage, but native retail client or
+dedicated gameplay cannot load the retail game modules. Apple-hardware,
+windowed renderer smoke testing remains required before claiming runtime
+renderer promotion. FnQL reports the missing module before checking for a
+mod-provided QVM. The Windows x86 package remains the retail client-play path;
+FnQL does not reconstruct or distribute replacement game code.
+
+The macOS package intentionally contains neither a Steam provider nor Valve's
+`libsteam_api.dylib`; platform authentication therefore remains unavailable
+and is reported honestly. A future production provider must be separately
+licensed, architecture-matched, signed with a compatible Team ID, and bundled
+before hardened-runtime library validation will load it. The existing
+`~/Library/Application Support/Quake3` home path is retained as a compatibility
+path rather than silently moving established user data.
 
 ---
 

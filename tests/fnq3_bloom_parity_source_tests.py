@@ -50,6 +50,33 @@ class FnQ3BloomParitySourceTests(unittest.TestCase):
             f"vk_bloom drifted from FnQ3 {FNQ3_REFERENCE}",
         )
 
+    def test_rtx_bloom_is_fnq3_with_the_fnq3_vulkan_highlight_guard(self) -> None:
+        rtx = normalized_text("code/rendererrtx/vk.c")
+        start = rtx.index("qboolean vk_bloom(")
+        bloom = rtx[start:]
+        fnq3_rtx_binding = (
+            "\t\tqvkCmdBindPipeline( vk.cmd->command_buffer, "
+            "VK_PIPELINE_BIND_POINT_GRAPHICS, vk.bloom_blend_pipeline );"
+        )
+        fnq3_vulkan_parity_binding = (
+            "\t\tqvkCmdBindPipeline( vk.cmd->command_buffer,\n"
+            "\t\t\tVK_PIPELINE_BIND_POINT_GRAPHICS,\n"
+            "\t\t\tR_BloomProtectHighlightsActive() &&\n"
+            "\t\t\t\tvk.bloom_blend_cel_pipeline != VK_NULL_HANDLE ?\n"
+            "\t\t\t\t\tvk.bloom_blend_cel_pipeline : vk.bloom_blend_pipeline );"
+        )
+
+        self.assertEqual(1, bloom.count(fnq3_vulkan_parity_binding))
+        fnq3_rtx_bloom = bloom.replace(
+            fnq3_vulkan_parity_binding,
+            fnq3_rtx_binding,
+        )
+        self.assertEqual(
+            "6c197147fe11cedd616869236e77a3aec0b5683c0d3d1822d04ec74a71d3cc68",
+            digest(fnq3_rtx_bloom),
+            "RTX vk_bloom drifted beyond the highlight guard already used by FnQ3 Vulkan",
+        )
+
     def test_vulkan_family_bloom_shaders_match_fnq3(self) -> None:
         expected = {
             "bloom.frag":
@@ -64,6 +91,39 @@ class FnQ3BloomParitySourceTests(unittest.TestCase):
                 path = f"code/{renderer}/shaders/{filename}"
                 with self.subTest(path=path):
                     self.assertEqual(expected_hash, digest(normalized_text(path)))
+
+    def test_ql_bloom_pipeline_is_absent(self) -> None:
+        engine_root = ROOT / "code"
+        forbidden_fingerprints = (
+            "RBPP_",
+            "RC_BLOOM_POST_PROCESS",
+            "RetailBloomPostProcessCommand",
+            "bloomPostProcessCommand_t",
+            '"r_enableBloom"',
+            '"r_bloomActive"',
+            '"r_bloomPasses"',
+            '"r_bloomIntensity"',
+            '"r_bloomBrightThreshold"',
+            '"r_bloomBlurScale"',
+            '"r_bloomBlurRadius"',
+            '"r_bloomBlurFalloff"',
+            '"r_bloomSaturation"',
+            '"r_bloomSceneIntensity"',
+            '"r_bloomSceneSaturation"',
+        )
+        source_suffixes = {
+            ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp",
+            ".frag", ".vert", ".comp", ".geom", ".glsl",
+            ".rgen", ".rchit", ".rmiss",
+        }
+
+        for path in engine_root.rglob("*"):
+            if not path.is_file() or path.suffix not in source_suffixes:
+                continue
+            source = path.read_text(encoding="utf-8")
+            for fingerprint in forbidden_fingerprints:
+                with self.subTest(path=path.relative_to(ROOT), fingerprint=fingerprint):
+                    self.assertNotIn(fingerprint, source)
 
     def test_renderer_bloom_defaults_match_fnq3(self) -> None:
         glx = normalized_text("code/renderer/tr_init.c")

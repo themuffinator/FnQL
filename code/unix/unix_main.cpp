@@ -531,9 +531,10 @@ char *Sys_ConsoleInput( void )
 					}
 				}
 
-				if ( key == 12 ) // clear teaminal
+				if ( key == 12 ) // clear terminal
 				{
-					write( STDOUT_FILENO, "\ec]", 3 );
+					write( STDOUT_FILENO, "\033c", 2 );
+					write( STDOUT_FILENO, "]", 1 );
 					if ( tty_con.cursor )
 					{
 						write( STDOUT_FILENO, tty_con.buffer, tty_con.cursor );
@@ -707,7 +708,7 @@ void Sys_ANSIColorify( const char *msg, char *buffer, int bufferSize )
   char  tempBuffer[ 8 ];
   const char *ANSIcolor;
 
-  if ( !msg || !buffer )
+  if ( !msg || !buffer || bufferSize <= 0 )
     return;
 
   msgLength = strlen( msg );
@@ -719,20 +720,20 @@ void Sys_ANSIColorify( const char *msg, char *buffer, int bufferSize )
     if ( msg[ i ] == '\n' )
     {
       Com_sprintf( tempBuffer, sizeof( tempBuffer ), "%c[0m\n", 0x1B );
-      strncat( buffer, tempBuffer, bufferSize - 1 );
+      Q_strcat( buffer, bufferSize, tempBuffer );
       i += 1;
     }
     else if ( msg[ i ] == Q_COLOR_ESCAPE && ( ANSIcolor = getANSIcolor( msg[ i+1 ] ) ) != NULL )
     {
       Com_sprintf( tempBuffer, sizeof( tempBuffer ), "%c[%sm", 0x1B, ANSIcolor );
-      strncat( buffer, tempBuffer, bufferSize - 1 );
+      Q_strcat( buffer, bufferSize, tempBuffer );
       i += 2;
     }
     else
     {
       if ( printableChar( msg[ i ] ) ) {
         Com_sprintf( tempBuffer, sizeof( tempBuffer ), "%c", msg[ i ] );
-        strncat( buffer, tempBuffer, bufferSize - 1 );
+        Q_strcat( buffer, bufferSize, tempBuffer );
       }
       i += 1;
     }
@@ -815,19 +816,19 @@ void Sys_PrintBinVersion( const char* name )
 
 	fprintf( stdout, "\n\n%s\n", sep );
 #ifdef DEDICATED
-	fprintf( stdout, "Linux Quake3 Dedicated Server [%s %s]\n", date, time );
+	fprintf( stdout, "%s Dedicated Server (%s-%s) [%s %s]\n",
+		FNQL_PROJECT_NAME, OS_STRING, ARCH_STRING, date, time );
 #else
-	fprintf( stdout, "Linux Quake3 Full Executable  [%s %s]\n", date, time );
+	fprintf( stdout, "%s Client (%s-%s) [%s %s]\n",
+		FNQL_PROJECT_NAME, OS_STRING, ARCH_STRING, date, time );
 #endif
 	fprintf( stdout, " local install: %s\n", name );
 	fprintf( stdout, "%s\n\n", sep );
 }
 
 
-#ifdef __APPLE__
+#if defined( __APPLE__ ) || defined( __linux__ )
 static char binaryPath[ MAX_OSPATH ] = { 0 };
-static char installPath[ MAX_OSPATH ] = { 0 };
-
 
 /*
 =================
@@ -845,7 +846,11 @@ static void Sys_SetBinaryPath( const char *path )
 		Q_strncpyz( binaryPath, d, sizeof( binaryPath ) );
 	}
 }
+#endif
 
+
+#ifdef __APPLE__
+static char installPath[ MAX_OSPATH ] = { 0 };
 
 /*
 =================
@@ -893,8 +898,10 @@ static char *Sys_StripAppBundle( char *dir )
 
 	return cwd;
 }
+#endif
 
 
+#if defined( __APPLE__ ) || defined( __linux__ )
 /*
 =================
 Sys_DefaultAppPath
@@ -904,7 +911,7 @@ char *Sys_DefaultAppPath( void )
 {
 	return binaryPath;
 }
-#endif // __APPLE__
+#endif
 
 
 /*
@@ -927,9 +934,10 @@ const char *Sys_DefaultBasePath( void )
 =================
 Sys_BinName
 
-This resolves any symlinks to the binary. It's disabled for debug
-builds because there are situations where you are likely to want
-to symlink to binaries and /not/ have the links resolved.
+This resolves the installed binary path where the platform exposes an
+authoritative executable location.  Linux uses it in every configuration so
+app-local renderer and sidecar discovery does not depend on the launch working
+directory; filesystem base-path behavior remains independent.
 =================
 */
 #ifdef __APPLE__
@@ -939,29 +947,28 @@ const char *Sys_BinName( const char *arg0 )
 {
 	static char dst[ PATH_MAX ];
 
-#ifdef NDEBUG
+#if defined (__APPLE__)
+	uint32_t bufsize = sizeof( dst );
+	char resolved[ PATH_MAX ];
 
-#if defined (__linux__)
+	/* argv[0] may be relative, a symlink, or unrelated to the Finder-launched
+	 * executable.  dyld is authoritative in debug and release configurations. */
+	if ( _NSGetExecutablePath( dst, &bufsize ) == -1 )
+	{
+		Q_strncpyz( dst, arg0, PATH_MAX );
+	}
+	else if ( realpath( dst, resolved ) != NULL )
+	{
+		Q_strncpyz( dst, resolved, PATH_MAX );
+	}
+#elif defined (__linux__)
 	int n = readlink( "/proc/self/exe", dst, PATH_MAX - 1 );
 
 	if ( n >= 0 && n < PATH_MAX )
 		dst[ n ] = '\0';
 	else
 		Q_strncpyz( dst, arg0, PATH_MAX );
-#elif defined (__APPLE__)
-	uint32_t bufsize = sizeof( dst );
-
-	if ( _NSGetExecutablePath( dst, &bufsize ) == -1 )
-	{
-		Q_strncpyz( dst, arg0, PATH_MAX );
-	}
 #else
-
-#warning Sys_BinName not implemented
-	Q_strncpyz( dst, arg0, PATH_MAX );
-#endif
-
-#else // DEBUG
 	Q_strncpyz( dst, arg0, PATH_MAX );
 #endif
 	return dst;
@@ -982,6 +989,25 @@ static int Sys_ParseArgs( int argc, const char* argv[] )
 	return 0;
 }
 
+static bool Sys_CommandLineArgNeedsQuotes( const char *arg )
+{
+	if ( !arg || !arg[0] )
+	{
+		return true;
+	}
+
+	for ( const char *cursor = arg; *cursor; ++cursor )
+	{
+		if ( static_cast<unsigned char>( *cursor ) <= ' '
+			|| *cursor == ';' || ( *cursor == '+' && cursor != arg ) )
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+
 static std::string Sys_BuildCommandLine( int argc, const char* argv[] )
 {
 	std::string cmdline;
@@ -992,7 +1018,23 @@ static std::string Sys_BuildCommandLine( int argc, const char* argv[] )
 		{
 			cmdline.push_back( ' ' );
 		}
-		cmdline.append( argv[i] );
+
+		const char *arg = argv[i] ? argv[i] : "";
+		/* Quake's command tokenizer understands quoted values but not escaped
+		 * quotes.  Preserve normal POSIX argv entries containing whitespace or
+		 * command separators; retain the historical raw form for the uncommon
+		 * embedded-quote case rather than inventing a lossy escape convention. */
+		const bool quote = Sys_CommandLineArgNeedsQuotes( arg )
+			&& strchr( arg, '"' ) == nullptr;
+		if ( quote )
+		{
+			cmdline.push_back( '"' );
+		}
+		cmdline.append( arg );
+		if ( quote )
+		{
+			cmdline.push_back( '"' );
+		}
 	}
 
 	return cmdline;
@@ -1018,8 +1060,10 @@ int main( int argc, const char* argv[] )
 		return 0; // print version and exit
 	}
 
+#if defined( __APPLE__ ) || defined( __linux__ )
+	Sys_SetBinaryPath( Sys_BinName( argv[ 0 ] ) );
+#endif
 #ifdef __APPLE__
-	Sys_SetBinaryPath( argv[ 0 ] );
 	Sys_SetDefaultBasePath( Sys_StripAppBundle( binaryPath ) );
 #endif
 

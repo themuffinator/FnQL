@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import tarfile
 import zipfile
 from pathlib import Path
 from typing import Sequence
@@ -23,7 +24,10 @@ def verify_release_layout(root: Path) -> None:
         validate_root_archive(root)
         return
 
-    if root.is_file() and root.suffix.lower() == ".zip":
+    if root.is_file() and (
+        root.suffix.lower() == ".zip"
+        or root.name.casefold().endswith(".tar.gz")
+    ):
         validate_release_archive_contents(root)
         return
 
@@ -63,7 +67,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     root = args.root.expanduser().resolve()
     try:
         verify_release_layout(root)
-    except (OSError, zipfile.BadZipFile, ValueError) as exc:
+    except (OSError, tarfile.TarError, zipfile.BadZipFile, ValueError) as exc:
         print(f"verify_release_layout.py: {exc}", file=sys.stderr)
         return 1
 

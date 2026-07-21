@@ -162,7 +162,9 @@ def channel_metadata(
 
 
 def package_archive_name(meta: dict[str, object], artifact_dir_name: str) -> str:
-    return f"{meta['archive_prefix']}-{safe_artifact_name(artifact_dir_name)}.zip"
+    artifact_name = safe_artifact_name(artifact_dir_name)
+    suffix = ".tar.gz" if artifact_name.casefold().startswith("linux-") else ".zip"
+    return f"{meta['archive_prefix']}-{artifact_name}{suffix}"
 
 
 def to_json(data: dict[str, object]) -> str:

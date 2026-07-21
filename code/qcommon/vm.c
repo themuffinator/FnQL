@@ -2042,6 +2042,25 @@ static void *VM_LoadPinnedDll( vmIndex_t index, const char *filename ) {
 	return libHandle;
 }
 
+static void *VM_OpenNativeModule( vmIndex_t index, const char *filename,
+	qboolean pinnedOnly ) {
+	void *libHandle;
+
+	if ( pinnedOnly ) {
+		return VM_LoadPinnedDll( index, filename );
+	}
+
+	// Materialize the virtual-filesystem selection first so the bytes executed
+	// now are exactly the bytes a later pure restart can pin.
+	libHandle = VM_LoadDllFromPakCache( index, filename );
+	if ( !libHandle ) {
+		// Preserve development/system layouts whose library is visible to the OS
+		// loader but intentionally not readable as a virtual file.
+		libHandle = FS_LoadLibrary( filename );
+	}
+	return libHandle;
+}
+
 static qboolean VM_AssignDllFunction( void *destination, size_t destinationSize,
 	void *symbol, const char *symbolName ) {
 	if ( destinationSize != sizeof( symbol ) ) {
@@ -2069,19 +2088,24 @@ static void * QDECL VM_LoadDll( vmIndex_t index, const char *name,
 	void		*vmMainSymbol;
 
 	Com_sprintf( filename, sizeof( filename ), "%s" ARCH_STRING DLL_EXT, name );
+	libHandle = VM_OpenNativeModule( index, filename, pinnedOnly );
 
-	if ( pinnedOnly ) {
-		libHandle = VM_LoadPinnedDll( index, filename );
-	} else {
-		// Materialize the virtual-filesystem selection first so the bytes
-		// executed now are exactly the bytes a later pure restart can pin.
-		libHandle = VM_LoadDllFromPakCache( index, filename );
-		if ( !libHandle ) {
-			// Preserve development/system layouts whose library is visible to
-			// the OS loader but intentionally not readable as a virtual file.
-			libHandle = FS_LoadLibrary( filename );
+#if defined( __linux__ ) && idx64
+	/* Retail bin.pk3 names its 64-bit Linux dedicated module qagamex64.so,
+	 * while FnQL and its FnQ3 baseline use qagamex86_64.so.  Keep the modern
+	 * name authoritative for locally built modules and accept the retail name
+	 * only as the game-module fallback.  Retail ships no Linux cgame or UI
+	 * modules, so broad architecture aliases would advertise a client boundary
+	 * that does not exist. */
+	if ( !libHandle && index == VM_GAME && !Q_stricmp( name, "qagame" ) ) {
+		Com_sprintf( filename, sizeof( filename ), "%sx64%s", name, DLL_EXT );
+		libHandle = VM_OpenNativeModule( index, filename, pinnedOnly );
+		if ( libHandle ) {
+			Com_Printf( "VM_LoadDll: using retail Linux x64 module name '%s'\n",
+				filename );
 		}
 	}
+#endif
 
 	if ( !libHandle ) {
 		if ( pinnedOnly ) {
@@ -2212,6 +2236,12 @@ vm_t *VM_CreateNative( vmIndex_t index, syscall_t systemCalls, dllSyscall_t dllS
 			}
 		}
 
+#ifdef __APPLE__
+		Com_Printf( S_COLOR_YELLOW
+			"FnQL macOS: no compatible native '%s' module was found. "
+			"Retail Quake Live ships no macOS game modules; checking for a QVM fallback.\n",
+			name );
+#endif
 		Com_Printf( "Failed to load dll, looking for qvm.\n" );
 		interpret = VMI_COMPILED;
 	}

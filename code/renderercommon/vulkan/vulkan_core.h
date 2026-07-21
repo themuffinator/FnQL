@@ -9634,6 +9634,13 @@ VKAPI_ATTR void VKAPI_CALL vkCmdTraceRaysIndirect2KHR(
 #define VK_KHR_PORTABILITY_ENUMERATION_SPEC_VERSION 1
 #define VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME "VK_KHR_portability_enumeration"
 
+/* Device-side portability is advertised by MoltenVK.  This bundled header
+ * predates the extension, but FnQL only needs its canonical name in order to
+ * enable the extension when a physical device reports it. */
+#ifndef VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME
+#define VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME "VK_KHR_portability_subset"
+#endif
+
 
 #define VK_KHR_maintenance4 1
 #define VK_KHR_MAINTENANCE_4_SPEC_VERSION 2

@@ -52,7 +52,20 @@ class SteamProviderSourceTests(unittest.TestCase):
         self.assertIn('Cvar_Get("com_steamIntegration", "1", CVAR_ARCHIVE | CVAR_INIT)', source)
         self.assertIn("IsAbsolutePath", source)
         self.assertIn("IsBareFileName", source)
+        self.assertIn("BuildCandidatePaths", source)
+        self.assertIn("Sys_DefaultAppPath()", source)
         self.assertIn("Sys_DefaultBasePath()", source)
+        primary_load = source.index("state.library = OpenLibrary(state.providerPath)")
+        fallback_guard = source.index("if (!state.library && providerFallbackPath[0])")
+        fallback_load = source.index(
+            "state.library = OpenLibrary(state.providerPath)", fallback_guard
+        )
+        self.assertLess(primary_load, fallback_guard)
+        self.assertLess(fallback_guard, fallback_load)
+        self.assertIn(
+            "CopyText(state.providerPath, sizeof(state.providerPath), providerFallbackPath)",
+            source[fallback_guard:fallback_load],
+        )
         self.assertIn("LoadLibraryExW", source)
         self.assertIn("LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32", source)
         self.assertIn("RTLD_NOW | RTLD_LOCAL", source)

@@ -3080,6 +3080,7 @@ static qboolean vk_create_device( VkPhysicalDevice physical_device, int device_i
 		VkDeviceCreateInfo device_desc;
 		VkResult res;
 		qboolean swapchainSupported = qfalse;
+		qboolean portabilitySubset = qfalse;
 		qboolean dedicatedAllocation = qfalse;
 		qboolean memoryRequirements2 = qfalse;
 		qboolean debugMarker = qfalse;
@@ -3114,6 +3115,8 @@ static qboolean vk_create_device( VkPhysicalDevice physical_device, int device_i
 			ext = extension_properties[i].extensionName;
 			if ( strcmp( ext, VK_KHR_SWAPCHAIN_EXTENSION_NAME ) == 0 ) {
 				swapchainSupported = qtrue;
+			} else if ( strcmp( ext, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME ) == 0 ) {
+				portabilitySubset = qtrue;
 			} else if ( strcmp( ext, VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME ) == 0 ) {
 				dedicatedAllocation = qtrue;
 			} else if ( strcmp( ext, VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME ) == 0 ) {
@@ -3187,6 +3190,9 @@ static qboolean vk_create_device( VkPhysicalDevice physical_device, int device_i
 #endif
 
 		device_extension_list[ device_extension_count++ ] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+		if ( portabilitySubset ) {
+			device_extension_list[ device_extension_count++ ] = VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME;
+		}
 
 		if ( vk.dedicatedAllocation ) {
 			device_extension_list[ device_extension_count++ ] = VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME;

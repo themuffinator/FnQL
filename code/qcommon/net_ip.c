@@ -1438,7 +1438,7 @@ static void NET_GetLocalAddress( void )
 		for( search = ifap; search; search = search->ifa_next )
 		{
 			// Only add interfaces that are up.
-			if ( ifap->ifa_flags & IFF_UP )
+			if ( search->ifa_flags & IFF_UP )
 				NET_AddLocalAddress( search->ifa_name, search->ifa_addr, search->ifa_netmask );
 		}
 	

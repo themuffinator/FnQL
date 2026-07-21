@@ -1,9 +1,24 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 3.12)
 
+# This must be initialized before PROJECT() enables a compiler.  APPLE is a
+# target-system result and is not reliably available this early; the variable
+# is harmless on non-Apple targets, where CMake ignores it.
+IF(NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
+	SET(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum supported macOS version")
+ENDIF()
+
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/version/fnql_version.h" FNQL_VERSION_STRING_LINE REGEX "^#define FNQL_VERSION_STRING \"[^\"]+\"$")
 string(REGEX REPLACE "^#define FNQL_VERSION_STRING \"([^\"]+)\"$" "\\1" FNQL_VERSION_STRING "${FNQL_VERSION_STRING_LINE}")
 
 PROJECT(FnQL VERSION ${FNQL_VERSION_STRING} LANGUAGES C CXX)
+
+SET(FNQL_MACOS_SHORT_VERSION
+	"${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}")
+IF(PROJECT_VERSION_TWEAK GREATER 0)
+	SET(FNQL_MACOS_BUNDLE_VERSION "${PROJECT_VERSION_TWEAK}")
+ELSE()
+	SET(FNQL_MACOS_BUNDLE_VERSION "1")
+ENDIF()
 
 find_package(Threads REQUIRED)
 
@@ -34,6 +49,12 @@ endif()
 
 OPTION(USE_SDL "" ON)
 OPTION(USE_CURL "" ON)
+IF(WIN32)
+	OPTION(USE_CURL_DLOPEN "Resolve libcurl at runtime instead of linking it" OFF)
+ELSE()
+	OPTION(USE_CURL_DLOPEN "Resolve libcurl at runtime instead of linking it" ON)
+ENDIF()
+OPTION(USE_OGG_VORBIS "Enable Ogg/Vorbis audio through a system vorbisfile dependency" ON)
 OPTION(USE_VK "Build the Vulkan renderer module" ON)
 OPTION(USE_RTX "Build the ray-tracing renderer module" ON)
 OPTION(USE_GLX "Build the GLx OpenGL-lineage renderer module" ON)
@@ -41,6 +62,13 @@ OPTION(USE_SYSTEM_JPEG "Use a system libjpeg instead of the Meson-fetched libjpe
 OPTION(USE_RENDERER_DLOPEN "" ON)
 OPTION(FNQL_AUDIO_LOOPBACK_TESTS "Build deterministic audio runtime and OpenAL loopback tests" ON)
 OPTION(FNQL_GLX_LOGIC_TESTS "Build deterministic GLx renderer logic tests" ON)
+
+IF(APPLE)
+	ADD_COMPILE_DEFINITIONS(MACOS_X)
+	IF(NOT USE_SDL)
+		MESSAGE(FATAL_ERROR "macOS client builds require SDL3; configure with -DUSE_SDL=ON")
+	ENDIF()
+ENDIF()
 
 IF(RENDERER_DEFAULT STREQUAL "glx")
 	SET(USE_GLX ON CACHE BOOL "Build the GLx OpenGL-lineage renderer module" FORCE)
@@ -82,8 +110,12 @@ list(APPEND QCOMMON_SRCS
 # exclude platform-dependent QVM bytecode compilers
 list(FILTER QCOMMON_SRCS EXCLUDE REGEX ".*vm_(aarch64|armv7l|powerpc|x86)\\.c$")
 # add platform-dependent QVM bytecode compilers
-IF(CMAKE_SYSTEM_PROCESSOR MATCHES AMD64|x86|i*86)
-	IF(CMAKE_SYSTEM_PROCESSOR MATCHES AMD64)
+STRING(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" FNQL_SYSTEM_PROCESSOR)
+IF(FNQL_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|x64|x86|i[3-6]86)$")
+	# CMAKE_SYSTEM_PROCESSOR commonly reports x86_64 on Linux and may describe
+	# the host rather than a 32-bit target. The pointer size is authoritative for
+	# binary/module naming once CMake has selected the target toolchain.
+	IF(CMAKE_SIZEOF_VOID_P EQUAL 8)
 		IF(WIN32)
 			SET(BINEXT .x64)
 		ELSE()
@@ -95,16 +127,16 @@ IF(CMAKE_SYSTEM_PROCESSOR MATCHES AMD64|x86|i*86)
 		SET(RENDEXT _x86)
 	ENDIF()
 	list(APPEND QCOMMON_SRCS code/qcommon/vm_x86.c)
-ELSEIF(CMAKE_SYSTEM_PROCESSOR MATCHES aarch64|arm64)
+ELSEIF(FNQL_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
 	SET(BINEXT .aarch64)
 	SET(RENDEXT _aarch64)
 	list(APPEND QCOMMON_SRCS code/qcommon/vm_aarch64.c)
-ELSEIF(CMAKE_SYSTEM_PROCESSOR MATCHES arm*)
+ELSEIF(FNQL_SYSTEM_PROCESSOR MATCHES "^arm")
 	SET(BINEXT .arm)
 	SET(RENDEXT _arm)
 	list(APPEND QCOMMON_SRCS code/qcommon/vm_armv7l.c)
-ELSEIF(CMAKE_SYSTEM_PROCESSOR MATCHES "ppc64le|ppc64")
-	IF(CMAKE_SYSTEM_PROCESSOR MATCHES "ppc64le")
+ELSEIF(FNQL_SYSTEM_PROCESSOR MATCHES "^(ppc64le|ppc64)$")
+	IF(FNQL_SYSTEM_PROCESSOR STREQUAL "ppc64le")
 		SET(BINEXT .ppc64le)
 		SET(RENDEXT _ppc64le)
 		list(APPEND QCOMMON_SRCS code/qcommon/vm_powerpc.c)
@@ -121,6 +153,17 @@ SET(PLATFORM_ASM_SRCS)
 IF(MSVC AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
 	enable_language(ASM_MASM)
 	list(APPEND PLATFORM_ASM_SRCS code/asm/common_x64.asm)
+ENDIF()
+
+SET(CLIENT_ASM_SRCS)
+IF(NOT MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND
+		FNQL_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|x64)$")
+	enable_language(ASM)
+	list(APPEND CLIENT_ASM_SRCS code/asm/snd_mix_x86_64_preprocessed.S)
+	IF(NOT APPLE)
+		set_source_files_properties(code/asm/snd_mix_x86_64_preprocessed.S
+			PROPERTIES COMPILE_DEFINITIONS ELF)
+	ENDIF()
 ENDIF()
 
 # botlib
@@ -172,15 +215,61 @@ list(APPEND CLIENT_SRCS
 	code/client/audio/codecs/snd_codec.cpp
 	code/client/audio/codecs/snd_codec_ogg.cpp
 	code/client/audio/codecs/snd_codec_wav.cpp
-	code/client/audio/openal/AudioSystem.cpp)
+	code/client/audio/openal/AudioSystem.cpp
+	${CLIENT_ASM_SRCS})
 IF(NOT USE_CURL)
 	list(REMOVE_ITEM CLIENT_SRCS code/client/cl_curl.cpp)
 ENDIF()
 
 #ADD_LIBRARY(client OBJECT ${CLIENT_SRCS})
 
-# jpeg
 set(FNQL_CLIENT_LINK_LIBS)
+set(FNQL_CLIENT_COMPILE_DEFINITIONS)
+set(FNQL_CLIENT_INCLUDE_DIRS)
+
+# cURL.  Runtime loading is the Unix default, but headers are still required
+# to compile the ABI declarations.  Missing optional system packages keep the
+# historical build fallback (feature disabled) instead of breaking unrelated
+# CMake configurations.
+IF(USE_CURL)
+	find_package(CURL QUIET)
+	IF(CURL_FOUND)
+		list(APPEND FNQL_CLIENT_COMPILE_DEFINITIONS USE_CURL)
+		list(APPEND FNQL_CLIENT_INCLUDE_DIRS ${CURL_INCLUDE_DIRS})
+		IF(USE_CURL_DLOPEN)
+			list(APPEND FNQL_CLIENT_COMPILE_DEFINITIONS USE_CURL_DLOPEN)
+		ELSEIF(TARGET CURL::libcurl)
+			list(APPEND FNQL_CLIENT_LINK_LIBS CURL::libcurl)
+		ELSE()
+			list(APPEND FNQL_CLIENT_LINK_LIBS ${CURL_LIBRARIES})
+		ENDIF()
+	ELSE()
+		message(WARNING "USE_CURL=ON but a system libcurl development package was not found; CMake client downloads are disabled")
+		list(REMOVE_ITEM CLIENT_SRCS code/client/cl_curl.cpp)
+	ENDIF()
+ENDIF()
+
+# Ogg/Vorbis.  Legacy Make builds may use system packages and Meson owns the
+# pinned fallback graph; CMake likewise consumes the system dependency without
+# introducing another bundled-source ownership path.
+IF(USE_OGG_VORBIS)
+	find_package(PkgConfig QUIET)
+	IF(PkgConfig_FOUND)
+		pkg_check_modules(VORBISFILE QUIET IMPORTED_TARGET vorbisfile)
+	ENDIF()
+	IF(TARGET PkgConfig::VORBISFILE)
+		list(APPEND FNQL_CLIENT_COMPILE_DEFINITIONS USE_OGG_VORBIS)
+		list(APPEND FNQL_CLIENT_INCLUDE_DIRS ${VORBISFILE_INCLUDE_DIRS})
+		list(APPEND FNQL_CLIENT_LINK_LIBS PkgConfig::VORBISFILE)
+	ELSE()
+		message(WARNING "USE_OGG_VORBIS=ON but a system vorbisfile development package was not found; CMake Ogg audio is disabled")
+		list(REMOVE_ITEM CLIENT_SRCS code/client/audio/codecs/snd_codec_ogg.cpp)
+	ENDIF()
+ELSE()
+	list(REMOVE_ITEM CLIENT_SRCS code/client/audio/codecs/snd_codec_ogg.cpp)
+ENDIF()
+
+# jpeg
 IF(USE_SYSTEM_JPEG)
 	ADD_LIBRARY(client OBJECT ${CLIENT_SRCS})
 	find_package(JPEG REQUIRED)
@@ -202,6 +291,13 @@ ELSE()
 
 	include(ExternalProject)
 	set(FNQL_LIBJPEG_TURBO_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/libjpeg-turbo")
+	set(FNQL_LIBJPEG_TURBO_PLATFORM_ARGS)
+	if(APPLE)
+		list(APPEND FNQL_LIBJPEG_TURBO_PLATFORM_ARGS
+			"-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}"
+			"-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+			"-DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}")
+	endif()
 	if(MSVC OR CMAKE_C_SIMULATE_ID STREQUAL "MSVC")
 		set(FNQL_LIBJPEG_TURBO_LIBRARY "${FNQL_LIBJPEG_TURBO_BINARY_DIR}/jpeg-static.lib")
 	else()
@@ -213,6 +309,7 @@ ELSE()
 		CMAKE_ARGS
 			"-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
 			"-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}"
+			${FNQL_LIBJPEG_TURBO_PLATFORM_ARGS}
 			"-DENABLE_SHARED=OFF"
 			"-DENABLE_STATIC=ON"
 			"-DWITH_CRT_DLL=ON"
@@ -237,6 +334,12 @@ ELSE()
 ENDIF()
 
 target_compile_features(client PRIVATE cxx_std_17)
+IF(FNQL_CLIENT_COMPILE_DEFINITIONS)
+	target_compile_definitions(client PRIVATE ${FNQL_CLIENT_COMPILE_DEFINITIONS})
+ENDIF()
+IF(FNQL_CLIENT_INCLUDE_DIRS)
+	target_include_directories(client PRIVATE ${FNQL_CLIENT_INCLUDE_DIRS})
+ENDIF()
 
 set(FNQL_OPENAL_INCLUDE_DIRS)
 set(FNQL_OPENAL_INCLUDE_CANDIDATES
@@ -502,6 +605,18 @@ IF(USE_RENDERER_DLOPEN)
 		TARGET_COMPILE_DEFINITIONS(${RENDERER_PREFIX}_rtx${RENDEXT} PRIVATE USE_RENDERER_DLOPEN RENDERER_RTX)
 		SET_TARGET_PROPERTIES(${RENDERER_PREFIX}_rtx${RENDEXT} PROPERTIES PREFIX "")
 	ENDIF()
+
+	# q_shared.h pins legacy glibc math symbols for binary compatibility.  Each
+	# independently loaded Unix renderer therefore needs its own libm linkage;
+	# linking libm only into the client does not resolve a module's symbols.
+	IF(UNIX)
+		FOREACH(FNQL_RENDERER_KIND glx vk rtx)
+			SET(FNQL_RENDERER_TARGET ${RENDERER_PREFIX}_${FNQL_RENDERER_KIND}${RENDEXT})
+			IF(TARGET ${FNQL_RENDERER_TARGET})
+				TARGET_LINK_LIBRARIES(${FNQL_RENDERER_TARGET} PRIVATE m)
+			ENDIF()
+		ENDFOREACH()
+	ENDIF()
 ELSE()
 	IF(RENDERER_DEFAULT STREQUAL "glx")
 		ADD_LIBRARY(${RENDERER_PREFIX}_glx OBJECT ${RENDERER_GL_SRCS} ${RENDERER_GLX_SRCS} ${RENDERER_COMMON_SRCS})
@@ -555,14 +670,15 @@ IF(UNIX)
 	ENDIF()
 
 	IF(APPLE)
-		SET(EXE_TYPE MACOSX_BUNDLE)
+		SET(CLIENT_EXE_TYPE MACOSX_BUNDLE)
 		list(APPEND Q3_SRCS code/unix/fnql.icns)
 		set_source_files_properties(code/unix/fnql.icns PROPERTIES
 			MACOSX_PACKAGE_LOCATION Resources)
 		SET(MACOSX_BUNDLE_ICON_FILE fnql.icns)
 	ENDIF()
 ELSEIF(WIN32)
-	SET(EXE_TYPE WIN32)
+	SET(CLIENT_EXE_TYPE WIN32)
+	SET(SERVER_EXE_TYPE WIN32)
 	# Prevent Windows headers from exporting legacy min/max macros into shared
 	# client headers that use the C++ standard-library overloads.
 	ADD_COMPILE_DEFINITIONS(NOMINMAX)
@@ -625,9 +741,17 @@ ENDIF()
 
 # client executable
 
-ADD_EXECUTABLE(${CNAME}${BINEXT} ${EXE_TYPE} ${Q3_SRCS})
+ADD_EXECUTABLE(${CNAME}${BINEXT} ${CLIENT_EXE_TYPE} ${Q3_SRCS})
 TARGET_LINK_LIBRARIES(${CNAME}${BINEXT} qcommon botlib client q3ui Threads::Threads ${FNQL_CLIENT_LINK_LIBS})
 set_property(TARGET ${CNAME}${BINEXT} PROPERTY LINKER_LANGUAGE CXX)
+IF(APPLE)
+	SET_TARGET_PROPERTIES(${CNAME}${BINEXT} PROPERTIES
+		MACOSX_BUNDLE_BUNDLE_NAME "FnQL"
+		MACOSX_BUNDLE_GUI_IDENTIFIER "org.fnql.fnql"
+		MACOSX_BUNDLE_SHORT_VERSION_STRING "${FNQL_MACOS_SHORT_VERSION}"
+		MACOSX_BUNDLE_BUNDLE_VERSION "${FNQL_MACOS_BUNDLE_VERSION}"
+		MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/misc/macos/Info.plist.in")
+ENDIF()
 IF(TARGET fnql_webpak)
 	add_dependencies(${CNAME}${BINEXT} fnql_webpak)
 	add_custom_command(
@@ -650,7 +774,7 @@ ENDIF()
 
 # dedicated server executable
 
-ADD_EXECUTABLE(${DNAME}${BINEXT} ${EXE_TYPE} ${Q3_SRCS})
+ADD_EXECUTABLE(${DNAME}${BINEXT} ${SERVER_EXE_TYPE} ${Q3_SRCS})
 TARGET_LINK_LIBRARIES(${DNAME}${BINEXT} qcommon_ded botlib Threads::Threads)
 set_property(TARGET ${DNAME}${BINEXT} PROPERTY LINKER_LANGUAGE CXX)
 #TARGET_LINK_OPTIONS(${DNAME} PRIVATE -fno-pie) # v3.13+

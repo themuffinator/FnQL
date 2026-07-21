@@ -1,3 +1,10 @@
+ARCHIVAL UPSTREAM DOCUMENT — NOT FNQL INSTALLATION INSTRUCTIONS
+
+This file describes the 1999 Q3Test Linux release and is retained only for
+upstream provenance. Do not install FnQL, Quake Live, or dependencies from the
+commands and links below. Current FnQL Linux support, extraction, build, and
+dedicated-server instructions are in ../README.md and ../BUILD.md.
+
 +----------------------------------------+
 | Q3Test                                 |
 | The Official Quake 3: Arena TEST       |

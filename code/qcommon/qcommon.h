@@ -1429,7 +1429,7 @@ const char *Sys_SteamPath( void );
 const char *Sys_QuakeLiveProfilePath( const char *installPath );
 #endif
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__linux__)
 char    *Sys_DefaultAppPath( void );
 #endif
 

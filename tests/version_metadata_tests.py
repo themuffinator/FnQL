@@ -56,6 +56,10 @@ class VersionMetadataTests(unittest.TestCase):
             fnql_meta.package_archive_name(meta, "windows-x86_64"),
             "fnql-0.1.0.1-20260620-abcdef12-windows-x86_64.zip",
         )
+        self.assertEqual(
+            fnql_meta.package_archive_name(meta, "linux-x86"),
+            "fnql-0.1.0.1-20260620-abcdef12-linux-x86.tar.gz",
+        )
         for name in ("../windows", "linux/x64", "bad\nname"):
             with self.subTest(name=name):
                 with self.assertRaisesRegex(ValueError, "safe path component"):

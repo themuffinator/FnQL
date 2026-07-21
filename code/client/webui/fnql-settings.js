@@ -325,10 +325,9 @@
       return;
     }
 
-    // Retail's second Video column consists solely of the legacy
-    // r_enablePostProcess/r_enableBloom pipeline. FnQL renderers expose their
-    // own supported controls in the adjacent FnQL tab, so do not present
-    // controls that no longer own engine behavior.
+    // Retail's second Video column consists solely of its legacy post-process
+    // pipeline. FnQL does not implement or register the retail bloom path; its
+    // supported FnQ3 controls live in the adjacent FnQL tab.
     columns[1].className += columns[1].className.indexOf('fnql-retail-unsupported') === -1 ? ' fnql-retail-unsupported' : '';
     columns[0].className += columns[0].className.indexOf('fnql-retail-supported') === -1 ? ' fnql-retail-supported' : '';
 

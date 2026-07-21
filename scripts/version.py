@@ -85,7 +85,8 @@ def main() -> int:
     print(f"{meta['project_name']} {meta['version_label']} [{meta['channel']}]")
     print(f"tag: {meta['release_tag']}")
     print(f"title: {meta['release_title']}")
-    print(f"archives: {meta['archive_prefix']}-<artifact>.zip")
+    print(f"archives: {meta['archive_prefix']}-<artifact>.zip (non-Linux)")
+    print(f"          {meta['archive_prefix']}-linux-<arch>.tar.gz (Linux)")
     return 0
 
 

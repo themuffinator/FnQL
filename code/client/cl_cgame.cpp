@@ -2256,25 +2256,24 @@ static void QDECL QL_CG_trap_PublishTaggedInfoString( const char *messageType, c
 	CL_WebView_PublishTaggedInfoString( messageType, infoString );
 }
 
-static void QDECL QL_CG_trap_R_MirrorPoint( vec3_t in, orientation_t *surface, orientation_t *camera, vec3_t out ) {
-	vec3_t local;
-	vec3_t transformed;
-
-	VectorSubtract( in, surface->origin, local );
-	VectorClear( transformed );
-	for ( int i = 0; i < 3; ++i ) {
-		const float d = DotProduct( local, surface->axis[i] );
-		VectorMA( transformed, d, camera->axis[i], transformed );
+static void QDECL QL_CG_trap_R_TransformModelToClip( const vec3_t point, vec4_t eye, vec4_t clip ) {
+	if ( re.TransformModelToClip ) {
+		re.TransformModelToClip( point, eye, clip );
+		return;
 	}
-	VectorAdd( transformed, camera->origin, out );
+
+	Vector4Set( eye, 0.0f, 0.0f, 0.0f, 1.0f );
+	Vector4Set( clip, 0.0f, 0.0f, 0.0f, 1.0f );
 }
 
-static void QDECL QL_CG_trap_R_MirrorVector( vec3_t in, orientation_t *surface, orientation_t *camera, vec3_t out ) {
-	VectorClear( out );
-	for ( int i = 0; i < 3; ++i ) {
-		const float d = DotProduct( in, surface->axis[i] );
-		VectorMA( out, d, camera->axis[i], out );
+static void QDECL QL_CG_trap_R_TransformClipToWindow( const vec4_t clip, vec4_t normalized, vec4_t window ) {
+	if ( re.TransformClipToWindow ) {
+		re.TransformClipToWindow( clip, normalized, window );
+		return;
 	}
+
+	Vector4Set( normalized, 0.0f, 0.0f, 0.0f, 1.0f );
+	Vector4Set( window, 0.0f, 0.0f, 0.5f, 0.5f );
 }
 
 static void QDECL QL_CG_trap_DrawScaledText( int x, int y, const char *text, int fontHandle,
@@ -2523,8 +2522,8 @@ static bool CL_InitCGameImports( void ) {
 	ql_cgame_imports[CG_QL_IMPORT_ADVERTISEMENTBRIDGE_CLEAR_DELAY] = (ql_import_f)QL_CG_trap_AdvertisementBridge_ClearDelay;
 	ql_cgame_imports[CG_QL_IMPORT_PUBLISH_TAGGED_INFO_STRING] = (ql_import_f)QL_CG_trap_PublishTaggedInfoString;
 	ql_cgame_imports[CG_QL_IMPORT_RETAIL_RESERVED_117] = (ql_import_f)QL_CG_trap_RetailReservedImport;
-	ql_cgame_imports[CG_QL_IMPORT_R_MIRROR_POINT] = (ql_import_f)QL_CG_trap_R_MirrorPoint;
-	ql_cgame_imports[CG_QL_IMPORT_R_MIRROR_VECTOR] = (ql_import_f)QL_CG_trap_R_MirrorVector;
+	ql_cgame_imports[CG_QL_IMPORT_R_TRANSFORM_MODEL_TO_CLIP] = (ql_import_f)QL_CG_trap_R_TransformModelToClip;
+	ql_cgame_imports[CG_QL_IMPORT_R_TRANSFORM_CLIP_TO_WINDOW] = (ql_import_f)QL_CG_trap_R_TransformClipToWindow;
 	ql_cgame_imports[CG_QL_IMPORT_IS_SUBSCRIBED_APP] = (ql_import_f)QL_CG_trap_IsSubscribedApp;
 	ql_cgame_imports[CG_QL_IMPORT_DRAW_SCALED_TEXT] = (ql_import_f)QL_CG_trap_DrawScaledText;
 	ql_cgame_imports[CG_QL_IMPORT_MEASURE_TEXT] = (ql_import_f)QL_CG_trap_MeasureText;

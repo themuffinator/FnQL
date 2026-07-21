@@ -4,3 +4,7 @@
 # Root-package map sidecars must be byte-stable across release hosts.
 pkg/baseq3/maps/*.azb binary
 pkg/baseq3/maps/*.fog text eol=lf
+
+# Apple signing/notarization property lists require canonical LF text.
+misc/macos/*.plist.in text eol=lf
+misc/macos/*.entitlements text eol=lf

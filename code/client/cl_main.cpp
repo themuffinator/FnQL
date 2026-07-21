@@ -4477,13 +4477,37 @@ static bool CL_RendererLoadFailureIsFatal( const char *rendererName )
 CL_InitRef
 ============
 */
+#ifdef USE_RENDERER_DLOPEN
+static void *CL_LoadRendererLibrary( const char *dllName ) {
+	char *ospath;
+
+#if defined( __APPLE__ ) || defined( __linux__ )
+	void *library;
+	/* Packaged Unix clients keep renderer modules beside the executable.  The
+	 * base path may instead be the retail Steam install or the launch working
+	 * directory, so prefer the resolved application directory on platforms that
+	 * expose it and retain the established base-path fallback below. */
+	const char *appPath = Sys_DefaultAppPath();
+	if ( appPath && appPath[0] ) {
+		ospath = FS_BuildOSPath( appPath, dllName, nullptr );
+		library = Sys_LoadLibrary( ospath );
+		if ( library ) {
+			return library;
+		}
+	}
+#endif
+
+	ospath = FS_BuildOSPath( Sys_DefaultBasePath(), dllName, nullptr );
+	return Sys_LoadLibrary( ospath );
+}
+#endif
+
 static void CL_InitRef( void ) {
 	refimport_t	rimp{};
 	refexport_t	*ret;
 #ifdef USE_RENDERER_DLOPEN
 	GetRefAPI_t		GetRefAPI;
 	std::array<char, MAX_OSPATH> dllName;
-	char			*ospath;
 	const char		*requestedRenderer;
 #endif
 
@@ -4501,8 +4525,7 @@ static void CL_InitRef( void ) {
 
 	requestedRenderer = cl_renderer->string;
 	Com_sprintf( dllName.data(), static_cast<int>( dllName.size() ), RENDERER_PREFIX "_%s_" REND_ARCH_STRING DLL_EXT, requestedRenderer );
-	ospath = FS_BuildOSPath( Sys_DefaultBasePath(), dllName.data(), nullptr );
-	rendererLib = Sys_LoadLibrary( ospath );
+	rendererLib = CL_LoadRendererLibrary( dllName.data() );
 	if ( !rendererLib )
 	{
 		if ( CL_RendererLoadFailureIsFatal( requestedRenderer ) ) {
@@ -4512,8 +4535,7 @@ static void CL_InitRef( void ) {
 		Com_Printf( S_COLOR_YELLOW "WARNING: failed to load renderer %s; trying default renderer\n", dllName.data() );
 		Cvar_ForceReset( "cl_renderer" );
 		Com_sprintf( dllName.data(), static_cast<int>( dllName.size() ), RENDERER_PREFIX "_%s_" REND_ARCH_STRING DLL_EXT, cl_renderer->string );
-		ospath = FS_BuildOSPath( Sys_DefaultBasePath(), dllName.data(), nullptr );
-		rendererLib = Sys_LoadLibrary( ospath );
+		rendererLib = CL_LoadRendererLibrary( dllName.data() );
 		if ( !rendererLib )
 		{
 			Com_Error( ERR_FATAL, "Failed to load renderer %s", dllName.data() );
