@@ -123,6 +123,15 @@ class MacOSSupportSourceTests(unittest.TestCase):
         self.assertIn("macos-release-sign, ubuntu-x86]", workflow)
         self.assertIn("name: macos-x86_64", workflow)
         self.assertIn("name: macos-aarch64", workflow)
+        macos_job = workflow.split("  macos:", 1)[1].split(
+            "\n  macos-release-sign:", 1
+        )[0]
+        stamp_step = macos_job.index("name: Stamp release build version")
+        configure_step = macos_job.index("name: Configure, build, and test")
+        self.assertIn(
+            "python3 scripts/generate_docs.py",
+            macos_job[stamp_step:configure_step],
+        )
         signing_job = workflow.split("  macos-release-sign:", 1)[1].split(
             "\n  ubuntu-x86:", 1
         )[0]

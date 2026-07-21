@@ -220,7 +220,9 @@ jobs:
           printf '%s\n' "$build_tools/bin" >> "$GITHUB_PATH"
 
       - name: Stamp release build version
-        run: python3 scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
+        run: |
+          python3 scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
+          python3 scripts/generate_docs.py
 
       - name: Configure, build, and test
         run: |
