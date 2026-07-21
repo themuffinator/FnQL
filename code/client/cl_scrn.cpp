@@ -213,32 +213,83 @@ static void SCR_DrawNonGameBackdrop( void ) {
 }
 
 
+static qboolean SCR_ResolveAspectCoverCrop( float sourceWidth, float sourceHeight,
+	float screenWidth, float screenHeight,
+	float *s0, float *t0, float *s1, float *t1 ) {
+	float sourceAspect;
+	float screenAspect;
+
+	if ( sourceWidth <= 0.0f || sourceHeight <= 0.0f
+		|| screenWidth <= 0.0f || screenHeight <= 0.0f
+		|| !s0 || !t0 || !s1 || !t1 ) {
+		return qfalse;
+	}
+
+	*s0 = 0.0f;
+	*t0 = 0.0f;
+	*s1 = 1.0f;
+	*t1 = 1.0f;
+	sourceAspect = sourceWidth / sourceHeight;
+	screenAspect = screenWidth / screenHeight;
+
+	if ( screenAspect > sourceAspect ) {
+		const float visibleHeight = sourceAspect / screenAspect;
+		*t0 = ( 1.0f - visibleHeight ) * 0.5f;
+		*t1 = 1.0f - *t0;
+	} else if ( screenAspect < sourceAspect ) {
+		const float visibleWidth = screenAspect / sourceAspect;
+		*s0 = ( 1.0f - visibleWidth ) * 0.5f;
+		*s1 = 1.0f - *s0;
+	}
+
+	return qtrue;
+}
+
+
+qboolean SCR_AdjustRetailConnectBackdropUV( qhandle_t shader,
+	float *s0, float *t0, float *s1, float *t1 ) {
+	if ( !scr_connectBackground || shader != scr_connectBackground
+		|| ( cls.state != CA_CONNECTING && cls.state != CA_CHALLENGING
+			&& cls.state != CA_CONNECTED ) ) {
+		return qfalse;
+	}
+
+	return SCR_ResolveAspectCoverCrop( 1920.0f, 1080.0f,
+		static_cast<float>( cls.glconfig.vidWidth ),
+		static_cast<float>( cls.glconfig.vidHeight ), s0, t0, s1, t1 );
+}
+
+
 /*
 =======================
 SCR_DrawRetailConnectBackdrop
 
 Retail ui/connect.menu uses ui/assets/backscreen_smoke with a 1920x1080
-backgroundSize crop. Draw the same asset underneath the native connect export
-so the screen remains correct if the retail UI's menu stack is unavailable
-during a browser-to-game transition.
+backgroundSize crop. Preserve that authored aspect in both directions: crop
+the sides on narrower displays and crop the top and bottom beyond 16:9. This
+also keeps every texture coordinate in range instead of stretching a clamped
+edge column across ultrawide displays. Draw the same asset underneath the
+native connect export so the screen remains correct if the retail UI's menu
+stack is unavailable during a browser-to-game transition.
 =======================
 */
 static void SCR_DrawRetailConnectBackdrop( void ) {
-	constexpr float sourceWidth = 1920.0f;
-	constexpr float sourceHeight = 1080.0f;
 	const float screenWidth = static_cast<float>( cls.glconfig.vidWidth );
 	const float screenHeight = static_cast<float>( cls.glconfig.vidHeight );
 	float s0;
+	float t0;
+	float s1;
+	float t1;
 
-	if ( !scr_connectBackground || screenWidth <= 0.0f || screenHeight <= 0.0f ) {
+	if ( !scr_connectBackground
+		|| !SCR_ResolveAspectCoverCrop( 1920.0f, 1080.0f,
+			screenWidth, screenHeight, &s0, &t0, &s1, &t1 ) ) {
 		return;
 	}
 
-	s0 = ( sourceWidth - screenWidth * ( sourceHeight / screenHeight ) )
-		/ sourceWidth * 0.5f;
 	ScopedRenderColor scopedColor( nullptr );
 	re.DrawStretchPic( 0.0f, 0.0f, screenWidth, screenHeight,
-		s0, 0.0f, 1.0f - s0, 1.0f, scr_connectBackground );
+		s0, t0, s1, t1, scr_connectBackground );
 }
 
 /*

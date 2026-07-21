@@ -99,6 +99,7 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
     def test_connection_and_level_load_screens_redraw_after_browser_release(self) -> None:
         screen = read_source("code/client/cl_scrn.cpp")
         main = read_source("code/client/cl_main.cpp")
+        ui = read_source("code/client/cl_ui.cpp")
 
         self.assertIn("uiMenuVisible = CL_UIMenusAreVisible();", screen)
         self.assertIn("cls.state == CA_LOADING || cls.state == CA_PRIMED || cls.state == CA_ACTIVE", screen)
@@ -116,6 +117,18 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
         self.assertIn("CL_WebHost_DrawBrowserSurface();", browser_draw)
         self.assertIn("UI_DRAW_CONNECT_SCREEN, qfalse", screen)
         self.assertIn("UI_DRAW_CONNECT_SCREEN, qtrue", screen)
+
+        # Retail connect.menu declares its backdrop as a 1920x1080 authored
+        # surface. The cover crop must switch axes beyond 16:9 instead of
+        # passing negative S coordinates to a clamped texture.
+        self.assertIn("static qboolean SCR_ResolveAspectCoverCrop", screen)
+        self.assertIn("if ( screenAspect > sourceAspect )", screen)
+        self.assertIn("*t0 = ( 1.0f - visibleHeight ) * 0.5f;", screen)
+        self.assertIn("else if ( screenAspect < sourceAspect )", screen)
+        self.assertIn("*s0 = ( 1.0f - visibleWidth ) * 0.5f;", screen)
+        self.assertNotIn("sourceWidth - screenWidth * ( sourceHeight / screenHeight )", screen)
+        self.assertIn("SCR_AdjustRetailConnectBackdropUV( args[9]", ui)
+        self.assertIn("re.DrawStretchPic( x, y, w, h, s0, t0, s1, t1, args[9] );", ui)
 
         self.assertIn("!uiMenuVisible", screen)
         self.assertIn("!browserOverlayRequested", screen)

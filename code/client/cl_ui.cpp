@@ -950,9 +950,17 @@ static intptr_t CL_UISystemCalls( intptr_t *args ) {
 		float y = VMF(2);
 		float w = VMF(3);
 		float h = VMF(4);
+		float s0 = VMF(5);
+		float t0 = VMF(6);
+		float s1 = VMF(7);
+		float t1 = VMF(8);
 
 		CL_UIAdjustStretchPic( &x, &y, &w, &h );
-		re.DrawStretchPic( x, y, w, h, VMF(5), VMF(6), VMF(7), VMF(8), args[9] );
+		// Retail connect.menu identifies a 1920x1080 authored background. Its
+		// horizontal crop becomes an out-of-range edge smear past 16:9, so the
+		// host completes the same aspect-preserving cover operation vertically.
+		SCR_AdjustRetailConnectBackdropUV( args[9], &s0, &t0, &s1, &t1 );
+		re.DrawStretchPic( x, y, w, h, s0, t0, s1, t1, args[9] );
 		return 0;
 	}
 

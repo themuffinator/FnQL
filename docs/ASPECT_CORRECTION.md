@@ -19,6 +19,15 @@ With `cl_menuAspect 1`, traditional menu art and UI-rendered model scenes use
 the same centered 4:3 transform. The UI module remains responsible for the
 scene projection; the engine changes only the destination viewport.
 
+## Connecting Screen
+
+Retail `ui/connect.menu` declares `ui/assets/backscreen_smoke` as a 1920x1080
+background. FnQL preserves that authored 16:9 aspect with a centered cover
+crop: narrower displays crop the sides, while displays wider than 16:9 crop
+the top and bottom. The image is never stretched, and ultrawide modes do not
+smear its outermost texture columns across the extra width. Connection text
+keeps the retail UI's centered coordinates.
+
 ## Cinematics
 
 `cl_cinematicAspect` is independent of menu presentation. Use `1` for
