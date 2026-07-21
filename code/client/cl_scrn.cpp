@@ -246,7 +246,59 @@ static qboolean SCR_ResolveAspectCoverCrop( float sourceWidth, float sourceHeigh
 }
 
 
+static qboolean SCR_FloatNear( float value, float expected, float tolerance ) {
+	const float difference = value - expected;
+	return difference >= -tolerance && difference <= tolerance ? qtrue : qfalse;
+}
+
+
+/*
+=======================
+SCR_AdjustRetailAuthoredBackdropUV
+
+Retail UI and cgame draw 1920x1080 connection/loading art directly in
+framebuffer coordinates.  Their narrow-screen crop is correct, but the same
+formula produces negative horizontal texture coordinates beyond 16:9.  Match
+the complete retail draw signature before replacing it with the equivalent
+two-axis cover crop, so unrelated fullscreen module draws are untouched.
+=======================
+*/
+static qboolean SCR_AdjustRetailAuthoredBackdropUV(
+	float x, float y, float width, float height,
+	float *s0, float *t0, float *s1, float *t1 ) {
+	constexpr float kGeometryTolerance = 0.5f;
+	constexpr float kTextureTolerance = 0.001f;
+	const float sourceAspect = 1920.0f / 1080.0f;
+	const float screenWidth = static_cast<float>( cls.glconfig.vidWidth );
+	const float screenHeight = static_cast<float>( cls.glconfig.vidHeight );
+	float screenAspect;
+	float retailS0;
+
+	if ( screenWidth <= 0.0f || screenHeight <= 0.0f
+		|| !s0 || !t0 || !s1 || !t1 ) {
+		return qfalse;
+	}
+
+	screenAspect = screenWidth / screenHeight;
+	retailS0 = ( 1.0f - screenAspect / sourceAspect ) * 0.5f;
+	if ( !SCR_FloatNear( x, 0.0f, kGeometryTolerance )
+		|| !SCR_FloatNear( y, 0.0f, kGeometryTolerance )
+		|| !SCR_FloatNear( width, screenWidth, kGeometryTolerance )
+		|| !SCR_FloatNear( height, screenHeight, kGeometryTolerance )
+		|| !SCR_FloatNear( *s0, retailS0, kTextureTolerance )
+		|| !SCR_FloatNear( *t0, 0.0f, kTextureTolerance )
+		|| !SCR_FloatNear( *s1, 1.0f - retailS0, kTextureTolerance )
+		|| !SCR_FloatNear( *t1, 1.0f, kTextureTolerance ) ) {
+		return qfalse;
+	}
+
+	return SCR_ResolveAspectCoverCrop( 1920.0f, 1080.0f,
+		screenWidth, screenHeight, s0, t0, s1, t1 );
+}
+
+
 qboolean SCR_AdjustRetailConnectBackdropUV( qhandle_t shader,
+	float x, float y, float width, float height,
 	float *s0, float *t0, float *s1, float *t1 ) {
 	if ( !scr_connectBackground || shader != scr_connectBackground
 		|| ( cls.state != CA_CONNECTING && cls.state != CA_CHALLENGING
@@ -254,9 +306,20 @@ qboolean SCR_AdjustRetailConnectBackdropUV( qhandle_t shader,
 		return qfalse;
 	}
 
-	return SCR_ResolveAspectCoverCrop( 1920.0f, 1080.0f,
-		static_cast<float>( cls.glconfig.vidWidth ),
-		static_cast<float>( cls.glconfig.vidHeight ), s0, t0, s1, t1 );
+	return SCR_AdjustRetailAuthoredBackdropUV( x, y, width, height,
+		s0, t0, s1, t1 );
+}
+
+
+qboolean SCR_AdjustRetailCGameLoadingBackdropUV(
+	float x, float y, float width, float height,
+	float *s0, float *t0, float *s1, float *t1 ) {
+	if ( cls.state != CA_LOADING && cls.state != CA_PRIMED ) {
+		return qfalse;
+	}
+
+	return SCR_AdjustRetailAuthoredBackdropUV( x, y, width, height,
+		s0, t0, s1, t1 );
 }
 
 

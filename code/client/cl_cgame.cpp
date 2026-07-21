@@ -1765,11 +1765,23 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 	case CG_R_SETCOLOR:
 		re.SetColor( VMA(1) );
 		return 0;
-	case CG_R_DRAWSTRETCHPIC:
+	case CG_R_DRAWSTRETCHPIC: {
 		if ( !CL_CaptureHidesHud() ) {
-			re.DrawStretchPic( VMF(1), VMF(2), VMF(3), VMF(4), VMF(5), VMF(6), VMF(7), VMF(8), args[9] );
+			float x = VMF(1);
+			float y = VMF(2);
+			float w = VMF(3);
+			float h = VMF(4);
+			float s0 = VMF(5);
+			float t0 = VMF(6);
+			float s1 = VMF(7);
+			float t1 = VMF(8);
+
+			SCR_AdjustRetailCGameLoadingBackdropUV( x, y, w, h,
+				&s0, &t0, &s1, &t1 );
+			re.DrawStretchPic( x, y, w, h, s0, t0, s1, t1, args[9] );
 		}
 		return 0;
+	}
 	case CG_R_MODELBOUNDS:
 		re.ModelBounds( args[1], VMA(2), VMA(3) );
 		return 0;

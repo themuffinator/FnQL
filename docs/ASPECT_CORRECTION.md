@@ -28,6 +28,12 @@ the top and bottom. The image is never stretched, and ultrawide modes do not
 smear its outermost texture columns across the extra width. Connection text
 keeps the retail UI's centered coordinates.
 
+The retail cgame takes over after the initial connection dialog and uses the
+same authored 16:9 crop for its smoke and map-levelshot loading backgrounds.
+FnQL recognizes only that full-frame loading draw signature during
+`CA_LOADING` and `CA_PRIMED`, and applies the same centered cover crop. HUD and
+other cgame draws are not modified.
+
 ## Cinematics
 
 `cl_cinematicAspect` is independent of menu presentation. Use `1` for

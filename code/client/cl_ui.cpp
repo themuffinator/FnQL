@@ -959,7 +959,8 @@ static intptr_t CL_UISystemCalls( intptr_t *args ) {
 		// Retail connect.menu identifies a 1920x1080 authored background. Its
 		// horizontal crop becomes an out-of-range edge smear past 16:9, so the
 		// host completes the same aspect-preserving cover operation vertically.
-		SCR_AdjustRetailConnectBackdropUV( args[9], &s0, &t0, &s1, &t1 );
+		SCR_AdjustRetailConnectBackdropUV( args[9], x, y, w, h,
+			&s0, &t0, &s1, &t1 );
 		re.DrawStretchPic( x, y, w, h, s0, t0, s1, t1, args[9] );
 		return 0;
 	}

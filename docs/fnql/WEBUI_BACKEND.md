@@ -125,13 +125,26 @@ fixture, but the live runtime never replaces the retail navigation document
 with it. This keeps retail bootstrap behavior authoritative while preserving
 the FnQL settings extension.
 
-The settings script inserts an FnQL tab beside the retail Video tab and builds
-controls only for cvars present in the engine's allowlisted configuration
-snapshot. This naturally hides renderer- or platform-specific controls that
-are not registered. It also removes the retail Video menu's legacy
-post-processing column and replaces its duplicated mode/fullscreen controls;
-the corresponding FnQL controls own `r_mode`, `r_modeFullscreen`, renderer
-selection, and the supported post-processing cvars.
+The settings script appends an FnQL tab after every retail settings tab, making
+it the final item in both visual and keyboard navigation order. The extension
+uses the retail navigation's own `active` class and styling and suppresses the
+underlying route's selected state while the FnQL panel is open, so only one tab
+is presented as active. Leaving or replacing the Settings view clears that
+temporary state instead of reopening a stale FnQL panel later.
+
+The panel builds controls only for cvars present in the engine's allowlisted
+configuration snapshot. This naturally hides renderer- or platform-specific
+controls that are not registered. It also removes the retail Video menu's
+legacy post-processing column and replaces its duplicated mode/fullscreen
+controls; the corresponding FnQL controls own `r_mode`, `r_modeFullscreen`,
+renderer selection, and the supported post-processing cvars.
+
+The standalone tab is a transitional home for engine-owned controls. Those
+controls should ultimately move into the relevant retail sections: display and
+rendering under Video, player visibility under Team, interface and capture
+under Game, and backend controls under Sound. That migration must remain a
+project-owned sparse overlay rather than copying or modifying the proprietary
+retail bundle; the FnQL tab can be removed once no settings remain in it.
 
 Build systems generate the sidecar alongside the executable, and the runtime
 checks the executable directory first so VS Code/Meson build trees discover it

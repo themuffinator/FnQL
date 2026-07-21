@@ -55,6 +55,29 @@ def decode_datapack(path: Path) -> dict[str, bytes]:
 
 
 class WebPakBuilderTests(unittest.TestCase):
+    def test_settings_tab_follows_retail_navigation_contract(self) -> None:
+        script = (
+            ROOT / "code" / "client" / "webui" / "fnql-settings.js"
+        ).read_text(encoding="utf-8")
+        style = (
+            ROOT / "code" / "client" / "webui" / "css" / "fnql-settings.css"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("nav.appendChild(tab);", script)
+        self.assertIn("else if (tab.nextSibling)", script)
+        self.assertNotIn("nav.insertBefore(tab", script)
+        self.assertIn("clearRetailActiveTabs(nav);", script)
+        self.assertIn("tab.className = 'button fnql-settings-tab active';", script)
+        self.assertIn("retailTab.classList.add('active');", script)
+        self.assertIn("deactivate(node);", script)
+        self.assertIn("if (currentRoot && currentRoot !== root)", script)
+        self.assertIn(
+            "window.addEventListener('hashchange', function () {\n      deactivate();",
+            script,
+        )
+        self.assertNotIn("is-active", script)
+        self.assertNotIn(".fnql-settings-tab", style)
+
     def test_project_overlay_is_sparse_and_round_trips(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "fnql-web.pak"
@@ -79,6 +102,13 @@ class WebPakBuilderTests(unittest.TestCase):
         )
         self.assertIn(b"window.addEventListener('hashchange'", decoded["fnql-settings.js"])
         self.assertIn(b"window.setInterval(attach, 1000)", decoded["fnql-settings.js"])
+        self.assertIn(b"nav.appendChild(tab);", decoded["fnql-settings.js"])
+        self.assertIn(
+            b"tab.className = 'button fnql-settings-tab active';",
+            decoded["fnql-settings.js"],
+        )
+        self.assertNotIn(b"is-active", decoded["fnql-settings.js"])
+        self.assertNotIn(b".fnql-settings-tab", decoded["css/fnql-settings.css"])
         source_paths = {
             resource.virtual_path
             for resource in build_webpak.collect_resources(

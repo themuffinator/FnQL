@@ -264,17 +264,30 @@
     panel.__fnqlSettingsSignature = settingsSignature(cache);
   }
 
-  function deactivate() {
+  function deactivate(retailTab) {
     active = false;
     if (!currentRoot) {
       return;
     }
+    var nav = currentRoot.querySelector('nav.button-row');
     var section = currentRoot.querySelector('section');
     var panel = currentRoot.querySelector('.fnql-settings-panel');
     var tab = currentRoot.querySelector('.fnql-settings-tab');
+    if (nav && retailTab && retailTab.parentNode === nav) {
+      clearRetailActiveTabs(nav);
+      retailTab.classList.add('active');
+    }
     if (section) { section.style.display = ''; }
     if (panel) { panel.style.display = 'none'; }
     if (tab) { tab.className = 'button fnql-settings-tab'; }
+  }
+
+  function clearRetailActiveTabs(nav) {
+    var links = nav.querySelectorAll('a.button.active');
+    var index;
+    for (index = 0; index < links.length; index += 1) {
+      links[index].classList.remove('active');
+    }
   }
 
   function activate() {
@@ -336,8 +349,12 @@
   function attach() {
     var root = document.querySelector('.game-settings');
     if (!root) {
+      active = false;
       currentRoot = null;
       return;
+    }
+    if (currentRoot && currentRoot !== root) {
+      active = false;
     }
     currentRoot = root;
     var nav = root.querySelector('nav.button-row');
@@ -352,17 +369,11 @@
       tab = element('button', 'button fnql-settings-tab', 'FnQL');
       tab.type = 'button';
       tab.onclick = activate;
-      var links = nav.querySelectorAll('a');
-      var inserted = false;
-      var linkIndex;
-      for (linkIndex = 0; linkIndex < links.length; linkIndex += 1) {
-        if (String(links[linkIndex].textContent).toLowerCase() === 'video') {
-          nav.insertBefore(tab, links[linkIndex].nextSibling);
-          inserted = true;
-          break;
-        }
-      }
-      if (!inserted) { nav.appendChild(tab); }
+      nav.appendChild(tab);
+    } else if (tab.nextSibling) {
+      // React can rebuild or reorder the retail links without replacing the
+      // navigation node. Keep FnQL last in visual and keyboard tab order.
+      nav.appendChild(tab);
     }
 
     var panel = root.querySelector('.fnql-settings-panel');
@@ -373,9 +384,10 @@
     }
 
     if (active) {
+      clearRetailActiveTabs(nav);
       section.style.display = 'none';
       panel.style.display = '';
-      tab.className = 'button fnql-settings-tab is-active';
+      tab.className = 'button fnql-settings-tab active';
       if (panel.__fnqlSettingsSignature !== settingsSignature(cvarCache())) {
         renderPanel(panel);
       }
@@ -386,7 +398,7 @@
     var node = event.target;
     while (node && node !== document) {
       if (node.tagName === 'A' && node.parentNode && node.parentNode.className.indexOf('button-row') !== -1) {
-        deactivate();
+        deactivate(node);
         return;
       }
       node = node.parentNode;
@@ -400,6 +412,7 @@
       observer.observe(document.body, { childList: true, subtree: true });
     }
     window.addEventListener('hashchange', function () {
+      deactivate();
       window.setTimeout(attach, 0);
     }, false);
     // Awesomium's Chromium build does not reliably deliver MutationObserver

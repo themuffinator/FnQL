@@ -618,6 +618,10 @@ int		SCR_GetBigStringWidth( const char *str );	// returns in virtual 640x480 coo
 void	SCR_AdjustFrom640( float *x, float *y, float *w, float *h );
 void	SCR_AdjustFrom640Uniform( float *x, float *y, float *w, float *h );
 qboolean SCR_AdjustRetailConnectBackdropUV( qhandle_t shader,
+	float x, float y, float width, float height,
+	float *s0, float *t0, float *s1, float *t1 );
+qboolean SCR_AdjustRetailCGameLoadingBackdropUV(
+	float x, float y, float width, float height,
 	float *s0, float *t0, float *s1, float *t1 );
 void	SCR_FillRect( float x, float y, float width, float height, 
 					 const float *color );
