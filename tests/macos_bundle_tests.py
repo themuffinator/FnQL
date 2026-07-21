@@ -119,6 +119,53 @@ def fake_finder(name: str) -> str:
 
 
 class MacOSBundleTests(unittest.TestCase):
+    def test_windows_publish_retries_transient_directory_access_denial(self) -> None:
+        attempts: list[tuple[Path, Path]] = []
+        delays: list[float] = []
+        source = Path("source")
+        destination = Path("destination")
+
+        def replace(left: Path, right: Path) -> None:
+            attempts.append((left, right))
+            if len(attempts) < 3:
+                raise PermissionError("transient scanner lock")
+
+        macos_bundle._replace_staged_directory(
+            source,
+            destination,
+            platform_name="nt",
+            replacer=replace,
+            sleeper=delays.append,
+        )
+
+        self.assertEqual(attempts, [(source, destination)] * 3)
+        self.assertEqual(
+            delays,
+            [
+                macos_bundle.WINDOWS_DIRECTORY_REPLACE_DELAY_SECONDS,
+                macos_bundle.WINDOWS_DIRECTORY_REPLACE_DELAY_SECONDS * 2,
+            ],
+        )
+
+    def test_non_windows_publish_does_not_retry_permission_errors(self) -> None:
+        attempts = 0
+
+        def replace(_source: Path, _destination: Path) -> None:
+            nonlocal attempts
+            attempts += 1
+            raise PermissionError("real permission failure")
+
+        with self.assertRaises(PermissionError):
+            macos_bundle._replace_staged_directory(
+                Path("source"),
+                Path("destination"),
+                platform_name="posix",
+                replacer=replace,
+                sleeper=lambda _delay: None,
+            )
+
+        self.assertEqual(attempts, 1)
+
     def test_default_bundle_versions_keep_three_part_display_and_build_number(self) -> None:
         self.assertEqual(
             macos_bundle.default_bundle_versions(

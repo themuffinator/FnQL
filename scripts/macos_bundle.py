@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Sequence
@@ -47,6 +48,8 @@ RENDERER_RE = re.compile(
 )
 VERSION_RE = re.compile(r"^[0-9]+(?:\.[0-9]+){0,2}$")
 DEFAULT_SOURCE_DATE_EPOCH = 946684800  # 2000-01-01T00:00:00Z
+WINDOWS_DIRECTORY_REPLACE_ATTEMPTS = 6
+WINDOWS_DIRECTORY_REPLACE_DELAY_SECONDS = 0.05
 MACHO_MAGIC_64_ENDIANNESS = {
     b"\xcf\xfa\xed\xfe": "little",
     b"\xfe\xed\xfa\xcf": "big",
@@ -608,6 +611,28 @@ def _normalize_tree_timestamps(root: Path, epoch: int) -> None:
         os.utime(path, (epoch, epoch))
 
 
+def _replace_staged_directory(
+    source: Path,
+    destination: Path,
+    *,
+    platform_name: str = os.name,
+    replacer: Callable[[Path, Path], None] = os.replace,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> None:
+    """Publish a completed tree, tolerating transient Windows file scanners."""
+    for attempt in range(WINDOWS_DIRECTORY_REPLACE_ATTEMPTS):
+        try:
+            replacer(source, destination)
+            return
+        except PermissionError:
+            if (
+                platform_name != "nt"
+                or attempt + 1 == WINDOWS_DIRECTORY_REPLACE_ATTEMPTS
+            ):
+                raise
+            sleeper(WINDOWS_DIRECTORY_REPLACE_DELAY_SECONDS * (attempt + 1))
+
+
 def stage_bundle(
     inputs: Mapping[str, Path],
     output: Path,
@@ -721,7 +746,7 @@ def stage_bundle(
                 runner=runner,
                 finder=finder,
             )
-        os.replace(payload_root, output)
+        _replace_staged_directory(payload_root, output)
     return output
 
 

@@ -193,13 +193,16 @@ non-regular entries, unsafe paths, non-i386 ELF files, and non-canonical modes.
 This is necessary because downloaded CI artifacts do not reliably retain Unix
 executable bits. Windows ZIP members use fixed timestamps and modes as well, so
 identical staged bytes produce identical archives on repeated packaging runs.
-The native macOS job creates its complete ZIP with `ditto` after optional
-notarization and stapling; `scripts/release.py` validates and publishes that
-ZIP byte-for-byte instead of reconstructing it on Linux and discarding Apple
-metadata. Validation requires mode `0755` on Mach-O executables and renderer
+The native macOS job creates unsigned ZIPs with the deterministic release
+writer. The opt-in signing job uses `ditto` after notarization and stapling;
+`scripts/release.py` validates and publishes that signed ZIP byte-for-byte
+instead of reconstructing it on Linux and discarding Apple metadata. Validation
+requires mode `0755` on Mach-O executables and renderer
 dylibs, checks thin x86_64/arm64 or Universal 2 headers against the artifact
-label, and requires the canonical signed `FnQL.app` plist/layout plus the
-standalone server and audio-zone tool. Windows and Linux remain under the
+label, and requires the canonical `FnQL.app` plist/layout plus the standalone
+server and audio-zone tool. Unsigned validation rejects a project app-bundle
+signature; the opt-in publication lane requires one. Windows and Linux remain
+under the
 strict i386 retail-facing policy; accepting modern Apple architectures does
 not relax it.
 
@@ -228,10 +231,12 @@ Expected behavior:
   paths, and validates the bundle. Local and ordinary push builds receive no
   project-applied app-bundle or Developer ID signature by default (Apple
   Silicon binaries retain clang's platform-required ad-hoc Mach-O signature).
-  An explicit manual release uses a fresh runner that never built repository
-  code, imports a temporary Developer ID identity, applies the hardened-runtime
-  executable-memory entitlement, submits through `notarytool`, staples the app,
-  verifies Gatekeeper state, and deletes the temporary keychain before publishing
+  A manual workflow run remains unsigned by default. Setting its `sign_macos`
+  input to `true` selects the explicit public-release lane, which uses a fresh
+  runner that never built repository code, imports a temporary Developer ID
+  identity, applies the hardened-runtime executable-memory entitlement, submits
+  through `notarytool`, staples the app, verifies Gatekeeper state, and deletes
+  the temporary keychain before publishing
 - retail `bin.pk3` has no Mach-O or QVM game modules, so the macOS artifact is
   explicitly an engine/platform/tool distribution rather than a claim of
   native retail gameplay. Missing Steam/WebUI providers retain honest fallback
@@ -253,7 +258,7 @@ Expected behavior:
   the retail-facing i386 Windows/Linux ABI
 - Linux release artifacts build inside an Ubuntu 20.04 userspace and run `scripts/check_elf_glibc.py --max-glibc 2.31` before upload so hosted runner image changes do not raise the packaged glibc requirement unexpectedly.
 
-The explicit macOS release lane fails closed unless all five protected
+The opt-in `sign_macos` release lane fails closed unless all five protected
 repository secrets are present: `MACOS_DEVELOPER_ID_P12_BASE64`,
 `MACOS_DEVELOPER_ID_P12_PASSWORD`, `MACOS_NOTARY_KEY_BASE64`,
 `MACOS_NOTARY_KEY_ID`, and `MACOS_NOTARY_ISSUER_ID`. The certificate and App

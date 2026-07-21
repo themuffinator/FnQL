@@ -827,6 +827,12 @@ class ReleasePackagingTests(unittest.TestCase):
                 make_macos_release_members(include_signature=False),
                 archive_name="macos-x86_64.zip",
             )
+        with self.assertRaisesRegex(ValueError, "must be an unsigned macOS app bundle"):
+            release.validate_macos_distribution_files(
+                make_macos_release_members(),
+                archive_name="macos-x86_64.zip",
+                require_signature=False,
+            )
         release.validate_macos_distribution_files(
             make_macos_release_members(include_signature=False),
             archive_name="macos-x86_64.zip",
@@ -915,14 +921,29 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertIn("  macos:", workflow)
         self.assertIn("macos-15-intel", workflow)
         self.assertIn("runner: macos-15", workflow)
+        self.assertIn("sign_macos:", workflow)
+        self.assertIn("default: false", workflow)
+        self.assertIn('python3 -m venv "$build_tools"', workflow)
+        self.assertIn('"$build_tools/bin/python" -m pip install', workflow)
+        self.assertIn('"$build_tools/bin" >> "$GITHUB_PATH"', workflow)
+        self.assertNotIn("python3 -m pip install meson==1.9.1 ninja", workflow)
         self.assertIn("name: macos-${{ matrix.artifact_arch }}", workflow)
         self.assertIn("name: Stage without project signing", workflow)
         self.assertNotIn("--sign-identity -", workflow)
-        self.assertIn("if: github.event_name == 'workflow_dispatch'", workflow)
         self.assertIn("MACOS_DEVELOPER_ID_P12_BASE64", workflow)
         self.assertIn("  macos-release-sign:", workflow)
         self.assertIn("needs: [macos]", workflow)
         self.assertIn("name: unsigned-apple-${{ matrix.artifact_arch }}", workflow)
+        self.assertIn(
+            "if: ${{ github.event_name != 'workflow_dispatch' || !inputs.sign_macos }}",
+            workflow,
+        )
+        self.assertEqual(
+            workflow.count(
+                "if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_macos }}"
+            ),
+            3,
+        )
         self.assertIn(
             "needs: [prepare, windows-msys32, windows-msvc, source-validation, macos-release-sign, ubuntu-x86]",
             workflow,

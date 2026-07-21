@@ -291,7 +291,9 @@ the other portable dependencies from the pinned wrap definitions, so a release
 does not acquire Homebrew or MacPorts library paths:
 
 ```sh
-python3 -m pip install meson==1.9.1 ninja
+python3 -m venv .tmp/macos-build-tools
+. .tmp/macos-build-tools/bin/activate
+python -m pip install --disable-pip-version-check meson==1.9.1 ninja
 arch="$(uname -m)"
 test "$arch" = arm64 && input_arch=arm64 || input_arch=x86_64
 export MACOSX_DEPLOYMENT_TARGET=11.0
@@ -352,6 +354,12 @@ arguments with:
 --entitlements misc/macos/fnql.entitlements \
 --notary-profile fnql-notary
 ```
+
+GitHub Actions also leaves macOS artifacts unsigned on pushes and on default
+manual runs. Set the `sign_macos` workflow input to `true` only for an explicit
+public release: that enables the isolated Developer ID/notarization jobs and
+release publication, and fails closed if the required protected secrets are
+not configured.
 
 The tool signs nested code inside-out with the hardened runtime, submits with
 `notarytool --wait`, staples the app, and verifies it with `codesign`,

@@ -777,6 +777,16 @@ def validate_macos_distribution_files(
         raise ValueError(
             f"{archive_name} is missing required macOS app files: " + ", ".join(missing)
         )
+    if not require_signature:
+        signature_prefix = f"{MACOS_APP_ROOT}/_CodeSignature/"
+        unexpected_signatures = sorted(
+            name for name in by_name if name.startswith(signature_prefix)
+        )
+        if unexpected_signatures:
+            raise ValueError(
+                f"{archive_name} must be an unsigned macOS app bundle; found: "
+                + ", ".join(unexpected_signatures)
+            )
 
     bundled_steam_api = sorted(
         member.name

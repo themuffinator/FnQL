@@ -12,6 +12,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      sign_macos:
+        description: Sign and notarize macOS artifacts, then publish the manual release
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   prepare:
@@ -206,8 +212,12 @@ jobs:
 
       - name: Install build tools
         run: |
+          set -euo pipefail
           test "$(uname -m)" = "${{ matrix.host_arch }}"
-          python3 -m pip install meson==1.9.1 ninja
+          build_tools="$RUNNER_TEMP/fnql-macos-build-tools-${{ matrix.arch }}"
+          python3 -m venv "$build_tools"
+          "$build_tools/bin/python" -m pip install --disable-pip-version-check meson==1.9.1 ninja
+          printf '%s\n' "$build_tools/bin" >> "$GITHUB_PATH"
 
       - name: Stamp release build version
         run: python3 scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
@@ -277,23 +287,23 @@ jobs:
           )
           PY
 
-      - name: Preserve unsigned macOS payload metadata
+      - name: Create deterministic unsigned macOS payload
         run: |
-          rm -f macos-payload.zip
-          ditto -c -k --norsrc bin macos-payload.zip
           python3 - <<'PY'
           from pathlib import Path
           from scripts import release
 
+          payload = Path("macos-payload.zip")
+          release.write_release_archive(Path("bin"), payload)
           release.validate_release_archive_contents(
-              Path("macos-payload.zip"),
+              payload,
               artifact_name="macos-${{ matrix.artifact_arch }}",
               require_macos_signature=False,
           )
           PY
 
       - uses: actions/upload-artifact@v7
-        if: github.event_name != 'workflow_dispatch'
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.sign_macos }}
         with:
           name: macos-${{ matrix.artifact_arch }}
           path: macos-payload.zip
@@ -301,7 +311,7 @@ jobs:
           retention-days: 5
 
       - uses: actions/upload-artifact@v7
-        if: github.event_name == 'workflow_dispatch'
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_macos }}
         with:
           name: unsigned-apple-${{ matrix.artifact_arch }}
           path: macos-payload.zip
@@ -309,7 +319,7 @@ jobs:
           retention-days: 1
 
   macos-release-sign:
-    if: github.event_name == 'workflow_dispatch'
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_macos }}
     needs: [macos]
     name: Sign macOS ${{ matrix.arch }} release
     runs-on: ${{ matrix.runner }}
@@ -610,7 +620,7 @@ jobs:
           PY
 
   publish:
-    if: github.event_name == 'workflow_dispatch'
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_macos }}
     needs: [prepare, windows-msys32, windows-msvc, source-validation, macos-release-sign, ubuntu-x86]
     runs-on: ubuntu-latest
     permissions:
