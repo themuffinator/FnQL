@@ -108,7 +108,8 @@ jobs:
             mesa-common-dev \
             meson \
             ninja-build \
-            pkg-config
+            pkg-config \
+            python3-venv
 
       - name: Build dependency-isolated dedicated server
         run: |
@@ -140,6 +141,13 @@ jobs:
             -Drenderer-default=glx \
             -Dsdl=disabled
           meson compile -C .tmp/meson-linux-curl-fallback fnql.x86_64
+
+      - name: Install SDL3-compatible Meson
+        run: |
+          build_tools="$RUNNER_TEMP/fnql-linux-build-tools"
+          python3 -m venv "$build_tools"
+          "$build_tools/bin/python" -m pip install --disable-pip-version-check meson==1.9.1
+          printf '%s\n' "$build_tools/bin" >> "$GITHUB_PATH"
 
       - name: Configure native Linux SDL3 Meson build
         run: |
