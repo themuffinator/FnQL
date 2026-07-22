@@ -90,6 +90,9 @@ MACOS_REQUIRED_UNSIGNED_APP_ENTRIES = (
 MACOS_SIGNATURE_ENTRY = f"{MACOS_APP_ROOT}/_CodeSignature/CodeResources"
 MACOS_REQUIRED_APP_ENTRIES = (*MACOS_REQUIRED_UNSIGNED_APP_ENTRIES, MACOS_SIGNATURE_ENTRY)
 MACOS_PREBUILT_PAYLOAD_NAME = "macos-payload.zip"
+PUBLISHED_RELEASE_ARTIFACTS = frozenset(
+    {"linux-x86", "windows-mingw-x86", "windows-msvc-x86"}
+)
 RELEASE_ZIP_SUFFIX = ".zip"
 RELEASE_TAR_GZ_SUFFIX = ".tar.gz"
 RELEASE_ARCHIVE_SUFFIXES = (RELEASE_TAR_GZ_SUFFIX, RELEASE_ZIP_SUFFIX)
@@ -242,14 +245,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--build-number", type=non_negative_int)
     parser.add_argument("--commit")
     parser.add_argument("--ref-name")
-    parser.add_argument(
-        "--allow-unsigned-macos",
-        action="store_true",
-        help=(
-            "Allow unsigned macOS application bundles in manual release artifacts. "
-            "Tagged release packaging always requires Developer ID signatures."
-        ),
-    )
     parser.add_argument(
         "--glx-proof-root",
         type=Path,
@@ -991,6 +986,20 @@ def release_artifact_dirs(artifact_root: Path) -> list[Path]:
     artifact_dirs = sorted(path for path in artifact_root.iterdir() if path.is_dir())
     if not artifact_dirs:
         raise ValueError(f"Artifact root does not contain any artifact directories: {artifact_root}")
+    artifact_names = {path.name for path in artifact_dirs}
+    if artifact_names != PUBLISHED_RELEASE_ARTIFACTS:
+        missing = sorted(PUBLISHED_RELEASE_ARTIFACTS - artifact_names)
+        unsupported = sorted(artifact_names - PUBLISHED_RELEASE_ARTIFACTS)
+        details = []
+        if missing:
+            details.append("missing: " + ", ".join(missing))
+        if unsupported:
+            details.append("unsupported: " + ", ".join(unsupported))
+        raise ValueError(
+            "Release artifacts must be the supported Windows/Linux set ("
+            + "; ".join(details)
+            + ")"
+        )
     for path in artifact_dirs:
         platform = release_platform(path.name)
         if platform == "macos" and macos_artifact_arch(path.name) is None:
@@ -1166,10 +1175,6 @@ def attach_glx_rollback_archives(
 
 
 def build_archives(args: argparse.Namespace) -> dict[str, object]:
-    if args.allow_unsigned_macos and args.channel != "manual":
-        raise ValueError("--allow-unsigned-macos is only valid for manual releases")
-    require_macos_signature = not args.allow_unsigned_macos
-
     subprocess.run([sys.executable, str(ROOT / "scripts" / "generate_docs.py")], check=True)
 
     meta = channel_metadata(
@@ -1211,7 +1216,6 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         if publish_prebuilt_macos_payload(
             artifact_dir,
             archive_path,
-            require_macos_signature=require_macos_signature,
         ):
             skipped_files = []
         else:
@@ -1225,7 +1229,6 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         validate_release_archive_contents(
             archive_path,
             artifact_name=artifact_dir.name,
-            require_macos_signature=require_macos_signature,
         )
         checksum = sha256sum(archive_path)
         archives.append(
@@ -1253,7 +1256,6 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         "release_title": meta["release_title"],
         "build_date": meta["build_date"],
         "commit": meta["commit"],
-        "macos_signature_required": require_macos_signature,
         "glx_proof_corpus": release_corpus_manifest(),
         "glx_release_evidence_docs": GLX_RELEASE_EVIDENCE_DOCS,
         "glx_runtime_proof": glx_runtime_proof,

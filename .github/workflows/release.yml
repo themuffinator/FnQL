@@ -12,12 +12,6 @@ on:
     branches:
       - main
   workflow_dispatch:
-    inputs:
-      sign_macos:
-        description: Sign and notarize macOS artifacts before publishing the manual release
-        required: false
-        type: boolean
-        default: false
 
 jobs:
   prepare:
@@ -188,6 +182,9 @@ jobs:
           python tests/steam_provider_source_tests.py
 
   macos:
+    # Retail Quake Live ships no macOS game modules or QVMs. Keep the job
+    # definition as development reference, but do not build release artifacts.
+    if: ${{ false }}
     needs: [prepare]
     name: Build macOS ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
@@ -305,7 +302,7 @@ jobs:
           PY
 
       - uses: actions/upload-artifact@v7
-        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.sign_macos }}
+        if: ${{ false }}
         with:
           name: macos-${{ matrix.artifact_arch }}
           path: macos-payload.zip
@@ -313,7 +310,7 @@ jobs:
           retention-days: 5
 
       - uses: actions/upload-artifact@v7
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_macos }}
+        if: ${{ false }}
         with:
           name: unsigned-apple-${{ matrix.artifact_arch }}
           path: macos-payload.zip
@@ -321,7 +318,8 @@ jobs:
           retention-days: 1
 
   macos-release-sign:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_macos }}
+    # Disabled with the macOS release build above.
+    if: ${{ false }}
     needs: [macos]
     name: Sign macOS ${{ matrix.arch }} release
     runs-on: ${{ matrix.runner }}
@@ -594,7 +592,7 @@ jobs:
 
   push-build-validation:
     if: always()
-    needs: [prepare, windows-msys32, windows-msvc, source-validation, macos, ubuntu-x86]
+    needs: [prepare, windows-msys32, windows-msvc, source-validation, ubuntu-x86]
     runs-on: ubuntu-latest
     steps:
       - name: Check platform build results
@@ -627,13 +625,9 @@ jobs:
         always() &&
         github.event_name == 'workflow_dispatch' &&
         needs.prepare.result == 'success' &&
-        needs.push-build-validation.result == 'success' &&
-        (
-          (inputs.sign_macos && needs.macos-release-sign.result == 'success') ||
-          (!inputs.sign_macos && needs.macos-release-sign.result == 'skipped')
-        )
+        needs.push-build-validation.result == 'success'
       }}
-    needs: [prepare, push-build-validation, macos-release-sign]
+    needs: [prepare, push-build-validation]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -671,31 +665,13 @@ jobs:
           name: linux-x86
           path: artifacts/linux-x86
 
-      - name: Download Intel macOS artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: macos-x86_64
-          path: artifacts/macos-x86_64
-
-      - name: Download Apple Silicon macOS artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: macos-aarch64
-          path: artifacts/macos-aarch64
-
       - name: Resolve release version metadata
         run: |
           python scripts/version.py github-env --channel manual --build-number "${{ needs.prepare.outputs.build_number }}" --build-date "${{ needs.prepare.outputs.build_date }}" --commit "${{ needs.prepare.outputs.head_commit }}" >> "$GITHUB_ENV"
 
       - name: Package release archives
-        env:
-          SIGN_MACOS: ${{ inputs.sign_macos }}
         run: |
-          signature_args=()
-          if [ "$SIGN_MACOS" != "true" ]; then
-            signature_args+=(--allow-unsigned-macos)
-          fi
-          python scripts/release.py --channel manual --artifact-root artifacts --build-number "${{ needs.prepare.outputs.build_number }}" --build-date "${{ needs.prepare.outputs.build_date }}" --commit "${{ needs.prepare.outputs.head_commit }}" "${signature_args[@]}"
+          python scripts/release.py --channel manual --artifact-root artifacts --build-number "${{ needs.prepare.outputs.build_number }}" --build-date "${{ needs.prepare.outputs.build_date }}" --commit "${{ needs.prepare.outputs.head_commit }}"
 
       - name: Build Copilot changelog cleanup
         id: copilot_notes

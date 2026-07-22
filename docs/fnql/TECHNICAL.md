@@ -174,8 +174,7 @@ The script:
 4. injects only the shared package docs needed by players and maintainers
 5. deterministically rebuilds the project-owned sparse `fnql-web.pak` settings overlay
 6. writes versioned archives into `.install/packages/`: deterministic `.zip`
-   for Windows, deterministic permission-preserving `.tar.gz` for Linux, and a
-   macOS-native `.zip` that preserves signing/notarization metadata
+   for Windows and deterministic permission-preserving `.tar.gz` for Linux
 7. emits `.install/release-manifest.json` and `.install/SHA256SUMS.txt`
 
 `fnql-web.pak` is a release-root sidecar, not an entry in `FnQL-pkg.fnz`.
@@ -193,18 +192,12 @@ non-regular entries, unsafe paths, non-i386 ELF files, and non-canonical modes.
 This is necessary because downloaded CI artifacts do not reliably retain Unix
 executable bits. Windows ZIP members use fixed timestamps and modes as well, so
 identical staged bytes produce identical archives on repeated packaging runs.
-The native macOS job creates unsigned ZIPs with the deterministic release
-writer. The opt-in signing job uses `ditto` after notarization and stapling;
-`scripts/release.py` validates and publishes that signed ZIP byte-for-byte
-instead of reconstructing it on Linux and discarding Apple metadata. Validation
-requires mode `0755` on Mach-O executables and renderer
-dylibs, checks thin x86_64/arm64 or Universal 2 headers against the artifact
-label, and requires the canonical `FnQL.app` plist/layout plus the standalone
-server and audio-zone tool. Unsigned validation rejects a project app-bundle
-signature; the opt-in publication lane requires one. Windows and Linux remain
-under the
-strict i386 retail-facing policy; accepting modern Apple architectures does
-not relax it.
+Public packaging accepts exactly `windows-mingw-x86`, `windows-msvc-x86`, and
+`linux-x86`; missing or additional artifact directories fail packaging. The
+retained macOS bundle and validation code is development-only and its release
+workflow jobs are hard-disabled because retail Quake Live has no macOS game
+modules or QVMs. Windows and Linux remain under the strict i386 retail-facing
+policy.
 
 Manual release publishing builds GitHub release details from the pending changelog, commits, and changed-file summary. If `COPILOT_GITHUB_TOKEN` is configured, the workflow uses GitHub Copilot release-note cleanup with [`.github/release-notes-instructions.md`](../../.github/release-notes-instructions.md); otherwise it falls back to the repo-local GitHub Models prompt in [`scripts/manual_release.py`](../../scripts/manual_release.py). After a release is created from a branch, CI resets `docs/fnql/CHANGELOG.md` back to an empty categorized `Unreleased` template and commits that reset to the release branch.
 
@@ -225,26 +218,10 @@ Expected behavior:
   but no native Linux cgame or UI module, so 64-bit and ARM builds and the
   native Linux client remain developer/verification targets outside the
   retail-play release contract
-- macOS release artifacts are native x86_64 and arm64 app distributions built
-  and tested on `macos-15-intel` and `macos-15`, respectively. CI uses pinned
-  static dependency fallbacks, audits `otool -L` for build-machine package
-  paths, and validates the bundle. Local and ordinary push builds receive no
-  project-applied app-bundle or Developer ID signature by default (Apple
-  Silicon binaries retain clang's platform-required ad-hoc Mach-O signature).
-  A manual workflow run remains unsigned by default. Setting its `sign_macos`
-  input to `true` selects the explicit public-release lane, which uses a fresh
-  runner that never built repository code, imports a temporary Developer ID
-  identity, applies the hardened-runtime executable-memory entitlement, submits
-  through `notarytool`, staples the app, verifies Gatekeeper state, and deletes
-  the temporary keychain before publishing
-- retail `bin.pk3` has no Mach-O or QVM game modules, so the macOS artifact is
-  explicitly an engine/platform/tool distribution rather than a claim of
-  native retail gameplay. Missing Steam/WebUI providers retain honest fallback
-  status, and missing game modules receive a deterministic diagnostic
-- the macOS package deliberately contains no provider or
-  `libsteam_api.dylib`. Hardened-runtime library validation also means any
-  future external native provider/module needs an architecture-compatible
-  signature policy; unsupported platform authentication is never synthesized
+- macOS release jobs and artifacts are disabled. Retail `bin.pk3` has no
+  Mach-O or QVM game modules, so local macOS builds remain unsupported
+  engine/platform/tool development targets rather than a native retail-play
+  claim
 - both Windows packages fetch the provider version pinned in
   `version/fnql_steam_provider.json`, verify its SHA-256 and PE i386 identity,
   and include only `fnql_steam.dll`; provider source and Valve's
@@ -252,21 +229,11 @@ Expected behavior:
 - MinGW release links its compiler, C++ and bundled compression runtimes
   statically, while MSVC uses its static runtime; a PE import audit rejects
   known unshipped compiler/runtime DLL dependencies before artifact upload
-- `scripts/release.py` applies platform-specific architecture policy and
-  verifies recognized PE, ELF, and Mach-O headers before an archive is emitted,
-  so mislabeled binaries fail packaging without conflating modern macOS with
-  the retail-facing i386 Windows/Linux ABI
+- `scripts/release.py` requires the exact supported Windows/Linux artifact set,
+  applies platform-specific architecture policy, and verifies recognized PE
+  and ELF headers before a public archive is emitted
 - Linux release artifacts build inside an Ubuntu 20.04 userspace and run `scripts/check_elf_glibc.py --max-glibc 2.31` before upload so hosted runner image changes do not raise the packaged glibc requirement unexpectedly.
 
-The opt-in `sign_macos` release lane fails closed unless all five protected
-repository secrets are present: `MACOS_DEVELOPER_ID_P12_BASE64`,
-`MACOS_DEVELOPER_ID_P12_PASSWORD`, `MACOS_NOTARY_KEY_BASE64`,
-`MACOS_NOTARY_KEY_ID`, and `MACOS_NOTARY_ISSUER_ID`. The certificate and App
-Store Connect API key are decoded only beneath `RUNNER_TEMP`, imported into a
-per-job keychain, masked where appropriate, and removed by an `always()` cleanup
-step. Normal build/push jobs do not read these secrets or invoke the project's
-`codesign` stage; the isolated signing job does not check out or execute
-repository code after credentials become available.
 - Linux artifacts are published as `.tar.gz`, not ZIP, so executable modes
   survive installation. `scripts/release.py` recreates canonical tar metadata
   after artifact download and `scripts/verify_release_layout.py` validates the

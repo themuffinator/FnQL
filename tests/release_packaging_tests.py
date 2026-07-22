@@ -677,13 +677,27 @@ class ReleasePackagingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "does not contain any artifact directories"):
                 release.release_artifact_dirs(root)
 
-    def test_release_artifact_dirs_reject_64_bit_architecture_names(self) -> None:
+    def test_release_artifact_dirs_require_supported_windows_linux_set(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "windows-msvc-x86").mkdir()
-            (root / "linux-x86_64").mkdir()
+            for name in release.PUBLISHED_RELEASE_ARTIFACTS:
+                (root / name).mkdir()
 
-            with self.assertRaisesRegex(ValueError, "32-bit x86 only"):
+            self.assertEqual(
+                [path.name for path in release.release_artifact_dirs(root)],
+                sorted(release.PUBLISHED_RELEASE_ARTIFACTS),
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in release.PUBLISHED_RELEASE_ARTIFACTS:
+                (root / name).mkdir()
+            (root / "macos-x86_64").mkdir()
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "supported Windows/Linux set.*unsupported: macos-x86_64",
+            ):
                 release.release_artifact_dirs(root)
 
     def test_release_stage_rejects_a_64_bit_pe_even_without_an_arch_suffix(self) -> None:
@@ -839,11 +853,6 @@ class ReleasePackagingTests(unittest.TestCase):
             )
             self.assertEqual(destination.read_bytes(), payload.read_bytes())
 
-    def test_unsigned_macos_override_is_manual_only(self) -> None:
-        args = type("Args", (), {"channel": "release", "allow_unsigned_macos": True})()
-        with self.assertRaisesRegex(ValueError, "only valid for manual releases"):
-            release.build_archives(args)
-
     def test_macos_policy_requires_supported_minimum_and_signed_app(self) -> None:
         with self.assertRaisesRegex(ValueError, "LSMinimumSystemVersion"):
             release.validate_macos_distribution_files(
@@ -917,7 +926,7 @@ class ReleasePackagingTests(unittest.TestCase):
             cmake,
         )
 
-    def test_release_workflow_keeps_retail_x86_and_adds_native_macos(self) -> None:
+    def test_release_workflow_publishes_only_supported_windows_and_linux(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
             encoding="utf-8"
         )
@@ -947,43 +956,28 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertNotIn("docs/fnquake3/", workflow)
         self.assertIn('gh release create "${FNQL_RELEASE_TAG}"', workflow)
         self.assertNotIn("ubuntu-arm64:", workflow)
-        self.assertIn("  macos:", workflow)
-        self.assertIn("macos-15-intel", workflow)
-        self.assertIn("runner: macos-15", workflow)
-        self.assertIn("sign_macos:", workflow)
-        self.assertIn("default: false", workflow)
-        self.assertIn('python3 -m venv "$build_tools"', workflow)
-        self.assertIn('"$build_tools/bin/python" -m pip install', workflow)
-        self.assertIn('"$build_tools/bin" >> "$GITHUB_PATH"', workflow)
-        self.assertNotIn("python3 -m pip install meson==1.9.1 ninja", workflow)
-        self.assertIn("name: macos-${{ matrix.artifact_arch }}", workflow)
-        self.assertIn("name: Stage without project signing", workflow)
-        self.assertNotIn("--sign-identity -", workflow)
-        self.assertIn("MACOS_DEVELOPER_ID_P12_BASE64", workflow)
-        self.assertIn("  macos-release-sign:", workflow)
-        self.assertIn("needs: [macos]", workflow)
-        self.assertIn("name: unsigned-apple-${{ matrix.artifact_arch }}", workflow)
+        self.assertNotIn("sign_macos:", workflow)
+        macos_job = workflow.split("  macos:", 1)[1].split(
+            "\n  macos-release-sign:", 1
+        )[0]
+        signing_job = workflow.split("  macos-release-sign:", 1)[1].split(
+            "\n  ubuntu-x86:", 1
+        )[0]
+        self.assertIn("if: ${{ false }}", macos_job)
+        self.assertIn("if: ${{ false }}", signing_job)
         self.assertIn(
-            "if: ${{ github.event_name != 'workflow_dispatch' || !inputs.sign_macos }}",
+            "needs: [prepare, windows-msys32, windows-msvc, source-validation, ubuntu-x86]",
             workflow,
         )
-        self.assertEqual(
-            workflow.count(
-                "if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_macos }}"
-            ),
-            2,
-        )
         self.assertIn(
-            "needs: [prepare, push-build-validation, macos-release-sign]",
+            "needs: [prepare, push-build-validation]",
             workflow,
         )
         self.assertIn("needs.push-build-validation.result == 'success'", workflow)
-        self.assertIn("needs.macos-release-sign.result == 'skipped'", workflow)
-        self.assertIn("signature_args+=(--allow-unsigned-macos)", workflow)
-        self.assertIn("name: macos-x86_64", workflow)
-        self.assertIn("name: macos-aarch64", workflow)
-        self.assertIn("ditto -c -k --sequesterRsrc bin macos-payload.zip", workflow)
-        self.assertIn("path: macos-payload.zip", workflow)
+        publish_job = workflow.split("  publish:", 1)[1]
+        self.assertNotIn("Download Intel macOS artifact", publish_job)
+        self.assertNotIn("Download Apple Silicon macOS artifact", publish_job)
+        self.assertNotIn("allow-unsigned-macos", publish_job)
         self.assertNotIn("arch: [x86, x86_64]", workflow)
         self.assertNotIn("arch: [arm64, x86, x64]", workflow)
 

@@ -94,72 +94,27 @@ class MacOSSupportSourceTests(unittest.TestCase):
                 source,
             )
 
-    def test_release_ci_covers_both_native_apple_architectures(self) -> None:
+    def test_release_ci_keeps_macos_artifacts_disabled(self) -> None:
         workflow = read(".github/workflows/release.yml")
         build_guide = read("BUILD.md")
-        self.assertIn("macos-15-intel", workflow)
-        self.assertIn("runner: macos-15", workflow)
-        self.assertIn("artifact_arch: x86_64", workflow)
-        self.assertIn("artifact_arch: aarch64", workflow)
-        self.assertIn("sign_macos:", workflow)
-        self.assertIn("default: false", workflow)
-        self.assertIn('python3 -m venv "$build_tools"', workflow)
-        self.assertNotIn("python3 -m pip install meson==1.9.1 ninja", workflow)
+        self.assertNotIn("sign_macos:", workflow)
         self.assertIn("python3 -m venv .tmp/macos-build-tools", build_guide)
         self.assertNotIn("python3 -m pip install meson==1.9.1 ninja", build_guide)
-        self.assertIn("scripts/macos_bundle.py", workflow)
-        self.assertIn("Stage without project signing", workflow)
-        self.assertNotIn("--sign-identity -", workflow)
-        self.assertIn("macos-release-sign:", workflow)
-        self.assertIn("Developer ID sign, notarize, and staple", workflow)
-        self.assertIn("name: unsigned-apple-${{ matrix.artifact_arch }}", workflow)
-        self.assertIn(
-            "if: ${{ github.event_name != 'workflow_dispatch' || !inputs.sign_macos }}",
-            workflow,
-        )
-        self.assertEqual(
-            workflow.count(
-                "if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_macos }}"
-            ),
-            2,
-        )
-        self.assertIn("MACOS_DEVELOPER_ID_P12_BASE64", workflow)
-        self.assertIn("MACOS_NOTARY_KEY_BASE64", workflow)
-        self.assertIn('--keychain "$FNQL_MACOS_KEYCHAIN_PATH"', workflow)
-        self.assertIn("codesign --verify --deep --strict", workflow)
-        self.assertIn("com.apple.security.cs.allow-unsigned-executable-memory", workflow)
-        self.assertIn("otool -L", workflow)
-        self.assertIn("release.validate_stage_tree", workflow)
-        self.assertIn("Create deterministic unsigned macOS payload", workflow)
-        self.assertIn('release.write_release_archive(Path("bin"), payload)', workflow)
-        self.assertNotIn("ditto -c -k --norsrc bin macos-payload.zip", workflow)
-        self.assertIn("ditto -c -k --sequesterRsrc bin macos-payload.zip", workflow)
-        self.assertIn("path: macos-payload.zip", workflow)
         self.assertIn("if: always()", workflow)
-        self.assertIn("needs: [prepare, windows-msys32, windows-msvc, source-validation, macos, ubuntu-x86]", workflow)
-        self.assertIn("needs: [prepare, push-build-validation, macos-release-sign]", workflow)
+        self.assertIn("needs: [prepare, windows-msys32, windows-msvc, source-validation, ubuntu-x86]", workflow)
+        self.assertIn("needs: [prepare, push-build-validation]", workflow)
         self.assertIn("needs.push-build-validation.result == 'success'", workflow)
-        self.assertIn("needs.macos-release-sign.result == 'skipped'", workflow)
-        self.assertIn("signature_args+=(--allow-unsigned-macos)", workflow)
-        self.assertIn("name: macos-x86_64", workflow)
-        self.assertIn("name: macos-aarch64", workflow)
         macos_job = workflow.split("  macos:", 1)[1].split(
             "\n  macos-release-sign:", 1
         )[0]
-        stamp_step = macos_job.index("name: Stamp release build version")
-        configure_step = macos_job.index("name: Configure, build, and test")
-        self.assertIn(
-            "python3 scripts/generate_docs.py",
-            macos_job[stamp_step:configure_step],
-        )
         signing_job = workflow.split("  macos-release-sign:", 1)[1].split(
             "\n  ubuntu-x86:", 1
         )[0]
-        self.assertNotIn("actions/checkout", signing_job)
-        self.assertLess(
-            signing_job.index("Extract and validate unsigned payload"),
-            signing_job.index("Configure isolated Developer ID credentials"),
-        )
+        self.assertIn("if: ${{ false }}", macos_job)
+        self.assertIn("if: ${{ false }}", signing_job)
+        publish_job = workflow.split("  publish:", 1)[1]
+        self.assertNotIn("macos-x86_64", publish_job)
+        self.assertNotIn("macos-aarch64", publish_job)
 
     def test_signing_assets_use_hardened_runtime_entitlement(self) -> None:
         entitlements = read("misc/macos/fnql.entitlements")

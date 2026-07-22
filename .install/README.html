@@ -364,7 +364,7 @@
       </div>
       <ol>
         <li>Install <a href="https://store.steampowered.com/app/282440/Quake_Live/">Quake Live through Steam</a> and launch the retail game once so Steam creates its normal files and player profile.</li>
-        <li>Download the Windows or macOS <code>.zip</code>, or Linux <code>.tar.gz</code>, from the <a href="https://github.com/themuffinator/FnQL/releases/latest">latest FnQL release</a>.</li>
+        <li>Download the supported Windows <code>.zip</code> or Linux <code>.tar.gz</code> from the <a href="https://github.com/themuffinator/FnQL/releases/latest">latest FnQL release</a>.</li>
       </ol>
       <div class="feature-grid">
         <article class="feature-group">
@@ -383,16 +383,8 @@
             <li>From that folder run <code>./fnql.ded +set fs_steampath "$PWD" +set dedicated 2 +map campgrounds</code>.</li>
           </ol>
         </article>
-        <article class="feature-group">
-          <h3>Native macOS engine and tools</h3>
-          <ol>
-            <li>Choose the Intel <code>x86_64</code> or Apple Silicon <code>aarch64</code> ZIP and preserve the complete <code>FnQL.app</code> layout.</li>
-            <li>The app contains its renderer dylibs and FnQL sidecars; <code>fnql.ded</code> and <code>fnql-audiozonesc</code> are included beside it.</li>
-            <li>Both architectures are compiled, automatically tested, and dependency-audited in CI. Ordinary builds receive no project-applied app-bundle or Developer ID signature by default (Apple Silicon retains clang's required ad-hoc Mach-O signature), while public release runs explicitly use an isolated Developer ID signing and notarization job. Physical-Apple-hardware renderer smoke remains a promotion gate, and the package includes no macOS Steam provider or Valve runtime. Signing and Universal 2 commands are in the Build Guide.</li>
-          </ol>
-        </article>
       </div>
-      <p class="footer">Retail Quake Live ships native Linux server modules, but its client and WebUI modules are Win32-only. It ships no macOS game, client, UI, or QVM modules. Native Linux client and macOS packages are engine/platform targets rather than retail-play paths; use the Win32/x86 package for retail client play.</p>
+      <p class="footer">Official releases support the Windows Win32/x86 retail client and Linux i686 dedicated server. Retail ships no native Linux client/UI modules and no macOS game, client, UI, or QVM modules, so FnQL publishes no macOS package and makes no native macOS retail-play claim.</p>
       <p class="footer">FnQL locates conventional Steam libraries automatically. For a custom library, start it with <code>+set fs_steampath "&lt;Quake Live folder&gt;"</code>. Steam and WebUI features fail safely when optional runtime components are unavailable.</p>
       <p class="footer">To compile FnQL yourself, use the <a href="https://github.com/themuffinator/FnQL/blob/main/BUILD.md">Build Guide</a>.</p>
     </section>

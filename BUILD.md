@@ -20,6 +20,10 @@ Retail `bin.pk3` ships `qagamex86.dll`, `cgamex86.dll`, and `uix86.dll`; the x64
 build remains useful for engine-only validation but cannot load those x86
 modules in-process.
 
+Official release support is deliberately limited to the Windows Win32/x86
+retail client and Linux i686 dedicated server. Other build targets are
+developer-only and are not published as supported downloads.
+
 All maintained build graphs generate `fnql-web.pak` beside the client. Keep
 that sidecar with the executable when copying a build manually. It contains
 only FnQL's settings overrides and still requires the legitimate retail
@@ -283,12 +287,13 @@ After that, either copy the resulting binaries from the `build` directory or run
 
 ---
 
-### macos
+### macOS (unsupported development target)
 
-FnQL supports native Intel (`x86_64`) and Apple Silicon (`arm64`) engine builds
-on macOS 11 or newer. Meson is the maintained build path. It builds SDL3 and
-the other portable dependencies from the pinned wrap definitions, so a release
-does not acquire Homebrew or MacPorts library paths:
+FnQL retains native Intel (`x86_64`) and Apple Silicon (`arm64`) engine/tool
+builds on macOS 11 or newer for development. They are not supported release
+targets and the release workflow neither builds nor publishes them because
+retail Quake Live provides no macOS game modules or QVMs. Meson is the
+maintained local build path and uses the pinned dependency wraps:
 
 ```sh
 python3 -m venv .tmp/macos-build-tools
@@ -316,11 +321,9 @@ python3 scripts/macos_bundle.py \
   --output .tmp/FnQL-macOS
 ```
 
-The staged distribution contains `FnQL.app`, `fnql.ded`, and
+The locally staged development bundle contains `FnQL.app`, `fnql.ded`, and
 `fnql-audiozonesc`. The app owns its renderer dylibs, `FnQL-pkg.fnz`, and
-`fnql-web.pak` under `Contents/MacOS`. CI verifies the plist, canonical layout,
-executable modes, and every Mach-O dependency on both native runner families;
-the explicit manual-release lane additionally verifies distribution signatures.
+`fnql-web.pak` under `Contents/MacOS`.
 Install MoltenVK (for example from the Vulkan SDK) only when testing the
 optional `vk` renderer; the default `glx` renderer uses Apple's OpenGL path.
 Meson install trees are the only supported input to the distribution packager.
@@ -355,11 +358,9 @@ arguments with:
 --notary-profile fnql-notary
 ```
 
-GitHub Actions also leaves macOS artifacts unsigned on pushes and on default
-manual runs. Set the `sign_macos` workflow input to `true` only for an explicit
-public release: that enables the isolated Developer ID/notarization jobs and
-release publication, and fails closed if the required protected secrets are
-not configured.
+The GitHub release workflow hard-disables its retained macOS build/signing job
+definitions. These local signing commands are for development experiments and
+do not make the bundle retail-playable or eligible for official publication.
 
 The tool signs nested code inside-out with the hardened runtime, submits with
 `notarytool --wait`, staples the app, and verifies it with `codesign`,
@@ -376,7 +377,7 @@ renderer promotion. FnQL reports the missing module before checking for a
 mod-provided QVM. The Windows x86 package remains the retail client-play path;
 FnQL does not reconstruct or distribute replacement game code.
 
-The macOS package intentionally contains neither a Steam provider nor Valve's
+Any locally built macOS bundle intentionally contains neither a Steam provider nor Valve's
 `libsteam_api.dylib`; platform authentication therefore remains unavailable
 and is reported honestly. A future production provider must be separately
 licensed, architecture-matched, signed with a compatible Team ID, and bundled
