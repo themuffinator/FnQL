@@ -5,11 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RENDERERS = {
-    "renderer": "GLX",
-    "renderervk": "VULKAN",
-    "rendererrtx": "RTX",
-}
+RENDERERS = ("renderer", "renderervk", "rendererrtx")
 
 
 def read(relative_path: str) -> str:
@@ -17,7 +13,7 @@ def read(relative_path: str) -> str:
 
 
 class RendererCvarCompatibilitySourceTests(unittest.TestCase):
-    def test_shared_contract_contains_every_retail_only_renderer_control(self) -> None:
+    def test_shared_contract_contains_supported_retail_renderer_controls(self) -> None:
         contract = read("code/renderercommon/tr_ql_cvars.h")
         retail_only = (
             "r_fastSkyColor",
@@ -33,12 +29,6 @@ class RendererCvarCompatibilitySourceTests(unittest.TestCase):
             "r_debugShaderIndex",
             "r_debugSortExcept",
             "r_debugAds",
-            "r_floatingPointFBOs",
-            "r_enablePostProcess",
-            "r_enableColorCorrect",
-            "r_postProcessActive",
-            "r_colorCorrectActive",
-            "r_contrast",
         )
         for name in retail_only:
             with self.subTest(name=name):
@@ -47,14 +37,24 @@ class RendererCvarCompatibilitySourceTests(unittest.TestCase):
         self.assertIn('"r_fastSkyColor", "0x000000"', contract)
         self.assertIn('"r_drawSkyFloor", "1"', contract)
         self.assertIn('"r_showSmp", "0", CVAR_CHEAT', contract)
-        self.assertIn('"r_enablePostProcess", "1"', contract)
-        self.assertIn('"r_enableColorCorrect", "1"', contract)
 
-    def test_retail_bloom_control_surface_is_not_renderer_owned(self) -> None:
-        contract = read("code/renderercommon/tr_ql_cvars.h")
-        retail_bloom_names = (
+    def test_legacy_ql_postprocess_control_surface_is_absent(self) -> None:
+        forbidden = (
+            "RBPP_",
+            "RC_BLOOM_POST_PROCESS",
+            "RetailBloomPostProcessCommand",
+            "bloomPostProcessCommand_t",
+            "R_QLUpdateRendererCvars",
+            "R_QLRetailContrast",
+            "retailContrast",
+            "retail_contrast",
+            "r_floatingPointFBOs",
+            "r_enablePostProcess",
             "r_enableBloom",
+            "r_enableColorCorrect",
+            "r_postProcessActive",
             "r_bloomActive",
+            "r_colorCorrectActive",
             "r_bloomPasses",
             "r_bloomIntensity",
             "r_bloomBrightThreshold",
@@ -64,69 +64,25 @@ class RendererCvarCompatibilitySourceTests(unittest.TestCase):
             "r_bloomSaturation",
             "r_bloomSceneIntensity",
             "r_bloomSceneSaturation",
+            "r_contrast",
+            "r_qlRetailPostProcessBridge",
         )
+        source_suffixes = {
+            ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp",
+            ".frag", ".vert", ".comp", ".geom", ".glsl",
+            ".rgen", ".rchit", ".rmiss",
+        }
 
-        for name in retail_bloom_names:
-            with self.subTest(name=name):
-                self.assertNotIn(f'"{name}"', contract)
+        for path in (ROOT / "code").rglob("*"):
+            if not path.is_file() or path.suffix not in source_suffixes:
+                continue
+            source = path.read_text(encoding="utf-8")
+            for fingerprint in forbidden:
+                with self.subTest(path=path.relative_to(ROOT), fingerprint=fingerprint):
+                    self.assertNotIn(fingerprint, source)
 
-        self.assertNotIn("cvar_t *enableBloom", contract)
-        self.assertNotIn("cvar_t *bloomActive", contract)
-        self.assertNotIn("qlRendererCvars.bloom", contract)
-
-    def test_retail_postprocess_never_preempts_fnq3_renderer_controls(self) -> None:
-        contract = read("code/renderercommon/tr_ql_cvars.h")
-        self.assertNotIn("bridgeMarkerExisted", contract)
-        self.assertNotIn("retailPostProcessExisted", contract)
-        self.assertNotIn("useRetailPostProcess", contract)
-        self.assertIn(
-            '"r_qlRetailPostProcessBridge", "0",\n\t\tCVAR_ROM',
-            contract,
-        )
-        self.assertIn('ri.Cvar_Set( "r_qlRetailPostProcessBridge", "0" )', contract)
-        self.assertNotIn("R_QLPostParameterModificationCount", contract)
-        self.assertNotIn("postParameterModificationCount", contract)
-        self.assertNotIn("R_QLBridgeCvar", contract)
-        migration_start = contract.index("if ( retiredBridgeOwnedPostProcess )")
-        migration_end = contract.index("/* The ROM registration pins")
-        normal_runtime = contract[:migration_start] + contract[migration_end:]
-        self.assertNotIn('ri.Cvar_Set( "r_bloom"', normal_runtime)
-        self.assertNotIn('ri.Cvar_Set( "r_bloom_', normal_runtime)
-        self.assertNotIn('ri.Cvar_Set( "r_colorGrade"', normal_runtime)
-
-        contrast = contract[
-            contract.index("static ID_INLINE float R_QLRetailContrast") :
-            contract.index("#endif /* TR_QL_CVARS_H */")
-        ]
-        self.assertIn("return 1.0f;", contrast)
-        self.assertNotIn("qlRendererCvars.contrast->value", contrast)
-
-    def test_retired_bridge_profiles_restore_fnq3_bloom_defaults_once(self) -> None:
-        contract = read("code/renderercommon/tr_ql_cvars.h")
-
-        self.assertIn("retiredBridgeOwnedPostProcess", contract)
-        self.assertIn(
-            'atoi( ri.Cvar_VariableString( "r_qlRetailPostProcessBridge" ) ) != 0',
-            contract,
-        )
-        migration = contract[
-            contract.index("if ( retiredBridgeOwnedPostProcess )") :
-            contract.index("/* The ROM registration pins")
-        ]
-        self.assertIn(
-            'ri.Cvar_Set( "r_bloom", backend == QL_CVAR_BACKEND_GLX ? "0" : "1" )',
-            migration,
-        )
-        for name, value in (
-            ("r_bloom_intensity", "0.5"),
-            ("r_bloom_threshold", "0.75"),
-            ("r_colorGrade", "0"),
-            ("r_bloom_passes", "5"),
-        ):
-            self.assertIn(f'ri.Cvar_Set( "{name}", "{value}" )', migration)
-
-    def test_all_renderers_register_update_and_consume_operational_controls(self) -> None:
-        for renderer, backend in RENDERERS.items():
+    def test_all_renderers_register_and_consume_operational_controls(self) -> None:
+        for renderer in RENDERERS:
             with self.subTest(renderer=renderer):
                 local = read(f"code/{renderer}/tr_local.h")
                 init = read(f"code/{renderer}/tr_init.c")
@@ -138,9 +94,9 @@ class RendererCvarCompatibilitySourceTests(unittest.TestCase):
                 world = read(f"code/{renderer}/tr_world.c")
 
                 self.assertIn('renderercommon/tr_ql_cvars.h"', local)
-                self.assertIn(f"R_QLRegisterRendererCvars( QL_CVAR_BACKEND_{backend} )", init)
+                self.assertIn("R_QLRegisterRendererCvars();", init)
                 self.assertIn("qlRendererCvars_t qlRendererCvars;", main)
-                self.assertIn("R_QLUpdateRendererCvars(", commands)
+                self.assertNotIn("R_QLUpdateRendererCvars", commands)
                 self.assertIn("R_QLSkipBatch( tess.numIndexes )", shade)
                 self.assertIn("qlRendererCvars.debugSortExcept", shade)
                 self.assertIn("qlRendererCvars.debugShaderIndex", shade)
@@ -187,7 +143,8 @@ class RendererCvarCompatibilitySourceTests(unittest.TestCase):
             client,
         )
         self.assertIn('Cvar_Set2( "r_qlRetailVideoBridge", "1", qtrue )', client)
-        self.assertIn('Cvar_Set( "r_mode", r_windowedMode->string )', client)
+        self.assertNotIn('Cvar_Set( "r_mode", r_windowedMode->string )', client)
+        self.assertIn("CL_GetRequestedMode( qboolean fullscreen )", client)
         self.assertIn('Cvar_Set( "r_stereoEnabled", r_stereo->string )', client)
         self.assertIn('Cvar_Set2( "r_aspectRatio"', client)
         self.assertIn('Cvar_Set2( "r_gl_vendor", cls.glconfig.vendor_string', client)
@@ -195,28 +152,53 @@ class RendererCvarCompatibilitySourceTests(unittest.TestCase):
         self.assertIn("!r_noFastRestart->integer", client)
         self.assertIn('Cvar_Set2( "r_windowedMode", "-1", qtrue )', client)
 
-    def test_retail_contrast_reaches_every_final_output_shader(self) -> None:
+    def test_final_output_shaders_have_no_ql_postprocess_stage(self) -> None:
         classic = read("code/renderer/tr_arb.c")
         vulkan_shader = read("code/renderervk/shaders/gamma.frag")
         vulkan = read("code/renderervk/vk.c")
         rtx_shader = read("code/rendererrtx/shaders/gamma.frag")
         rtx = read("code/rendererrtx/vk.c")
 
-        self.assertIn("R_QLRetailContrast()", classic)
-        self.assertIn("retailContrast", vulkan_shader)
-        self.assertIn("frag_spec_data.retail_contrast = R_QLRetailContrast()", vulkan)
-        self.assertIn("retailContrast", rtx_shader)
-        self.assertIn("frag_spec_data.retail_contrast = R_QLRetailContrast()", rtx)
+        for source in (classic, vulkan_shader, vulkan, rtx_shader, rtx):
+            self.assertNotIn("R_QLRetailContrast", source)
+            self.assertNotIn("retailContrast", source)
+            self.assertNotIn("retail_contrast", source)
 
-    def test_retail_float_framebuffer_alias_cannot_change_fnq3_storage(self) -> None:
+    def test_stale_fnq3_bloom_profile_repair_is_narrow_and_versioned(self) -> None:
+        migration = read("code/renderercommon/tr_fnq3_bloom_config.h")
+
+        self.assertIn('"r_fnq3BloomConfigVersion", "0"', migration)
+        self.assertIn('CVAR_ARCHIVE | CVAR_PROTECTED', migration)
+        self.assertIn('atof( threshold ) - 0.25f', migration)
+        self.assertIn('atof( intensity ) - 0.5f', migration)
+        self.assertIn('atoi( passes ) == 1', migration)
+        self.assertIn('ri.Cvar_Set( "r_bloom_threshold", "0.75" )', migration)
+        self.assertIn('ri.Cvar_Set( "r_bloom_passes", "5" )', migration)
+
+        for forbidden in (
+            "r_enablePostProcess",
+            "r_enableBloom",
+            "r_bloomBrightThreshold",
+            "r_qlRetailPostProcessBridge",
+        ):
+            self.assertNotIn(forbidden, migration)
+
+        for renderer in RENDERERS:
+            init = read(f"code/{renderer}/tr_init.c")
+            self.assertIn('renderercommon/tr_fnq3_bloom_config.h"', init)
+            self.assertLess(
+                init.index("R_QLRegisterRendererCvars();"),
+                init.index("R_MigrateFnQ3BloomConfig();"),
+            )
+
+    def test_fnq3_controls_exclusively_own_framebuffer_and_bloom_storage(self) -> None:
         classic = read("code/renderer/tr_arb.c")
         vulkan = read("code/renderervk/vk.c")
         rtx = read("code/rendererrtx/vk.c")
 
         contract = read("code/renderercommon/tr_ql_cvars.h")
 
-        self.assertIn('"r_floatingPointFBOs", "0"', contract)
-        self.assertIn("FnQ3 r_hdr and r_hdrPrecision own scene storage", contract)
+        self.assertNotIn("r_floatingPointFBOs", contract)
         for source in (classic, vulkan, rtx):
             self.assertNotIn("qlRendererCvars.floatingPointFBOs", source)
 

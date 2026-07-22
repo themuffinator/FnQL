@@ -917,11 +917,8 @@ static qboolean GLX_PostShader_SetFinalUniforms( PostShaderState *state,
 	const qboolean lgg = program ?
 		GLX_PostShader_GradeUsesLiftGammaGain( program->plan.key.grade ) : qfalse;
 	const qboolean lut = ( program && program->plan.key.lutActive ) ? qtrue : qfalse;
-	const qboolean postParamsRequired =
-		( program && ( program->plan.featureMask &
-		( GLX_POST_SHADER_FEATURE_OUTPUT_TRANSFORM |
-		GLX_POST_SHADER_FEATURE_GREYSCALE |
-		GLX_POST_SHADER_FEATURE_HDR_HEADROOM_OUTPUT ) ) != 0u ) ? qtrue : qfalse;
+	const qboolean postParamsRequired = program ?
+		GLX_PostShader_PostParamsRequired( program->plan ) : qfalse;
 	const qboolean outputParamsRequired =
 		( program && ( program->plan.featureMask &
 		( GLX_POST_SHADER_FEATURE_HDR_HEADROOM_OUTPUT |

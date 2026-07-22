@@ -4,6 +4,8 @@
 
 namespace fnql::client {
 
+constexpr int kRetailMenuAspectPolicyVersion = 1;
+
 struct CanvasGeometry {
 	float scale = 1.0f;
 	float biasX = 0.0f;
@@ -30,6 +32,17 @@ inline CanvasGeometry CalculateCanvasGeometry( int width, int height ) {
 	}
 
 	return geometry;
+}
+
+// FnQL originally archived 0 as cl_menuAspect's default.  When retail-native
+// UI drawing became the compatibility target the default changed to 1, but an
+// already-written 0 continues to override that new default.  Migrate that
+// legacy archived value once; after the marker is current, an explicit opt-out
+// remains an opt-out.
+inline bool ShouldMigrateMenuAspectToRetail( bool archivedValueExisted,
+	int menuAspect, int policyVersion ) {
+	return archivedValueExisted && menuAspect == 0 &&
+		policyVersion < kRetailMenuAspectPolicyVersion;
 }
 
 } // namespace fnql::client

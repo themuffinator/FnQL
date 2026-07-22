@@ -3346,6 +3346,7 @@ bool PostShaderFinalEligibilityCoversLegacyGamma()
 	CHECK( plan.key.outputTransform == qtrue );
 	CHECK( plan.key.transfer == glx::OutputTransfer::SdrSrgb );
 	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_LEGACY_GAMMA ) != 0u );
+	CHECK( glx::GLX_PostShader_PostParamsRequired( plan ) == qfalse );
 	CHECK( glx::GLX_PostShader_FinalOutputDomainSupported( plan, output, qtrue ) == qtrue );
 	CHECK( glx::GLX_PostShader_FinalCompatibilityRejectMask( plan, output,
 		qfalse, qtrue ) == glx::GLX_POST_SHADER_DIRECT_REJECT_NONE );
@@ -3363,6 +3364,19 @@ bool PostShaderFinalEligibilityCoversLegacyGamma()
 	CHECK( ( bloomPrefinalPlan.featureMask & glx::GLX_POST_SHADER_FEATURE_OUTPUT_TRANSFORM ) == 0u );
 	CHECK( glx::GLX_PostShader_FinalCompatibilityRejectMask( bloomPrefinalPlan,
 		output, qtrue, qfalse ) == glx::GLX_POST_SHADER_DIRECT_REJECT_NONE );
+	CHECK( glx::GLX_PostShader_PostParamsRequired( bloomPrefinalPlan ) == qfalse );
+
+	output.crtAmount = 1.0f;
+	plan = glx::GLX_PostShader_BuildPlan( output );
+	CHECK( plan.key.crt == qtrue );
+	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_CRT ) != 0u );
+	CHECK( glx::GLX_PostShader_PostParamsRequired( plan ) == qfalse );
+
+	output.crtAmount = 0.0f;
+	output.greyscale = 1.0f;
+	plan = glx::GLX_PostShader_BuildPlan( output );
+	CHECK( glx::GLX_PostShader_PostParamsRequired( plan ) == qtrue );
+	output.greyscale = 0.0f;
 
 	glx::OutputTransform hdrTransferInSdr = output;
 	hdrTransferInSdr.transfer = glx::OutputTransfer::Hdr10Pq;
@@ -3383,8 +3397,14 @@ bool PostShaderFinalEligibilityCoversLegacyGamma()
 	CHECK( plan.valid == qtrue );
 	CHECK( plan.key.sceneLinear == qtrue );
 	CHECK( ( plan.featureMask & glx::GLX_POST_SHADER_FEATURE_SCENE_LINEAR ) != 0u );
+	CHECK( glx::GLX_PostShader_PostParamsRequired( plan ) == qtrue );
 	CHECK( glx::GLX_PostShader_FinalCompatibilityRejectMask( plan, output,
 		qfalse, qtrue ) == glx::GLX_POST_SHADER_DIRECT_REJECT_NONE );
+
+	plan = glx::GLX_PostShader_BuildPlanForPass( output, qfalse, qfalse );
+	CHECK( plan.key.sceneLinear == qtrue );
+	CHECK( plan.key.outputTransform == qfalse );
+	CHECK( glx::GLX_PostShader_PostParamsRequired( plan ) == qfalse );
 
 	return true;
 }

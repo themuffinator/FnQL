@@ -34,6 +34,9 @@ Every change should protect these project constraints:
    Quake Live evidence requires intentionally replacing incompatible behavior,
    document the evidence, scope the change narrowly, and add a regression gate
    for both the corrected behavior and unaffected paths.
+9. FnQL is a 32-bit-only project. Build, test, package, and launch only x86
+   artifacts (Win32 on Windows and the corresponding 32-bit target elsewhere).
+   Do not use x86_64 artifacts as validation and do not ship them.
 
 ## Reference Repositories
 

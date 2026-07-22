@@ -277,6 +277,18 @@ static ID_INLINE unsigned int GLX_PostShader_FeaturesForKey( const PostShaderKey
 	return features;
 }
 
+static ID_INLINE qboolean GLX_PostShader_PostParamsRequired(
+	const PostShaderPlan &plan )
+{
+	if ( plan.key.outputTransform && plan.key.sceneLinear ) {
+		return qtrue;
+	}
+
+	return ( plan.featureMask &
+		( GLX_POST_SHADER_FEATURE_GREYSCALE |
+		GLX_POST_SHADER_FEATURE_HDR_HEADROOM_OUTPUT ) ) != 0u ? qtrue : qfalse;
+}
+
 static ID_INLINE unsigned int GLX_PostShader_HashKey( const PostShaderKey &key,
 	unsigned int featureMask )
 {

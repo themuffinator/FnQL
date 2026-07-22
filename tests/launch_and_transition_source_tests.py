@@ -133,7 +133,18 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
         self.assertIn("SCR_FloatNear( width, screenWidth", screen)
         self.assertIn("SCR_FloatNear( *s0, retailS0", screen)
         self.assertIn("cls.state != CA_LOADING && cls.state != CA_PRIMED", screen)
-        self.assertIn("SCR_AdjustRetailConnectBackdropUV( args[9], x, y, w, h", ui)
+        draw_start = ui.index("case UI_R_DRAWSTRETCHPIC:")
+        draw_end = ui.index("case UI_R_MODELBOUNDS:", draw_start)
+        draw_stretch_pic = ui[draw_start:draw_end]
+        connect_adjust = "SCR_AdjustRetailConnectBackdropUV("
+        menu_adjust = "CL_UIAdjustStretchPic( &x, &y, &w, &h );"
+        self.assertIn("qboolean retailConnectBackdrop;", draw_stretch_pic)
+        self.assertIn("retailConnectBackdrop = " + connect_adjust, draw_stretch_pic)
+        self.assertIn("if ( !retailConnectBackdrop )", draw_stretch_pic)
+        self.assertLess(
+            draw_stretch_pic.index(connect_adjust),
+            draw_stretch_pic.index(menu_adjust),
+        )
         self.assertIn("re.DrawStretchPic( x, y, w, h, s0, t0, s1, t1, args[9] );", ui)
         self.assertIn("SCR_AdjustRetailCGameLoadingBackdropUV( x, y, w, h", cgame)
         self.assertIn("re.DrawStretchPic( x, y, w, h, s0, t0, s1, t1, args[9] );", cgame)
@@ -196,6 +207,10 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
         main = read_source("code/client/cl_main.cpp")
 
         self.assertIn('cl_menuAspect = Cvar_Get( "cl_menuAspect", "1", CVAR_ARCHIVE );', main)
+        self.assertIn('Cvar_Flags( "cl_menuAspect" )', main)
+        self.assertIn('Cvar_Get( "cl_menuAspectPolicyVersion", "0",', main)
+        self.assertIn("ShouldMigrateMenuAspectToRetail", main)
+        self.assertIn('Cvar_SetIntegerValue( "cl_menuAspect", 1 );', main)
         self.assertIn("The retail UI applies its centered 4:3 transform", ui)
         self.assertIn("!cl_menuAspect || cl_menuAspect->integer || cls.scale <= 0.0f", ui)
         self.assertIn("*x = ( *x - cls.biasX ) / cls.scale * xscale;", ui)

@@ -1212,6 +1212,9 @@ test('fnql_renderer_contract_source', python,
 test('fnql_renderer_cvar_compat_source', python,
   args: files('tests/renderer_cvar_compat_source_tests.py'),
 )
+test('fnql_fnq3_bloom_parity_source', python,
+  args: files('tests/fnq3_bloom_parity_source_tests.py'),
+)
 test('fnql_rtx_renderer_contract_source', python,
   args: files('tests/rtx_renderer_contract_source_tests.py'),
 )

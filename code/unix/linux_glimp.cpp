@@ -2244,17 +2244,18 @@ static qboolean GLW_LoadOpenGL( const char *name )
 	{
 		rserr_t err;
 		fullscreen = ( r_fullscreen->integer != 0 ) ? qtrue : qfalse;
+		const int mode = CL_GetRequestedMode( fullscreen );
 
 		// create the window and set up the context
-		err = GLW_StartDriverAndSetMode( r_mode->integer, r_modeFullscreen->string, fullscreen, qfalse /* vulkan */ );
+		err = GLW_StartDriverAndSetMode( mode, r_modeFullscreen->string, fullscreen, qfalse /* vulkan */ );
 		if ( err != RSERR_OK )
 		{
 			if ( err == RSERR_FATAL_ERROR )
 				goto fail;
 
-			if ( r_mode->integer != 3 || ( fullscreen && atoi( r_modeFullscreen->string ) != 3 ) )
+			if ( mode != 3 || ( fullscreen && atoi( r_modeFullscreen->string ) != 3 ) )
 			{
-				Com_Printf( "Setting \\r_mode %d failed, falling back on \\r_mode %d\n", r_mode->integer, 3 );
+				Com_Printf( "Setting video mode %d failed, falling back on mode %d\n", mode, 3 );
 
 				if ( GLW_StartDriverAndSetMode( 3, "", fullscreen, qfalse /* vulkan */ ) != RSERR_OK )
 				{
@@ -2399,9 +2400,10 @@ static qboolean GLW_LoadVulkan( void )
 	{
 		rserr_t err;
 		qboolean fullscreen = ( r_fullscreen->integer != 0 ) ? qtrue : qfalse;
+		const int mode = CL_GetRequestedMode( fullscreen );
 
 		// create the window and set up the context
-		err = GLW_StartDriverAndSetMode( r_mode->integer, r_modeFullscreen->string, fullscreen, qtrue /* vulkan */ );
+		err = GLW_StartDriverAndSetMode( mode, r_modeFullscreen->string, fullscreen, qtrue /* vulkan */ );
 		if ( err == RSERR_OK )
 		{
 			return qtrue;

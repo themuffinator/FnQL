@@ -46,16 +46,31 @@ class WindowManagementSourceTests(unittest.TestCase):
         self.assertIn("kDebounceMilliseconds = 100", scheduler)
         self.assertIn("now - deadline < 0x80000000u", scheduler)
         self.assertIn("ConsumeIfReady", source)
-        self.assertIn('Cvar_SetIntegerValue( "r_customWidth", request.width );', source)
-        self.assertIn('Cvar_SetIntegerValue( "r_customHeight", request.height );', source)
-        self.assertIn('Cvar_Set( "r_mode", "-1" );', source)
-        self.assertIn('Cvar_Set2( "r_windowedWidth", r_customwidth->string', source)
-        self.assertIn('Cvar_Set2( "r_windowedHeight", r_customheight->string', source)
+        self.assertIn('Cvar_Set2( "r_windowedMode", "-1", qtrue );', source)
+        self.assertIn('Cvar_Set2( "r_windowedWidth", va( "%d", request.width )', source)
+        self.assertIn('Cvar_Set2( "r_windowedHeight", va( "%d", request.height )', source)
+        self.assertNotIn('Cvar_Set( "r_mode", "-1" );', source)
         self.assertIn("request.preserveWindow ? REF_KEEP_WINDOW : REF_DESTROY_WINDOW", source)
         self.assertNotIn('Cbuf_AddText( "vid_restart fast window_resize', source)
         self.assertIn("if ( gw_minimized ||", source)
         self.assertIn("cl_windowModeChange", source)
         self.assertIn("CL_IsWindowResizeRestart()", read_text("code/sdl/sdl_glimp.cpp"))
+
+    def test_retail_windowed_mode_does_not_overwrite_r_mode(self) -> None:
+        client = read_text("code/client/cl_main.cpp")
+        self.assertIn("int CL_GetRequestedMode( qboolean fullscreen )", client)
+        self.assertIn("if ( !fullscreen && r_windowedMode )", client)
+        self.assertNotIn('Cvar_Set( "r_mode", r_windowedMode->string );', client)
+        self.assertIn("*width = r_windowedWidth->integer;", client)
+        self.assertIn("*height = r_windowedHeight->integer;", client)
+
+        for path in (
+            "code/sdl/sdl_glimp.cpp",
+            "code/win32/win_glimp.cpp",
+            "code/unix/linux_glimp.cpp",
+        ):
+            with self.subTest(path=path):
+                self.assertIn("CL_GetRequestedMode(", read_text(path))
 
     def test_canvas_geometry_is_refreshed_before_console_and_web_surfaces(self) -> None:
         client = read_text("code/client/cl_main.cpp")

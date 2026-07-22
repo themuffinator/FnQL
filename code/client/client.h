@@ -529,6 +529,7 @@ qboolean CL_CheckPaused( void );
 qboolean CL_NoDelay( void );
 int CL_DemoRecordMessageMode( void );
 
+int CL_GetRequestedMode( qboolean fullscreen );
 qboolean CL_GetModeInfo( int *width, int *height, float *windowAspect, int mode, const char *modeFS, int dw, int dh, qboolean fullscreen );
 qboolean CL_CopyClientIdentity( int clientNum, cgameClientIdentity_t *identity );
 qboolean CL_GetClientSteamId( int clientNum, unsigned int *steamIdLow, unsigned int *steamIdHigh );

@@ -48,7 +48,6 @@ layout(constant_id = 41) const float crtScanlineStrength = 0.55;
 layout(constant_id = 42) const float crtMaskStrength = 0.35;
 layout(constant_id = 43) const float crtCurvature = 0.01;
 layout(constant_id = 44) const float crtChromatic = 1.35;
-layout(constant_id = 45) const float retailContrast = 1.0;
 
 layout(push_constant) uniform PostPushConstants {
 	vec4 crtRuntime; // time seconds, inverse source width/height, unused
@@ -320,7 +319,6 @@ vec3 applyCRT(vec2 uv, vec3 originalColor) {
 	crtColor *= mix(1.0, vignette * shimmer, 0.85);
 	crtColor *= screen;
 	vec3 color = max(mix(originalColor, crtColor, amount), vec3(0.0));
-	color = (color - vec3(0.5)) * retailContrast + vec3(0.5);
 
 	if ( outputColorSpace == 1 ) {
 		return clamp(color, vec3(0.0), vec3(1.0));

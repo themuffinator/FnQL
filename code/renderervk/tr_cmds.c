@@ -801,7 +801,6 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 	if ( !tr.registered ) {
 		return;
 	}
-	R_QLUpdateRendererCvars( NULL, r_bloom, r_colorGrade );
 
 	glState.finishCalled = qfalse;
 

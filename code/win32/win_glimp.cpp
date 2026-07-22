@@ -1486,12 +1486,13 @@ static qboolean GLW_LoadOpenGL( const char *drivername )
 	if ( QGL_Init( buffer ) )
 	{
 		cdsFullscreen = r_fullscreen->integer != 0 ? qtrue : qfalse;
+		const int mode = CL_GetRequestedMode( cdsFullscreen );
 
 		// create the window and set up the context
-		if ( GLW_StartDriverAndSetMode( r_mode->integer, r_modeFullscreen->string, r_colorbits->integer, cdsFullscreen, qfalse ) != RSERR_OK )
+		if ( GLW_StartDriverAndSetMode( mode, r_modeFullscreen->string, r_colorbits->integer, cdsFullscreen, qfalse ) != RSERR_OK )
 		{
 			// if we're on a 24/32-bit desktop try it again but with a 16-bit desktop
-			if ( r_colorbits->integer != 16 || cdsFullscreen != qtrue || r_mode->integer != 3 )
+			if ( r_colorbits->integer != 16 || cdsFullscreen != qtrue || mode != 3 )
 			{
 				if ( GLW_StartDriverAndSetMode( 3, "", 16, qtrue, qfalse ) != RSERR_OK )
 				{
@@ -1708,9 +1709,10 @@ static qboolean GLW_LoadVulkan( void )
 	if ( QVK_Init() )
 	{
 		qboolean cdsFullscreen = r_fullscreen->integer != 0 ? qtrue : qfalse;
+		const int mode = CL_GetRequestedMode( cdsFullscreen );
 
 		// create the window and set up the context
-		if ( GLW_StartDriverAndSetMode( r_mode->integer, r_modeFullscreen->string, r_colorbits->integer, cdsFullscreen, qtrue ) == RSERR_OK )
+		if ( GLW_StartDriverAndSetMode( mode, r_modeFullscreen->string, r_colorbits->integer, cdsFullscreen, qtrue ) == RSERR_OK )
 			return qtrue;
 	}
 

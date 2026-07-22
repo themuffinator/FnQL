@@ -2570,9 +2570,6 @@ static void CL_CheckWindowResize( void ) {
 		return;
 	}
 
-	Cvar_SetIntegerValue( "r_customWidth", request.width );
-	Cvar_SetIntegerValue( "r_customHeight", request.height );
-	Cvar_Set( "r_mode", "-1" );
 	Cvar_Set2( "r_windowedMode", "-1", qtrue );
 	Cvar_Set2( "r_windowedWidth", va( "%d", request.width ), qtrue );
 	Cvar_Set2( "r_windowedHeight", va( "%d", request.height ), qtrue );
@@ -4285,19 +4282,6 @@ static void CL_InitRenderer( void ) {
 	if ( cls.glconfig.renderer_string[0] ) {
 		Cvar_Set2( "r_lastValidRenderer", cls.glconfig.renderer_string, qtrue );
 	}
-	if ( !r_fullscreen->integer ) {
-		Cvar_Set2( "r_windowedMode", r_mode->string, qtrue );
-		// SDL custom modes are expressed in logical window units, while the
-		// renderer publishes drawable pixels on HiDPI displays. Preserve the
-		// requested custom extent so a later restart does not scale it twice.
-		if ( r_mode->integer == -1 && r_customwidth && r_customheight ) {
-			Cvar_Set2( "r_windowedWidth", r_customwidth->string, qtrue );
-			Cvar_Set2( "r_windowedHeight", r_customheight->string, qtrue );
-		} else {
-			Cvar_Set2( "r_windowedWidth", va( "%d", cls.glconfig.vidWidth ), qtrue );
-			Cvar_Set2( "r_windowedHeight", va( "%d", cls.glconfig.vidHeight ), qtrue );
-		}
-	}
 	Cvar_Set2( "r_stereo", Cvar_VariableIntegerValue( "r_stereoEnabled" ) ? "1" : "0", qtrue );
 	retailWindowedModeModificationCount = r_windowedMode->modificationCount;
 	retailWindowedWidthModificationCount = r_windowedWidth->modificationCount;
@@ -4863,6 +4847,18 @@ static constexpr std::array<vidmode_t, 25> cl_vidModes = {{
 }};
 static constexpr int s_numVidModes = static_cast<int>( cl_vidModes.size() );
 
+int CL_GetRequestedMode( qboolean fullscreen )
+{
+	// Retail QL keeps its windowed selection independent from r_mode. Preserve
+	// FnQ3's dedicated fullscreen override at the platform boundary; the
+	// renderer resolves r_modeFullscreen after receiving this base selection.
+	if ( !fullscreen && r_windowedMode ) {
+		return r_windowedMode->integer;
+	}
+
+	return r_mode ? r_mode->integer : 3;
+}
+
 qboolean CL_GetModeInfo( int *width, int *height, float *windowAspect, int mode, const char *modeFS, int dw, int dh, qboolean fullscreen )
 {
 	const	vidmode_t *vm;
@@ -4887,8 +4883,13 @@ qboolean CL_GetModeInfo( int *width, int *height, float *windowAspect, int mode,
 		*height = dh;
 		pixelAspect = r_customPixelAspect->value;
 	} else if ( mode == -1 ) { // custom resolution
-		*width = r_customwidth->integer;
-		*height = r_customheight->integer;
+		if ( fullscreen || !r_windowedWidth || !r_windowedHeight ) {
+			*width = r_customwidth->integer;
+			*height = r_customheight->integer;
+		} else {
+			*width = r_windowedWidth->integer;
+			*height = r_windowedHeight->integer;
+		}
 		pixelAspect = r_customPixelAspect->value;
 	} else { // predefined resolution
 		vm = &cl_vidModes[ mode ];
@@ -4943,10 +4944,13 @@ static void CL_InitGLimp_Cvars( void )
 	Cvar_CheckRange( r_aspectRatio, "0", "3", CV_INTEGER );
 	Cvar_SetDescription( r_aspectRatio, "Retail aspect preset published from the active drawable: 0 standard/auto, 1 16:9+, 2 16:10, 3 narrower than 4:3." );
 	r_windowedMode = Cvar_Get( "r_windowedMode", "12", CVAR_ARCHIVE | CVAR_LATCH | CVAR_PROTECTED | CVAR_CLOUD );
+	Cvar_CheckRange( r_windowedMode, "-2", va( "%i", s_numVidModes-1 ), CV_INTEGER );
 	Cvar_SetDescription( r_windowedMode, "Retail windowed video mode; -1 uses r_windowedWidth and r_windowedHeight." );
 	r_windowedWidth = Cvar_Get( "r_windowedWidth", "1600", CVAR_ARCHIVE | CVAR_LATCH );
+	Cvar_CheckRange( r_windowedWidth, "4", nullptr, CV_INTEGER );
 	Cvar_SetDescription( r_windowedWidth, "Retail custom window width used by r_windowedMode -1." );
 	r_windowedHeight = Cvar_Get( "r_windowedHeight", "1024", CVAR_ARCHIVE | CVAR_LATCH );
+	Cvar_CheckRange( r_windowedHeight, "4", nullptr, CV_INTEGER );
 	Cvar_SetDescription( r_windowedHeight, "Retail custom window height used by r_windowedMode -1." );
 	r_stereo = Cvar_Get( "r_stereo", "0", CVAR_ARCHIVE | CVAR_LATCH );
 	Cvar_CheckRange( r_stereo, "0", "1", CV_INTEGER );
@@ -4976,11 +4980,6 @@ static void CL_InitGLimp_Cvars( void )
 				|| r_ext_gamma_control->modificationCount != retailGammaModificationCount ) );
 	if ( useRetailVideoConfig ) {
 		Cvar_Set2( "r_qlRetailVideoBridge", "1", qtrue );
-		Cvar_Set( "r_mode", r_windowedMode->string );
-		if ( r_windowedMode->integer == -1 ) {
-			Cvar_Set( "r_customWidth", r_windowedWidth->string );
-			Cvar_Set( "r_customHeight", r_windowedHeight->string );
-		}
 		Cvar_Set( "r_stereoEnabled", r_stereo->string );
 		Cvar_Set( "r_ignoreHWGamma", r_ext_gamma_control->integer ? "0" : "1" );
 	}
@@ -5033,6 +5032,16 @@ static void CL_InitGLimp_Cvars( void )
 	r_customheight = Cvar_Get( "r_customHeight", "1024", CVAR_ARCHIVE | CVAR_LATCH );
 	Cvar_CheckRange( r_customheight, "4", nullptr, CV_INTEGER );
 	Cvar_SetDescription( r_customheight, "Custom height to use with \\r_mode -1." );
+
+	if ( !useRetailVideoConfig ) {
+		// One-way migration for an FnQ3/FnQL profile that predates the retail
+		// windowed cvars. Once retail owns them they remain an independent pair.
+		Cvar_Set2( "r_windowedMode", r_mode->string, qtrue );
+		if ( r_mode->integer == -1 ) {
+			Cvar_Set2( "r_windowedWidth", r_customwidth->string, qtrue );
+			Cvar_Set2( "r_windowedHeight", r_customheight->string, qtrue );
+		}
+	}
 
 	r_colorbits = Cvar_Get( "r_colorbits", "0", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	Cvar_CheckRange( r_colorbits, "0", "32", CV_INTEGER );
@@ -5154,8 +5163,22 @@ void CL_Init( void ) {
 	cl_drawRecordingModificationCount = cl_drawRecording->modificationCount;
 	Cvar_SetDescription( cl_demoRecordMessage, "Retail demo recording indicator: hidden (0), detailed (1), or compact REC icon (2)." );
 	Cvar_SetDescription( cl_drawRecording, "FnQL compatibility alias for cl_demoRecordMessage." );
+	const unsigned menuAspectFlags = Cvar_Flags( "cl_menuAspect" );
+	const bool hadArchivedMenuAspect =
+		menuAspectFlags != CVAR_NONEXISTENT && ( menuAspectFlags & CVAR_ARCHIVE ) != 0;
+	cvar_t *menuAspectPolicyVersion = Cvar_Get( "cl_menuAspectPolicyVersion", "0",
+		CVAR_ARCHIVE_ND | CVAR_PRIVATE | CVAR_NOTABCOMPLETE );
 	cl_menuAspect = Cvar_Get( "cl_menuAspect", "1", CVAR_ARCHIVE );
 	Cvar_CheckRange( cl_menuAspect, "0", "1", CV_INTEGER );
+	if ( fnql::client::ShouldMigrateMenuAspectToRetail( hadArchivedMenuAspect,
+		cl_menuAspect->integer, menuAspectPolicyVersion->integer ) ) {
+		Cvar_SetIntegerValue( "cl_menuAspect", 1 );
+		Com_Printf( "Migrated legacy cl_menuAspect 0 to the retail menu drawing policy.\n" );
+	}
+	if ( menuAspectPolicyVersion->integer < fnql::client::kRetailMenuAspectPolicyVersion ) {
+		Cvar_SetIntegerValue( "cl_menuAspectPolicyVersion",
+			fnql::client::kRetailMenuAspectPolicyVersion );
+	}
 	Cvar_SetDescription( cl_menuAspect,
 		"Menu aspect correction:\n"
 		" 1 - retain the retail QL centered 4:3 menu layout (default)\n"

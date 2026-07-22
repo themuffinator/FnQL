@@ -154,6 +154,21 @@ void TestCanvasGeometryTracksDrawableAspect() {
 		"invalid transient drawable dimensions retain safe canvas defaults" );
 }
 
+void TestLegacyMenuAspectMigratesOnlyOnce() {
+	using fnql::client::ShouldMigrateMenuAspectToRetail;
+	using fnql::client::kRetailMenuAspectPolicyVersion;
+
+	Check( ShouldMigrateMenuAspectToRetail( true, 0, 0 ),
+		"an archived stretch value predating retail policy is migrated" );
+	Check( !ShouldMigrateMenuAspectToRetail( false, 0, 0 ),
+		"a clean command-line opt-out is not mistaken for an archived default" );
+	Check( !ShouldMigrateMenuAspectToRetail( true, 1, 0 ),
+		"an already-correct retail value remains unchanged" );
+	Check( !ShouldMigrateMenuAspectToRetail(
+		true, 0, kRetailMenuAspectPolicyVersion ),
+		"an explicit opt-out remains valid after the migration marker is current" );
+}
+
 } // namespace
 
 int main() {
@@ -166,5 +181,6 @@ int main() {
 	TestResizeSchedulerHandlesClockWrap();
 	TestResizeSchedulerCanCompleteInteractiveResize();
 	TestCanvasGeometryTracksDrawableAspect();
+	TestLegacyMenuAspectMigratesOnlyOnce();
 	return failures == 0 ? 0 : 1;
 }

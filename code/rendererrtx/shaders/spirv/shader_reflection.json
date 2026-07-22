@@ -306,7 +306,7 @@
       "source": "gamma.frag",
       "stage": "frag",
       "defines": [],
-      "byte_size": 25272,
+      "byte_size": 25104,
       "reflection": {
         "descriptor_bindings": [
           {

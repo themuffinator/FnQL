@@ -8004,7 +8004,7 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	VkGraphicsPipelineCreateInfo create_info;
 	VkViewport viewport;
 	VkRect2D scissor;
-	VkSpecializationMapEntry spec_entries[47];
+	VkSpecializationMapEntry spec_entries[46];
 	VkSpecializationInfo frag_spec_info;
 	VkPipeline *pipeline;
 	VkShaderModule fsmodule;
@@ -8049,7 +8049,6 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 		float crt_curvature;
 		float crt_chromatic;
 		int cubemap_capture_mode;
-		float retail_contrast;
 	} frag_spec_data;
 
 	switch ( program_index ) {
@@ -8243,7 +8242,6 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	frag_spec_data.crt_mode = ( r_crt && r_crt->integer && frag_spec_data.crt_amount > 0.001f &&
 		( program_index == 0 || program_index == 3 ) ) ? 1 : 0;
 	frag_spec_data.cubemap_capture_mode = ( program_index == 8 ) ? 1 : 0;
-	frag_spec_data.retail_contrast = R_QLRetailContrast();
 
 	if ( !vk_surface_format_color_depth( vk.present_format.format, &frag_spec_data.depth_r, &frag_spec_data.depth_g, &frag_spec_data.depth_b ) )
 		ri.Printf( PRINT_ALL, "Format %s not recognized, dither to assume 8bpc\n", vk_format_string( vk.base_format.format ) );
@@ -8431,10 +8429,6 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	spec_entries[45].constantID = 45;
 	spec_entries[45].offset = offsetof( struct FragSpecData, cubemap_capture_mode );
 	spec_entries[45].size = sizeof( frag_spec_data.cubemap_capture_mode );
-
-	spec_entries[46].constantID = 46;
-	spec_entries[46].offset = offsetof( struct FragSpecData, retail_contrast );
-	spec_entries[46].size = sizeof( frag_spec_data.retail_contrast );
 
 	frag_spec_info.mapEntryCount = ARRAY_LEN( spec_entries );
 	frag_spec_info.pMapEntries = spec_entries;

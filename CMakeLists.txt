@@ -551,6 +551,8 @@ IF(Python3_Interpreter_FOUND)
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/renderer_contract_source_tests.py")
 	add_test(NAME fnql_renderer_cvar_compat_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/renderer_cvar_compat_source_tests.py")
+	add_test(NAME fnql_fnq3_bloom_parity_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/fnq3_bloom_parity_source_tests.py")
 	add_test(NAME fnql_rtx_renderer_contract_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/rtx_renderer_contract_source_tests.py")
 	add_test(NAME fnql_rtx_raster_feature_parity_source

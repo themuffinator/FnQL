@@ -22,6 +22,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 // tr_init.c -- functions that are not called every frame
 
 #include "tr_local.h"
+#include "../renderercommon/tr_fnq3_bloom_config.h"
 #include "../renderercommon/tr_levelshot.h"
 
 glconfig_t	glConfig;
@@ -1841,7 +1842,7 @@ static void GfxInfo( void )
 	}
 	else
 	{
-		mode = ri.Cvar_VariableIntegerValue( "r_mode" );
+		mode = ri.Cvar_VariableIntegerValue( "r_windowedMode" );
 		fs = fsstrings[0];
 	}
 
@@ -1989,7 +1990,8 @@ R_Register
 */
 static void R_Register( void )
 {
-	R_QLRegisterRendererCvars( QL_CVAR_BACKEND_RTX );
+	R_QLRegisterRendererCvars();
+	R_MigrateFnQ3BloomConfig();
 
 	// make sure all the commands added here are also removed in R_Shutdown
 	ri.Cmd_AddCommand( "imagelist", R_ImageList_f );

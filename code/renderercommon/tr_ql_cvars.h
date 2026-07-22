@@ -19,16 +19,10 @@ version.
  * Quake III cvars.  Keep those controls in one renderer-neutral contract so
  * the GLx, Vulkan, and RTX backends cannot drift apart.
  *
- * These are compatibility controls, not replacements for FnQL's newer HDR
- * and color-grade controls. Bloom is deliberately excluded: the renderer has
- * only the FnQ3 r_bloom control surface and implementation.
+ * Post-processing controls are deliberately excluded. FnQL keeps the FnQ3
+ * framebuffer, HDR, color-grade, and bloom control surfaces and rendering
+ * paths without a second QL post-process owner or compatibility shim.
  */
-typedef enum qlRendererCvarBackend_e {
-	QL_CVAR_BACKEND_GLX,
-	QL_CVAR_BACKEND_VULKAN,
-	QL_CVAR_BACKEND_RTX
-} qlRendererCvarBackend_t;
-
 typedef struct qlRendererCvars_s {
 	cvar_t *fastSkyColor;
 	cvar_t *drawSkyFloor;
@@ -43,12 +37,6 @@ typedef struct qlRendererCvars_s {
 	cvar_t *debugShaderIndex;
 	cvar_t *debugSortExcept;
 	cvar_t *debugAds;
-	cvar_t *enablePostProcess;
-	cvar_t *enableColorCorrect;
-	cvar_t *postProcessActive;
-	cvar_t *colorCorrectActive;
-	cvar_t *contrast;
-	qlRendererCvarBackend_t backend;
 } qlRendererCvars_t;
 
 extern qlRendererCvars_t qlRendererCvars;
@@ -67,14 +55,9 @@ static ID_INLINE cvar_t *R_QLRegisterCvar( const char *name,
 	return cvar;
 }
 
-static ID_INLINE void R_QLRegisterRendererCvars( qlRendererCvarBackend_t backend )
+static ID_INLINE void R_QLRegisterRendererCvars( void )
 {
 	const int profileFlags = CVAR_ARCHIVE | CVAR_CLOUD;
-	const int postFlags = CVAR_ARCHIVE | CVAR_LATCH | CVAR_CLOUD;
-	const qboolean retiredBridgeOwnedPostProcess =
-		atoi( ri.Cvar_VariableString( "r_qlRetailPostProcessBridge" ) ) != 0
-			? qtrue : qfalse;
-	qlRendererCvars.backend = backend;
 
 	qlRendererCvars.fastSkyColor = R_QLRegisterCvar( "r_fastSkyColor", "0x000000",
 		CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_CLOUD, NULL, NULL, CV_NONE,
@@ -115,64 +98,9 @@ static ID_INLINE void R_QLRegisterRendererCvars( qlRendererCvarBackend_t backend
 	qlRendererCvars.debugAds = R_QLRegisterCvar( "r_debugAds", "0", CVAR_TEMP,
 		NULL, NULL, CV_INTEGER,
 		"Print a bounded retail advertisement-surface diagnostic snapshot." );
-	(void)R_QLRegisterCvar( "r_floatingPointFBOs", "0",
-		CVAR_ARCHIVE | CVAR_LATCH, "0", "1", CV_INTEGER,
-		"Retail floating-point framebuffer selector; queryable for compatibility while FnQ3 r_hdr and r_hdrPrecision own scene storage." );
-
-	qlRendererCvars.enablePostProcess = R_QLRegisterCvar( "r_enablePostProcess", "1",
-		postFlags, "0", "1", CV_INTEGER,
-		"Retail post-process compatibility control; it does not gate the FnQ3 bloom path." );
-	qlRendererCvars.enableColorCorrect = R_QLRegisterCvar( "r_enableColorCorrect", "1",
-		postFlags, "0", "1", CV_INTEGER,
-		"Retail color-correction compatibility control; r_colorGrade owns FnQ3 color grading." );
-	/* Renderer-owned mirrors are temporary and overwritten every frame. */
-	qlRendererCvars.postProcessActive = R_QLRegisterCvar( "r_postProcessActive", "0",
-		CVAR_TEMP, "0", "1", CV_INTEGER,
-		"Reports whether the active renderer is running a post-process path." );
-	qlRendererCvars.colorCorrectActive = R_QLRegisterCvar( "r_colorCorrectActive", "0",
-		CVAR_TEMP, "0", "1", CV_INTEGER,
-		"Reports whether color correction is active in the current renderer." );
-	qlRendererCvars.contrast = R_QLRegisterCvar( "r_contrast", "1.0", profileFlags,
-		NULL, NULL, CV_FLOAT, "Retail color-correction contrast." );
-	(void)R_QLRegisterCvar( "r_qlRetailPostProcessBridge", "0",
-		CVAR_ROM, "0", "0", CV_INTEGER,
-		"Reports that retail post-process cvars do not own FnQ3 renderer effects." );
 	(void)R_QLRegisterCvar( "r_qlOcclusionQueries", "0", CVAR_TEMP | CVAR_PROTECTED,
 		"0", "1", CV_INTEGER,
 		"Internal common-backend occlusion-query capability status." );
-
-	/* Older FnQL builds persisted this as an ownership marker after copying the
-	 * retail threshold, pass count, bloom enable, and color-grade enable into
-	 * FnQ3 cvars. Restore only bridge-owned profiles once; unmarked user tuning
-	 * remains untouched. These are the FnQ3 defaults used by FnQL. */
-	if ( retiredBridgeOwnedPostProcess ) {
-		ri.Cvar_Set( "r_bloom", backend == QL_CVAR_BACKEND_GLX ? "0" : "1" );
-		ri.Cvar_Set( "r_bloom_intensity", "0.5" );
-		ri.Cvar_Set( "r_bloom_threshold", "0.75" );
-		ri.Cvar_Set( "r_colorGrade", "0" );
-		if ( backend == QL_CVAR_BACKEND_GLX ) {
-			ri.Cvar_Set( "r_bloom_passes", "5" );
-		}
-	}
-
-	/* The ROM registration pins the retired ownership marker to zero so it
-	 * cannot resume the old retail-to-FnQ3 bridge on a renderer restart. */
-	ri.Cvar_Set( "r_qlRetailPostProcessBridge", "0" );
-}
-
-static ID_INLINE void R_QLUpdateRendererCvars( const cvar_t *postProcess,
-	const cvar_t *bloom, const cvar_t *colorCorrect )
-{
-	const qboolean postActive = postProcess ? ( postProcess->integer != 0 )
-		: ( ( bloom && bloom->integer ) || ( colorCorrect && colorCorrect->integer ) );
-	const qboolean colorActive = postActive && colorCorrect && colorCorrect->integer;
-
-	if ( qlRendererCvars.postProcessActive->integer != postActive ) {
-		ri.Cvar_Set( "r_postProcessActive", postActive ? "1" : "0" );
-	}
-	if ( qlRendererCvars.colorCorrectActive->integer != colorActive ) {
-		ri.Cvar_Set( "r_colorCorrectActive", colorActive ? "1" : "0" );
-	}
 }
 
 static ID_INLINE void R_QLFastSkyColor( vec4_t color )
@@ -200,11 +128,6 @@ static ID_INLINE qboolean R_QLSkipBatch( int numIndexes )
 			&& numIndexes <= 512 )
 		|| ( qlRendererCvars.skipLargeBatches->integer && numIndexes >= 2000 )
 		? qtrue : qfalse;
-}
-
-static ID_INLINE float R_QLRetailContrast( void )
-{
-	return 1.0f;
 }
 
 #endif /* TR_QL_CVARS_H */

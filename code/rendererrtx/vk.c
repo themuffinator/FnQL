@@ -16635,7 +16635,7 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	VkGraphicsPipelineCreateInfo create_info;
 	VkViewport viewport;
 	VkRect2D scissor;
-	VkSpecializationMapEntry spec_entries[46];
+	VkSpecializationMapEntry spec_entries[45];
 	VkSpecializationInfo frag_spec_info;
 	VkPipeline *pipeline;
 	VkShaderModule fsmodule;
@@ -16677,7 +16677,6 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 		float crt_mask_strength;
 		float crt_curvature;
 		float crt_chromatic;
-		float retail_contrast;
 	} frag_spec_data;
 
 	switch ( program_index ) {
@@ -16884,7 +16883,6 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	frag_spec_data.crt_mode =
 		( r_crt && r_crt->integer && frag_spec_data.crt_amount > 0.001f &&
 		  ( program_index == 0 || program_index == 3 ) ) ? 1 : 0;
-	frag_spec_data.retail_contrast = R_QLRetailContrast();
 
 	if ( !vk_surface_format_color_depth( vk.present_format.format, &frag_spec_data.depth_r, &frag_spec_data.depth_g, &frag_spec_data.depth_b ) )
 		ri.Printf( PRINT_ALL, "Format %s not recognized, dither to assume 8bpc\n", vk_format_string( vk.base_format.format ) );
@@ -16979,7 +16977,6 @@ void vk_create_post_process_pipeline( int program_index, uint32_t width, uint32_
 	VK_FRAG_SPEC_FIELD( 42, crt_mask_strength );
 	VK_FRAG_SPEC_FIELD( 43, crt_curvature );
 	VK_FRAG_SPEC_FIELD( 44, crt_chromatic );
-	VK_FRAG_SPEC_FIELD( 45, retail_contrast );
 
 	#undef VK_FRAG_SPEC_ARRAY
 	#undef VK_FRAG_SPEC_FIELD

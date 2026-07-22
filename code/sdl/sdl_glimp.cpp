@@ -1137,6 +1137,8 @@ of OpenGL
 void GLimp_Init( glconfig_t *config )
 {
 	rserr_t err;
+	const qboolean fullscreen = GLW_CvarEnabled( r_fullscreen );
+	const int mode = CL_GetRequestedMode( fullscreen );
 
 	// REF_KEEP_WINDOW re-enters platform initialization without calling
 	// GLimp_Shutdown. Tear down window-bound input first so text input,
@@ -1164,7 +1166,7 @@ void GLimp_Init( glconfig_t *config )
 	Cvar_SetDescription( r_stereoEnabled, "Enable stereo rendering for techniques like shutter glasses." );
 
 	// Create the window and set up the context
-	err = GLimp_StartDriverAndSetMode( r_mode->integer, r_modeFullscreen->string, GLW_CvarEnabled( r_fullscreen ), qfalse );
+	err = GLimp_StartDriverAndSetMode( mode, r_modeFullscreen->string, fullscreen, qfalse );
 	if ( err != RSERR_OK )
 	{
 		if ( err == RSERR_FATAL_ERROR )
@@ -1173,10 +1175,10 @@ void GLimp_Init( glconfig_t *config )
 			return;
 		}
 
-		if ( r_mode->integer != 3 || ( r_fullscreen->integer && atoi( r_modeFullscreen->string ) != 3 ) )
+		if ( mode != 3 || ( fullscreen && atoi( r_modeFullscreen->string ) != 3 ) )
 		{
-			Com_Printf( "Setting \\r_mode %d failed, falling back on \\r_mode %d\n", r_mode->integer, 3 );
-			if ( GLimp_StartDriverAndSetMode( 3, "", GLW_CvarEnabled( r_fullscreen ), qfalse ) != RSERR_OK )
+			Com_Printf( "Setting video mode %d failed, falling back on mode %d\n", mode, 3 );
+			if ( GLimp_StartDriverAndSetMode( 3, "", fullscreen, qfalse ) != RSERR_OK )
 			{
 				// Nothing worked, give up
 				Com_Error( ERR_FATAL, "GLimp_Init() - could not load OpenGL subsystem" );
@@ -1384,6 +1386,8 @@ of Vulkan
 void VKimp_Init( glconfig_t *config )
 {
 	rserr_t err;
+	const qboolean fullscreen = GLW_CvarEnabled( r_fullscreen );
+	const int mode = CL_GetRequestedMode( fullscreen );
 
 	if ( SDL_window ) {
 		IN_Shutdown();
@@ -1406,7 +1410,7 @@ void VKimp_Init( glconfig_t *config )
 	glw_state.config = config;
 
 	// Create the window and set up the context
-	err = GLimp_StartDriverAndSetMode( r_mode->integer, r_modeFullscreen->string, GLW_CvarEnabled( r_fullscreen ), qtrue /* Vulkan */ );
+	err = GLimp_StartDriverAndSetMode( mode, r_modeFullscreen->string, fullscreen, qtrue /* Vulkan */ );
 	if ( err != RSERR_OK )
 	{
 		if ( err == RSERR_FATAL_ERROR )
@@ -1415,9 +1419,9 @@ void VKimp_Init( glconfig_t *config )
 			return;
 		}
 
-		Com_Printf( "Setting r_mode %d failed, falling back on r_mode %d\n", r_mode->integer, 3 );
+		Com_Printf( "Setting video mode %d failed, falling back on mode %d\n", mode, 3 );
 
-		err = GLimp_StartDriverAndSetMode( 3, "", GLW_CvarEnabled( r_fullscreen ), qtrue /* Vulkan */ );
+		err = GLimp_StartDriverAndSetMode( 3, "", fullscreen, qtrue /* Vulkan */ );
 		if( err != RSERR_OK )
 		{
 			// Nothing worked, give up

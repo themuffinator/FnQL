@@ -601,13 +601,10 @@ static void FBO_SetOutputTransformParams( float gamma, float obScale )
 	int lutSize = 16;
 	float lutScale = FBO_ColorGradeLutScale();
 	qboolean lutActive;
-	const float retailContrast = R_QLRetailContrast();
 
 	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 0, gamma, gamma, gamma, outputScale );
 	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 2, exposure, exposure, exposure, 1.0f );
 	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 3, srgbOutput, srgbOutput, srgbOutput, 1.0f );
-	qglProgramLocalParameter4fARB( GL_FRAGMENT_PROGRAM_ARB, 12,
-		retailContrast, 0.5f * ( 1.0f - retailContrast ), 0.0f, 0.0f );
 
 	FBO_ParseVec3Cvar( r_colorGradeLift, 0.0f, 0.0f, 0.0f, -1.0f, 1.0f, lift );
 	FBO_ParseVec3Cvar( r_colorGradeGamma, 1.0f, 1.0f, 1.0f, 0.1f, 8.0f, gradeGamma );
@@ -2969,14 +2966,11 @@ static const char *gammaFP = {
 	"OPTION ARB_precision_hint_fastest; \n"
 	"PARAM gamma = program.local[0]; \n"
 	"PARAM exposure = program.local[2]; \n"
-	"PARAM retailContrast = program.local[12]; \n"
 	"TEMP base; \n"
 	"TEX base, fragment.texcoord[0], texture[0], 2D; \n"
 	"MUL base.xyz, base, exposure.x; \n"
 	"%s" // scene-linear color grading, if requested
 	"%s" // tone scale, if scene-linear mode requested it
-	"MAD base.xyz, base, retailContrast.x, retailContrast.y; \n"
-	"MAX base.xyz, base, 0.0; \n"
 	"%s" // legacy gamma or SDR sRGB output transfer
 	"%s" // for greyscale shader if needed
 	"MOV base.w, 1.0; \n"
@@ -3163,7 +3157,6 @@ static const char *blend2gammaFP = {
 	"PARAM gamma = program.local[0]; \n"
 	"PARAM factor = program.local[1]; \n"
 	"PARAM exposure = program.local[2]; \n"
-	"PARAM retailContrast = program.local[12]; \n"
 	"TEMP base; \n"
 	"TEMP post; \n"
 	"TEMP gate; \n"
@@ -3179,8 +3172,6 @@ static const char *blend2gammaFP = {
 	"MUL base.xyz, base, exposure.x; \n"
 	"%s" // scene-linear color grading, if requested
 	"%s" // tone scale, if scene-linear mode requested it
-	"MAD base.xyz, base, retailContrast.x, retailContrast.y; \n"
-	"MAX base.xyz, base, 0.0; \n"
 	"%s" // legacy gamma or SDR sRGB output transfer
 	"%s" // for greyscale shader if needed
 	"MOV base.w, 1.0; \n"

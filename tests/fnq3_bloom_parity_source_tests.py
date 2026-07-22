@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import unittest
 from pathlib import Path
 
@@ -15,6 +16,26 @@ def normalized_text(relative_path: str) -> str:
 
 def digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def source_slice(source: str, start: str, end: str) -> str:
+    begin = source.index(start)
+    return source[begin : source.index(end, begin)]
+
+
+def spirv_bytes(renderer: str, array_name: str) -> bytes:
+    source = normalized_text(f"code/{renderer}/shaders/spirv/shader_data.c")
+    match = re.search(
+        rf"const unsigned char {array_name}\[(\d+)\] = \{{(.*?)\n\}};",
+        source,
+        re.DOTALL,
+    )
+    if not match:
+        raise AssertionError(f"missing embedded shader array: {renderer}/{array_name}")
+    payload = bytes(int(value, 16) for value in re.findall(r"0x([0-9A-Fa-f]{2})", match.group(2)))
+    if len(payload) != int(match.group(1)):
+        raise AssertionError(f"embedded shader length mismatch: {renderer}/{array_name}")
+    return payload
 
 
 class FnQ3BloomParitySourceTests(unittest.TestCase):
@@ -92,15 +113,84 @@ class FnQ3BloomParitySourceTests(unittest.TestCase):
                 with self.subTest(path=path):
                     self.assertEqual(expected_hash, digest(normalized_text(path)))
 
-    def test_ql_bloom_pipeline_is_absent(self) -> None:
+    def test_fnq3_final_output_contract_and_rtx_extension_are_pinned(self) -> None:
+        exact_files = {
+            "code/rendererglx/glx_post_shader.cpp":
+                "36e6aaa78b85ff0f36be90fed8747a2759ba08abf2f76899a55dc09408ebeaae",
+            "code/rendererglx/glx_post_shader_plan.h":
+                "33cf4a2920ebb85462a04d4e951bb031db6bed12f9edbf8d13e4f2cc9ca4120e",
+            "code/renderervk/shaders/gamma.frag":
+                "e4cf09c9732c464859c5b57098216e4f5d5bf9124ba23affb2f4c3679cb4e817",
+        }
+        for path, expected_hash in exact_files.items():
+            with self.subTest(path=path):
+                self.assertEqual(
+                    expected_hash,
+                    digest(normalized_text(path)),
+                    f"final-output contract drifted from FnQ3 {FNQ3_REFERENCE}",
+                )
+
+        arb = normalized_text("code/renderer/tr_arb.c")
+        exact_arb_slices = (
+            (
+                "static void FBO_SetOutputTransformParams(",
+                "static void FBO_SetFramebufferSrgb(",
+                "36829ca47ee79bbf3ceac6b130fdb005367cafdb645585e452a7d6746c487150",
+            ),
+            (
+                "static const char *gammaFP = {",
+                "static char *ARB_BuildBloomProgram(",
+                "478ddcafc22db9e9e0bf4923c01514a293f48dc3f4e3923769b328eaa702c219",
+            ),
+            (
+                "static const char *blend2gammaFP = {",
+                "static void RenderQuad(",
+                "0c7be6d0d7f3b2b0a8e2e68f3d469b514dfab42dcc408913d2ac86bd6b10b3d4",
+            ),
+        )
+        for start, end, expected_hash in exact_arb_slices:
+            with self.subTest(slice=start):
+                self.assertEqual(expected_hash, digest(source_slice(arb, start, end)))
+
+        # Vulkan is byte-for-byte FnQ3. RTX retains FnQL's renderer extension;
+        # pin its QL-free output shader as a separate non-regression contract.
+        embedded = {
+            ("renderervk", "gamma_frag_spv"):
+                "1fc2d4ff27a0d7beef6fa663d064bb78b4cdb6d23742652f8c1b5873fcccaa46",
+            ("rendererrtx", "gamma_frag_spv"):
+                "121dcbd24af0e0e8e37bda587ae9cb12f81254013b8a1d85c4a1ea009efacf04",
+        }
+        for (renderer, array_name), expected_hash in embedded.items():
+            with self.subTest(renderer=renderer, shader=array_name):
+                self.assertEqual(expected_hash, hashlib.sha256(
+                    spirv_bytes(renderer, array_name)
+                ).hexdigest())
+
+        vulkan = normalized_text("code/renderervk/vk.c")
+        self.assertIn("VkSpecializationMapEntry spec_entries[46];", vulkan)
+        self.assertIn("spec_entries[45].constantID = 45;", vulkan)
+        rtx = normalized_text("code/rendererrtx/vk.c")
+        self.assertIn("VkSpecializationMapEntry spec_entries[45];", rtx)
+        self.assertNotIn("VK_FRAG_SPEC_FIELD( 45,", rtx)
+
+    def test_ql_postprocess_pipeline_is_absent(self) -> None:
         engine_root = ROOT / "code"
         forbidden_fingerprints = (
             "RBPP_",
             "RC_BLOOM_POST_PROCESS",
             "RetailBloomPostProcessCommand",
             "bloomPostProcessCommand_t",
+            "R_QLUpdateRendererCvars",
+            "R_QLRetailContrast",
+            "retailContrast",
+            "retail_contrast",
+            '"r_floatingPointFBOs"',
+            '"r_enablePostProcess"',
             '"r_enableBloom"',
+            '"r_enableColorCorrect"',
+            '"r_postProcessActive"',
             '"r_bloomActive"',
+            '"r_colorCorrectActive"',
             '"r_bloomPasses"',
             '"r_bloomIntensity"',
             '"r_bloomBrightThreshold"',
@@ -110,6 +200,8 @@ class FnQ3BloomParitySourceTests(unittest.TestCase):
             '"r_bloomSaturation"',
             '"r_bloomSceneIntensity"',
             '"r_bloomSceneSaturation"',
+            '"r_contrast"',
+            '"r_qlRetailPostProcessBridge"',
         )
         source_suffixes = {
             ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp",

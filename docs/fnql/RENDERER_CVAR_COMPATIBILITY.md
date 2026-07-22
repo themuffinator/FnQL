@@ -2,9 +2,9 @@
 
 ## Scope
 
-FnQL exposes the retail Quake Live renderer and video cvar surface without
-replacing the renderer improvements inherited from FnQ3. The compatibility
-contract is shared by the GLx, Vulkan, and RTX renderer
+FnQL exposes the supported non-postprocess portion of the retail Quake Live
+renderer and video cvar surface without replacing the renderer improvements
+inherited from FnQ3. The compatibility contract is shared by the GLx, Vulkan, and RTX renderer
 modules. Platform-owned video aliases live in the client, where renderer
 restarts and actual drawable dimensions are known.
 
@@ -23,8 +23,6 @@ Retail-specific behavior covered by the common renderer contract includes:
   `r_debugSortExcept` for the observed diagnostic submission behavior;
 - `r_debugAds`, which publishes a bounded snapshot of loaded advertisement
   state plus retail bridge labels consistently on every backend;
-- `r_enablePostProcess`, the color-correction gate and status mirrors,
-  `r_contrast`, and `r_floatingPointFBOs`;
 - `r_smp`, `r_showSmp`, `r_ignoreFastPath`, and `r_primitives`, whose retail
   selectors remain queryable even when a modern backend has only one safe
   implementation path;
@@ -39,40 +37,35 @@ classification uses the active drawable rather than assuming the requested
 window size. Window resize synchronization preserves FnQL's existing HiDPI
 logical-versus-drawable distinction.
 
-QLSRP's matrix records a separate retail bloom pipeline and control family.
-FnQL deliberately does not register or implement that pipeline. Retail modules
-may create their own compatibility cvars, but the renderer never consumes or
-mirrors them. No runtime SMP path is retained in FnQL either.
+QLSRP's matrix records a separate retail framebuffer/postprocess pipeline,
+including bloom, color correction, contrast, floating-point-FBO selection,
+enable gates, and active-state mirrors. FnQL deliberately does not register,
+implement, bridge, or report that pipeline. Retail modules may create their
+own cvars, but the renderer never consumes or mirrors them. No runtime SMP path
+is retained in FnQL either.
 
 ## Non-Regression Ownership
 
-FnQL's established cvars remain canonical for its modern bloom, color-grade,
-HDR, tone-map, mode, custom-size, stereo, and hardware-gamma paths. The retail
-bloom cvar family is not renderer-owned and never writes `r_bloom` or
-`r_bloom_*`. This prevents retail's lower extraction threshold from silently
-replacing FnQ3's bloom threshold and keeps exactly one bloom owner across every
-renderer backend.
-
-`r_qlRetailPostProcessBridge` is a read-only zero status value. It also retires
-the ownership marker written by older FnQL builds, so renderer restarts cannot
-resume the former alias bridge. `r_contrast` remains queryable but neutral in
-the FnQ3 final-output paths.
-The remaining active-state mirrors report only the supported generic
-post-process and color-correction paths rather than inventing a QL bloom state.
+FnQL's established cvars remain canonical for its FnQ3 bloom, color-grade, HDR,
+tone-map, mode, custom-size, stereo, and hardware-gamma paths. No retail
+postprocess cvar is renderer-owned, and no runtime compatibility bridge writes
+`r_bloom`, `r_bloom_*`, `r_colorGrade`, or final-output shader parameters. The
+one-time obsolete-profile repair described below is the sole exception. This
+prevents retail's lower extraction threshold from silently replacing FnQ3's
+bloom threshold and keeps exactly one bloom owner across every backend.
 
 ## Capability and Fallback Rules
 
-`r_floatingPointFBOs` remains queryable for retail modules and profiles but is
-not a second framebuffer-format owner. FnQ3's `r_hdr`, `r_hdrPrecision`, and
-`r_hdrBloomFormat` controls exclusively select scene and bloom storage on GLx,
-Vulkan, and RTX. This prevents a retail profile from preserving out-of-range
-SDR highlights that FnQ3 bloom would normally clamp before extraction.
+FnQ3's `r_hdr`, `r_hdrPrecision`, and `r_hdrBloomFormat` controls exclusively
+select scene and bloom storage on GLx, Vulkan, and RTX. A retail profile can
+still contain names from the unsupported QL postprocess family, but those names
+remain unknown or module-owned and cannot affect renderer behavior.
 
-Profiles written by the short-lived retail post-process bridge are identified
-by its ownership marker and migrated once to the FnQ3 bloom defaults. This
-restores the FnQ3 `0.75` extraction threshold and five-pass GLx chain instead
-of retaining the retail `0.25` threshold and one-pass setting. Profiles without
-the marker retain their explicit user tuning.
+One obsolete FnQL build could also persist its translated values under the
+canonical FnQ3 names. FnQL repairs only the exact stale `0.25` threshold,
+`0.5` intensity, one-pass, unmodulated tuple once, restoring the FnQ3 `0.75`
+threshold and five-pass chain. The repair is versioned independently, reads no
+QL postprocess cvar, and leaves normal FnQ3 tuning untouched.
 
 `r_gl_reserved` is similarly capability-shaped: it publishes `1` only when the
 active common renderer exposes the complete occlusion-query path, otherwise
@@ -87,12 +80,12 @@ inert is preferable to introducing a divergent submission path.
 
 ## Validation
 
-`tests/renderer_cvar_compat_source_tests.py` guards registration, ownership,
-video publication, operational renderer consumers, post-process shader wiring,
-the one-time bridge migration, and FnQ3 framebuffer ownership across every
-retained renderer. `tests/fnq3_bloom_parity_source_tests.py` pins the FnQ3 bloom
-implementation and rejects QL bloom pipeline fingerprints and renderer-owned
-retail bloom controls. Compile validation must cover all three renderer modules
-plus the client translation unit. Runtime retail validation should use
-legitimate Steam assets, windowed mode, imported retail cvar presets, and a
-fresh FnQL profile.
+`tests/renderer_cvar_compat_source_tests.py` guards supported registration,
+video publication, operational renderer consumers, the complete absence of QL
+postprocess controls and shader stages, and FnQ3 framebuffer ownership across
+every retained renderer. `tests/fnq3_bloom_parity_source_tests.py` pins the
+FnQ3 bloom implementation, exact GLx/Vulkan final-output contracts, the
+QL-free RTX extension, and rejects QL postprocess pipeline fingerprints.
+Compile validation must cover all three renderer modules plus the client
+translation unit. Runtime retail validation should use legitimate Steam assets,
+windowed mode, deterministic FnQ3 settings, and an isolated profile.

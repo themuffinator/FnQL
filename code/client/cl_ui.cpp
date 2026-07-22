@@ -954,13 +954,18 @@ static intptr_t CL_UISystemCalls( intptr_t *args ) {
 		float t0 = VMF(6);
 		float s1 = VMF(7);
 		float t1 = VMF(8);
+		qboolean retailConnectBackdrop;
 
-		CL_UIAdjustStretchPic( &x, &y, &w, &h );
-		// Retail connect.menu identifies a 1920x1080 authored background. Its
-		// horizontal crop becomes an out-of-range edge smear past 16:9, so the
-		// host completes the same aspect-preserving cover operation vertically.
-		SCR_AdjustRetailConnectBackdropUV( args[9], x, y, w, h,
+		// Retail connect.menu's backgroundSize path has already submitted this
+		// quad in framebuffer pixels.  Identify it before the optional non-retail
+		// menu stretch can expand that native geometry a second time.  The same
+		// match also completes the authored 16:9 cover crop on ultrawide displays.
+		retailConnectBackdrop = SCR_AdjustRetailConnectBackdropUV(
+			args[9], x, y, w, h,
 			&s0, &t0, &s1, &t1 );
+		if ( !retailConnectBackdrop ) {
+			CL_UIAdjustStretchPic( &x, &y, &w, &h );
+		}
 		re.DrawStretchPic( x, y, w, h, s0, t0, s1, t1, args[9] );
 		return 0;
 	}
