@@ -277,8 +277,9 @@ class PlatformPortSafetyTests(unittest.TestCase):
             "TARGET_LINK_LIBRARIES(${FNQL_RENDERER_TARGET} PRIVATE m)", cmake
         )
 
-    def test_linux_ci_builds_the_full_native_sdl_runtime(self) -> None:
+    def test_linux_ci_builds_and_verifies_only_i686_artifacts(self) -> None:
         workflow = read(".github/workflows/linux-verification.yml")
+        cross_file = read("misc/meson/linux-x86.ini")
 
         self.assertIn("make-server-i686:", workflow)
         self.assertIn("ARCH=x86", workflow)
@@ -286,33 +287,23 @@ class PlatformPortSafetyTests(unittest.TestCase):
         self.assertIn("BUILD_CLIENT=0", workflow)
         self.assertIn("build/release-linux-x86/fnql.ded", workflow)
         self.assertIn("ELF 32-bit LSB", workflow)
-        self.assertIn("meson-sdl-x86_64:", workflow)
+        self.assertIn("meson-x86:", workflow)
+        self.assertIn("--cross-file misc/meson/linux-x86.ini", workflow)
         self.assertIn("--wrap-mode=nofallback", workflow)
         self.assertIn("-Dbuild-client=false", workflow)
-        self.assertIn("meson-linux-server-only fnql.ded.x86_64", workflow)
-        self.assertIn("meson-linux-curl-fallback", workflow)
-        self.assertIn("--wrap-mode=forcefallback", workflow)
-        self.assertIn("-Dcurl-dlopen=false", workflow)
-        self.assertIn("meson-linux-curl-fallback fnql.x86_64", workflow)
-        self.assertIn("--force-fallback-for=sdl3,fontstash", workflow)
+        self.assertIn("meson-linux-server-only fnql.ded", workflow)
+        self.assertIn("meson-linux-renderers", workflow)
         self.assertIn("-Dbuild-client=true", workflow)
-        self.assertIn("-Dbuild-server=true", workflow)
+        self.assertIn("-Dbuild-server=false", workflow)
         self.assertIn("-Drenderers=glx,vk,rtx", workflow)
-        self.assertIn("-Dsdl=enabled", workflow)
-        self.assertIn("meson test -C .tmp/meson-linux-x86_64", workflow)
-        self.assertIn("fnql.ded.x86_64", workflow)
-        self.assertIn("fnql_glx_x86_64.so", workflow)
-        self.assertIn("fnql_vk_x86_64.so", workflow)
-        self.assertIn("fnql_rtx_x86_64.so", workflow)
-        cmake_targets = workflow.index("--target")
-        target_listing = workflow[
-            cmake_targets : workflow.index("ninja -C", cmake_targets)
-        ]
-        self.assertIn("fnql.x86_64", target_listing)
-        self.assertIn("fnql.ded.x86_64", target_listing)
-        self.assertIn("fnql_glx_x86_64", target_listing)
-        self.assertIn("fnql_vk_x86_64", target_listing)
-        self.assertIn("fnql_rtx_x86_64", target_listing)
+        self.assertIn("fnql_${renderer}_x86.so", workflow)
+        self.assertIn("Intel 80386", workflow)
+        self.assertNotIn("x86_64", workflow)
+        self.assertNotIn("ELF 64-bit", workflow)
+        self.assertIn("c_args = ['-m32']", cross_file)
+        self.assertIn("cpp_args = ['-m32']", cross_file)
+        self.assertIn("cpu_family = 'x86'", cross_file)
+        self.assertIn("cpu = 'i686'", cross_file)
 
     def test_meson_server_only_build_skips_client_dependencies(self) -> None:
         meson = read("meson.build")

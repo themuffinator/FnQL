@@ -10,8 +10,8 @@ The hosted CI jobs are planning and build checks. Blocking runtime evidence stil
 
 The first Vulkan RC evidence should cover:
 
-- Windows 10 or newer, x64, dynamic renderer build, retail `baseq3` assets.
-- Linux x86_64, Mesa or vendor Vulkan driver, dynamic renderer build, retail `baseq3` assets.
+- Windows 10 or newer, Win32/x86 dynamic renderer build, retail `baseq3` assets.
+- Linux i686, Mesa or vendor Vulkan driver, dynamic renderer build, retail `baseq3` assets.
 
 Additional packaged platforms should keep building Vulkan where the project already enables `USE_VK`, but they are not blocking runtime platforms until maintainers add stable GPU runners for them.
 

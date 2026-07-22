@@ -98,20 +98,14 @@ class MacOSSupportSourceTests(unittest.TestCase):
         workflow = read(".github/workflows/release.yml")
         build_guide = read("BUILD.md")
         self.assertNotIn("sign_macos:", workflow)
-        self.assertIn("python3 -m venv .tmp/macos-build-tools", build_guide)
-        self.assertNotIn("python3 -m pip install meson==1.9.1 ninja", build_guide)
+        self.assertNotIn("macos-build-tools", build_guide)
+        self.assertIn("macOS is disabled and unsupported", build_guide)
         self.assertIn("if: always()", workflow)
         self.assertIn("needs: [prepare, windows-msys32, windows-msvc, source-validation, ubuntu-x86]", workflow)
         self.assertIn("needs: [prepare, push-build-validation]", workflow)
         self.assertIn("needs.push-build-validation.result == 'success'", workflow)
-        macos_job = workflow.split("  macos:", 1)[1].split(
-            "\n  macos-release-sign:", 1
-        )[0]
-        signing_job = workflow.split("  macos-release-sign:", 1)[1].split(
-            "\n  ubuntu-x86:", 1
-        )[0]
-        self.assertIn("if: ${{ false }}", macos_job)
-        self.assertIn("if: ${{ false }}", signing_job)
+        self.assertNotIn("  macos:", workflow)
+        self.assertNotIn("  macos-release-sign:", workflow)
         publish_job = workflow.split("  publish:", 1)[1]
         self.assertNotIn("macos-x86_64", publish_job)
         self.assertNotIn("macos-aarch64", publish_job)

@@ -33,7 +33,7 @@ GLX_EXPECTED_PASS_SCHEDULE = (
 GLX_EXPECTED_PASS_SCHEDULE_COUNT = 10
 GLX_EXPECTED_PASS_SCHEDULE_HASH = "541629f7"
 GLX_PRODUCT_TIERS = {"GL12", "GL2X", "GL3X", "GL41", "GL46"}
-GLX_BLOCKING_RELEASE_PLATFORMS = ("windows-x64", "linux-x86_64")
+GLX_BLOCKING_RELEASE_PLATFORMS = ("windows-x86", "linux-x86")
 GLX_RELEASE_REQUIRED_GATES = ("rc-smoke", "rc-parity", "rc-proof")
 GLX_RELEASE_PROOF_VERSION = 1
 GLX_COLOR_CONTRACT_VERSION = "2026-05-10-p0"
@@ -3089,10 +3089,10 @@ def release_corpus_manifest() -> dict[str, object]:
 
 
 def normalize_proof_platform(value: str) -> str:
-    platform_id = value.strip().lower().replace("amd64", "x64")
+    platform_id = value.strip().lower()
     if not PROOF_PLATFORM_RE.match(platform_id):
         raise ValueError(
-            "Proof platform must be a stable id such as windows-x64 or linux-x86_64."
+            "Proof platform must be a stable id such as windows-x86 or linux-x86."
         )
     return platform_id
 
@@ -3104,8 +3104,10 @@ def runtime_platform_id(
     system_value = (system_name or platform.system() or "unknown").strip().lower()
     machine_value = (machine_name or platform.machine() or "unknown").strip().lower()
     machine_aliases = {
-        "amd64": "x64",
-        "x86_64": "x86_64",
+        # Proof ids identify the FnQL artifact ABI. FnQL remains x86 even when
+        # the runner and its Python interpreter are 64-bit.
+        "amd64": "x86",
+        "x86_64": "x86",
         "i386": "x86",
         "i686": "x86",
         "arm64": "arm64",
@@ -3114,8 +3116,6 @@ def runtime_platform_id(
     arch = machine_aliases.get(machine_value, re.sub(r"[^a-z0-9_]+", "-", machine_value))
     if system_value.startswith("win"):
         os_id = "windows"
-        if arch == "x86_64":
-            arch = "x64"
     elif system_value.startswith("linux"):
         os_id = "linux"
     elif system_value.startswith("darwin") or system_value.startswith("mac"):
@@ -3699,7 +3699,7 @@ def parse_args() -> argparse.Namespace:
         "--proof-platform",
         help=(
             "Stable runtime proof platform id to write into the manifest, such as "
-            "windows-x64 or linux-x86_64. Defaults to the current host platform."
+            "windows-x86 or linux-x86. Defaults to the current FnQL artifact ABI."
         ),
     )
     parser.add_argument(

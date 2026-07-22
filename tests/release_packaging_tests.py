@@ -939,14 +939,14 @@ class ReleasePackagingTests(unittest.TestCase):
             workflow.count("verify_release_layout.py bin/FnQL-pkg.fnz"),
             3,
         )
-        self.assertEqual(workflow.count("--skip-subprojects"), 3)
+        self.assertEqual(workflow.count("--skip-subprojects"), 2)
         self.assertEqual(workflow.count("fetch_steam_provider.py --output bin/fnql_steam.dll"), 2)
         self.assertEqual(workflow.count("check_windows_runtime_deps.py --require-pe bin"), 2)
         self.assertIn("-Dc_link_args=-static", workflow)
         self.assertIn("-Dcpp_link_args=-static", workflow)
-        self.assertEqual(workflow.count("-Dzlib:default_library=static"), 3)
+        self.assertEqual(workflow.count("-Dzlib:default_library=static"), 2)
         self.assertIn("-Db_vscrt=static_from_buildtype", workflow)
-        self.assertEqual(workflow.count("--wrap-mode=forcefallback"), 3)
+        self.assertEqual(workflow.count("--wrap-mode=forcefallback"), 2)
         meson = (ROOT / "meson.build").read_text(encoding="utf-8")
         self.assertIn("'zstd=disabled'", meson)
         self.assertIn("'brotli=disabled'", meson)
@@ -957,14 +957,8 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertIn('gh release create "${FNQL_RELEASE_TAG}"', workflow)
         self.assertNotIn("ubuntu-arm64:", workflow)
         self.assertNotIn("sign_macos:", workflow)
-        macos_job = workflow.split("  macos:", 1)[1].split(
-            "\n  macos-release-sign:", 1
-        )[0]
-        signing_job = workflow.split("  macos-release-sign:", 1)[1].split(
-            "\n  ubuntu-x86:", 1
-        )[0]
-        self.assertIn("if: ${{ false }}", macos_job)
-        self.assertIn("if: ${{ false }}", signing_job)
+        self.assertNotIn("  macos:", workflow)
+        self.assertNotIn("  macos-release-sign:", workflow)
         self.assertIn(
             "needs: [prepare, windows-msys32, windows-msvc, source-validation, ubuntu-x86]",
             workflow,

@@ -3219,7 +3219,7 @@ class GlxRuntimeSweepImageTests(unittest.TestCase):
 
     def test_visual_dossier_summarizes_review_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            manifest = release_proof_manifest("rc-parity", "windows-x64")
+            manifest = release_proof_manifest("rc-parity", "windows-x86")
             manifest_path = Path(tmp) / "manifest.json"
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
@@ -4012,7 +4012,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
         record = glx_runtime_sweep.release_proof_manifest_record(
             manifest,
-            Path("proof/windows-x64/glx-dlight-shader/manifest.json"),
+            Path("proof/windows-x86/glx-dlight-shader/manifest.json"),
             Path("proof"),
         )
         parity = record["projectedDlightShaderParity"]
@@ -4381,7 +4381,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
             self.assertEqual(ownership["items"], 12)
 
     def test_ownership_proof_evidence_passes_for_modern_zero_delegation(self) -> None:
-        manifest = ownership_proof_manifest("windows-x64")
+        manifest = ownership_proof_manifest("windows-x86")
         evidence = manifest["ownershipProofEvidence"]
 
         self.assertEqual(evidence["version"], glx_runtime_sweep.GLX_OWNERSHIP_PROOF_VERSION)
@@ -4443,7 +4443,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_ownership_proof_evidence_fails_on_delegation_and_missing_fingerprint(self) -> None:
         manifest = ownership_proof_manifest(
-            "windows-x64",
+            "windows-x86",
             calls=2,
             items=64,
             post_hash=0,
@@ -4938,7 +4938,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertTrue(any("complete color-pipeline metadata" in failure for failure in failures))
 
     def test_release_gates_require_renderer_switch_lifecycle_evidence(self) -> None:
-        manifest = release_proof_manifest("rc-smoke", "windows-x64")
+        manifest = release_proof_manifest("rc-smoke", "windows-x86")
         manifest.pop("rendererSwitchEvidence")
 
         failures = glx_runtime_sweep.evaluate_gate(manifest)
@@ -4948,7 +4948,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         )
 
     def test_renderer_switch_lifecycle_requires_completed_transitions(self) -> None:
-        manifest = release_proof_manifest("rc-smoke", "windows-x64")
+        manifest = release_proof_manifest("rc-smoke", "windows-x86")
         switch_run = next(
             run for run in manifest["runs"] if run.get("type") == "switch-screenshots"
         )
@@ -4964,7 +4964,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         )
 
     def test_renderer_switch_lifecycle_requires_round_trip_for_blocking_gates(self) -> None:
-        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        manifest = release_proof_manifest("rc-proof", "windows-x86")
         switch_run = next(
             run for run in manifest["runs"] if run.get("type") == "switch-screenshots"
         )
@@ -4982,7 +4982,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertTrue(any("switch back out of GLx" in failure for failure in failures))
 
     def test_renderer_switch_lifecycle_records_restart_and_glx_leg_evidence(self) -> None:
-        manifest = release_proof_manifest("rc-parity", "linux-x86_64")
+        manifest = release_proof_manifest("rc-parity", "linux-x86")
         evidence = manifest["rendererSwitchEvidence"]
 
         self.assertEqual(evidence["status"], "passed")
@@ -5000,7 +5000,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertGreater(evidence["glxPerformanceSamples"], 0)
 
     def test_world_proof_evidence_passes_for_blocking_rc_surface(self) -> None:
-        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        manifest = release_proof_manifest("rc-proof", "windows-x86")
         evidence = manifest["worldProofEvidence"]
 
         self.assertEqual(evidence["version"], glx_runtime_sweep.GLX_WORLD_PROOF_VERSION)
@@ -5015,7 +5015,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertEqual(glx_runtime_sweep.evaluate_gate(manifest), [])
 
     def test_world_proof_evidence_requires_versioned_object(self) -> None:
-        manifest = release_proof_manifest("rc-parity", "windows-x64")
+        manifest = release_proof_manifest("rc-parity", "windows-x86")
         manifest.pop("worldProofEvidence")
 
         failures = glx_runtime_sweep.evaluate_gate(manifest)
@@ -5023,7 +5023,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertTrue(any("No world proof evidence" in failure for failure in failures))
 
     def test_world_proof_evidence_rejects_stale_version_and_missing_fog(self) -> None:
-        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        manifest = release_proof_manifest("rc-proof", "windows-x86")
         requirements = glx_runtime_sweep.RC_GATE_PRESETS["rc-proof"]["requirements"]
         for run in manifest["runs"]:
             diagnostics = run.get("diagnostics")
@@ -5083,7 +5083,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertIn("fog support", text)
 
     def test_material_proof_evidence_passes_for_rc_proof_surface(self) -> None:
-        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        manifest = release_proof_manifest("rc-proof", "windows-x86")
         evidence = manifest["materialProofEvidence"]
 
         self.assertEqual(evidence["version"], glx_runtime_sweep.GLX_MATERIAL_PROOF_VERSION)
@@ -5102,7 +5102,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertEqual(glx_runtime_sweep.evaluate_gate(manifest), [])
 
     def test_material_proof_evidence_proves_staged_animated_screen_video_surface(self) -> None:
-        manifest = release_proof_manifest("rc-stress", "windows-x64")
+        manifest = release_proof_manifest("rc-stress", "windows-x86")
         evidence = manifest["materialProofEvidence"]
         stage_flags = evidence["stageFlags"]
 
@@ -5118,7 +5118,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertEqual(glx_runtime_sweep.evaluate_gate(manifest), [])
 
     def test_material_proof_evidence_keeps_screen_video_guarded_out_of_rc_proof(self) -> None:
-        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        manifest = release_proof_manifest("rc-proof", "windows-x86")
         evidence = manifest["materialProofEvidence"]
 
         self.assertIn("screenMap", evidence["forbiddenStreamFeatures"])
@@ -5130,7 +5130,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertEqual(glx_runtime_sweep.evaluate_gate(manifest), [])
 
     def test_material_proof_evidence_requires_versioned_object(self) -> None:
-        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        manifest = release_proof_manifest("rc-proof", "windows-x86")
         manifest.pop("materialProofEvidence")
 
         failures = glx_runtime_sweep.evaluate_gate(manifest)
@@ -5138,7 +5138,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertTrue(any("No material proof evidence" in failure for failure in failures))
 
     def test_material_proof_evidence_rejects_stale_version_and_unsafe_counters(self) -> None:
-        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        manifest = release_proof_manifest("rc-proof", "windows-x86")
         requirements = glx_runtime_sweep.RC_GATE_PRESETS["rc-proof"]["requirements"]
         for run in manifest["runs"]:
             diagnostics = run.get("diagnostics")
@@ -5223,7 +5223,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertIn("stream feature evidence", text)
 
     def test_material_proof_evidence_rejects_missing_staged_stage_flags_and_guards(self) -> None:
-        manifest = release_proof_manifest("rc-stress", "windows-x64")
+        manifest = release_proof_manifest("rc-stress", "windows-x86")
         requirements = glx_runtime_sweep.RC_GATE_PRESETS["rc-stress"]["requirements"]
         for run in manifest["runs"]:
             diagnostics = run.get("diagnostics")
@@ -5261,7 +5261,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertIn("stream guard evidence", text)
 
     def test_dynamic_proof_evidence_passes_for_rc_proof_surface(self) -> None:
-        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        manifest = release_proof_manifest("rc-proof", "windows-x86")
         evidence = manifest["dynamicProofEvidence"]
 
         self.assertEqual(evidence["version"], glx_runtime_sweep.GLX_DYNAMIC_PROOF_VERSION)
@@ -5286,7 +5286,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertEqual(glx_runtime_sweep.evaluate_gate(manifest), [])
 
     def test_dynamic_proof_evidence_proves_staged_particles_and_beams(self) -> None:
-        manifest = release_proof_manifest("rc-stress", "windows-x64")
+        manifest = release_proof_manifest("rc-stress", "windows-x86")
         evidence = manifest["dynamicProofEvidence"]
 
         self.assertEqual(evidence["status"], "passed")
@@ -5300,7 +5300,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertEqual(glx_runtime_sweep.evaluate_gate(manifest), [])
 
     def test_dynamic_proof_evidence_requires_versioned_object(self) -> None:
-        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        manifest = release_proof_manifest("rc-proof", "windows-x86")
         manifest.pop("dynamicProofEvidence")
 
         failures = glx_runtime_sweep.evaluate_gate(manifest)
@@ -5308,7 +5308,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertTrue(any("No dynamic proof evidence" in failure for failure in failures))
 
     def test_dynamic_proof_rejects_stale_or_missing_scissor_evidence(self) -> None:
-        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        manifest = release_proof_manifest("rc-proof", "windows-x86")
         requirements = glx_runtime_sweep.RC_GATE_PRESETS["rc-proof"]["requirements"]
         evidence = copy.deepcopy(manifest["dynamicProofEvidence"])
         evidence["version"] = 1
@@ -5331,7 +5331,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertIn("projected-dlight scissor evidence", text)
 
     def test_dynamic_proof_rejects_stale_version_and_unsafe_counters(self) -> None:
-        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        manifest = release_proof_manifest("rc-proof", "windows-x86")
         requirements = glx_runtime_sweep.RC_GATE_PRESETS["rc-proof"]["requirements"]
         for run in manifest["runs"]:
             diagnostics = run.get("diagnostics")
@@ -5466,7 +5466,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertIn("stream draw skips", text)
 
     def test_post_proof_evidence_passes_for_rc_proof_surface(self) -> None:
-        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        manifest = release_proof_manifest("rc-proof", "windows-x86")
         evidence = manifest["postProofEvidence"]
 
         self.assertEqual(evidence["version"], glx_runtime_sweep.GLX_POST_PROOF_VERSION)
@@ -5488,7 +5488,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertEqual(glx_runtime_sweep.evaluate_gate(manifest), [])
 
     def test_post_proof_evidence_requires_versioned_object(self) -> None:
-        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        manifest = release_proof_manifest("rc-proof", "windows-x86")
         manifest.pop("postProofEvidence")
 
         failures = glx_runtime_sweep.evaluate_gate(manifest)
@@ -5496,7 +5496,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertTrue(any("No post proof evidence" in failure for failure in failures))
 
     def test_post_proof_rejects_stale_version_and_missing_feature_evidence(self) -> None:
-        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        manifest = release_proof_manifest("rc-proof", "windows-x86")
         requirements = glx_runtime_sweep.RC_GATE_PRESETS["rc-proof"]["requirements"]
         for run in manifest["runs"]:
             diagnostics = run.get("diagnostics")
@@ -5595,7 +5595,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertIn("valid output color contract", text)
 
     def test_color_sweep_rejects_frame_dump_that_disagrees_with_row(self) -> None:
-        manifest = release_proof_manifest("rc-parity", "windows-x64")
+        manifest = release_proof_manifest("rc-parity", "windows-x86")
         color_run = next(
             run
             for run in manifest["runs"]
@@ -5610,7 +5610,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertTrue(any("colorFrame.space" in failure for failure in failures))
 
     def test_color_sweep_rejects_invalid_frame_contract(self) -> None:
-        manifest = release_proof_manifest("rc-parity", "windows-x64")
+        manifest = release_proof_manifest("rc-parity", "windows-x86")
         color_run = next(
             run
             for run in manifest["runs"]
@@ -5625,7 +5625,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertTrue(any("colorFrame.contractValid" in failure for failure in failures))
 
     def test_color_sweep_rejects_srgb_decode_state_drift(self) -> None:
-        manifest = release_proof_manifest("rc-parity", "windows-x64")
+        manifest = release_proof_manifest("rc-parity", "windows-x86")
         color_run = next(
             run
             for run in manifest["runs"]
@@ -5654,7 +5654,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertTrue(any("authored-color sceneLinearDecode" in failure for failure in failures))
 
     def test_color_sweep_requires_luma_false_color_sidecars(self) -> None:
-        manifest = release_proof_manifest("rc-parity", "windows-x64")
+        manifest = release_proof_manifest("rc-parity", "windows-x86")
         color_run = next(
             run
             for run in manifest["runs"]
@@ -5667,7 +5667,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertTrue(any("luma false-color sidecar" in failure for failure in failures))
 
     def test_color_sweep_requires_exposure_false_color_sidecars(self) -> None:
-        manifest = release_proof_manifest("rc-parity", "windows-x64")
+        manifest = release_proof_manifest("rc-parity", "windows-x86")
         color_run = next(
             run
             for run in manifest["runs"]
@@ -5680,7 +5680,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertTrue(any("exposure false-color sidecar" in failure for failure in failures))
 
     def test_color_sweep_requires_shader_reference_ramps(self) -> None:
-        manifest = release_proof_manifest("rc-parity", "windows-x64")
+        manifest = release_proof_manifest("rc-parity", "windows-x86")
         manifest["imageEvidence"]["shaderReferenceRamps"].pop()
 
         failures = glx_runtime_sweep.evaluate_gate(manifest)
@@ -6613,7 +6613,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         )
 
     def test_gate_evaluation_requires_dlight_shadow_scene_evidence(self) -> None:
-        manifest = release_proof_manifest("rc-parity", "linux-x86_64")
+        manifest = release_proof_manifest("rc-parity", "linux-x86")
         manifest["runs"] = [
             run for run in manifest["runs"] if run.get("type") != "dlight-shadow-scenes"
         ]
@@ -6623,7 +6623,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         self.assertTrue(any("dlight shadow scene run" in failure for failure in failures))
 
     def test_gate_evaluation_requires_dlight_shadow_category_evidence(self) -> None:
-        manifest = release_proof_manifest("rc-parity", "linux-x86_64")
+        manifest = release_proof_manifest("rc-parity", "linux-x86")
         shadow_run = next(
             run for run in manifest["runs"] if run.get("type") == "dlight-shadow-scenes"
         )
@@ -6638,7 +6638,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         self.assertTrue(any("stress-light-budget" in failure for failure in failures))
 
     def test_gate_evaluation_requires_shadow_manager_runtime_evidence(self) -> None:
-        manifest = release_proof_manifest("rc-parity", "linux-x86_64")
+        manifest = release_proof_manifest("rc-parity", "linux-x86")
         shadow_run = next(
             run for run in manifest["runs"] if run.get("type") == "dlight-shadow-scenes"
         )
@@ -6649,7 +6649,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         self.assertTrue(any("shadow manager" in failure for failure in failures))
 
     def test_gate_evaluation_requires_surface_light_spot_runtime_evidence(self) -> None:
-        manifest = release_proof_manifest("rc-parity", "linux-x86_64")
+        manifest = release_proof_manifest("rc-parity", "linux-x86")
         shadow_run = next(
             run for run in manifest["runs"] if run.get("type") == "dlight-shadow-scenes"
         )
@@ -6662,7 +6662,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         )
 
     def test_gate_evaluation_requires_csm_runtime_evidence(self) -> None:
-        manifest = release_proof_manifest("rc-parity", "linux-x86_64")
+        manifest = release_proof_manifest("rc-parity", "linux-x86")
         shadow_run = next(
             run for run in manifest["runs"] if run.get("type") == "dlight-shadow-scenes"
         )
@@ -6673,7 +6673,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         self.assertTrue(any("CSM runtime" in failure for failure in failures))
 
     def test_gate_evaluation_requires_csm_shimmer_screenshot_diff_smoke(self) -> None:
-        manifest = release_proof_manifest("rc-parity", "linux-x86_64")
+        manifest = release_proof_manifest("rc-parity", "linux-x86")
         shadow_run = next(
             run for run in manifest["runs"] if run.get("type") == "dlight-shadow-scenes"
         )
@@ -6686,7 +6686,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         )
 
     def test_gate_evaluation_requires_combined_shadow_atlas_smoke(self) -> None:
-        manifest = release_proof_manifest("rc-parity", "linux-x86_64")
+        manifest = release_proof_manifest("rc-parity", "linux-x86")
         shadow_run = next(
             run for run in manifest["runs"] if run.get("type") == "dlight-shadow-scenes"
         )
@@ -6699,7 +6699,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         )
 
     def test_gate_evaluation_requires_csm_fallback_smoke(self) -> None:
-        manifest = release_proof_manifest("rc-parity", "linux-x86_64")
+        manifest = release_proof_manifest("rc-parity", "linux-x86")
         shadow_run = next(
             run for run in manifest["runs"] if run.get("type") == "dlight-shadow-scenes"
         )
@@ -6831,7 +6831,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         self.assertEqual(proof["visual"]["status"], "failed")
 
     def test_rc_proof_gate_requires_reviewed_visual_and_performance_baselines(self) -> None:
-        manifest = release_proof_manifest("rc-proof", "windows-x64")
+        manifest = release_proof_manifest("rc-proof", "windows-x86")
 
         self.assertEqual(glx_runtime_sweep.evaluate_gate(manifest), [])
         proof = glx_runtime_sweep.proof_status(
@@ -6916,10 +6916,10 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for gate in glx_runtime_sweep.GLX_RELEASE_REQUIRED_GATES:
-                manifest = release_proof_manifest(gate, "windows-x64")
+                manifest = release_proof_manifest(gate, "windows-x86")
                 if gate == "rc-proof":
                     manifest["dryRun"] = True
-                manifest_dir = root / "windows-x64" / gate / "run"
+                manifest_dir = root / "windows-x86" / gate / "run"
                 manifest_dir.mkdir(parents=True)
                 (manifest_dir / "manifest.json").write_text(
                     json.dumps(manifest, indent=2),
@@ -6930,8 +6930,8 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
             failures = "\n".join(str(failure) for failure in summary["failures"])
 
             self.assertEqual(summary["status"], "failed")
-            self.assertIn("Missing GLx rc-smoke runtime proof for linux-x86_64", failures)
-            self.assertIn("No passing GLx rc-proof runtime proof for windows-x64", failures)
+            self.assertIn("Missing GLx rc-smoke runtime proof for linux-x86", failures)
+            self.assertIn("No passing GLx rc-proof runtime proof for windows-x86", failures)
             self.assertIn("dry-run manifests do not count as release proof", failures)
 
 
@@ -7149,7 +7149,7 @@ class GlxPromotionTests(unittest.TestCase):
             metadata_path = self.write_rollback_metadata(
                 Path(tmp),
                 rollback_package_metadata(
-                    platforms=["windows-x64"],
+                    platforms=["windows-x86"],
                     legacy_renderers=["glx"],
                     required_artifacts={"proofCorpus": True},
                     triggers=["driver regression only"],
@@ -7167,7 +7167,7 @@ class GlxPromotionTests(unittest.TestCase):
             self.assertIn("demo regressions", failures)
             self.assertIn("screenshot regressions", failures)
             self.assertIn("performance regressions", failures)
-            self.assertIn("linux-x86_64", failures)
+            self.assertIn("linux-x86", failures)
 
     def test_rollback_package_metadata_rejects_unsafe_artifact_names(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7238,8 +7238,8 @@ class GlxPromotionTests(unittest.TestCase):
                     "glx-ownership",
                     ownership_proof_manifest(
                         platform_id,
-                        calls=1 if platform_id == "windows-x64" else 0,
-                        items=4 if platform_id == "windows-x64" else 0,
+                        calls=1 if platform_id == "windows-x86" else 0,
+                        items=4 if platform_id == "windows-x86" else 0,
                     ),
                 )
 
@@ -7247,15 +7247,15 @@ class GlxPromotionTests(unittest.TestCase):
             failures = "\n".join(str(failure) for failure in proof["blockers"])
 
             self.assertEqual(proof["status"], "blocked")
-            self.assertIn("windows-x64", failures)
-            self.assertNotIn("linux-x86_64 did not report zero", failures)
+            self.assertIn("windows-x86", failures)
+            self.assertNotIn("linux-x86 did not report zero", failures)
 
     def test_ownership_proof_requires_versioned_evidence_object(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for platform_id in glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS:
                 manifest = ownership_proof_manifest(platform_id)
-                if platform_id == "windows-x64":
+                if platform_id == "windows-x86":
                     manifest.pop("ownershipProofEvidence")
                 self.write_manifest(
                     root,
@@ -7268,16 +7268,16 @@ class GlxPromotionTests(unittest.TestCase):
             failures = "\n".join(str(failure) for failure in proof["blockers"])
 
             self.assertEqual(proof["status"], "blocked")
-            self.assertIn("windows-x64", failures)
+            self.assertIn("windows-x86", failures)
             self.assertIn("versioned ownership proof evidence", failures)
-            self.assertNotIn("linux-x86_64 did not include versioned", failures)
+            self.assertNotIn("linux-x86 did not include versioned", failures)
 
     def test_ownership_proof_rejects_stale_evidence_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for platform_id in glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS:
                 manifest = ownership_proof_manifest(platform_id)
-                if platform_id == "windows-x64":
+                if platform_id == "windows-x86":
                     manifest["ownershipProofEvidence"]["version"] = 0
                 self.write_manifest(
                     root,
@@ -7302,10 +7302,10 @@ class GlxPromotionTests(unittest.TestCase):
                     "glx-ownership",
                     ownership_proof_manifest(
                         platform_id,
-                        post_mode="legacy-fallback" if platform_id == "windows-x64" else "glx-owned",
-                        post_nodes=0 if platform_id == "windows-x64" else 2,
-                        outputs=0 if platform_id == "windows-x64" else 1,
-                        legacy_fallback=1 if platform_id == "windows-x64" else 0,
+                        post_mode="legacy-fallback" if platform_id == "windows-x86" else "glx-owned",
+                        post_nodes=0 if platform_id == "windows-x86" else 2,
+                        outputs=0 if platform_id == "windows-x86" else 1,
+                        legacy_fallback=1 if platform_id == "windows-x86" else 0,
                     ),
                 )
 
@@ -7313,7 +7313,7 @@ class GlxPromotionTests(unittest.TestCase):
             failures = "\n".join(str(failure) for failure in proof["blockers"])
 
             self.assertEqual(proof["status"], "blocked")
-            self.assertIn("windows-x64", failures)
+            self.assertIn("windows-x86", failures)
             self.assertIn("did not prove executable GLx-owned modern post/output", failures)
 
     def test_ownership_proof_requires_modern_post_output_tier(self) -> None:
@@ -7326,7 +7326,7 @@ class GlxPromotionTests(unittest.TestCase):
                     "glx-ownership",
                     ownership_proof_manifest(
                         platform_id,
-                        tier="GL2X" if platform_id == "windows-x64" else "GL3X",
+                        tier="GL2X" if platform_id == "windows-x86" else "GL3X",
                     ),
                 )
 
@@ -7334,9 +7334,9 @@ class GlxPromotionTests(unittest.TestCase):
             failures = "\n".join(str(failure) for failure in proof["blockers"])
 
             self.assertEqual(proof["status"], "blocked")
-            self.assertIn("windows-x64", failures)
+            self.assertIn("windows-x86", failures)
             self.assertIn("did not prove a GL3X+ modern post/output tier", failures)
-            self.assertNotIn("linux-x86_64 did not prove a GL3X+", failures)
+            self.assertNotIn("linux-x86 did not prove a GL3X+", failures)
 
     def test_ownership_proof_requires_modern_tier_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7348,7 +7348,7 @@ class GlxPromotionTests(unittest.TestCase):
                     "glx-ownership",
                     ownership_proof_manifest(
                         platform_id,
-                        modern_tier_diagnostics=platform_id != "windows-x64",
+                        modern_tier_diagnostics=platform_id != "windows-x86",
                     ),
                 )
 
@@ -7356,9 +7356,9 @@ class GlxPromotionTests(unittest.TestCase):
             failures = "\n".join(str(failure) for failure in proof["blockers"])
 
             self.assertEqual(proof["status"], "blocked")
-            self.assertIn("windows-x64", failures)
+            self.assertIn("windows-x86", failures)
             self.assertIn("did not prove modern post-chain and scene-linear tier diagnostics", failures)
-            self.assertNotIn("linux-x86_64 did not prove modern post-chain", failures)
+            self.assertNotIn("linux-x86 did not prove modern post-chain", failures)
 
 
 class GlxRuntimeSweepPerformanceTests(unittest.TestCase):

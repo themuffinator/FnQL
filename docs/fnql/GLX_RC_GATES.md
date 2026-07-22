@@ -82,7 +82,7 @@ python scripts/glx_runtime_sweep.py --list-profiles
 python scripts/glx_runtime_sweep.py --list-corpus
 python scripts/glx_runtime_sweep.py --gate rc-smoke --exe path/to/fnql.x64.exe --basepath path/to/game/root
 python scripts/glx_runtime_sweep.py --gate rc-parity --exe path/to/fnql.x64.exe --basepath path/to/game/root
-python scripts/glx_runtime_sweep.py --gate rc-proof --exe path/to/fnql.x64.exe --basepath path/to/game/root --proof-dir .tmp/glx-proof/windows-x64
+python scripts/glx_runtime_sweep.py --gate rc-proof --exe path/to/fnql.x64.exe --basepath path/to/game/root --proof-dir .tmp/glx-proof/windows-x86
 python scripts/glx_runtime_sweep.py --gate rc-stress --exe path/to/fnql.x64.exe --basepath path/to/game/root
 ```
 
@@ -95,13 +95,13 @@ The sweep can compare captured PNG screenshots against an approved baseline dire
 To deliberately approve a new local baseline set:
 
 ```sh
-python scripts/glx_runtime_sweep.py --gate rc-parity --exe path/to/fnql.x64.exe --basepath path/to/game/root --screenshot-baseline-dir .tmp/glx-baselines/windows-x64 --approve-screenshot-baselines
+python scripts/glx_runtime_sweep.py --gate rc-parity --exe path/to/fnql.x64.exe --basepath path/to/game/root --screenshot-baseline-dir .tmp/glx-baselines/windows-x86 --approve-screenshot-baselines
 ```
 
 To compare a candidate run against that baseline and write difference PNGs:
 
 ```sh
-python scripts/glx_runtime_sweep.py --gate rc-parity --exe path/to/fnql.x64.exe --basepath path/to/game/root --screenshot-baseline-dir .tmp/glx-baselines/windows-x64 --screenshot-diff-dir .tmp/glx-diffs/windows-x64 --screenshot-max-rms 2.0 --screenshot-max-pixel-ratio 0.005
+python scripts/glx_runtime_sweep.py --gate rc-parity --exe path/to/fnql.x64.exe --basepath path/to/game/root --screenshot-baseline-dir .tmp/glx-baselines/windows-x86 --screenshot-diff-dir .tmp/glx-diffs/windows-x86 --screenshot-max-rms 2.0 --screenshot-max-pixel-ratio 0.005
 ```
 
 The initial thresholds are intentionally tight and should be adjusted only with reviewed evidence. Missing baselines or failed comparisons fail a non-dry-run gate when a baseline directory is supplied.
@@ -275,17 +275,17 @@ The release proof root is a reviewed artifact directory containing the runtime-s
 
 ```text
 proof-root/
-  windows-x64/
+  windows-x86/
     rc-smoke/<run-id>/manifest.json
     rc-parity/<run-id>/manifest.json
     rc-proof/<run-id>/manifest.json
-  linux-x86_64/
+  linux-x86/
     rc-smoke/<run-id>/manifest.json
     rc-parity/<run-id>/manifest.json
     rc-proof/<run-id>/manifest.json
 ```
 
-Each manifest must be non-dry-run, must carry `proofPlatform` as `windows-x64` or `linux-x86_64`, must carry passing `rendererSwitchEvidence`, must pass the gate when re-evaluated by `scripts/glx_runtime_sweep.py`, and must reference the current proof-corpus and parity-suite versions. `rc-proof` additionally must compare against reviewed screenshot baselines and a reviewed performance baseline; approval-mode manifests do not count as release proof.
+Each manifest must be non-dry-run, must carry `proofPlatform` as `windows-x86` or `linux-x86`, must carry passing `rendererSwitchEvidence`, must pass the gate when re-evaluated by `scripts/glx_runtime_sweep.py`, and must reference the current proof-corpus and parity-suite versions. `rc-proof` additionally must compare against reviewed screenshot baselines and a reviewed performance baseline; approval-mode manifests do not count as release proof.
 
 Each runtime sweep also writes `glx-visual-dossier.md` beside the manifest and
 records it under the manifest `visualDossier` field. The dossier is the review

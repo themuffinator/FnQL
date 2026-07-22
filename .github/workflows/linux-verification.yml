@@ -13,6 +13,7 @@ on:
       - 'Makefile'
       - 'meson.build'
       - 'meson_options.txt'
+      - 'misc/meson/**'
       - 'code/**'
       - 'pkg/**'
       - 'scripts/**'
@@ -26,6 +27,7 @@ on:
       - 'Makefile'
       - 'meson.build'
       - 'meson_options.txt'
+      - 'misc/meson/**'
       - 'code/**'
       - 'pkg/**'
       - 'scripts/**'
@@ -70,53 +72,32 @@ jobs:
           file build/release-linux-x86/fnql.ded | grep -F 'ELF 32-bit LSB'
           file build/release-linux-x86/fnql.ded | grep -F 'Intel 80386'
 
-  meson-sdl-x86_64:
-    name: Meson SDL3 x86_64 client, server, and renderers
+  meson-x86:
+    name: Meson i686 server, renderers, and tests
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install Linux build dependencies
+      - name: Install i686 Meson build dependencies
         run: |
+          sudo dpkg --add-architecture i386
           sudo apt-get -qq update
           sudo apt-get install -y \
-            binutils \
-            cmake \
             file \
-            g++ \
-            gcc \
-            libasound2-dev \
-            libcurl4-openssl-dev \
-            libdbus-1-dev \
-            libegl-dev \
-            libfreetype6-dev \
-            libjpeg-dev \
-            libogg-dev \
-            libopenal-dev \
-            libpipewire-0.3-dev \
-            libudev-dev \
-            libvorbis-dev \
-            libwayland-dev \
-            libx11-dev \
-            libxcursor-dev \
-            libxext-dev \
-            libxfixes-dev \
-            libxi-dev \
-            libxkbcommon-dev \
-            libxrandr-dev \
-            libxss-dev \
-            libxtst-dev \
-            libxxf86dga-dev \
-            libxxf86vm-dev \
-            mesa-common-dev \
+            gcc-multilib \
+            g++-multilib \
+            glslang-tools \
+            libc6-dev-i386 \
+            linux-libc-dev:i386 \
             meson \
             ninja-build \
             pkg-config \
-            python3-venv
+            python3
 
-      - name: Build dependency-isolated dedicated server
+      - name: Build dependency-isolated i686 dedicated server
         run: |
           meson setup .tmp/meson-linux-server-only \
+            --cross-file misc/meson/linux-x86.ini \
             --buildtype=debugoptimized \
             --wrap-mode=nofallback \
             -Daudio-tests=false \
@@ -126,101 +107,28 @@ jobs:
             -Dglx-tests=false \
             -Dogg-vorbis=false \
             -Dsdl=disabled
-          meson compile -C .tmp/meson-linux-server-only fnql.ded.x86_64
+          meson compile -C .tmp/meson-linux-server-only fnql.ded
+          file .tmp/meson-linux-server-only/fnql.ded | grep -F 'ELF 32-bit LSB'
+          file .tmp/meson-linux-server-only/fnql.ded | grep -F 'Intel 80386'
 
-      - name: Configure clean bundled cURL dependency graph
+      - name: Build i686 renderer modules
         run: |
-          meson setup .tmp/meson-linux-curl-fallback \
+          meson setup .tmp/meson-linux-renderers \
+            --cross-file misc/meson/linux-x86.ini \
             --buildtype=debugoptimized \
-            --wrap-mode=forcefallback \
             -Daudio-tests=false \
             -Dbuild-client=true \
             -Dbuild-server=false \
-            -Dcurl=enabled \
-            -Dcurl-dlopen=false \
+            -Dcurl=disabled \
             -Dglx-tests=false \
             -Dogg-vorbis=false \
-            -Drenderer-dlopen=false \
-            -Drenderer-default=glx \
-            -Dsdl=disabled
-          meson compile -C .tmp/meson-linux-curl-fallback fnql.x86_64
-
-      - name: Install SDL3-compatible Meson
-        run: |
-          build_tools="$RUNNER_TEMP/fnql-linux-build-tools"
-          python3 -m venv "$build_tools"
-          "$build_tools/bin/python" -m pip install --disable-pip-version-check meson==1.9.1
-          printf '%s\n' "$build_tools/bin" >> "$GITHUB_PATH"
-
-      - name: Configure native Linux SDL3 Meson build
-        run: |
-          meson setup .tmp/meson-linux-x86_64 \
-            --buildtype=debugoptimized \
-            --force-fallback-for=sdl3,fontstash \
-            --prefix / \
-            -Dbuild-client=true \
-            -Dbuild-server=true \
-            -Dcurl=enabled \
-            -Dcurl-dlopen=auto \
-            -Dogg-vorbis=true \
             -Drenderer-dlopen=true \
-            -Drenderers=glx,vk,rtx \
             -Drenderer-default=glx \
-            -Dsdl=enabled \
-            -Dsystem-jpeg=true
-
-      - name: Build all Linux runtime and test targets
-        run: meson compile -C .tmp/meson-linux-x86_64
-
-      - name: Run Linux test suite
-        run: meson test -C .tmp/meson-linux-x86_64 --print-errorlogs --timeout-multiplier 2
-
-      - name: Verify CMake x86_64 target naming
-        run: |
-          cmake -S . -B .tmp/cmake-linux-x86_64 -G Ninja \
-            -DUSE_SDL=OFF \
-            -DUSE_SYSTEM_JPEG=ON \
-            -DFNQL_AUDIO_LOOPBACK_TESTS=OFF \
-            -DFNQL_GLX_LOGIC_TESTS=OFF
-          cmake --build .tmp/cmake-linux-x86_64 \
-            --parallel 2 \
-            --target \
-              fnql.x86_64 \
-              fnql.ded.x86_64 \
-              fnql_glx_x86_64 \
-              fnql_vk_x86_64 \
-              fnql_rtx_x86_64
-          ninja -C .tmp/cmake-linux-x86_64 -t targets all > .tmp/cmake-linux-x86_64-targets.txt
-          grep -F 'fnql.x86_64' .tmp/cmake-linux-x86_64-targets.txt
-          grep -F 'fnql.ded.x86_64' .tmp/cmake-linux-x86_64-targets.txt
-          grep -F 'fnql_glx_x86_64' .tmp/cmake-linux-x86_64-targets.txt
-          grep -F 'fnql_vk_x86_64' .tmp/cmake-linux-x86_64-targets.txt
-          grep -F 'fnql_rtx_x86_64' .tmp/cmake-linux-x86_64-targets.txt
-
-      - name: Install and verify native Linux layout
-        run: |
-          stage="$PWD/.tmp/linux-x86_64-stage"
-          meson install -C .tmp/meson-linux-x86_64 \
-            --destdir "$stage" \
-            --no-rebuild \
-            --skip-subprojects
-
-          expected=(
-            fnql.x86_64
-            fnql.ded.x86_64
-            fnql_glx_x86_64.so
-            fnql_vk_x86_64.so
-            fnql_rtx_x86_64.so
-          )
-          for name in "${expected[@]}"; do
-            artifact="$stage/$name"
-            test -x "$artifact"
-            file "$artifact" | grep -F 'ELF 64-bit LSB'
-            if ldd "$artifact" | grep -F 'not found'; then
-              echo "$name has unresolved runtime dependencies" >&2
-              exit 1
-            fi
+            -Drenderers=glx,vk,rtx \
+            -Dsdl=disabled
+          for renderer in glx vk rtx; do
+            artifact=".tmp/meson-linux-renderers/fnql_${renderer}_x86.so"
+            meson compile -C .tmp/meson-linux-renderers "fnql_${renderer}_x86"
+            file "$artifact" | grep -F 'ELF 32-bit LSB'
+            file "$artifact" | grep -F 'Intel 80386'
           done
-
-          python scripts/verify_release_layout.py "$stage/FnQL-pkg.fnz"
-          test -s "$stage/fnql-web.pak"

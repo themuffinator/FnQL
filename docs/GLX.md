@@ -50,7 +50,7 @@ Use the runtime sweep for structured evidence:
 
 ```sh
 python scripts/glx_runtime_sweep.py --gate rc-parity --exe path/to/fnql --basepath path/to/game
-python scripts/glx_runtime_sweep.py --gate rc-proof --exe path/to/fnql --basepath path/to/game --proof-dir .tmp/glx-proof/windows-x64
+python scripts/glx_runtime_sweep.py --gate rc-proof --exe path/to/fnql --basepath path/to/game --proof-dir .tmp/glx-proof/windows-x86
 ```
 
 Inside the game, these commands are the first things to capture in a renderer bug report:

@@ -81,21 +81,19 @@ class RtxRendererContractSourceTests(unittest.TestCase):
         self.assertIn("-DRENDERER_RTX", meson)
         self.assertIn("renderer_default == 'rtx'", meson)
 
-        # The static RTX verification target links the complete Linux client,
-        # including its native ALSA backend, rather than only the renderer.
-        self.assertIn("libasound2-dev", workflow)
-
         focused_ci = source_section(
             workflow,
             "- name: Configure focused Meson Vulkan-family build",
-            "- name: Configure static RTX client build",
+            "  vulkan-gate-plans:",
         )
         self.assertIn("-Dbuild-client=true", focused_ci)
         self.assertIn("-Drenderer-default=${{ matrix.renderer }}", focused_ci)
         self.assertIn(
-            '"fnql_${{ matrix.renderer }}_x86_64"',
+            '"fnql_${{ matrix.renderer }}_x86"',
             focused_ci,
         )
+        self.assertIn("--cross-file misc/meson/linux-x86.ini", focused_ci)
+        self.assertIn("ELF 32-bit LSB", focused_ci)
 
         # Static clients also provide ABI-level host-font fallbacks. Every
         # supported build frontend must keep the renderer's implementations
@@ -106,16 +104,7 @@ class RtxRendererContractSourceTests(unittest.TestCase):
             self.assertIn(remap, cmake)
             self.assertIn(f"-D{remap}", makefile)
 
-        static_ci = source_section(
-            workflow,
-            "- name: Configure static RTX client build",
-            "  vulkan-gate-plans:",
-        )
-        self.assertIn("-Dbuild-client=true", static_ci)
-        self.assertIn(
-            "meson compile -C .tmp/meson-rtx-static-verification fnql.x86_64",
-            static_ci,
-        )
+        self.assertNotIn("x86_64", focused_ci)
 
     def test_rtx_exports_the_complete_quake_live_renderer_api_13_surface(self) -> None:
         public = read("code/renderercommon/tr_public.h")

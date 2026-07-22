@@ -41,7 +41,7 @@ static package promise.
       "id": "fnql-legacy-opengl",
       "type": "rollback",
       "artifactDir": "fnql-legacy-opengl",
-      "platforms": ["windows-x64", "linux-x86_64"],
+      "platforms": ["windows-x86", "linux-x86"],
       "legacyRenderers": ["opengl", "opengl2"],
       "selectionInstructions": "Run this package when the promoted GLx alias regresses; set cl_renderer opengl and restart video."
     }

@@ -15,14 +15,15 @@ to `.vscode/build-release.ps1` to build its strict dynamic-library target and
 stage only the resulting provider beside FnQL. See
 [`docs/fnql/STEAM_PROVIDER.md`](docs/fnql/STEAM_PROVIDER.md).
 
+FnQL is a **32-bit x86-only project**. Build, test, package, and run Win32 on
+Windows or i686 on Linux; x86_64, ARM, and macOS targets are unsupported.
+
 On Windows, use the **Win32/x86 client for retail Quake Live runtime tests**.
 Retail `bin.pk3` ships `qagamex86.dll`, `cgamex86.dll`, and `uix86.dll`; the x64
-build remains useful for engine-only validation but cannot load those x86
-modules in-process.
+ABI cannot load those x86 modules in-process and is not a FnQL target.
 
-Official release support is deliberately limited to the Windows Win32/x86
-retail client and Linux i686 dedicated server. Other build targets are
-developer-only and are not published as supported downloads.
+Official release support is limited to the Windows Win32/x86 retail client and
+Linux i686 dedicated server. macOS is disabled and unsupported.
 
 All maintained build graphs generate `fnql-web.pak` beside the client. Keep
 that sidecar with the executable when copying a build manually. It contains
@@ -97,7 +98,7 @@ they never silently substitute the incomplete host-font stubs.
 ### windows/msvc
 
 Install Visual Studio Community Edition 2017 or later, Python, Meson, and
-Ninja. You can build through Meson from a Visual Studio developer prompt:
+Ninja. Open an x86 Native Tools developer prompt, then build through Meson:
 
 `meson setup meson/build-msvc --buildtype=release`
 
@@ -113,8 +114,7 @@ debugging. All VS Code build and launch entry points are intentionally Win32
 only because retail Quake Live modules and Awesomium are 32-bit. The build
 helper compiles an explicit runtime-product list, so normal VS Code builds do
 not compile Meson's native test executables. Invoke the helper explicitly with
-`-RunTests` or use Meson directly for tests; use the maintained solution below
-for non-retail architecture work.
+`-RunTests` or use Meson directly for tests.
 
 Official Windows release archives include the compiled closed-source Win32
 `fnql_steam.dll` provider. Release CI downloads the exact binary pinned in
@@ -124,15 +124,11 @@ Steam-enabled development continues to build the private `../FnQL-Steam`
 sibling through the `-WithSteam` helper path documented in
 `docs/fnql/STEAM_PROVIDER.md`.
 
-Alternatively, open `code/win32/msvc2017/fnql.sln`. Its single maintained
-project delegates the selected Debug/Release and Win32/x64/ARM64 configuration
-to Meson with strict warnings enabled and all renderer modules selected. Build
-directories are isolated below `meson/build/vs/`. The older engine and renderer
-component projects remain alongside it for source-coupling/reference tooling;
-building one delegates to the same Meson graph. Obsolete third-party projects
-were removed rather than restoring deleted in-tree dependency sources. Install
-the corresponding MSVC C++ build tools for each selected architecture; ARM64
-requires the optional ARM64 compiler workload.
+Alternatively, open `code/win32/msvc2017/fnql.sln` and select a Win32
+Debug/Release configuration. Its maintained project delegates to Meson with
+strict warnings enabled and all renderer modules selected. Build directories
+are isolated below `meson/build/vs/`. x64 and ARM64 are outside FnQL's
+supported ABI.
 
 ---
 
@@ -143,9 +139,9 @@ Install the build dependencies first:
 `MSYS2 MSYS`
 
 * pacman -Syu
-* pacman -S make mingw-w64-x86_64-gcc mingw-w64-i686-gcc
+* pacman -S make mingw-w64-i686-gcc
 
-Use `MSYS2 MINGW32` or `MSYS2 MINGW64` depending on your target system, then either copy the resulting binaries from the `build` directory or run:
+Use `MSYS2 MINGW32`, then either copy the resulting binaries from the `build` directory or run:
 
 `make install DESTDIR=<path_to_quake_live_install>`
 
@@ -155,7 +151,7 @@ Use `MSYS2 MINGW32` or `MSYS2 MINGW64` depending on your target system, then eit
 
 All required build dependencies, including libraries and headers, are bundled in.
 
-Build with either `make ARCH=x86` or `make ARCH=x86_64` depending on your target system, then either copy the resulting binaries from the `build` directory or run:
+Build with `make ARCH=x86`, then either copy the resulting binaries from the `build` directory or run:
 
 `make install DESTDIR=<path_to_quake_live_install>`
 
@@ -165,9 +161,8 @@ Build with either `make ARCH=x86` or `make ARCH=x86_64` depending on your target
 
 Linux has two distinct compatibility surfaces:
 
-- Native dedicated servers can load the retail `qagamei386.so` or
-  `qagamex64.so` from `baseq3/bin.pk3`. The official release is i686 and uses
-  the former so its ABI matches the other retail-facing release artifacts.
+- Native dedicated servers load the retail `qagamei386.so` from
+  `baseq3/bin.pk3`; FnQL does not build or validate the x86_64 alternative.
 - Retail Quake Live does not ship native Linux `cgame` or UI modules; those
   modules and the retained Awesomium WebUI runtime are Win32-only. Native Linux
   client builds are maintained engine/platform development targets, but are not
@@ -190,7 +185,7 @@ Steam may instead use `~/.steam/steam/steamapps/common/Quake Live` or a custom
 library. Pass that exact directory through `fs_steampath`; do not copy retail
 assets into the repository or FnQL package.
 
-#### Native development build
+#### Meson i686 development build
 
 Meson is the preferred path. On Debian or Ubuntu, this baseline builds the
 legacy X11 backend using system development packages while Meson fetches only
@@ -198,20 +193,20 @@ missing wrap fallbacks (including the required pinned FontStash source):
 
 ```sh
 sudo apt update
-sudo apt install build-essential git meson ninja-build pkg-config python3 \
-  libasound2-dev libcurl4-openssl-dev libfreetype6-dev libjpeg-dev \
-  libogg-dev libopenal-dev libvorbis-dev libx11-dev
-meson setup meson/build-linux --buildtype=debugoptimized -Dsdl=disabled
-meson compile -C meson/build-linux
-meson test -C meson/build-linux
+sudo apt install gcc-multilib g++-multilib libc6-dev-i386 \
+  linux-libc-dev:i386 git meson ninja-build pkg-config python3
+meson setup meson/build-linux-x86 \
+  --cross-file misc/meson/linux-x86.ini \
+  --buildtype=debugoptimized -Dsdl=disabled -Dcurl=disabled \
+  -Dogg-vorbis=false
+meson compile -C meson/build-linux-x86
+meson test -C meson/build-linux-x86 --print-errorlogs
 ```
 
-For the SDL path, install SDL3 3.2.0 or newer and configure with
-`-Dsdl=enabled`. If the distribution does not yet package SDL3, the existing
-`subprojects/sdl3.wrap` fallback is the supported bundled source boundary; use
-`--wrap-mode=forcefallback` to exercise it explicitly. Meson prints whether
-SDL3, OpenAL, cURL, JPEG, and Ogg/Vorbis came from the system or a subproject at
-the end of configuration.
+For a complete i686 client build, install the corresponding `:i386` SDL3,
+OpenAL, cURL, JPEG, Ogg/Vorbis, and X11 development packages. The release
+workflow is the canonical dependency baseline when distribution package names
+differ.
 
 Stage a build without writing into the Steam library, verify it, and then copy
 the whole flat runtime root together:
@@ -219,7 +214,7 @@ the whole flat runtime root together:
 ```sh
 mkdir -p .tmp
 install_root="$(mktemp -d "$PWD/.tmp/linux-install.XXXXXX")"
-meson install -C meson/build-linux --destdir "$install_root"
+meson install -C meson/build-linux-x86 --destdir "$install_root"
 python3 scripts/verify_release_layout.py \
   "$install_root/usr/local/FnQL-pkg.fnz"
 ```
@@ -256,167 +251,20 @@ renderer modules, package sidecars, ELF i386 identity, and safe archive paths.
 
 ---
 
-### bsd
+### Other platforms
 
-Use the native Meson workflow above as a starting point, substituting the
-platform package manager and dependencies. BSD remains a source-build target;
-the project does not currently publish BSD release archives or claim the Linux
-retail-module boundary there.
-
----
-
-### arch linux
-
-Use the native Linux Meson workflow above with Arch package names. FnQL does
-not currently publish distro-native Arch package metadata; install into a
-staging directory and keep the flat runtime root together.
+FnQL does not build, test, package, or launch macOS, ARM, PowerPC, BSD, or
+other non-x86 targets. Windows Win32/x86 and Linux i686 are the supported
+platform/ABI combinations.
 
 ---
-
-### raspberry pi os
-
-Install the build dependencies:
-
-* apt install libsdl3-dev libxxf86dga-dev libcurl4-openssl-dev
-
-Then build with: `make`
-
-After that, either copy the resulting binaries from the `build` directory or run:
-
-`make install DESTDIR=<path_to_quake_live_install>`
-
----
-
-### macOS (unsupported development target)
-
-FnQL retains native Intel (`x86_64`) and Apple Silicon (`arm64`) engine/tool
-builds on macOS 11 or newer for development. They are not supported release
-targets and the release workflow neither builds nor publishes them because
-retail Quake Live provides no macOS game modules or QVMs. Meson is the
-maintained local build path and uses the pinned dependency wraps:
-
-```sh
-python3 -m venv .tmp/macos-build-tools
-. .tmp/macos-build-tools/bin/activate
-python -m pip install --disable-pip-version-check meson==1.9.1 ninja
-arch="$(uname -m)"
-test "$arch" = arm64 && input_arch=arm64 || input_arch=x86_64
-export MACOSX_DEPLOYMENT_TARGET=11.0
-meson setup ".tmp/meson-macos-$input_arch" \
-  --buildtype=release \
-  --wrap-mode=forcefallback \
-  --prefix "$PWD/.tmp/macos-install-$input_arch" \
-  -Ddefault_library=static \
-  -Dsdl=enabled \
-  -Dcurl=enabled \
-  -Dcurl-dlopen=false \
-  -Drenderer-dlopen=true \
-  -Drenderers=glx,vk,rtx \
-  -Drenderer-default=glx
-meson compile -C ".tmp/meson-macos-$input_arch"
-meson test -C ".tmp/meson-macos-$input_arch" --print-errorlogs
-meson install -C ".tmp/meson-macos-$input_arch" --no-rebuild --skip-subprojects
-python3 scripts/macos_bundle.py \
-  --input "$input_arch=$PWD/.tmp/macos-install-$input_arch" \
-  --output .tmp/FnQL-macOS
-```
-
-The locally staged development bundle contains `FnQL.app`, `fnql.ded`, and
-`fnql-audiozonesc`. The app owns its renderer dylibs, `FnQL-pkg.fnz`, and
-`fnql-web.pak` under `Contents/MacOS`.
-Install MoltenVK (for example from the Vulkan SDK) only when testing the
-optional `vk` renderer; the default `glx` renderer uses Apple's OpenGL path.
-Meson install trees are the only supported input to the distribution packager.
-The Make and CMake paths remain useful compile-time developer checks, but they
-do not stage the audio-zone tool and complete relocatable app contract.
-Local and normal CI builds receive no project-applied app-bundle or Developer
-ID signature by default. Apple Silicon still carries the ad-hoc Mach-O
-signature that `clang` applies because arm64 code must be signed. Pass
-`--sign-identity -` with `--entitlements misc/macos/fnql.entitlements` only
-when an explicit ad-hoc app signature is specifically useful.
-
-To build Universal 2, first produce one staged Meson install on each native
-architecture, then pass both inputs to the packager. Client, server, and tool
-executables are merged with `lipo`; both architecture-named renderer dylibs are
-retained because renderer lookup is slice-specific:
-
-```sh
-python3 scripts/macos_bundle.py \
-  --input x86_64=/path/to/x86_64/install \
-  --input arm64=/path/to/arm64/install \
-  --output .tmp/FnQL-macOS-universal2
-```
-
-Signing is opt-in. For a public distribution, import a Developer ID Application
-certificate, create an App Store Connect profile with
-`xcrun notarytool store-credentials fnql-notary`, and replace the ad-hoc
-arguments with:
-
-```sh
---sign-identity "Developer ID Application: Your Name (TEAMID)" \
---entitlements misc/macos/fnql.entitlements \
---notary-profile fnql-notary
-```
-
-The GitHub release workflow hard-disables its retained macOS build/signing job
-definitions. These local signing commands are for development experiments and
-do not make the bundle retail-playable or eligible for official publication.
-
-The tool signs nested code inside-out with the hardened runtime, submits with
-`notarytool --wait`, staples the app, and verifies it with `codesign`,
-`stapler`, and Gatekeeper. It does not put credentials on the command line.
-
-Important retail boundary: the legitimate Steam `baseq3/bin.pk3` contains
-Win32 client/UI/game DLLs and Linux game SOs, but no macOS dylibs or QVMs.
-Consequently the native Mac engine, renderer modules, tools, bundle, input,
-audio, filesystem, networking, and fallback paths have native compile, unit,
-package, signature, and dependency coverage, but native retail client or
-dedicated gameplay cannot load the retail game modules. Apple-hardware,
-windowed renderer smoke testing remains required before claiming runtime
-renderer promotion. FnQL reports the missing module before checking for a
-mod-provided QVM. The Windows x86 package remains the retail client-play path;
-FnQL does not reconstruct or distribute replacement game code.
-
-Any locally built macOS bundle intentionally contains neither a Steam provider nor Valve's
-`libsteam_api.dylib`; platform authentication therefore remains unavailable
-and is reported honestly. A future production provider must be separately
-licensed, architecture-matched, signed with a compatible Team ID, and bundled
-before hardened-runtime library validation will load it. The existing
-`~/Library/Application Support/Quake3` home path is retained as a compatibility
-path rather than silently moving established user data.
-
----
-
-### ppc64le / ppc64 (PowerPC 64-bit)
-
-Install the same build dependencies as the generic Linux section above, then build with:
-
-`make`
-
-The JIT compiler (`vm_powerpc.c`) supports optional ISA-level optimizations that are enabled automatically based on compiler target flags:
-
-* **ISA 2.07 (POWER8)**: Uses direct-move instructions (`mtvsrwa`, `mfvsrwz`, `xscvdpsxws`) to eliminate memory round-trips in float/int conversions (`OP_CVIF`, `OP_CVFI`)
-* **ISA 3.0 (POWER9)**: Uses hardware modulo instructions (`modsw`, `moduw`) to replace 3-instruction sequences for `OP_MODI` and `OP_MODU`
-
-To enable these optimizations, pass the appropriate `-mcpu` flag:
-
-`make CFLAGS='-mcpu=power8'` - enable ISA 2.07 optimizations
-
-`make CFLAGS='-mcpu=power9'` - enable ISA 2.07 + ISA 3.0 optimizations
-
-`make CFLAGS='-mcpu=native'` - auto-detect based on build machine (note: resulting binary may not be portable to older hardware)
-
-Without an explicit `-mcpu`, those optimizations depend on the compiler and distro defaults. The JIT falls back cleanly to baseline instruction sequences when the target ISA level is not available.
-
----
-
-Several Makefile options are available for Linux, MinGW, and macOS builds:
+Several Makefile options are available for Linux i686 and MinGW32 builds:
 
 `BUILD_CLIENT=1` - build unified client/server executable, enabled by default
 
 `BUILD_SERVER=1` - build dedicated server executable, enabled by default
 
-`USE_SDL=0` - disable the SDL3 backend for video, audio, and input and use the legacy non-SDL Unix backend instead; SDL3 is enabled by default and enforced for macOS
+`USE_SDL=0` - disable the SDL3 backend for video, audio, and input and use the legacy non-SDL Unix backend instead
 
 `USE_VK=1` - build the Vulkan raster renderer module (`vk`), enabled by default
 

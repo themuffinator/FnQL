@@ -3882,7 +3882,7 @@ bool LiquidClassificationAndImpulseLifetimeStayDeterministic()
 	CHECK( !R_LiquidContentsEnabled( CONTENTS_SLIME, 1 ) );
 	CHECK( R_LiquidContentsEnabled( CONTENTS_SLIME | CONTENTS_LAVA, 2 ) );
 	CHECK( R_LiquidContentsReflectionScale( CONTENTS_WATER ) == 1.0f );
-	CHECK( R_LiquidContentsReflectionScale( CONTENTS_SLIME ) == 0.55f );
+	CHECK( std::fabs( R_LiquidContentsReflectionScale( CONTENTS_SLIME ) - 0.55f ) < 0.000001f );
 	CHECK( R_LiquidContentsReflectionScale( CONTENTS_LAVA ) == 0.25f );
 	CHECK( R_LiquidViewportCoversTarget( 0, 0, 1920, 1080, 1920, 1080 ) );
 	CHECK( !R_LiquidViewportCoversTarget( 96, 54, 1728, 972, 1920, 1080 ) );

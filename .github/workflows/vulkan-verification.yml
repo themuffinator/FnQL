@@ -16,6 +16,7 @@ on:
       - 'README.md'
       - 'meson.build'
       - 'meson_options.txt'
+      - 'misc/meson/**'
       - 'code/renderercommon/**'
       - 'code/rendererrtx/**'
       - 'code/renderervk/**'
@@ -45,6 +46,7 @@ on:
       - 'README.md'
       - 'meson.build'
       - 'meson_options.txt'
+      - 'misc/meson/**'
       - 'code/renderercommon/**'
       - 'code/rendererrtx/**'
       - 'code/renderervk/**'
@@ -117,8 +119,9 @@ jobs:
 
       - name: Install build tools
         run: |
+          sudo dpkg --add-architecture i386
           sudo apt-get -qq update
-          sudo apt-get install -y meson ninja-build gcc g++ glslang-tools libasound2-dev libx11-dev libxext-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev mesa-common-dev
+          sudo apt-get install -y file meson ninja-build gcc-multilib g++-multilib libc6-dev-i386 linux-libc-dev:i386 glslang-tools
 
       - name: Verify generated RTX shaders
         if: matrix.renderer == 'rtx'
@@ -137,6 +140,7 @@ jobs:
       - name: Configure focused Meson Vulkan-family build
         run: |
           meson setup ".tmp/meson-${{ matrix.renderer }}-verification" \
+            --cross-file misc/meson/linux-x86.ini \
             --buildtype=debugoptimized \
             -Dsdl=disabled \
             -Dcurl=disabled \
@@ -149,26 +153,11 @@ jobs:
             -Dglx-tests=false
 
       - name: Build Vulkan-family renderer
-        run: meson compile -C ".tmp/meson-${{ matrix.renderer }}-verification" "fnql_${{ matrix.renderer }}_x86_64"
-
-      - name: Configure static RTX client build
-        if: matrix.renderer == 'rtx'
         run: |
-          meson setup .tmp/meson-rtx-static-verification \
-            --buildtype=debugoptimized \
-            -Dsdl=disabled \
-            -Dcurl=disabled \
-            -Drenderer-dlopen=false \
-            -Drenderer-default=rtx \
-            -Drenderers=rtx \
-            -Dbuild-client=true \
-            -Dbuild-server=false \
-            -Daudio-tests=false \
-            -Dglx-tests=false
-
-      - name: Build static RTX client
-        if: matrix.renderer == 'rtx'
-        run: meson compile -C .tmp/meson-rtx-static-verification fnql.x86_64
+          artifact=".tmp/meson-${{ matrix.renderer }}-verification/fnql_${{ matrix.renderer }}_x86.so"
+          meson compile -C ".tmp/meson-${{ matrix.renderer }}-verification" "fnql_${{ matrix.renderer }}_x86"
+          file "$artifact" | grep -F 'ELF 32-bit LSB'
+          file "$artifact" | grep -F 'Intel 80386'
 
   vulkan-gate-plans:
     name: Vulkan RC gate plans

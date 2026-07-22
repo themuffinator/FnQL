@@ -12,6 +12,7 @@ on:
       - '.github/workflows/glx-verification.yml'
       - 'meson.build'
       - 'meson_options.txt'
+      - 'misc/meson/**'
       - 'code/renderer/**'
       - 'code/renderercommon/**'
       - 'code/rendererglx/**'
@@ -29,6 +30,7 @@ on:
       - '.github/workflows/glx-verification.yml'
       - 'meson.build'
       - 'meson_options.txt'
+      - 'misc/meson/**'
       - 'code/renderer/**'
       - 'code/renderercommon/**'
       - 'code/rendererglx/**'
@@ -133,12 +135,14 @@ jobs:
 
       - name: Install build tools
         run: |
+          sudo dpkg --add-architecture i386
           sudo apt-get -qq update
-          sudo apt-get install -y meson ninja-build g++ libx11-dev libxext-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev mesa-common-dev
+          sudo apt-get install -y file meson ninja-build gcc-multilib g++-multilib libc6-dev-i386 linux-libc-dev:i386
 
       - name: Configure focused Meson test build
         run: |
           meson setup .tmp/meson-glx-verification \
+            --cross-file misc/meson/linux-x86.ini \
             --buildtype=debugoptimized \
             -Dsdl=disabled \
             -Dcurl=disabled \
@@ -150,7 +154,10 @@ jobs:
             -Dglx-tests=true
 
       - name: Build GLx logic tests
-        run: meson compile -C .tmp/meson-glx-verification fnql_glx_logic_tests
+        run: |
+          meson compile -C .tmp/meson-glx-verification fnql_glx_logic_tests
+          file .tmp/meson-glx-verification/fnql_glx_logic_tests | grep -F 'ELF 32-bit LSB'
+          file .tmp/meson-glx-verification/fnql_glx_logic_tests | grep -F 'Intel 80386'
 
       - name: Run GLx logic and boundary tests
         run: meson test -C .tmp/meson-glx-verification fnql_glx_logic fnql_glx_header_boundary --print-errorlogs
@@ -289,7 +296,7 @@ jobs:
         shell: python
         env:
           FNQL_GLX_RUNTIME_GATE: ${{ github.event_name == 'schedule' && 'rc-parity' || inputs.runtime_gate }}
-          FNQL_GLX_PROOF_PLATFORM: ${{ github.event_name == 'schedule' && (vars.FNQL_GLX_PROOF_PLATFORM || vars.FNQ3_GLX_PROOF_PLATFORM || 'linux-x86_64') || inputs.proof_platform }}
+          FNQL_GLX_PROOF_PLATFORM: ${{ github.event_name == 'schedule' && (vars.FNQL_GLX_PROOF_PLATFORM || vars.FNQ3_GLX_PROOF_PLATFORM || 'linux-x86') || inputs.proof_platform }}
           FNQL_GLX_PROOF_DIR: ${{ inputs.proof_dir || vars.FNQL_GLX_PROOF_DIR || vars.FNQ3_GLX_PROOF_DIR }}
           FNQL_GLX_RUNTIME_EXE: ${{ inputs.runtime_exe || vars.FNQL_GLX_RUNTIME_EXE || vars.FNQ3_GLX_RUNTIME_EXE }}
           FNQL_GLX_RUNTIME_BASEPATH: ${{ inputs.runtime_basepath || vars.FNQL_GLX_RUNTIME_BASEPATH || vars.FNQ3_GLX_RUNTIME_BASEPATH }}
