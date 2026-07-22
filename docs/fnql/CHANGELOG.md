@@ -19,16 +19,10 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
 - _None yet._
 
 ### Builds and Packaging
-- Publish Linux releases as deterministic permission-preserving tarballs and
-  validate their i686 client, dedicated server, renderer modules, sidecars,
-  archive paths, and executable modes before release.
-- Restrict public releases to the supported Windows x86 retail client and Linux
-  i686 dedicated-server paths; macOS engine-only development builds are not
-  published as playable artifacts.
+- _None yet._
 
 ### Fixes
 - _None yet._
 
 ### Documentation and Tooling
-- Document Windows retail-client and Linux dedicated-server support together
-  with their native module and installation boundaries.
+- _None yet._
