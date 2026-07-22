@@ -92,8 +92,10 @@ jobs:
             libjpeg-dev \
             libogg-dev \
             libopenal-dev \
+            libpipewire-0.3-dev \
             libudev-dev \
             libvorbis-dev \
+            libwayland-dev \
             libx11-dev \
             libxcursor-dev \
             libxext-dev \
