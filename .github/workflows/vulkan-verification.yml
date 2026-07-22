@@ -141,8 +141,9 @@ jobs:
             -Dsdl=disabled \
             -Dcurl=disabled \
             -Drenderer-dlopen=true \
+            -Drenderer-default=${{ matrix.renderer }} \
             -Drenderers=${{ matrix.renderer }} \
-            -Dbuild-client=false \
+            -Dbuild-client=true \
             -Dbuild-server=false \
             -Daudio-tests=false \
             -Dglx-tests=false

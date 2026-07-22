@@ -85,6 +85,18 @@ class RtxRendererContractSourceTests(unittest.TestCase):
         # including its native ALSA backend, rather than only the renderer.
         self.assertIn("libasound2-dev", workflow)
 
+        focused_ci = source_section(
+            workflow,
+            "- name: Configure focused Meson Vulkan-family build",
+            "- name: Configure static RTX client build",
+        )
+        self.assertIn("-Dbuild-client=true", focused_ci)
+        self.assertIn("-Drenderer-default=${{ matrix.renderer }}", focused_ci)
+        self.assertIn(
+            '"fnql_${{ matrix.renderer }}_x86_64"',
+            focused_ci,
+        )
+
         # Static clients also provide ABI-level host-font fallbacks. Every
         # supported build frontend must keep the renderer's implementations
         # private so the two definitions cannot collide at final link time.
