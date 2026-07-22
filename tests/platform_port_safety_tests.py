@@ -304,6 +304,7 @@ class PlatformPortSafetyTests(unittest.TestCase):
         self.assertIn("cpp_args = ['-m32']", cross_file)
         self.assertIn("cpu_family = 'x86'", cross_file)
         self.assertIn("cpu = 'i686'", cross_file)
+        self.assertIn("/usr/lib/i386-linux-gnu/pkgconfig", cross_file)
 
     def test_meson_server_only_build_skips_client_dependencies(self) -> None:
         meson = read("meson.build")

@@ -121,7 +121,11 @@ jobs:
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get -qq update
-          sudo apt-get install -y file meson ninja-build gcc-multilib g++-multilib libc6-dev-i386 linux-libc-dev:i386 glslang-tools
+          sudo apt-get install -y \
+            file meson ninja-build gcc-multilib g++-multilib glslang-tools \
+            libc6-dev-i386 linux-libc-dev:i386 libgl-dev:i386 \
+            libx11-dev:i386 libxext-dev:i386 libxrandr-dev:i386 \
+            libxxf86dga-dev:i386 libxxf86vm-dev:i386 mesa-common-dev:i386
 
       - name: Verify generated RTX shaders
         if: matrix.renderer == 'rtx'
@@ -144,6 +148,7 @@ jobs:
             --buildtype=debugoptimized \
             -Dsdl=disabled \
             -Dcurl=disabled \
+            -Dogg-vorbis=false \
             -Drenderer-dlopen=true \
             -Drenderer-default=${{ matrix.renderer }} \
             -Drenderers=${{ matrix.renderer }} \

@@ -88,7 +88,14 @@ jobs:
             g++-multilib \
             glslang-tools \
             libc6-dev-i386 \
+            libgl-dev:i386 \
+            libx11-dev:i386 \
+            libxext-dev:i386 \
+            libxrandr-dev:i386 \
+            libxxf86dga-dev:i386 \
+            libxxf86vm-dev:i386 \
             linux-libc-dev:i386 \
+            mesa-common-dev:i386 \
             meson \
             ninja-build \
             pkg-config \
