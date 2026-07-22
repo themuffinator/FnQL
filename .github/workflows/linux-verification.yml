@@ -88,6 +88,7 @@ jobs:
             libasound2-dev \
             libcurl4-openssl-dev \
             libdbus-1-dev \
+            libegl-dev \
             libfreetype6-dev \
             libjpeg-dev \
             libogg-dev \
