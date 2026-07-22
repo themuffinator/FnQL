@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       sign_macos:
-        description: Sign and notarize macOS artifacts, then publish the manual release
+        description: Sign and notarize macOS artifacts before publishing the manual release
         required: false
         type: boolean
         default: false
@@ -593,7 +593,7 @@ jobs:
           retention-days: 5
 
   push-build-validation:
-    if: github.event_name == 'push' && always()
+    if: always()
     needs: [prepare, windows-msys32, windows-msvc, source-validation, macos, ubuntu-x86]
     runs-on: ubuntu-latest
     steps:
@@ -618,12 +618,22 @@ jobs:
                   print(f"{name}: {result}")
               sys.exit(1)
 
-          print("All push build validations passed.")
+          print("All platform build validations passed.")
           PY
 
   publish:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_macos }}
-    needs: [prepare, windows-msys32, windows-msvc, source-validation, macos-release-sign, ubuntu-x86]
+    if: >-
+      ${{
+        always() &&
+        github.event_name == 'workflow_dispatch' &&
+        needs.prepare.result == 'success' &&
+        needs.push-build-validation.result == 'success' &&
+        (
+          (inputs.sign_macos && needs.macos-release-sign.result == 'success') ||
+          (!inputs.sign_macos && needs.macos-release-sign.result == 'skipped')
+        )
+      }}
+    needs: [prepare, push-build-validation, macos-release-sign]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -678,8 +688,14 @@ jobs:
           python scripts/version.py github-env --channel manual --build-number "${{ needs.prepare.outputs.build_number }}" --build-date "${{ needs.prepare.outputs.build_date }}" --commit "${{ needs.prepare.outputs.head_commit }}" >> "$GITHUB_ENV"
 
       - name: Package release archives
+        env:
+          SIGN_MACOS: ${{ inputs.sign_macos }}
         run: |
-          python scripts/release.py --channel manual --artifact-root artifacts --build-number "${{ needs.prepare.outputs.build_number }}" --build-date "${{ needs.prepare.outputs.build_date }}" --commit "${{ needs.prepare.outputs.head_commit }}"
+          signature_args=()
+          if [ "$SIGN_MACOS" != "true" ]; then
+            signature_args+=(--allow-unsigned-macos)
+          fi
+          python scripts/release.py --channel manual --artifact-root artifacts --build-number "${{ needs.prepare.outputs.build_number }}" --build-date "${{ needs.prepare.outputs.build_date }}" --commit "${{ needs.prepare.outputs.head_commit }}" "${signature_args[@]}"
 
       - name: Build Copilot changelog cleanup
         id: copilot_notes

@@ -121,7 +121,7 @@ class MacOSSupportSourceTests(unittest.TestCase):
             workflow.count(
                 "if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_macos }}"
             ),
-            3,
+            2,
         )
         self.assertIn("MACOS_DEVELOPER_ID_P12_BASE64", workflow)
         self.assertIn("MACOS_NOTARY_KEY_BASE64", workflow)
@@ -135,8 +135,12 @@ class MacOSSupportSourceTests(unittest.TestCase):
         self.assertNotIn("ditto -c -k --norsrc bin macos-payload.zip", workflow)
         self.assertIn("ditto -c -k --sequesterRsrc bin macos-payload.zip", workflow)
         self.assertIn("path: macos-payload.zip", workflow)
+        self.assertIn("if: always()", workflow)
         self.assertIn("needs: [prepare, windows-msys32, windows-msvc, source-validation, macos, ubuntu-x86]", workflow)
-        self.assertIn("macos-release-sign, ubuntu-x86]", workflow)
+        self.assertIn("needs: [prepare, push-build-validation, macos-release-sign]", workflow)
+        self.assertIn("needs.push-build-validation.result == 'success'", workflow)
+        self.assertIn("needs.macos-release-sign.result == 'skipped'", workflow)
+        self.assertIn("signature_args+=(--allow-unsigned-macos)", workflow)
         self.assertIn("name: macos-x86_64", workflow)
         self.assertIn("name: macos-aarch64", workflow)
         macos_job = workflow.split("  macos:", 1)[1].split(

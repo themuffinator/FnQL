@@ -243,6 +243,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--commit")
     parser.add_argument("--ref-name")
     parser.add_argument(
+        "--allow-unsigned-macos",
+        action="store_true",
+        help=(
+            "Allow unsigned macOS application bundles in manual release artifacts. "
+            "Tagged release packaging always requires Developer ID signatures."
+        ),
+    )
+    parser.add_argument(
         "--glx-proof-root",
         type=Path,
         help=(
@@ -997,6 +1005,8 @@ def release_artifact_dirs(artifact_root: Path) -> list[Path]:
 def publish_prebuilt_macos_payload(
     artifact_dir: Path,
     archive_path: Path,
+    *,
+    require_macos_signature: bool = True,
 ) -> bool:
     """Copy a macOS-created payload ZIP without discarding stapled metadata."""
     if release_platform(artifact_dir.name) != "macos":
@@ -1024,7 +1034,11 @@ def publish_prebuilt_macos_payload(
             "unexpected files: " + ", ".join(unexpected)
         )
 
-    validate_release_archive_contents(payload, artifact_name=artifact_dir.name)
+    validate_release_archive_contents(
+        payload,
+        artifact_name=artifact_dir.name,
+        require_macos_signature=require_macos_signature,
+    )
     temp_path = archive_path.with_name(f"{archive_path.name}.tmp")
     if temp_path.exists():
         temp_path.unlink()
@@ -1152,6 +1166,10 @@ def attach_glx_rollback_archives(
 
 
 def build_archives(args: argparse.Namespace) -> dict[str, object]:
+    if args.allow_unsigned_macos and args.channel != "manual":
+        raise ValueError("--allow-unsigned-macos is only valid for manual releases")
+    require_macos_signature = not args.allow_unsigned_macos
+
     subprocess.run([sys.executable, str(ROOT / "scripts" / "generate_docs.py")], check=True)
 
     meta = channel_metadata(
@@ -1190,7 +1208,11 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
 
         if stage_root.exists():
             shutil.rmtree(stage_root)
-        if publish_prebuilt_macos_payload(artifact_dir, archive_path):
+        if publish_prebuilt_macos_payload(
+            artifact_dir,
+            archive_path,
+            require_macos_signature=require_macos_signature,
+        ):
             skipped_files = []
         else:
             stage_root.mkdir(parents=True, exist_ok=True)
@@ -1200,7 +1222,11 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
             build_root_archive(stage_root)
             validate_stage_tree(stage_root, artifact_name=artifact_dir.name)
             write_release_archive(stage_root, archive_path)
-        validate_release_archive_contents(archive_path, artifact_name=artifact_dir.name)
+        validate_release_archive_contents(
+            archive_path,
+            artifact_name=artifact_dir.name,
+            require_macos_signature=require_macos_signature,
+        )
         checksum = sha256sum(archive_path)
         archives.append(
             {
@@ -1227,6 +1253,7 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         "release_title": meta["release_title"],
         "build_date": meta["build_date"],
         "commit": meta["commit"],
+        "macos_signature_required": require_macos_signature,
         "glx_proof_corpus": release_corpus_manifest(),
         "glx_release_evidence_docs": GLX_RELEASE_EVIDENCE_DOCS,
         "glx_runtime_proof": glx_runtime_proof,

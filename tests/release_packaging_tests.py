@@ -815,6 +815,35 @@ class ReleasePackagingTests(unittest.TestCase):
                     root / "second.zip",
                 )
 
+    def test_unsigned_prebuilt_macos_payload_requires_explicit_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stage = root / "stage"
+            artifact = root / "macos-x86_64"
+            artifact.mkdir()
+            populate_macos_release_stage(stage)
+            shutil.rmtree(stage / "FnQL.app" / "Contents" / "_CodeSignature")
+            payload = artifact / release.MACOS_PREBUILT_PAYLOAD_NAME
+            release.write_release_archive(stage, payload)
+            destination = root / "fnql-test-macos-x86_64.zip"
+
+            with self.assertRaisesRegex(ValueError, "_CodeSignature/CodeResources"):
+                release.publish_prebuilt_macos_payload(artifact, destination)
+
+            self.assertTrue(
+                release.publish_prebuilt_macos_payload(
+                    artifact,
+                    destination,
+                    require_macos_signature=False,
+                )
+            )
+            self.assertEqual(destination.read_bytes(), payload.read_bytes())
+
+    def test_unsigned_macos_override_is_manual_only(self) -> None:
+        args = type("Args", (), {"channel": "release", "allow_unsigned_macos": True})()
+        with self.assertRaisesRegex(ValueError, "only valid for manual releases"):
+            release.build_archives(args)
+
     def test_macos_policy_requires_supported_minimum_and_signed_app(self) -> None:
         with self.assertRaisesRegex(ValueError, "LSMinimumSystemVersion"):
             release.validate_macos_distribution_files(
@@ -942,12 +971,15 @@ class ReleasePackagingTests(unittest.TestCase):
             workflow.count(
                 "if: ${{ github.event_name == 'workflow_dispatch' && inputs.sign_macos }}"
             ),
-            3,
+            2,
         )
         self.assertIn(
-            "needs: [prepare, windows-msys32, windows-msvc, source-validation, macos-release-sign, ubuntu-x86]",
+            "needs: [prepare, push-build-validation, macos-release-sign]",
             workflow,
         )
+        self.assertIn("needs.push-build-validation.result == 'success'", workflow)
+        self.assertIn("needs.macos-release-sign.result == 'skipped'", workflow)
+        self.assertIn("signature_args+=(--allow-unsigned-macos)", workflow)
         self.assertIn("name: macos-x86_64", workflow)
         self.assertIn("name: macos-aarch64", workflow)
         self.assertIn("ditto -c -k --sequesterRsrc bin macos-payload.zip", workflow)
