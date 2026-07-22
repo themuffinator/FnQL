@@ -18,6 +18,22 @@ class MacOSSupportSourceTests(unittest.TestCase):
         self.assertIn("macOS client builds require SDL3", meson)
         self.assertIn("common_c_args += ['-DMACOS_X']", meson)
 
+    def test_meson_uses_path_independent_macos_renderer_modules(self) -> None:
+        meson = read("meson.build")
+        renderer_start = meson.index("renderer_targets = []")
+        renderer_end = meson.index("static_renderer_objects = []", renderer_start)
+        renderer_block = meson[renderer_start:renderer_end]
+        self.assertIn(
+            "renderer_module_type = darwin ? 'shared_module' : 'shared_library'",
+            renderer_block,
+        )
+        self.assertEqual(renderer_block.count("build_target("), 3)
+        self.assertEqual(
+            renderer_block.count("target_type: renderer_module_type"),
+            3,
+        )
+        self.assertNotIn("shared_library(", renderer_block)
+
     def test_make_uses_external_sdl_and_modular_renderers(self) -> None:
         makefile = read("Makefile")
         darwin_start = makefile.index("ifeq ($(COMPILE_PLATFORM),darwin)")

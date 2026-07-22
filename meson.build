@@ -724,14 +724,16 @@ botlib_objects = [botlib.extract_all_objects(recursive: false)]
 
 renderer_base_src = renderer_common_src + ['code/qcommon/q_shared.c', 'code/qcommon/puff.c', 'code/qcommon/q_math.c'] + platform_asm_src
 renderer_targets = []
+renderer_module_type = darwin ? 'shared_module' : 'shared_library'
 
 if build_client and renderer_dlopen
   renderer_c_args = common_c_args + ['-DUSE_RENDERER_DLOPEN']
   renderer_cpp_args = common_cpp_args + ['-DUSE_RENDERER_DLOPEN']
 
   if 'glx' in enabled_renderers
-    renderer_targets += shared_library(renderer_prefix + '_glx_' + renderer_arch,
+    renderer_targets += build_target(renderer_prefix + '_glx_' + renderer_arch,
       renderer_gl_src + renderer_glx_src + renderer_base_src,
+      target_type: renderer_module_type,
       include_directories: include_dirs,
       dependencies: renderer_deps,
       c_args: renderer_c_args + ['-DRENDERER_CLASSIC', '-DRENDERER_GLX'],
@@ -745,8 +747,9 @@ if build_client and renderer_dlopen
   endif
 
   if 'vk' in enabled_renderers
-    renderer_targets += shared_library(renderer_prefix + '_vk_' + renderer_arch,
+    renderer_targets += build_target(renderer_prefix + '_vk_' + renderer_arch,
       renderer_vk_src + renderer_base_src,
+      target_type: renderer_module_type,
       include_directories: include_dirs,
       dependencies: renderer_deps,
       c_args: renderer_c_args + ['-DRENDERER_VULKAN'],
@@ -760,8 +763,9 @@ if build_client and renderer_dlopen
   endif
 
   if 'rtx' in enabled_renderers
-    renderer_targets += shared_library(renderer_prefix + '_rtx_' + renderer_arch,
+    renderer_targets += build_target(renderer_prefix + '_rtx_' + renderer_arch,
       renderer_rtx_src + renderer_base_src,
+      target_type: renderer_module_type,
       include_directories: include_dirs,
       dependencies: renderer_deps,
       c_args: renderer_c_args + ['-DRENDERER_RTX'],
