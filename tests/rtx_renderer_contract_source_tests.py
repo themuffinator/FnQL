@@ -326,10 +326,17 @@ class RtxRendererContractSourceTests(unittest.TestCase):
             "void RE_AddLinearLightToScene",
             "void RE_AddAdditiveLightToScene",
         )
+        self.assertIn("dl->castsRtShadows = shadowEligible;", dynamic)
+        self.assertIn("dl->shadowEligible = shadowEligible;", dynamic)
+        self.assertIn(
+            "additive, qtrue );",
+            dynamic,
+        )
+        self.assertIn("dl->castsRtShadows = qtrue;", linear)
+        self.assertIn("dl->shadowEligible = qtrue;", linear)
+
         for label, block in (("point", dynamic), ("linear", linear)):
             with self.subTest(light=label):
-                self.assertIn("dl->castsRtShadows = qtrue;", block)
-                self.assertIn("dl->shadowEligible = qtrue;", block)
                 self.assertIn("dl->shadowPlanned = qfalse;", block)
                 self.assertIn("dl->shadowIndex = -1;", block)
                 self.assertIn("dl->shadowPriorityMultiplier = 1.0f;", block)

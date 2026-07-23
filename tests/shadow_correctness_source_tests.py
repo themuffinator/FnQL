@@ -56,7 +56,7 @@ class ShadowCorrectnessSourceTests(unittest.TestCase):
                     dlight,
                 )
 
-    def test_backend_rejects_alpha_test_casters_only_in_correctness_mode(self):
+    def test_backend_rejects_unsupported_point_casters_in_all_modes(self):
         for renderer in self.RENDERERS:
             with self.subTest(renderer=renderer):
                 backend = read_text(f"{renderer}/tr_backend.c")
@@ -65,9 +65,24 @@ class ShadowCorrectnessSourceTests(unittest.TestCase):
                 csm_allowed = section(backend, "static qboolean RB_CSMShadowSurfaceAllowed", "static qboolean RB_CSMShadowSurfaceCulledForCascade")
 
                 self.assertIn("r_shadowCorrectness || !r_shadowCorrectness->integer", dlight_needed)
-                self.assertIn("static qboolean RB_ShadowCorrectnessRejectsAlphaTest", dlight_needed)
+                self.assertIn(
+                    "static qboolean RB_ShadowShaderHasAlphaTest",
+                    dlight_needed,
+                )
+                self.assertIn(
+                    "static qboolean RB_ShadowCorrectnessRejectsAlphaTest",
+                    dlight_needed,
+                )
                 self.assertIn("stage->stateBits & GLS_ATEST_BITS", dlight_needed)
-                self.assertIn("RB_ShadowCorrectnessRejectsAlphaTest( shader )", dlight_allowed)
+                self.assertIn(
+                    "shader->numDeforms > 0 || "
+                    "RB_ShadowShaderHasAlphaTest( shader )",
+                    dlight_allowed,
+                )
+                self.assertNotIn(
+                    "RB_ShadowCorrectnessRejectsAlphaTest( shader )",
+                    dlight_allowed,
+                )
                 self.assertIn("RB_ShadowCorrectnessRejectsAlphaTest( shader )", csm_allowed)
 
     def test_correctness_mode_dumps_depth_pass_contract(self):

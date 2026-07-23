@@ -5321,7 +5321,7 @@ void CL_Init( void ) {
 	cl_guidServerUniq = Cvar_Get( "cl_guidServerUniq", "1", CVAR_ARCHIVE_ND );
 	Cvar_SetDescription( cl_guidServerUniq, "Makes cl_guid unique for each server." );
 
-	cl_dlURL = Cvar_Get( "cl_dlURL", "http://ws.q3df.org/maps/download/%1", CVAR_ARCHIVE_ND );
+	cl_dlURL = Cvar_Get( "cl_dlURL", "", CVAR_ARCHIVE_ND );
 	Cvar_SetDescription( cl_dlURL, "Cvar must point to download location." );
 
 	cl_dlDirectory = Cvar_Get( "cl_dlDirectory", "0", CVAR_ARCHIVE_ND );

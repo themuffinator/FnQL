@@ -222,19 +222,21 @@ Classic model shadow controls:
 
 Dynamic-light shadow-map controls:
 
-- `r_dlightShadows`: Enables dynamic-light shadow-map planning, atlas rendering, and filtered sampling. Default is `0`. This is latched, so use `vid_restart` after changing it.
+- `r_dlightShadows`: Enables dynamic-light shadow-map planning, atlas rendering, and filtered sampling. Default is `1`. This is latched, so use `vid_restart` after changing it.
 - `r_dlightShadowFilter`: Selects shadow filtering. Default is `2`.
   - `0`: Hard shadows.
   - `1`: 2x2 PCF.
   - `2`: Four-tap poisson PCF.
 - `r_dlightShadowResolution`: Requested per-face shadow-map resolution. Valid range is `64..1024`, default is `256`. The renderer rounds this down to a power of two and may reduce it to fit the atlas.
 - `r_dlightShadowMaxLights`: Maximum dynamic lights allowed to cast shadows in one view. Default is `4`. Lower values give each light more atlas space; higher values favor coverage over sharpness.
-- `r_dlightShadowStrength`: Controls how strongly shadow-map occlusion dims the dynamic light. Default is `0.6`.
+- `r_dlightShadowStrength`: Controls how strongly shadow-map occlusion dims the dynamic light. Default is `0.95`.
 - `r_dlightShadowBias`: Receiver bias in world units. Default is `4`.
 - `r_dlightShadowCasterDepthBias`: Constant depth bias while rendering shadow casters. Default is `1`.
 - `r_dlightShadowCasterSlopeBias`: Slope-scaled caster depth bias. Default is `1`.
 - `r_dlightShadowCasterNormalBias`: Light-aware caster normal offset in world units. Default is `0.25`.
 - `r_dlightShadowDebug`: Prints dynamic-light shadow planning and atlas counters. Use this or `r_speeds 4` when you want to confirm the effective atlas size and per-face resolution.
+- `r_muzzleFlashDlightOffset`: Moves recognized weapon muzzle-flash lights along the submitted flash model's forward axis, in world units. Default is `8`; use `0` for the retail origin.
+- `r_muzzleFlashDlightShadows`: Allows recognized weapon muzzle-flash lights to cast shadows. Default is `1`; set it to `0` to keep the light while disabling only its shadows.
 
 Quality-first dynamic-light shadow-map setup:
 

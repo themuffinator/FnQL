@@ -191,7 +191,8 @@ R_MDRAddAnimSurfaces
 
 // much stuff in there is just copied from R_AddMd3Surfaces in tr_mesh.c
 
-void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
+void R_MDRAddAnimSurfaces( trRefEntity_t *ent,
+	dlightShadowCasterContext_t *shadowCtx ) {
 	mdrHeader_t		*header;
 	mdrSurface_t	*surface;
 	mdrLOD_t		*lod;
@@ -243,13 +244,21 @@ void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
 	// cull the entire model if merged bounding box of both frames
 	// is outside the view frustum.
 	//
-	cull = R_MDRCullModel (header, ent);
-	if ( cull == CULL_OUT ) {
-		return;
+	if ( shadowCtx ) {
+		R_MDRModelBounds( header, ent, bounds[0], bounds[1] );
+		if ( R_DlightShadowEntityBoundsCulled( shadowCtx, ent,
+			bounds[0], bounds[1] ) ) {
+			return;
+		}
+	} else {
+		cull = R_MDRCullModel (header, ent);
+		if ( cull == CULL_OUT ) {
+			return;
+		}
 	}
 
 	// figure out the current LOD of the model we're rendering, and set the lod pointer respectively.
-	lodnum = R_ComputeLOD(ent);
+	lodnum = shadowCtx ? 0 : R_ComputeLOD(ent);
 	// check whether this model has as that many LODs at all. If not, try the closest thing we got.
 	if(header->numLODs <= 0)
 		return;
@@ -263,14 +272,14 @@ void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
 	}
 	
 	// set up lighting
-	if ( !personalModel || r_shadows->integer > 1 )
+	if ( !shadowCtx && ( !personalModel || r_shadows->integer > 1 ) )
 	{
 		R_SetupEntityLighting( &tr.refdef, ent );
 	}
 
 #ifdef USE_PMLIGHT
 	numDlights = 0;
-	if ( r_dlightMode->integer >= 2 && ( !personalModel || personalShadowCaster ) ) {
+	if ( !shadowCtx && r_dlightMode->integer >= 2 && !personalModel ) {
 		R_MDRModelBounds( header, ent, bounds[0], bounds[1] );
 		R_TransformDlights( tr.viewParms.num_dlights, tr.viewParms.dlights, &tr.or );
 		for ( n = 0; n < tr.viewParms.num_dlights; n++ ) {
@@ -282,7 +291,7 @@ void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
 #endif
 
 	// fogNum?
-	fogNum = R_MDRComputeFogNum( header, ent );
+	fogNum = shadowCtx ? 0 : R_MDRComputeFogNum( header, ent );
 
 	surface = (mdrSurface_t *)( (byte *)lod + lod->ofsSurfaces );
 
@@ -309,6 +318,15 @@ void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
 			shader = R_GetShaderByHandle( surface->shaderIndex );
 		else
 			shader = tr.defaultShader;
+
+		if ( shadowCtx ) {
+			if ( !R_AddDlightShadowEntityCasterSurface( shadowCtx,
+				(surfaceType_t *)surface, shader ) ) {
+				return;
+			}
+			surface = (mdrSurface_t *)( (byte *)surface + surface->ofsEnd );
+			continue;
+		}
 
 		// we will add shadows even if the main object isn't visible in the view
 
@@ -345,8 +363,7 @@ void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
 			for ( n = 0; n < numDlights; n++ ) {
 				dl = dlights[ n ];
 				tr.light = dl;
-				R_AddLitSurfFlags( (void *)surface, shader, fogNum,
-					personalModel ? LSF_SHADOW_CASTER_ONLY : 0 );
+				R_AddLitSurf( (void *)surface, shader, fogNum );
 			}
 		}
 #endif

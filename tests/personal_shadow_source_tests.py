@@ -30,7 +30,7 @@ class PersonalShadowSourceTests(unittest.TestCase):
                 self.assertIn("drawSurf->flags & DSF_SHADOW_CASTER_ONLY", backend)
                 self.assertIn("litSurf->flags & LSF_SHADOW_CASTER_ONLY", backend)
 
-    def test_personal_models_are_shadow_caster_only_in_all_model_formats(self):
+    def test_personal_models_keep_draw_casters_but_not_camera_lit_casters(self):
         for renderer in self.RENDERERS:
             for filename in self.MODEL_FILES:
                 path = f"{renderer}/{filename}"
@@ -42,14 +42,46 @@ class PersonalShadowSourceTests(unittest.TestCase):
                         "personalShadowCaster = personalModel && !(ent->e.renderfx & ( RF_NOSHADOW | RF_DEPTHHACK ));",
                         source,
                     )
-                    self.assertIn("!personalModel || personalShadowCaster", source)
                     self.assertIn(
                         "R_AddDrawSurfFlags( (void *)surface, shader, fogNum, 0, DSF_SHADOW_CASTER_ONLY );",
                         source,
                     )
-                    self.assertIn("R_AddLitSurfFlags( (void *)surface, shader, fogNum,", source)
-                    self.assertIn("personalModel ? LSF_SHADOW_CASTER_ONLY : 0", source)
+                    self.assertRegex(
+                        source,
+                        r"R_AddLitSurf(?:Flags)?\(\s*\(void \*\)surface,\s*"
+                        r"shader,\s*fogNum",
+                    )
+                    self.assertNotIn("LSF_SHADOW_CASTER_ONLY", source)
+                    self.assertIn("numDlights = 0;", source)
+                    self.assertRegex(
+                        source,
+                        r"if\s*\([^)]*!personalModel[^)]*\)\s*\{",
+                    )
                     self.assertRegex(source, r"if\s*\(\s*!personalModel\s*\)")
+
+    def test_canonical_point_caster_pass_handles_third_person_models(self):
+        source = read_text(
+            "code/renderercommon/tr_dlight_shadow_casters.h"
+        )
+        canonical = source[
+            source.index("static qboolean R_CollectDlightShadowEntityCasters("):
+            source.index("void R_AddPlannedDlightShadowCasters(")
+        ]
+
+        self.assertIn("ent->e.reType != RT_MODEL", canonical)
+        self.assertIn(
+            "RF_NOSHADOW | RF_FIRST_PERSON | RF_DEPTHHACK",
+            canonical,
+        )
+        self.assertNotIn("RF_THIRD_PERSON", canonical)
+        self.assertIn(
+            "!R_DlightShadowEntityTransformValid( ent )",
+            canonical,
+        )
+        self.assertIn("R_AddMD3Surfaces( ent, context );", canonical)
+        self.assertIn("R_MDRAddAnimSurfaces( ent, context );", canonical)
+        self.assertIn("R_AddIQMSurfaces( ent, context );", canonical)
+        self.assertIn("R_AddBrushModelSurfaces( ent, context );", canonical)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@
   "version": "0.2.0",
   "configurations": [
 
+
     {
       "name": "GLx (Steam / Retail QL / Win32)",
       "type": "cppvsdbg",
@@ -9,7 +10,6 @@
       "program": "${workspaceFolder}\\meson\\build\\win32\\fnql.exe",
       "args": ["+set", "r_fullscreen", "0", "+set", "cl_renderer", "glx", "+set", "com_steamIntegration", "1", "+set", "cl_webuiEnable", "1"],
       "cwd": "${workspaceFolder}\\meson\\build\\win32",
-      "preLaunchTask": "meson: build (Steam)",
       "stopAtEntry": false,
       "console": "internalConsole"
     },
@@ -20,7 +20,6 @@
       "program": "${workspaceFolder}\\meson\\build\\win32\\fnql.exe",
       "args": ["+set", "r_fullscreen", "0", "+set", "cl_renderer", "vk", "+set", "com_steamIntegration", "1", "+set", "cl_webuiEnable", "1"],
       "cwd": "${workspaceFolder}\\meson\\build\\win32",
-      "preLaunchTask": "meson: build (Steam)",
       "stopAtEntry": false,
       "console": "internalConsole"
     },
@@ -31,7 +30,6 @@
       "program": "${workspaceFolder}\\meson\\build\\win32-rtx\\fnql.exe",
       "args": ["+set", "r_fullscreen", "0", "+set", "cl_renderer", "rtx", "+set", "com_steamIntegration", "1", "+set", "cl_webuiEnable", "1"],
       "cwd": "${workspaceFolder}\\meson\\build\\win32-rtx",
-      "preLaunchTask": "meson: build RTX (Steam)",
       "stopAtEntry": false,
       "console": "internalConsole"
     },
@@ -42,7 +40,6 @@
       "program": "${workspaceFolder}\\meson\\build\\win32\\fnql.ded.exe",
       "args": ["+set", "com_steamIntegration", "1"],
       "cwd": "${workspaceFolder}\\meson\\build\\win32",
-      "preLaunchTask": "meson: build (Steam)",
       "stopAtEntry": false,
       "console": "internalConsole"
     }

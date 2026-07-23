@@ -44,6 +44,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/qfiles.h"
 #include "../qcommon/qcommon.h"
 #include "../renderercommon/tr_public.h"
+#include "../renderercommon/tr_dlight_shadow.h"
 #include "../renderercommon/tr_ql_cvars.h"
 #include "../renderercommon/tr_global_fog.h"
 #include "../renderercommon/tr_liquid.h"
@@ -93,10 +94,17 @@ typedef struct dlight_s {
 	int shadowReceiverCount;
 	float shadowPriority;
 	float shadowPriorityMultiplier;
+	float shadowProjectionFar;
 	int shadowSpotSource;
 	int shadowSpotSourceIndex;
 #endif
 } dlight_t;
+
+typedef struct {
+	dlight_t	*targetLight;
+	dlight_t	cullLight;
+	qboolean	overflow;
+} dlightShadowCasterContext_t;
 
 #ifdef USE_PMLIGHT
 typedef struct {
@@ -908,6 +916,7 @@ typedef struct {
 	vec3_t		origin;
 	vec3_t		color;
 	float		radius;
+	float		projectionFar;
 	qboolean	atlasAllocated;
 } shadowPointLightPlan_t;
 
@@ -1482,6 +1491,8 @@ typedef struct msurface_s {
 	int					lightCount;		// if == tr.lightCount, already added to the litsurf list for the current light
 	int					pmLitFrame;		// if == tr.viewCount, pmLitMask is valid for this view
 	unsigned int		pmLitMask;		// world lights already attempted for this surface this view
+	int					pmShadowFrame;	// if == tr.viewCount, pmShadowMask is valid for this view
+	uint64_t			pmShadowMask;	// world surfaces already appended for each dlight this view
 #endif // USE_PMLIGHT
 	surfaceType_t		*data;			// any of srf*_t
 } msurface_t;
@@ -1691,7 +1702,8 @@ typedef struct {
 	int		c_dlightShadowSkippedDisabled;
 	int		c_dlightShadowSkippedLinear;
 	int		c_dlightShadowSkippedNoSurfaces;
-	int		c_dlightShadowSkippedProjection;
+	int		c_dlightShadowSkippedInvalid;
+	int		c_dlightShadowSkippedCasterOverflow;
 	int		c_dlightShadowSkippedBudget;
 	int		c_dlightShadowSkippedLowValue;
 	int		c_dlightShadowAtlasWidth;
@@ -1800,6 +1812,9 @@ typedef struct {
 	viewParms_t	viewParms;
 	orientationr_t	or;
 	backEndCounters_t	pc;
+#ifdef USE_PMLIGHT
+	shadowManager_t	shadowManagerDebug;
+#endif
 	qboolean	isHyperspace;
 	const trRefEntity_t *currentEntity;
 	qboolean	skyRenderedThisView;	// flag for drawing sun
@@ -2051,6 +2066,8 @@ extern cvar_t	*r_spotShadowDebug;		// 0 - 1
 extern cvar_t	*r_dlightScale;			// 0.1 - 1.0
 extern cvar_t	*r_dlightIntensity;		// 0.1 - 1.0
 #endif
+extern cvar_t	*r_muzzleFlashDlightOffset;	// -64.0 - 64.0
+extern cvar_t	*r_muzzleFlashDlightShadows;	// 0 - 1
 extern cvar_t	*r_dlightSaturation;	// 0.0 - 1.0
 extern cvar_t	*r_dlightOverbrightGamut;	// 0.0 - 1.0
 extern cvar_t	*r_staticLights;			// 0 - 1
@@ -2212,7 +2229,7 @@ void R_SwapBuffers( int );
 
 void R_RenderView( const viewParms_t *parms );
 
-void R_AddMD3Surfaces( trRefEntity_t *e );
+void R_AddMD3Surfaces( trRefEntity_t *e, dlightShadowCasterContext_t *casterContext );
 void R_AddNullModelSurfaces( trRefEntity_t *e );
 void R_AddBeamSurfaces( trRefEntity_t *e );
 void R_AddRailSurfaces( trRefEntity_t *e, qboolean isUnderwater );
@@ -2229,6 +2246,14 @@ void R_AddDrawSurfFlags( surfaceType_t *surface, shader_t *shader, int fogIndex,
 void R_DecomposeLitSort( unsigned sort, int *entityNum, shader_t **shader, int *fogNum );
 void R_AddLitSurf( surfaceType_t *surface, shader_t *shader, int fogIndex );
 void R_AddLitSurfFlags( surfaceType_t *surface, shader_t *shader, int fogIndex, unsigned int flags );
+qboolean R_DlightShadowFrontendCasterAllowed( const shader_t *shader,
+	const surfaceType_t *surface );
+qboolean R_AddDlightShadowEntityCasterSurface(
+	dlightShadowCasterContext_t *context, surfaceType_t *surface,
+	shader_t *shader );
+qboolean R_DlightShadowEntityBoundsCulled(
+	const dlightShadowCasterContext_t *context, const trRefEntity_t *ent,
+	const vec3_t mins, const vec3_t maxs );
 #endif
 
 #define	CULL_IN		0		// completely unclipped
@@ -2422,6 +2447,7 @@ typedef struct shaderCommands_s
 	qboolean	csmCasterPass;
 	qboolean	csmShadowPass;
 	int			csmCascade;
+	cullType_t	shadowCasterCullType;
 	cullType_t	cullType;
 #endif
 
@@ -2463,8 +2489,11 @@ WORLD MAP
 ============================================================
 */
 
-void R_AddBrushModelSurfaces( trRefEntity_t *e );
+void R_AddBrushModelSurfaces( trRefEntity_t *e, dlightShadowCasterContext_t *casterContext );
 void R_AddWorldSurfaces( void );
+#ifdef USE_PMLIGHT
+void R_AddPlannedDlightShadowCasters( void );
+#endif
 qboolean R_inPVS( const vec3_t p1, const vec3_t p2 );
 qboolean R_PointLeafClusterArea( const vec3_t point, int *cluster, int *area );
 qboolean R_LeafClusterInCurrentPVS( const vec3_t vieworg, int cluster, int area );
@@ -2703,10 +2732,10 @@ ANIMATED MODELS
 =============================================================
 */
 
-void R_MDRAddAnimSurfaces( trRefEntity_t *ent );
+void R_MDRAddAnimSurfaces( trRefEntity_t *ent, dlightShadowCasterContext_t *casterContext );
 void RB_MDRSurfaceAnim( mdrSurface_t *surface );
 qboolean R_LoadIQM (model_t *mod, void *buffer, int filesize, const char *name );
-void R_AddIQMSurfaces( trRefEntity_t *ent );
+void R_AddIQMSurfaces( trRefEntity_t *ent, dlightShadowCasterContext_t *casterContext );
 void RB_IQMSurfaceAnim( const surfaceType_t *surface );
 int R_IQMLerpTag( orientation_t *tag, iqmData_t *data,
                   int startFrame, int endFrame,

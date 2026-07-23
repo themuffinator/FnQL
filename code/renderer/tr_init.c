@@ -118,6 +118,8 @@ cvar_t	*r_dlightScale;
 cvar_t	*r_dlightIntensity;
 #endif // USE_PMLIGHT
 
+cvar_t	*r_muzzleFlashDlightOffset;
+cvar_t	*r_muzzleFlashDlightShadows;
 cvar_t	*r_dlightSaturation;
 cvar_t	*r_dlightOverbrightGamut;
 cvar_t	*r_staticLights;
@@ -2832,6 +2834,14 @@ static void R_Register( void )
 	ri.Cvar_CheckRange( r_dlightIntensity, "0.1", "1", CV_FLOAT );
 	ri.Cvar_SetDescription( r_dlightIntensity, "Adjusts dynamic light intensity but not radius." );
 #endif // USE_PMLIGHT
+	r_muzzleFlashDlightOffset = ri.Cvar_Get( "r_muzzleFlashDlightOffset", "8", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_muzzleFlashDlightOffset, "-64", "64", CV_FLOAT );
+	ri.Cvar_SetDescription( r_muzzleFlashDlightOffset, "Offsets recognized weapon muzzle-flash dynamic lights along the submitted flash model's forward axis, in world units." );
+	ri.Cvar_SetGroup( r_muzzleFlashDlightOffset, CVG_RENDERER );
+	r_muzzleFlashDlightShadows = ri.Cvar_Get( "r_muzzleFlashDlightShadows", "1", CVAR_ARCHIVE_ND );
+	ri.Cvar_CheckRange( r_muzzleFlashDlightShadows, "0", "1", CV_INTEGER );
+	ri.Cvar_SetDescription( r_muzzleFlashDlightShadows, "Allows recognized weapon muzzle-flash dynamic lights to cast shadows. Disabling this does not disable the light." );
+	ri.Cvar_SetGroup( r_muzzleFlashDlightShadows, CVG_RENDERER );
 	r_dlightSaturation = ri.Cvar_Get( "r_dlightSaturation", "0.8", CVAR_ARCHIVE_ND );
 	ri.Cvar_CheckRange( r_dlightSaturation, "0", "1", CV_FLOAT );
 	ri.Cvar_SetDescription( r_dlightSaturation, "Adjusts dynamic light color saturation in linear light before rendering." );

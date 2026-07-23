@@ -1069,7 +1069,8 @@ R_AddIQMSurfaces
 Add all surfaces of this model
 =================
 */
-void R_AddIQMSurfaces( trRefEntity_t *ent ) {
+void R_AddIQMSurfaces( trRefEntity_t *ent,
+	dlightShadowCasterContext_t *shadowCtx ) {
 	iqmData_t		*data;
 	srfIQModel_t		*surface;
 	int			i, j;
@@ -1126,21 +1127,31 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 	// cull the entire model if merged bounding box of both frames
 	// is outside the view frustum.
 	//
-	cull = R_CullIQM ( data, ent );
-	if ( cull == CULL_OUT ) {
-		return;
+	if ( shadowCtx ) {
+		haveDlightBounds = R_IQMModelBounds( data, ent,
+			bounds[0], bounds[1] );
+		if ( haveDlightBounds &&
+			R_DlightShadowEntityBoundsCulled( shadowCtx, ent,
+				bounds[0], bounds[1] ) ) {
+			return;
+		}
+	} else {
+		cull = R_CullIQM ( data, ent );
+		if ( cull == CULL_OUT ) {
+			return;
+		}
 	}
 
 	//
 	// set up lighting now that we know we aren't culled
 	//
-	if ( !personalModel || r_shadows->integer > 1 ) {
+	if ( !shadowCtx && ( !personalModel || r_shadows->integer > 1 ) ) {
 		R_SetupEntityLighting( &tr.refdef, ent );
 	}
 
 #ifdef USE_PMLIGHT
 	numDlights = 0;
-	if ( r_dlightMode->integer >= 2 && ( !personalModel || personalShadowCaster ) ) {
+	if ( !shadowCtx && r_dlightMode->integer >= 2 && !personalModel ) {
 		haveDlightBounds = R_IQMModelBounds( data, ent, bounds[0], bounds[1] );
 		R_TransformDlights( tr.viewParms.num_dlights, tr.viewParms.dlights, &tr.or );
 		for ( n = 0; n < tr.viewParms.num_dlights; n++ ) {
@@ -1154,7 +1165,7 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 	//
 	// see if we are in a fog volume
 	//
-	fogNum = R_ComputeIQMFogNum( data, ent );
+	fogNum = shadowCtx ? 0 : R_ComputeIQMFogNum( data, ent );
 
 	for ( i = 0 ; i < data->num_surfaces ; i++ ) {
 		if(ent->e.customShader)
@@ -1174,6 +1185,15 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 			}
 		} else {
 			shader = surface->shader;
+		}
+
+		if ( shadowCtx ) {
+			if ( !R_AddDlightShadowEntityCasterSurface( shadowCtx,
+				(surfaceType_t *)surface, shader ) ) {
+				return;
+			}
+			surface++;
+			continue;
 		}
 
 		// we will add shadows even if the main object isn't visible in the view
@@ -1209,8 +1229,7 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 			for ( n = 0; n < numDlights; n++ ) {
 				dl = dlights[ n ];
 				tr.light = dl;
-				R_AddLitSurfFlags( (void *)surface, shader, fogNum,
-					personalModel ? LSF_SHADOW_CASTER_ONLY : 0 );
+				R_AddLitSurf( (void *)surface, shader, fogNum );
 			}
 		}
 #endif

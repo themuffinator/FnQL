@@ -2301,7 +2301,13 @@ void RB_StageIteratorGeneric( void )
 	// set face culling appropriately
 	//
 #ifdef USE_PMLIGHT
-	GL_Cull( tess.csmCasterPass ? CT_TWO_SIDED : shader->cullType );
+	if ( tess.csmCasterPass ) {
+		GL_Cull( CT_TWO_SIDED );
+	} else if ( backEnd.viewParms.passFlags & VPF_DLIGHT_SHADOW ) {
+		GL_Cull( tess.shadowCasterCullType );
+	} else {
+		GL_Cull( shader->cullType );
+	}
 #else
 	GL_Cull( shader->cullType );
 #endif

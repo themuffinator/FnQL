@@ -387,16 +387,30 @@ static qboolean R_PortalAllowMultipleViews( void ) {
 
 static void R_PortalCopyDlightsForPlan( portalViewPlan_t *plan ) {
 #ifdef USE_PMLIGHT
-	if ( r_numdlights + plan->parentParms.num_dlights <= ARRAY_LEN( backEndData->dlights ) ) {
-		int i;
+	int available;
+	int copyCount;
+	int i;
 
-		plan->viewParms.dlights = plan->parentParms.dlights + plan->parentParms.num_dlights;
-		plan->viewParms.num_dlights = plan->parentParms.num_dlights;
-		r_numdlights += plan->parentParms.num_dlights;
-		for ( i = 0; i < plan->parentParms.num_dlights; i++ ) {
-			plan->viewParms.dlights[i] = plan->parentParms.dlights[i];
-		}
+	// Each view owns the mutable lit-surface heads in its dlight records. Never
+	// leave a child pointing at its parent when the shared scene buffer is full.
+	plan->viewParms.dlights = NULL;
+	plan->viewParms.num_dlights = 0;
+	if ( !plan->parentParms.dlights || plan->parentParms.num_dlights == 0 ) {
+		return;
 	}
+
+	available = (int)ARRAY_LEN( backEndData->dlights ) - r_numdlights;
+	if ( available <= 0 ) {
+		return;
+	}
+
+	copyCount = MIN( (int)plan->parentParms.num_dlights, available );
+	plan->viewParms.dlights = &backEndData->dlights[r_numdlights];
+	plan->viewParms.num_dlights = copyCount;
+	for ( i = 0; i < copyCount; i++ ) {
+		plan->viewParms.dlights[i] = plan->parentParms.dlights[i];
+	}
+	r_numdlights += copyCount;
 #else
 	(void)plan;
 #endif
@@ -552,10 +566,25 @@ static void R_RenderPortalViewPlan( const portalViewPlan_t *plan ) {
 
 static void R_RenderPortalViewQueue( const portalViewQueue_t *queue ) {
 	int i;
+#ifdef USE_PMLIGHT
+	shadowManager_t parentShadowManager = tr.shadowManager;
+	csmPlan_t parentCsm = tr.csm;
+	csmPlan_t parentCsmDebugPlan = tr.csmDebugPlan;
+	shadowCorrectnessDebug_t parentCorrectnessDebug = tr.shadowCorrectnessDebug;
+#endif
 
 	for ( i = 0 ; i < queue->numPlans ; i++ ) {
 		R_RenderPortalViewPlan( &queue->plans[i] );
 	}
+
+#ifdef USE_PMLIGHT
+	// Child planning uses renderer globals, but the parent draw command is
+	// queued after all children. Restore its exact plan before that snapshot.
+	tr.shadowManager = parentShadowManager;
+	tr.csm = parentCsm;
+	tr.csmDebugPlan = parentCsmDebugPlan;
+	tr.shadowCorrectnessDebug = parentCorrectnessDebug;
+#endif
 }
 
 #endif // TR_PORTAL_PLAN_H

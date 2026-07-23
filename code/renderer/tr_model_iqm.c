@@ -1069,7 +1069,8 @@ R_AddIQMSurfaces
 Add all surfaces of this model
 =================
 */
-void R_AddIQMSurfaces( trRefEntity_t *ent ) {
+void R_AddIQMSurfaces( trRefEntity_t *ent,
+	dlightShadowCasterContext_t *casterContext ) {
 	iqmData_t		*data;
 	srfIQModel_t		*surface;
 	int			i, j;
@@ -1122,25 +1123,38 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 		ent->e.oldframe = 0;
 	}
 
-	//
-	// cull the entire model if merged bounding box of both frames
-	// is outside the view frustum.
-	//
-	cull = R_CullIQM ( data, ent );
-	if ( cull == CULL_OUT ) {
-		return;
+#ifdef USE_PMLIGHT
+	if ( casterContext ) {
+		haveDlightBounds =
+			R_IQMModelBounds( data, ent, bounds[0], bounds[1] );
+		if ( haveDlightBounds &&
+			R_DlightShadowEntityBoundsCulled( casterContext, ent,
+				bounds[0], bounds[1] ) ) {
+			return;
+		}
+	} else
+#endif
+	{
+		//
+		// cull the entire model if merged bounding box of both frames
+		// is outside the view frustum.
+		//
+		cull = R_CullIQM ( data, ent );
+		if ( cull == CULL_OUT ) {
+			return;
+		}
 	}
 
 	//
 	// set up lighting now that we know we aren't culled
 	//
-	if ( !personalModel || r_shadows->integer > 1 ) {
+	if ( !casterContext && ( !personalModel || r_shadows->integer > 1 ) ) {
 		R_SetupEntityLighting( &tr.refdef, ent );
 	}
 
 #ifdef USE_PMLIGHT
 	numDlights = 0;
-	if ( R_GetDlightMode() >= 2 && ( !personalModel || personalShadowCaster ) ) {
+	if ( !casterContext && !personalModel && R_GetDlightMode() >= 2 ) {
 		haveDlightBounds = R_IQMModelBounds( data, ent, bounds[0], bounds[1] );
 		for ( n = 0; n < tr.viewParms.num_dlights; n++ ) {
 			dl = &tr.viewParms.dlights[ n ];
@@ -1157,7 +1171,7 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 	//
 	// see if we are in a fog volume
 	//
-	fogNum = R_ComputeIQMFogNum( data, ent );
+	fogNum = casterContext ? 0 : R_ComputeIQMFogNum( data, ent );
 
 	for ( i = 0 ; i < data->num_surfaces ; i++ ) {
 		if(ent->e.customShader)
@@ -1178,6 +1192,17 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 		} else {
 			shader = surface->shader;
 		}
+
+#ifdef USE_PMLIGHT
+		if ( casterContext ) {
+			if ( !R_AddDlightShadowEntityCasterSurface( casterContext,
+				(surfaceType_t *)surface, shader ) ) {
+				return;
+			}
+			surface++;
+			continue;
+		}
+#endif
 
 		// we will add shadows even if the main object isn't visible in the view
 
@@ -1207,12 +1232,11 @@ void R_AddIQMSurfaces( trRefEntity_t *ent ) {
 		}
 
 #ifdef USE_PMLIGHT
-		if ( numDlights && shader->lightingStage >= 0 ) {
+		if ( !personalModel && numDlights && shader->lightingStage >= 0 ) {
 			for ( n = 0; n < numDlights; n++ ) {
 				dl = dlights[ n ];
 				tr.light = dl;
-				R_AddLitSurfFlags( (void *)surface, shader, fogNum,
-					personalModel ? LSF_SHADOW_CASTER_ONLY : 0 );
+				R_AddLitSurfFlags( (void *)surface, shader, fogNum, 0 );
 			}
 		}
 #endif

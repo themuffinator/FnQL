@@ -1457,6 +1457,12 @@ static qboolean R_MirrorViewBySurface( const drawSurf_t *drawSurf, int entityNum
 	viewParms_t		oldParms;
 	orientation_t	surface, camera;
 	qboolean		isMirror;
+#ifdef USE_PMLIGHT
+	shadowManager_t	oldShadowManager;
+	csmPlan_t		oldCsm;
+	csmPlan_t		oldCsmDebugPlan;
+	shadowCorrectnessDebug_t oldCorrectnessDebug;
+#endif
 
 	// don't recursively mirror
 	if ( tr.viewParms.portalView != PV_NONE ) {
@@ -1490,13 +1496,20 @@ static qboolean R_MirrorViewBySurface( const drawSurf_t *drawSurf, int entityNum
 
 #ifdef USE_PMLIGHT
 	// create dedicated set for each view
-	if ( r_numdlights + oldParms.num_dlights <= ARRAY_LEN( backEndData->dlights ) ) {
+	newParms.dlights = NULL;
+	newParms.num_dlights = 0;
+	if ( oldParms.dlights && oldParms.num_dlights > 0 &&
+		r_numdlights < (int)ARRAY_LEN( backEndData->dlights ) ) {
+		int copyCount = MIN( (int)oldParms.num_dlights,
+			(int)ARRAY_LEN( backEndData->dlights ) - r_numdlights );
 		int i;
-		newParms.dlights = oldParms.dlights + oldParms.num_dlights;
-		newParms.num_dlights = oldParms.num_dlights;
-		r_numdlights += oldParms.num_dlights;
-		for ( i = 0; i < oldParms.num_dlights; i++ )
+
+		newParms.dlights = &backEndData->dlights[r_numdlights];
+		newParms.num_dlights = copyCount;
+		for ( i = 0; i < copyCount; i++ ) {
 			newParms.dlights[i] = oldParms.dlights[i];
+		}
+		r_numdlights += copyCount;
 	}
 #endif
 
@@ -1525,9 +1538,21 @@ static qboolean R_MirrorViewBySurface( const drawSurf_t *drawSurf, int entityNum
 	// OPTIMIZE: restrict the viewport on the mirrored view
 
 	// render the mirror view
+#ifdef USE_PMLIGHT
+	oldShadowManager = tr.shadowManager;
+	oldCsm = tr.csm;
+	oldCsmDebugPlan = tr.csmDebugPlan;
+	oldCorrectnessDebug = tr.shadowCorrectnessDebug;
+#endif
 	R_RenderView( &newParms );
 
 	tr.viewParms = oldParms;
+#ifdef USE_PMLIGHT
+	tr.shadowManager = oldShadowManager;
+	tr.csm = oldCsm;
+	tr.csmDebugPlan = oldCsmDebugPlan;
+	tr.shadowCorrectnessDebug = oldCorrectnessDebug;
+#endif
 
 	return qtrue;
 }
@@ -1951,6 +1976,9 @@ static int R_CountDlightShadowReceivers( const dlight_t *dl )
 
 	count = 0;
 	for ( surf = dl->head; surf != NULL; surf = surf->next ) {
+		if ( surf->flags & LSF_SHADOW_CASTER_ONLY ) {
+			continue;
+		}
 		count++;
 	}
 
@@ -1958,27 +1986,33 @@ static int R_CountDlightShadowReceivers( const dlight_t *dl )
 }
 
 
-static qboolean R_DlightShadowProjectionValid( const dlight_t *dl )
+static qboolean R_DlightShadowInputValid( const dlight_t *dl )
 {
-	vec4_t eye, clip, normalized, window;
+	int i;
 
-	R_TransformModelToClip( dl->origin, tr.viewParms.world.modelMatrix, tr.viewParms.projectionMatrix, eye, clip );
-	if ( clip[3] <= 0.0f ) {
+	if ( !dl || !R_DlightShadowFloatIsFinite( dl->radius ) ||
+		!R_DlightShadowFloatIsFinite( dl->shadowProjectionFar ) ||
+		dl->radius <= 0.0f || dl->shadowProjectionFar < dl->radius ) {
 		return qfalse;
 	}
 
-	R_TransformClipToWindow( clip, &tr.viewParms, normalized, window );
-	return ( normalized[2] >= 0.0f && normalized[2] <= 1.0f ) ? qtrue : qfalse;
+	for ( i = 0; i < 3; i++ ) {
+		if ( !R_DlightShadowFloatIsFinite( dl->origin[i] ) ||
+			!R_DlightShadowFloatIsFinite( dl->color[i] ) ) {
+			return qfalse;
+		}
+	}
+
+	return qtrue;
 }
 
 
-static float R_DlightShadowPriority( const dlight_t *dl, int receivers )
+static float R_DlightShadowPriority( const dlight_t *dl )
 {
 	vec3_t delta;
 	float brightness;
 	float dist2;
 	float radius2;
-	float receiverScale;
 	float priorityMultiplier;
 
 	brightness = dl->color[0];
@@ -1994,11 +2028,10 @@ static float R_DlightShadowPriority( const dlight_t *dl, int receivers )
 
 	VectorSubtract( dl->origin, tr.viewParms.or.origin, delta );
 	dist2 = DotProduct( delta, delta );
-	radius2 = Square( dl->radius );
-	receiverScale = 1.0f + 0.03125f * Com_Clamp( 0.0f, 64.0f, (float)receivers );
+	radius2 = Square( dl->shadowProjectionFar );
 	priorityMultiplier = ( dl->shadowPriorityMultiplier > 0.0f ) ? dl->shadowPriorityMultiplier : 1.0f;
 
-	return brightness * receiverScale * radius2 * priorityMultiplier / ( dist2 + radius2 + 1.0f );
+	return brightness * radius2 * priorityMultiplier / ( dist2 + radius2 + 1.0f );
 }
 
 static void R_ShadowManagerStorePointLightRecord( shadowPointLightPlan_t *record,
@@ -2014,6 +2047,7 @@ static void R_ShadowManagerStorePointLightRecord( shadowPointLightPlan_t *record
 	VectorCopy( dl->origin, record->origin );
 	VectorCopy( dl->color, record->color );
 	record->radius = dl->radius;
+	record->projectionFar = dl->shadowProjectionFar;
 	record->atlasAllocated = qfalse;
 }
 
@@ -2797,8 +2831,8 @@ static void R_PlanDlightShadows( void )
 			tr.pc.c_dlightShadowSkippedNoSurfaces++;
 			continue;
 		}
-		if ( !R_DlightShadowProjectionValid( dl ) ) {
-			tr.pc.c_dlightShadowSkippedProjection++;
+		if ( !R_DlightShadowInputValid( dl ) ) {
+			tr.pc.c_dlightShadowSkippedInvalid++;
 			continue;
 		}
 
@@ -2809,7 +2843,7 @@ static void R_PlanDlightShadows( void )
 		}
 
 		dl->shadowReceiverCount = receivers;
-		dl->shadowPriority = R_DlightShadowPriority( dl, receivers );
+		dl->shadowPriority = R_DlightShadowPriority( dl );
 		if ( dl->shadowPriority <= 0.0f ) {
 			tr.pc.c_dlightShadowSkippedDisabled++;
 			continue;
@@ -3014,6 +3048,7 @@ static void R_PlanFrameShadows( void )
 	R_PlanCascadedShadows();
 #ifdef USE_PMLIGHT
 	R_PlanDlightShadows();
+	R_AddPlannedDlightShadowCasters();
 	R_PlanSpotShadows();
 #endif
 	R_UpdateShadowManagerSummary();
@@ -3127,8 +3162,8 @@ static void R_SortDrawSurfs( drawSurf_t *drawSurfs, int numDrawSurfs ) {
 		dlight_t *dl;
 		// all the lit surfaces are in a single queue
 		// but each light's surfaces are sorted within its subsection
-		for ( i = 0; i < tr.refdef.num_dlights; ++i ) { 
-			dl = &tr.refdef.dlights[ i ];
+		for ( i = 0; i < tr.viewParms.num_dlights; ++i ) {
+			dl = &tr.viewParms.dlights[ i ];
 			if ( dl->head ) {
 				R_SortLitsurfs( dl );
 			}
@@ -3202,16 +3237,16 @@ static void R_AddEntitySurfaces( void ) {
 			} else {
 				switch ( tr.currentModel->type ) {
 				case MOD_MESH:
-					R_AddMD3Surfaces( ent );
+					R_AddMD3Surfaces( ent, NULL );
 					break;
 				case MOD_MDR:
-					R_MDRAddAnimSurfaces( ent );
+					R_MDRAddAnimSurfaces( ent, NULL );
 					break;
 				case MOD_IQM:
-					R_AddIQMSurfaces( ent );
+					R_AddIQMSurfaces( ent, NULL );
 					break;
 				case MOD_BRUSH:
-					R_AddBrushModelSurfaces( ent );
+					R_AddBrushModelSurfaces( ent, NULL );
 					break;
 				case MOD_BAD:		// null model axis
 					if ( (ent->e.renderfx & RF_THIRD_PERSON) && (tr.viewParms.portalView == PV_NONE) ) {
@@ -3239,6 +3274,16 @@ R_GenerateDrawSurfs
 ====================
 */
 static void R_GenerateDrawSurfs( void ) {
+#ifdef USE_PMLIGHT
+	int i;
+
+	// Views that skip the world walk must not inherit lit-surface chains from
+	// the previous view or from the parent side of a portal.
+	for ( i = 0; i < tr.viewParms.num_dlights; i++ ) {
+		tr.viewParms.dlights[i].head = tr.viewParms.dlights[i].tail = NULL;
+	}
+#endif
+
 	R_AddWorldSurfaces ();
 
 	R_UpdateAdvertisements();

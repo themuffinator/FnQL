@@ -1555,11 +1555,11 @@ void RE_DrawWebUISurface( int x, int y, int w, int h, int cols, int rows,
 	RE_StretchPic( x, y, w, h, 0.0f, 0.0f, 1.0f, 1.0f, tr.webUIShader );
 }
 
-static qboolean RB_ShadowCorrectnessRejectsAlphaTest( const shader_t *shader )
+static qboolean RB_ShadowShaderHasAlphaTest( const shader_t *shader )
 {
 	int i;
 
-	if ( !r_shadowCorrectness || !r_shadowCorrectness->integer || !shader ) {
+	if ( !shader ) {
 		return qfalse;
 	}
 
@@ -1572,6 +1572,12 @@ static qboolean RB_ShadowCorrectnessRejectsAlphaTest( const shader_t *shader )
 	}
 
 	return qfalse;
+}
+
+static qboolean RB_ShadowCorrectnessRejectsAlphaTest( const shader_t *shader )
+{
+	return ( r_shadowCorrectness && r_shadowCorrectness->integer &&
+		RB_ShadowShaderHasAlphaTest( shader ) ) ? qtrue : qfalse;
 }
 
 static const float rb_dlightShadowFlipMatrix[16] = {
@@ -1666,7 +1672,7 @@ static void RB_BuildDlightShadowView( const dlight_t *dl, const shadowPointLight
 	shadowParms->scissorHeight = shadowParms->viewportHeight;
 	shadowParms->fovX = 90.0f;
 	shadowParms->fovY = 90.0f;
-	shadowParms->zFar = MAX( dl->radius, 64.0f );
+	shadowParms->zFar = plan ? plan->projectionFar : dl->shadowProjectionFar;
 	shadowParms->stereoFrame = STEREO_CENTER;
 	shadowParms->portalView = PV_NONE;
 	shadowParms->passFlags = VPF_DLIGHT_SHADOW;
@@ -1825,30 +1831,34 @@ static void RB_SetDlightShadowCasterDepthBias( qboolean enable )
 	qglDisable( GL_POLYGON_OFFSET_FILL );
 }
 
+static const shader_t *RB_DlightShadowEffectiveShader( const shader_t *shader )
+{
+	return shader && shader->remappedShader ? shader->remappedShader : shader;
+}
+
 static qboolean RB_DlightShadowCasterAllowed( const shader_t *shader, const surfaceType_t *surface )
 {
 	if ( !shader || !surface ) {
 		return qfalse;
 	}
+	shader = RB_DlightShadowEffectiveShader( shader );
 	if ( shader->sort != SS_OPAQUE || shader->isSky || shader->polygonOffset ||
 		(shader->surfaceFlags & ( SURF_SKY | SURF_NODLIGHT )) ) {
 		return qfalse;
 	}
-	if ( shader->lightingStage < 0 ) {
-		return qfalse;
-	}
-	if ( RB_ShadowCorrectnessRejectsAlphaTest( shader ) ) {
+	if ( shader->numDeforms > 0 || RB_ShadowShaderHasAlphaTest( shader ) ) {
 		return qfalse;
 	}
 
 	switch ( *surface ) {
 		case SF_FACE:
-		case SF_GRID:
 		case SF_TRIANGLES:
 		case SF_MD3:
 		case SF_MDR:
 		case SF_IQM:
 			return qtrue;
+		case SF_GRID:
+			return ( !r_nocurves || !r_nocurves->integer ) ? qtrue : qfalse;
 		default:
 			return qfalse;
 	}
@@ -2024,6 +2034,7 @@ static qboolean RB_DlightShadowSurfaceBounds( const surfaceType_t *surface, vec3
 }
 
 #define RB_DLIGHT_CASTER_BOUNDS_MEMO_SLOTS 1024
+#define RB_DLIGHT_SHADOW_FACE_CULL_BASE_EPSILON 0.125f
 
 typedef struct {
 	unsigned int serial;
@@ -2087,8 +2098,17 @@ static qboolean RB_DlightShadowBoundsCulledForOrientation( const vec3_t mins, co
 	const cplane_t *plane;
 	vec3_t local;
 	vec3_t transformed[8];
+	float cullEpsilon;
 	int i, j;
 	qboolean front;
+
+	// Shadow-caster normal bias can move a vertex by up to 0.75 times the
+	// clamped bias. Keep the conservative face test outside that envelope so
+	// biased geometry cannot disappear at a cube seam.
+	cullEpsilon = RB_DLIGHT_SHADOW_FACE_CULL_BASE_EPSILON +
+		0.75f * R_ShadowClampCasterNormalBias(
+			r_dlightShadowCasterNormalBias ?
+				r_dlightShadowCasterNormalBias->value : 0.25f );
 
 	for ( i = 0; i < 8; i++ ) {
 		local[0] = (i & 1) ? maxs[0] : mins[0];
@@ -2105,7 +2125,8 @@ static qboolean RB_DlightShadowBoundsCulledForOrientation( const vec3_t mins, co
 		plane = &backEnd.viewParms.frustum[i];
 		front = qfalse;
 		for ( j = 0; j < 8; j++ ) {
-			if ( DotProduct( transformed[j], plane->normal ) > plane->dist ) {
+			if ( DotProduct( transformed[j], plane->normal ) >=
+				plane->dist - cullEpsilon ) {
 				front = qtrue;
 				break;
 			}
@@ -2188,7 +2209,7 @@ static qboolean RB_DlightShadowEntityCasterAllowed( int entityNum )
 typedef struct {
 	qboolean valid;
 	unsigned int generation;
-	unsigned int signature;
+	uint64_t signature;
 } dlightShadowCacheSlot_t;
 
 static dlightShadowCacheSlot_t rb_dlightShadowCache[RB_DLIGHT_SHADOW_CACHE_SLOTS];
@@ -2218,51 +2239,99 @@ static unsigned int RB_DlightShadowCacheHashPtr( unsigned int hash, const void *
 	return hash;
 }
 
+static uint64_t RB_DlightShadowCacheHash64UInt( uint64_t hash, uint32_t value )
+{
+	hash ^= (uint64_t)value;
+	hash *= 1099511628211ULL;
+	return hash;
+}
+
+static uint64_t RB_DlightShadowCacheHash64Float( uint64_t hash, float value )
+{
+	uint32_t bits;
+
+	Com_Memcpy( &bits, &value, sizeof( bits ) );
+	return RB_DlightShadowCacheHash64UInt( hash, bits );
+}
+
+static uint64_t RB_DlightShadowCacheHash64Ptr( uint64_t hash, const void *ptr )
+{
+	uint64_t bits = (uint64_t)(intptr_t)ptr;
+
+	hash = RB_DlightShadowCacheHash64UInt( hash, (uint32_t)bits );
+	return RB_DlightShadowCacheHash64UInt( hash, (uint32_t)( bits >> 32 ) );
+}
+
+static uint64_t RB_DlightShadowCacheHash64String( uint64_t hash, const char *value )
+{
+	if ( value ) {
+		while ( *value ) {
+			hash = RB_DlightShadowCacheHash64UInt( hash, (byte)*value++ );
+		}
+	}
+	return RB_DlightShadowCacheHash64UInt( hash, 0 );
+}
+
 static qboolean RB_DlightShadowCacheSignature( const dlight_t *dl,
-	const shadowPointLightPlan_t *plan, unsigned int *signature )
+	const shadowPointLightPlan_t *plan, uint64_t *signature )
 {
 	const litSurf_t *litSurf;
 	shader_t *shader;
+	const shader_t *casterShader;
+	float projectionFar;
 	int entityNum;
 	int fogNum;
 	int i;
 	int atlasBaseFace;
 	int atlasFaceSize;
-	int receiverCount;
-	unsigned int hash;
+	uint64_t hash;
 
 	atlasBaseFace = plan ? plan->atlasBaseFace : ( dl ? dl->shadowAtlasBaseFace : -1 );
 	atlasFaceSize = plan ? plan->atlasFaceSize : ( dl ? dl->shadowAtlasFaceSize : 0 );
-	receiverCount = plan ? plan->receiverCount : ( dl ? dl->shadowReceiverCount : 0 );
+	projectionFar = plan ? plan->projectionFar : ( dl ? dl->shadowProjectionFar : 0.0f );
 	if ( !dl || !signature || dl->linear || atlasFaceSize <= 0 || atlasBaseFace < 0 ) {
 		return qfalse;
 	}
 
-	hash = 2166136261U;
+	hash = 14695981039346656037ULL;
 	for ( i = 0; i < 3; i++ ) {
-		hash = RB_DlightShadowCacheHashFloat( hash, dl->origin[i] );
-		hash = RB_DlightShadowCacheHashFloat( hash, dl->color[i] );
+		hash = RB_DlightShadowCacheHash64Float( hash, dl->origin[i] );
 	}
-	hash = RB_DlightShadowCacheHashFloat( hash, dl->radius );
-	hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)dl->additive );
-	hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)receiverCount );
-	hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)atlasFaceSize );
+	hash = RB_DlightShadowCacheHash64Float( hash, projectionFar );
+	hash = RB_DlightShadowCacheHash64UInt( hash, (uint32_t)atlasFaceSize );
+	hash = RB_DlightShadowCacheHash64Float( hash, R_ShadowClampCasterDepthBias(
+		r_dlightShadowCasterDepthBias ? r_dlightShadowCasterDepthBias->value : 1.0f ) );
+	hash = RB_DlightShadowCacheHash64Float( hash, R_ShadowClampCasterSlopeBias(
+		r_dlightShadowCasterSlopeBias ? r_dlightShadowCasterSlopeBias->value : 1.0f ) );
+	hash = RB_DlightShadowCacheHash64Float( hash, R_ShadowClampCasterNormalBias(
+		r_dlightShadowCasterNormalBias ? r_dlightShadowCasterNormalBias->value : 0.25f ) );
+	hash = RB_DlightShadowCacheHash64UInt( hash, r_nocull ? (uint32_t)r_nocull->integer : 0 );
+	hash = RB_DlightShadowCacheHash64Float( hash,
+		r_lodCurveError ? r_lodCurveError->value : 0.0f );
+	hash = RB_DlightShadowCacheHash64UInt( hash,
+		( r_shadowCorrectness && r_shadowCorrectness->integer ) ? 1u : 0u );
+	hash = RB_DlightShadowCacheHash64String( hash,
+		tr.world ? tr.world->baseName : NULL );
 
 	for ( litSurf = dl->head; litSurf; litSurf = litSurf->next ) {
+		if ( !( litSurf->flags & LSF_SHADOW_CASTER_ONLY ) ) {
+			continue;
+		}
 		R_DecomposeLitSort( litSurf->sort, &entityNum, &shader, &fogNum );
+		if ( !RB_DlightShadowEntityCasterAllowed( entityNum ) ) {
+			continue;
+		}
+		if ( !RB_DlightShadowCasterAllowed( shader, litSurf->surface ) ) {
+			continue;
+		}
+		casterShader = RB_DlightShadowEffectiveShader( shader );
 		if ( entityNum != REFENTITYNUM_WORLD ) {
 			return qfalse;
 		}
 
-		hash = RB_DlightShadowCacheHashUInt( hash, litSurf->sort );
-		hash = RB_DlightShadowCacheHashPtr( hash, litSurf->surface );
-
-		if ( !RB_DlightShadowCasterAllowed( shader, litSurf->surface ) ) {
-			continue;
-		}
-		if ( shader->numDeforms > 0 ) {
-			return qfalse;
-		}
+		hash = RB_DlightShadowCacheHash64UInt( hash, litSurf->sort );
+		hash = RB_DlightShadowCacheHash64UInt( hash, (uint32_t)casterShader->cullType );
+		hash = RB_DlightShadowCacheHash64Ptr( hash, litSurf->surface );
 	}
 
 	*signature = hash;
@@ -2289,7 +2358,7 @@ static int RB_DlightShadowCacheSlot( const dlight_t *dl, const shadowPointLightP
 }
 
 static qboolean RB_DlightShadowCacheLookup( const dlight_t *dl,
-	const shadowPointLightPlan_t *plan, int face, unsigned int signature, unsigned int generation )
+	const shadowPointLightPlan_t *plan, int face, uint64_t signature, unsigned int generation )
 {
 	int slot;
 	const dlightShadowCacheSlot_t *entry;
@@ -2308,7 +2377,7 @@ static qboolean RB_DlightShadowCacheLookup( const dlight_t *dl,
 }
 
 static void RB_DlightShadowCacheStore( const dlight_t *dl, const shadowPointLightPlan_t *plan,
-	int face, unsigned int signature, unsigned int generation )
+	int face, uint64_t signature, unsigned int generation )
 {
 	int slot;
 	dlightShadowCacheSlot_t *entry;
@@ -2968,6 +3037,7 @@ static int RB_RenderDlightShadowCasters( const dlight_t *dl )
 {
 	const litSurf_t *litSurf;
 	shader_t *shader;
+	const shader_t *casterShader;
 	int currentEntityNum;
 	int entityNum;
 	int fogNum;
@@ -2975,6 +3045,7 @@ static int RB_RenderDlightShadowCasters( const dlight_t *dl )
 	int surfaces;
 	double originalTime;
 	qboolean surfaceActive;
+	cullType_t currentCullType;
 #ifdef USE_VBO
 	qboolean vboCasterBound = qfalse;
 #endif
@@ -2983,10 +3054,14 @@ static int RB_RenderDlightShadowCasters( const dlight_t *dl )
 	surfaces = 0;
 	surfaceActive = qfalse;
 	currentEntityNum = -1;
+	currentCullType = CT_TWO_SIDED;
 	chainIndex = -1;
 
 	for ( litSurf = dl->head; litSurf; litSurf = litSurf->next ) {
 		chainIndex++;
+		if ( !( litSurf->flags & LSF_SHADOW_CASTER_ONLY ) ) {
+			continue;
+		}
 		R_DecomposeLitSort( litSurf->sort, &entityNum, &shader, &fogNum );
 		if ( !RB_DlightShadowEntityCasterAllowed( entityNum ) ) {
 			continue;
@@ -2994,6 +3069,7 @@ static int RB_RenderDlightShadowCasters( const dlight_t *dl )
 		if ( !RB_DlightShadowCasterAllowed( shader, litSurf->surface ) ) {
 			continue;
 		}
+		casterShader = RB_DlightShadowEffectiveShader( shader );
 
 		if ( entityNum != currentEntityNum ) {
 			if ( surfaceActive ) {
@@ -3012,6 +3088,13 @@ static int RB_RenderDlightShadowCasters( const dlight_t *dl )
 			continue;
 		}
 
+		if ( surfaceActive && currentCullType != casterShader->cullType ) {
+			RB_EndSurface();
+			backEnd.pc.c_dlightShadowAtlasBatches++;
+			backEnd.pc.c_dlightShadowAtlasDraws++;
+			surfaceActive = qfalse;
+		}
+
 #ifdef USE_VBO
 		// static world casters draw straight from the world VBO with the
 		// caster-bias vertex program instead of re-tessellating per face
@@ -3027,8 +3110,10 @@ static int RB_RenderDlightShadowCasters( const dlight_t *dl )
 				}
 				if ( !vboCasterBound &&
 					ARB_DlightShadowCasterVBOBegin( backEnd.viewParms.or.origin ) ) {
-					GL_Cull( tr.defaultShader->cullType ); // match the tess batches
 					vboCasterBound = qtrue;
+				}
+				if ( vboCasterBound ) {
+					GL_Cull( casterShader->cullType );
 				}
 				if ( vboCasterBound && VBO_DrawDepthCasterItem( shader, itemIndex ) ) {
 					backEnd.pc.c_dlightShadowAtlasDraws++;
@@ -3049,6 +3134,8 @@ static int RB_RenderDlightShadowCasters( const dlight_t *dl )
 		if ( !surfaceActive ) {
 			RB_BeginSurface( tr.defaultShader, 0 );
 			tess.allowVBO = qfalse;
+			tess.shadowCasterCullType = casterShader->cullType;
+			currentCullType = casterShader->cullType;
 			surfaceActive = qtrue;
 		}
 
@@ -3159,6 +3246,7 @@ static int RB_RenderSpotShadowCasters( drawSurf_t *drawSurfs, int numDrawSurfs,
 	int currentEntityNum;
 	int surfaces;
 	qboolean surfaceActive;
+	cullType_t currentCullType;
 	int i;
 #ifdef USE_VBO
 	qboolean vboCasterBound = qfalse;
@@ -3167,10 +3255,12 @@ static int RB_RenderSpotShadowCasters( drawSurf_t *drawSurfs, int numDrawSurfs,
 	currentEntityNum = -1;
 	surfaces = 0;
 	surfaceActive = qfalse;
+	currentCullType = CT_TWO_SIDED;
 
 	for ( i = 0; i < numDrawSurfs; i++ ) {
 		drawSurf_t *drawSurf = &drawSurfs[i];
 		shader_t *shader;
+		const shader_t *casterShader;
 		int entityNum;
 		int fogNum;
 		int dlighted;
@@ -3180,6 +3270,7 @@ static int RB_RenderSpotShadowCasters( drawSurf_t *drawSurfs, int numDrawSurfs,
 			!RB_DlightShadowCasterAllowed( shader, drawSurf->surface ) ) {
 			continue;
 		}
+		casterShader = RB_DlightShadowEffectiveShader( shader );
 
 		if ( entityNum != currentEntityNum ) {
 			if ( surfaceActive ) {
@@ -3193,6 +3284,10 @@ static int RB_RenderSpotShadowCasters( drawSurf_t *drawSurfs, int numDrawSurfs,
 		if ( RB_DlightShadowSurfaceCulled( drawSurf->surface ) ) {
 			continue;
 		}
+		if ( surfaceActive && currentCullType != casterShader->cullType ) {
+			RB_EndSurface();
+			surfaceActive = qfalse;
+		}
 
 #ifdef USE_VBO
 		if ( entityNum == REFENTITYNUM_WORLD && r_vbo->integer ) {
@@ -3205,8 +3300,10 @@ static int RB_RenderSpotShadowCasters( drawSurf_t *drawSurfs, int numDrawSurfs,
 				}
 				if ( !vboCasterBound &&
 					ARB_DlightShadowCasterVBOBegin( backEnd.viewParms.or.origin ) ) {
-					GL_Cull( tr.defaultShader->cullType ); // match the tess batches
 					vboCasterBound = qtrue;
+				}
+				if ( vboCasterBound ) {
+					GL_Cull( casterShader->cullType );
 				}
 				if ( vboCasterBound && VBO_DrawDepthCasterItem( shader, itemIndex ) ) {
 					surfaces++;
@@ -3224,6 +3321,8 @@ static int RB_RenderSpotShadowCasters( drawSurf_t *drawSurfs, int numDrawSurfs,
 		if ( !surfaceActive ) {
 			RB_BeginSurface( tr.defaultShader, 0 );
 			tess.allowVBO = qfalse;
+			tess.shadowCasterCullType = casterShader->cullType;
+			currentCullType = casterShader->cullType;
 			surfaceActive = qtrue;
 		}
 
@@ -3266,6 +3365,16 @@ static qboolean RB_SpotShadowCacheSignature( drawSurf_t *drawSurfs, int numDrawS
 	hash = 2166136261U;
 	hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)tr.shadowManager.spotPlanCount );
 	hash = RB_DlightShadowCacheHashUInt( hash, (unsigned int)FBO_SpotShadowAtlasHeight() );
+	hash = RB_DlightShadowCacheHashFloat( hash, R_ShadowClampCasterDepthBias(
+		r_dlightShadowCasterDepthBias ? r_dlightShadowCasterDepthBias->value : 1.0f ) );
+	hash = RB_DlightShadowCacheHashFloat( hash, R_ShadowClampCasterSlopeBias(
+		r_dlightShadowCasterSlopeBias ? r_dlightShadowCasterSlopeBias->value : 1.0f ) );
+	hash = RB_DlightShadowCacheHashFloat( hash, R_ShadowClampCasterNormalBias(
+		r_dlightShadowCasterNormalBias ? r_dlightShadowCasterNormalBias->value : 0.25f ) );
+	hash = RB_DlightShadowCacheHashUInt( hash,
+		r_nocull ? (unsigned int)r_nocull->integer : 0u );
+	hash = RB_DlightShadowCacheHashFloat( hash,
+		r_lodCurveError ? r_lodCurveError->value : 0.0f );
 	for ( i = 0; i < tr.shadowManager.spotPlanCount; i++ ) {
 		const shadowSpotLightPlan_t *plan = &tr.shadowManager.spotPlans[i];
 		int axis;
@@ -3285,6 +3394,7 @@ static qboolean RB_SpotShadowCacheSignature( drawSurf_t *drawSurfs, int numDrawS
 	for ( i = 0; i < numDrawSurfs; i++ ) {
 		const drawSurf_t *drawSurf = &drawSurfs[i];
 		shader_t *shader;
+		const shader_t *casterShader;
 		int entityNum;
 		int fogNum;
 		int dlighted;
@@ -3294,16 +3404,15 @@ static qboolean RB_SpotShadowCacheSignature( drawSurf_t *drawSurfs, int numDrawS
 			!RB_DlightShadowCasterAllowed( shader, drawSurf->surface ) ) {
 			continue;
 		}
+		casterShader = RB_DlightShadowEffectiveShader( shader );
 		// entity and brush-model casters move independently of the spot
 		// plans; mirror the world-only dlight tile cache policy and re-render
 		if ( entityNum != REFENTITYNUM_WORLD ) {
 			return qfalse;
 		}
-		if ( shader->numDeforms > 0 ) {
-			return qfalse;
-		}
-
 		hash = RB_DlightShadowCacheHashUInt( hash, drawSurf->sort );
+		hash = RB_DlightShadowCacheHashUInt( hash,
+			(unsigned int)casterShader->cullType );
 		hash = RB_DlightShadowCacheHashPtr( hash, drawSurf->surface );
 	}
 
@@ -3431,6 +3540,7 @@ static void RB_RenderDlightShadowAtlas( void )
 #endif
 	int atlasHeight;
 	int startMsec;
+	int lightCount;
 	unsigned int atlasGeneration;
 	qboolean correctnessMode;
 	int i, face;
@@ -3463,19 +3573,21 @@ static void RB_RenderDlightShadowAtlas( void )
 	atlasHeight = FBO_DlightShadowAtlasHeight();
 	atlasGeneration = FBO_DlightShadowAtlasGeneration();
 	correctnessMode = ( r_shadowCorrectness && r_shadowCorrectness->integer ) ? qtrue : qfalse;
+	lightCount = tr.shadowManager.planned ?
+		tr.shadowManager.pointPlanCount : (int)savedViewParms.num_dlights;
 	RB_SetDlightShadowCasterDepthBias( qtrue );
 
-	for ( i = 0; i < ( tr.shadowManager.planned ?
-		tr.shadowManager.pointPlanCount : savedViewParms.num_dlights ); i++ ) {
+	for ( i = 0; i < lightCount; i++ ) {
 		const shadowPointLightPlan_t *plan;
-		unsigned int cacheSignature;
+		uint64_t cacheSignature;
 		qboolean cacheable;
 		qboolean lightRendered;
 
 		if ( tr.shadowManager.planned ) {
 			plan = &tr.shadowManager.pointPlans[i];
 			if ( !plan->atlasAllocated || plan->atlasFaceSize <= 0 ||
-				plan->dlightIndex < 0 || plan->dlightIndex >= savedViewParms.num_dlights ) {
+				plan->dlightIndex < 0 ||
+				(unsigned int)plan->dlightIndex >= savedViewParms.num_dlights ) {
 				continue;
 			}
 			dl = &savedViewParms.dlights[plan->dlightIndex];
@@ -3954,6 +4066,15 @@ static const void *RB_DrawSurfs( const void *data ) {
 #ifdef USE_FBO
 	if ( !( cmd->refdef.rdflags & RDF_NOWORLDMODEL ) ) {
 		FBO_MotionBlur();
+	}
+#endif
+#ifdef USE_PMLIGHT
+	if ( !( cmd->refdef.rdflags & RDF_NOWORLDMODEL ) &&
+		( ( r_speeds && r_speeds->integer == 4 ) ||
+			( r_dlightShadowDebug && r_dlightShadowDebug->integer ) ||
+			( r_csmDebug && r_csmDebug->integer ) ||
+			( r_spotShadowDebug && r_spotShadowDebug->integer ) ) ) {
+		backEnd.shadowManagerDebug = tr.shadowManager;
 	}
 #endif
 

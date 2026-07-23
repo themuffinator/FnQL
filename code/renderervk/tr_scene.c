@@ -23,6 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "tr_local.h"
 #include "../renderercommon/tr_cubemap.h"
 #include "../renderercommon/tr_liquid.h"
+#include "../renderercommon/tr_muzzle_flash_light.h"
 
 static int			r_firstSceneDrawSurf;
 #ifdef USE_PMLIGHT
@@ -156,6 +157,7 @@ void RE_ClearScene( void ) {
 	r_firstSceneDlight = r_numdlights;
 	r_firstSceneEntity = r_numentities;
 	r_firstScenePoly = r_numpolys;
+	R_ClearMuzzleFlashLightCandidate();
 }
 
 /*
@@ -404,6 +406,7 @@ void RE_AddRefEntityToScene( const refEntity_t *ent, qboolean intShaderTime ) {
 		ri.Error( ERR_DROP, "RE_AddRefEntityToScene: bad reType %i", ent->reType );
 	}
 
+	R_TrackMuzzleFlashLightEntity( ent );
 	backEndData->entities[r_numentities].e = *ent;
 	backEndData->entities[r_numentities].lightingCalculated = qfalse;
 	backEndData->entities[r_numentities].intShaderTime = intShaderTime;
@@ -414,12 +417,18 @@ void RE_AddRefEntityToScene( const refEntity_t *ent, qboolean intShaderTime ) {
 
 /*
 =====================
-RE_AddDynamicLightToScene
+RE_AddDynamicLightToSceneWithShadowEligibility
 =====================
 */
-static void RE_AddDynamicLightToScene( const vec3_t org, float intensity, float r, float g, float b, int additive ) {
+static void RE_AddDynamicLightToSceneWithShadowEligibility( const vec3_t org,
+	float intensity, float r, float g, float b, int additive,
+	qboolean shadowEligible ) {
 	dlight_t	*dl;
+#ifdef USE_PMLIGHT
+	float		shadowProjectionFar = 0.0f;
+#endif
 
+	(void)shadowEligible;
 	if ( !tr.registered ) {
 		return;
 	}
@@ -443,6 +452,8 @@ static void RE_AddDynamicLightToScene( const vec3_t org, float intensity, float 
 		r *= r_dlightIntensity->value;
 		g *= r_dlightIntensity->value;
 		b *= r_dlightIntensity->value;
+		shadowProjectionFar =
+			R_DlightShadowProjectionFarForRadius( intensity, r_dlightScale->value );
 		intensity *= r_dlightScale->value;
 	}
 #endif
@@ -458,7 +469,7 @@ static void RE_AddDynamicLightToScene( const vec3_t org, float intensity, float 
 	dl->additive = additive;
 	dl->linear = qfalse;
 #ifdef USE_PMLIGHT
-	dl->shadowEligible = qtrue;
+	dl->shadowEligible = shadowEligible;
 	dl->shadowPlanned = qfalse;
 	dl->shadowIndex = -1;
 	dl->shadowAtlasBaseFace = -1;
@@ -468,9 +479,16 @@ static void RE_AddDynamicLightToScene( const vec3_t org, float intensity, float 
 	dl->shadowReceiverCount = 0;
 	dl->shadowPriority = 0.0f;
 	dl->shadowPriorityMultiplier = 1.0f;
+	dl->shadowProjectionFar = shadowProjectionFar;
 	dl->shadowSpotSource = -1;
 	dl->shadowSpotSourceIndex = -1;
 #endif
+}
+
+static void RE_AddDynamicLightToScene( const vec3_t org, float intensity,
+	float r, float g, float b, int additive ) {
+	RE_AddDynamicLightToSceneWithShadowEligibility( org, intensity, r, g, b,
+		additive, qtrue );
 }
 
 
@@ -528,6 +546,7 @@ void RE_AddLinearLightToScene( const vec3_t start, const vec3_t end, float inten
 	dl->shadowReceiverCount = 0;
 	dl->shadowPriority = 0.0f;
 	dl->shadowPriorityMultiplier = 1.0f;
+	dl->shadowProjectionFar = 0.0f;
 	dl->shadowSpotSource = -1;
 	dl->shadowSpotSourceIndex = -1;
 #endif
@@ -808,6 +827,10 @@ static void R_AddStaticMapLightsToScene( const refdef_t *fd )
 		}
 
 		dl = &backEndData->dlights[before];
+		if ( !dl->linear ) {
+			dl->shadowProjectionFar =
+				R_DlightShadowExactProjectionFarForRadius( dl->radius );
+		}
 		if ( light->type == MAP_LIGHT_SPOT ) {
 			dl->shadowSpotSource = SHADOW_SPOT_SOURCE_STATIC_MAP;
 			dl->shadowSpotSourceIndex = bestIndex;
@@ -988,6 +1011,10 @@ static void R_AddSurfaceLightProxiesToScene( const refdef_t *fd )
 		}
 
 		dl = &backEndData->dlights[before];
+		if ( !dl->linear ) {
+			dl->shadowProjectionFar =
+				R_DlightShadowExactProjectionFarForRadius( dl->radius );
+		}
 		if ( proxy->projection == SURFACE_LIGHT_PROXY_SPOT ) {
 			dl->shadowSpotSource = SHADOW_SPOT_SOURCE_SURFACELIGHT_PROXY;
 			dl->shadowSpotSourceIndex = bestIndex;
@@ -1137,7 +1164,12 @@ RE_AddLightToScene
 =====================
 */
 void RE_AddLightToScene( const vec3_t org, float intensity, float r, float g, float b ) {
-	RE_AddDynamicLightToScene( org, intensity, r, g, b, qfalse );
+	vec3_t adjustedOrigin;
+	qboolean muzzleFlash = R_PrepareMuzzleFlashLight( org, adjustedOrigin );
+
+	RE_AddDynamicLightToSceneWithShadowEligibility( adjustedOrigin, intensity,
+		r, g, b, qfalse,
+		R_MuzzleFlashLightShadowEligible( muzzleFlash ) );
 }
 
 
@@ -1148,7 +1180,12 @@ RE_AddAdditiveLightToScene
 =====================
 */
 void RE_AddAdditiveLightToScene( const vec3_t org, float intensity, float r, float g, float b ) {
-	RE_AddDynamicLightToScene( org, intensity, r, g, b, qtrue );
+	vec3_t adjustedOrigin;
+	qboolean muzzleFlash = R_PrepareMuzzleFlashLight( org, adjustedOrigin );
+
+	RE_AddDynamicLightToSceneWithShadowEligibility( adjustedOrigin, intensity,
+		r, g, b, qtrue,
+		R_MuzzleFlashLightShadowEligible( muzzleFlash ) );
 }
 
 /*

@@ -1115,16 +1115,18 @@ static void RB_SetDepthFade( const shaderStage_t *pStage )
 */
 #ifdef USE_VULKAN
 #ifdef USE_PMLIGHT
-static uint32_t VK_CSMCasterPipeline( uint32_t pipeline )
+static uint32_t VK_ShadowCasterPipeline( uint32_t pipeline )
 {
 	Vk_Pipeline_Def def;
 
-	if ( !tess.csmCasterPass ) {
+	if ( !tess.csmCasterPass &&
+		!( backEnd.viewParms.passFlags & VPF_DLIGHT_SHADOW ) ) {
 		return pipeline;
 	}
 
 	vk_get_pipeline_def( pipeline, &def );
-	def.face_culling = CT_TWO_SIDED;
+	def.face_culling = tess.csmCasterPass ?
+		CT_TWO_SIDED : tess.shadowCasterCullType;
 	return vk_find_pipeline_ext( 0, &def, qfalse );
 }
 #endif
@@ -1222,7 +1224,7 @@ static void RB_IterateStagesGeneric( const shaderCommands_t *input )
 			pipeline = pStage->vk_pipeline[fog_stage];
 		}
 #ifdef USE_PMLIGHT
-		pipeline = VK_CSMCasterPipeline( pipeline );
+			pipeline = VK_ShadowCasterPipeline( pipeline );
 #endif
 
 		vk_bind_pipeline( pipeline );
@@ -1365,7 +1367,10 @@ static qboolean VK_DlightShadowParams( const dlight_t *dl,
 	}
 
 	zNear = 1.0f;
-	zFar = MAX( dl->radius, 64.0f );
+	zFar = plan ? plan->projectionFar : dl->shadowProjectionFar;
+	if ( zFar <= zNear ) {
+		return qfalse;
+	}
 
 	shadowInfo[0] = zNear;
 	shadowInfo[1] = zFar;

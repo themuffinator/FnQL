@@ -287,8 +287,17 @@ static void R_PerformanceCounters( void ) {
 		Com_Memset( &tr.shadowCorrectnessDebug, 0, sizeof( tr.shadowCorrectnessDebug ) );
 		Com_Memset( &tr.csmDebugPlan, 0, sizeof( tr.csmDebugPlan ) );
 		Com_Memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );
+#ifdef USE_PMLIGHT
+		Com_Memset( &backEnd.shadowManagerDebug, 0, sizeof( backEnd.shadowManagerDebug ) );
+#endif
 		return;
 	}
+
+#ifdef USE_PMLIGHT
+	if ( backEnd.shadowManagerDebug.planned ) {
+		tr.shadowManager = backEnd.shadowManagerDebug;
+	}
+#endif
 
 	if (r_speeds->integer == 1) {
 		ri.Printf (PRINT_ALL, "%i/%i shaders/surfs %i leafs %i verts %i/%i tris %.2f mtex %.2f dc\n",
@@ -439,7 +448,7 @@ static void R_PerformanceCounters( void ) {
 		R_ShadowFilterOffsets( effectiveFilter, &filterInner, &filterOuter );
 
 		ri.Printf( PRINT_ALL,
-			"dlight shadows plan:%i/%i cand:%i atlas:%ix%i/%i fill:%i%% filter:%s taps:%i offsets:%.2f/%.2f render lights:%i faces:%i batches:%i draws:%i surfs:%i cpu:%ims skip disabled:%i linear:%i nosurf:%i proj:%i budget:%i lowvalue:%i\n",
+			"dlight shadows plan:%i/%i cand:%i atlas:%ix%i/%i fill:%i%% filter:%s taps:%i offsets:%.2f/%.2f render lights:%i faces:%i batches:%i draws:%i surfs:%i cpu:%ims skip disabled:%i linear:%i nosurf:%i invalid:%i overflow:%i budget:%i lowvalue:%i\n",
 			tr.pc.c_dlightShadowPlanned, tr.pc.c_dlightShadowConsidered,
 			tr.pc.c_dlightShadowCandidates,
 			tr.pc.c_dlightShadowAtlasWidth, tr.pc.c_dlightShadowAtlasHeight,
@@ -456,7 +465,9 @@ static void R_PerformanceCounters( void ) {
 			backEnd.pc.c_dlightShadowAtlasMsec,
 			tr.pc.c_dlightShadowSkippedDisabled,
 			tr.pc.c_dlightShadowSkippedLinear, tr.pc.c_dlightShadowSkippedNoSurfaces,
-			tr.pc.c_dlightShadowSkippedProjection, tr.pc.c_dlightShadowSkippedBudget,
+			tr.pc.c_dlightShadowSkippedInvalid,
+			tr.pc.c_dlightShadowSkippedCasterOverflow,
+			tr.pc.c_dlightShadowSkippedBudget,
 			tr.pc.c_dlightShadowSkippedLowValue );
 	}
 #endif
@@ -524,6 +535,9 @@ static void R_PerformanceCounters( void ) {
 	Com_Memset( &tr.shadowCorrectnessDebug, 0, sizeof( tr.shadowCorrectnessDebug ) );
 	Com_Memset( &tr.csmDebugPlan, 0, sizeof( tr.csmDebugPlan ) );
 	Com_Memset( &backEnd.pc, 0, sizeof( backEnd.pc ) );
+#ifdef USE_PMLIGHT
+	Com_Memset( &backEnd.shadowManagerDebug, 0, sizeof( backEnd.shadowManagerDebug ) );
+#endif
 }
 
 

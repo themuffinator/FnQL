@@ -1124,7 +1124,10 @@ static qboolean ARB_DlightShadowParams( const dlight_t *dl, const shadowPointLig
 	}
 
 	zNear = 1.0f;
-	zFar = MAX( dl->radius, 64.0f );
+	zFar = plan ? plan->projectionFar : dl->shadowProjectionFar;
+	if ( zFar <= zNear ) {
+		return qfalse;
+	}
 	depth = MAX( zFar - zNear, 1.0f );
 
 	shadowAtlas[0] = (float)atlasFaceSize;
@@ -1222,11 +1225,12 @@ static qboolean GLX_LightingShadowParams( const dlight_t *dl, vec4_t dlightShado
 {
 	// one-entry cache: the plan lookups below are linear scans that run twice
 	// per lit batch (program eligibility + program setup) with identical
-	// inputs for every batch of the same light. tess.dlightUpdateParams is
-	// set whenever the light, fog or cull state changes, which covers every
-	// input this function reads (shadow manager and atlas state are constant
-	// across a lit pass).
+	// inputs for every batch of the same light. Keep it scoped to the exact
+	// frame, view and atlas publication that produced those parameters.
 	static const dlight_t *cachedLight;
+	static int cachedFrameCount = -1;
+	static int cachedViewCount = -1;
+	static unsigned int cachedAtlasGeneration;
 	static qboolean cachedResult;
 	static vec4_t cachedShadow;
 	static vec4_t cachedAtlas;
@@ -1235,11 +1239,18 @@ static qboolean GLX_LightingShadowParams( const dlight_t *dl, vec4_t dlightShado
 	const shadowPointLightPlan_t *shadowPlan;
 	const shadowSpotLightPlan_t *spotPlan;
 	float shadowStrength = 0.0f;
-	float shadowReceiverBiasScale = 0.0f;
+	float shadowReceiverBias = 0.0f;
 	int atlasWidth;
 	int atlasHeight;
+	unsigned int atlasGeneration;
 
-	if ( !tess.dlightUpdateParams && dl == cachedLight ) {
+	atlasGeneration = tr.shadowManager.planned ?
+		tr.shadowManager.pointAtlasPublication.generation :
+		FBO_DlightShadowAtlasGeneration();
+	if ( !tess.dlightUpdateParams && dl == cachedLight &&
+		cachedFrameCount == backEnd.viewParms.frameCount &&
+		cachedViewCount == tr.shadowManager.viewCount &&
+		cachedAtlasGeneration == atlasGeneration ) {
 		Vector4Copy( cachedShadow, dlightShadow );
 		Vector4Copy( cachedAtlas, shadowAtlas );
 		Vector4Copy( cachedDepth, shadowDepth );
@@ -1260,8 +1271,8 @@ static qboolean GLX_LightingShadowParams( const dlight_t *dl, vec4_t dlightShado
 			shadowDepth, shadowFilter );
 	} else {
 		if ( shadowAtlas[0] > 0.0f ) {
-			shadowReceiverBiasScale =
-				R_ShadowClampReceiverBias( r_dlightShadowBias ? r_dlightShadowBias->value : 4.0f ) / shadowAtlas[0];
+			shadowReceiverBias =
+				R_ShadowClampReceiverBias( r_dlightShadowBias ? r_dlightShadowBias->value : 4.0f );
 		}
 
 		if ( tr.shadowManager.planned ) {
@@ -1274,13 +1285,16 @@ static qboolean GLX_LightingShadowParams( const dlight_t *dl, vec4_t dlightShado
 		dlightShadow[0] = atlasWidth > 0 ? 1.0f / (float)atlasWidth : 0.0f;
 		dlightShadow[1] = atlasHeight > 0 ? 1.0f / (float)atlasHeight : 0.0f;
 		dlightShadow[2] = shadowStrength;
-		dlightShadow[3] = shadowReceiverBiasScale;
+		dlightShadow[3] = shadowReceiverBias;
 		ARB_DlightShadowFilterOffsets( &shadowFilter[0], &shadowFilter[1] );
 
 		cachedResult = dlightShadow[0] > 0.0f && dlightShadow[1] > 0.0f && shadowStrength > 0.0f ? qtrue : qfalse;
 	}
 
 	cachedLight = dl;
+	cachedFrameCount = backEnd.viewParms.frameCount;
+	cachedViewCount = tr.shadowManager.viewCount;
+	cachedAtlasGeneration = atlasGeneration;
 	Vector4Copy( dlightShadow, cachedShadow );
 	Vector4Copy( shadowAtlas, cachedAtlas );
 	Vector4Copy( shadowDepth, cachedDepth );
@@ -1658,7 +1672,7 @@ void ARB_SetupLightParams( const shaderStage_t *pStage )
 	float textureScale;
 	float shadowFilterInner = 0.0f;
 	float shadowFilterOuter = 0.0f;
-	float shadowReceiverBiasScale = 0.0f;
+	float shadowReceiverBias = 0.0f;
 	float shadowStrength = 0.0f;
 	int atlasWidth;
 	int atlasHeight;
@@ -1686,8 +1700,8 @@ void ARB_SetupLightParams( const shaderStage_t *pStage )
 	dlightShadow = ARB_DlightShadowParams( dl, shadowPlan, shadowAtlas, shadowDepth,
 		&shadowStrength );
 	if ( dlightShadow && shadowAtlas[0] > 0.0f ) {
-		shadowReceiverBiasScale =
-			R_ShadowClampReceiverBias( r_dlightShadowBias ? r_dlightShadowBias->value : 4.0f ) / shadowAtlas[0];
+		shadowReceiverBias =
+			R_ShadowClampReceiverBias( r_dlightShadowBias ? r_dlightShadowBias->value : 4.0f );
 	}
 	if ( tr.shadowManager.planned ) {
 		atlasWidth = tr.shadowManager.pointAtlasPublication.width;
@@ -1736,7 +1750,7 @@ void ARB_SetupLightParams( const shaderStage_t *pStage )
 		atlasWidth > 0 ? 1.0f / (float)atlasWidth : 0.0f,
 		atlasHeight > 0 ? 1.0f / (float)atlasHeight : 0.0f,
 		dlightShadow ? shadowStrength : 0.0f,
-		shadowReceiverBiasScale );
+		shadowReceiverBias );
 	qglProgramLocalParameter4fvARB( GL_FRAGMENT_PROGRAM_ARB, 8, shadowAtlas );
 	qglProgramLocalParameter4fvARB( GL_FRAGMENT_PROGRAM_ARB, 9, shadowDepth );
 	if ( dlightShadow ) {
@@ -2209,6 +2223,7 @@ static const char *ARB_BuildDlightFP( char *program, int programIndex )
 		"PARAM half = { 0.5, 0.5, 0.5, 0.5 }; \n"
 		"PARAM two = { 2.0, 2.0, 2.0, 2.0 }; \n"
 		"PARAM faceConst = { 3.0, 5.0, 0.0001, 0.0 }; \n"
+		"PARAM receiverBiasConst = { 0.375, 0.125, 0.0, 0.0 }; \n"
 		"PARAM eps = { 0.00001, 0.0, 0.0, 0.0 }; \n"
 		"TEMP shadowVec, absVec, masks, signMask, faceInfo, local, tile, depthTap, occ, shadowFactor; \n"
 		"MOV shadowVec.xyz, -dnLV; \n"
@@ -2218,10 +2233,13 @@ static const char *ARB_BuildDlightFP( char *program, int programIndex )
 		"MAX faceInfo.x, faceInfo.x, faceConst.z; \n"
 		"DP3 local.x, nn, lv; \n"
 		"ABS local.x, local.x; \n"
-		"MAD local.x, local.x, -half.x, one.x; \n"
-		"MUL local.x, local.x, half.x; \n"
+		"MAD local.x, local.x, -receiverBiasConst.x, half.x; \n"
 		"MUL local.x, local.x, dlightShadow.w; \n"
-		"MUL local.x, local.x, faceInfo.x; \n"
+		"RCP local.z, shadowAtlas.x; \n"
+		"MUL local.y, faceInfo.x, two.x; \n"
+		"MUL local.y, local.y, local.z; \n"
+		"MAX local.y, local.y, receiverBiasConst.y; \n"
+		"MIN local.x, local.x, local.y; \n"
 		"ADD faceInfo.y, faceInfo.x, -local.x; \n"
 		"MAX faceInfo.y, faceInfo.y, shadowDepth.z; \n"
 		"RCP faceInfo.z, faceInfo.x; \n"

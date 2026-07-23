@@ -46,6 +46,7 @@ typedef struct {
 	qboolean csmCasterPass;
 	qboolean csmShadowPass;
 	int csmCascade;
+	cullType_t shadowCasterCullType;
 #endif
 } rbSurfaceRestartState_t;
 
@@ -55,6 +56,7 @@ static void RB_SaveSurfaceRestartState( rbSurfaceRestartState_t *state ) {
 	state->csmCasterPass = tess.csmCasterPass;
 	state->csmShadowPass = tess.csmShadowPass;
 	state->csmCascade = tess.csmCascade;
+	state->shadowCasterCullType = tess.shadowCasterCullType;
 #endif
 }
 
@@ -64,6 +66,7 @@ static void RB_RestoreSurfaceRestartState( const rbSurfaceRestartState_t *state 
 	tess.csmCasterPass = state->csmCasterPass;
 	tess.csmShadowPass = state->csmShadowPass;
 	tess.csmCascade = state->csmCascade;
+	tess.shadowCasterCullType = state->shadowCasterCullType;
 #endif
 }
 
@@ -1201,11 +1204,15 @@ static void RB_SurfaceGrid( srfGridMesh_t *cv ) {
 
 	// determine the allowable discrepance
 #ifdef USE_PMLIGHT
-	if ( cv->vboItemIndex && ( tr.mapLoading || ( tess.dlightPass && tess.shader->isStaticShader ) ) )
+	if ( ( backEnd.viewParms.passFlags & VPF_DLIGHT_SHADOW ) ||
+		( cv->vboItemIndex &&
+			( tr.mapLoading || ( tess.dlightPass && tess.shader->isStaticShader ) ) ) )
 #else
 	if ( cv->vboItemIndex && tr.mapLoading )
 #endif
-		lodError = r_lodCurveError->value; // fixed quality for VBO
+		// A point-light cube must use identical patch tessellation on every
+		// face. View-dependent LOD here creates cracks and temporal popping.
+		lodError = r_lodCurveError->value;
 	else
 #endif // USE_VBO_GRID
 		lodError = LodErrorForVolume( cv->lodOrigin, cv->lodRadius );

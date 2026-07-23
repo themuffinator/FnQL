@@ -73,23 +73,40 @@ static float ProjectRadius( float r, vec3_t location )
 
 /*
 =============
+R_MD3ModelBounds
+=============
+*/
+static void R_MD3ModelBounds( const md3Header_t *header,
+	const trRefEntity_t *ent, vec3_t bounds[2] ) {
+	const md3Frame_t	*oldFrame, *newFrame;
+	int			i;
+
+	newFrame = (const md3Frame_t *)( (const byte *)header + header->ofsFrames ) +
+		ent->e.frame;
+	oldFrame = (const md3Frame_t *)( (const byte *)header + header->ofsFrames ) +
+		ent->e.oldframe;
+
+	for ( i = 0; i < 3; i++ ) {
+		bounds[0][i] = MIN( oldFrame->bounds[0][i], newFrame->bounds[0][i] );
+		bounds[1][i] = MAX( oldFrame->bounds[1][i], newFrame->bounds[1][i] );
+	}
+}
+
+
+/*
+=============
 R_CullModel
 =============
 */
 static int R_CullModel( md3Header_t *header, const trRefEntity_t *ent, vec3_t bounds[] ) {
-	//vec3_t bounds[2];
 	md3Frame_t	*oldFrame, *newFrame;
-	int			i;
 
 	// compute frame pointers
 	newFrame = ( md3Frame_t * ) ( ( byte * ) header + header->ofsFrames ) + ent->e.frame;
 	oldFrame = ( md3Frame_t * ) ( ( byte * ) header + header->ofsFrames ) + ent->e.oldframe;
 
 	// calculate a bounding box in the current coordinate system
-	for (i = 0 ; i < 3 ; i++) {
-		bounds[0][i] = oldFrame->bounds[0][i] < newFrame->bounds[0][i] ? oldFrame->bounds[0][i] : newFrame->bounds[0][i];
-		bounds[1][i] = oldFrame->bounds[1][i] > newFrame->bounds[1][i] ? oldFrame->bounds[1][i] : newFrame->bounds[1][i];
-	}
+	R_MD3ModelBounds( header, ent, bounds );
 
 	// cull bounding sphere ONLY if this is not an upscaled entity
 	if ( !ent->e.nonNormalizedAxes )
@@ -279,7 +296,8 @@ static int R_ComputeFogNum( md3Header_t *header, const trRefEntity_t *ent ) {
 R_AddMD3Surfaces
 =================
 */
-void R_AddMD3Surfaces( trRefEntity_t *ent ) {
+void R_AddMD3Surfaces( trRefEntity_t *ent,
+	dlightShadowCasterContext_t *shadowCtx ) {
 	vec3_t			bounds[2];
 	int				i;
 	md3Header_t		*header = NULL;
@@ -327,7 +345,7 @@ void R_AddMD3Surfaces( trRefEntity_t *ent ) {
 	//
 	// compute LOD
 	//
-	lod = R_ComputeLOD( ent );
+	lod = shadowCtx ? 0 : R_ComputeLOD( ent );
 
 	header = tr.currentModel->md3[lod];
 
@@ -335,21 +353,29 @@ void R_AddMD3Surfaces( trRefEntity_t *ent ) {
 	// cull the entire model if merged bounding box of both frames
 	// is outside the view frustum.
 	//
-	cull = R_CullModel( header, ent, bounds );
-	if ( cull == CULL_OUT ) {
-		return;
+	if ( shadowCtx ) {
+		R_MD3ModelBounds( header, ent, bounds );
+		if ( R_DlightShadowEntityBoundsCulled( shadowCtx, ent,
+			bounds[0], bounds[1] ) ) {
+			return;
+		}
+	} else {
+		cull = R_CullModel( header, ent, bounds );
+		if ( cull == CULL_OUT ) {
+			return;
+		}
 	}
 
 	//
 	// set up lighting now that we know we aren't culled
 	//
-	if ( !personalModel || r_shadows->integer > 1 ) {
+	if ( !shadowCtx && ( !personalModel || r_shadows->integer > 1 ) ) {
 		R_SetupEntityLighting( &tr.refdef, ent );
 	}
 
 #ifdef USE_PMLIGHT
 	numDlights = 0;
-	if ( r_dlightMode->integer >= 2 && ( !personalModel || personalShadowCaster ) ) {
+	if ( !shadowCtx && r_dlightMode->integer >= 2 && !personalModel ) {
 		R_TransformDlights( tr.viewParms.num_dlights, tr.viewParms.dlights, &tr.or );
 		for ( n = 0; n < tr.viewParms.num_dlights; n++ ) {
 			dl = &tr.viewParms.dlights[ n ];
@@ -362,7 +388,7 @@ void R_AddMD3Surfaces( trRefEntity_t *ent ) {
 	//
 	// see if we are in a fog volume
 	//
-	fogNum = R_ComputeFogNum( header, ent );
+	fogNum = shadowCtx ? 0 : R_ComputeFogNum( header, ent );
 
 	//
 	// draw all surfaces
@@ -387,10 +413,10 @@ void R_AddMD3Surfaces( trRefEntity_t *ent ) {
 					break;
 				}
 			}
-			if (shader == tr.defaultShader) {
+			if ( !shadowCtx && shader == tr.defaultShader ) {
 				ri.Printf( PRINT_DEVELOPER, "WARNING: no shader for surface %s in skin %s\n", surface->name, skin->name);
 			}
-			else if (shader->defaultShader) {
+			else if ( !shadowCtx && shader->defaultShader ) {
 				ri.Printf( PRINT_DEVELOPER, "WARNING: shader %s in skin %s not found\n", shader->name, skin->name);
 			}
 		} else if ( surface->numShaders <= 0 ) {
@@ -401,6 +427,14 @@ void R_AddMD3Surfaces( trRefEntity_t *ent ) {
 			shader = tr.shaders[ md3Shader->shaderIndex ];
 		}
 
+		if ( shadowCtx ) {
+			if ( !R_AddDlightShadowEntityCasterSurface( shadowCtx,
+				(surfaceType_t *)surface, shader ) ) {
+				return;
+			}
+			surface = (md3Surface_t *)( (byte *)surface + surface->ofsEnd );
+			continue;
+		}
 
 		// we will add shadows even if the main object isn't visible in the view
 
@@ -436,8 +470,7 @@ void R_AddMD3Surfaces( trRefEntity_t *ent ) {
 			for ( n = 0; n < numDlights; n++ ) {
 				dl = dlights[ n ];
 				tr.light = dl;
-				R_AddLitSurfFlags( (void *)surface, shader, fogNum,
-					personalModel ? LSF_SHADOW_CASTER_ONLY : 0 );
+				R_AddLitSurf( (void *)surface, shader, fogNum );
 			}
 		}
 #endif

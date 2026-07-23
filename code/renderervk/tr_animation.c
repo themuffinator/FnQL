@@ -191,7 +191,8 @@ R_MDRAddAnimSurfaces
 
 // much stuff in there is just copied from R_AddMd3Surfaces in tr_mesh.c
 
-void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
+void R_MDRAddAnimSurfaces( trRefEntity_t *ent,
+	dlightShadowCasterContext_t *casterContext ) {
 	mdrHeader_t		*header;
 	mdrSurface_t	*surface;
 	mdrLOD_t		*lod;
@@ -239,22 +240,41 @@ void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
 		ent->e.oldframe = 0;
 	}
 
-	//
-	// cull the entire model if merged bounding box of both frames
-	// is outside the view frustum.
-	//
-	cull = R_MDRCullModel (header, ent);
-	if ( cull == CULL_OUT ) {
-		return;
-	}
+#ifdef USE_PMLIGHT
+	numDlights = 0;
+	if ( casterContext ) {
+		if ( header->numLODs <= 0 ) {
+			return;
+		}
+		R_MDRModelBounds( header, ent, bounds[0], bounds[1] );
+		if ( R_DlightShadowEntityBoundsCulled( casterContext, ent,
+			bounds[0], bounds[1] ) ) {
+			return;
+		}
+		// Shadow caster geometry must not change with camera-dependent LOD.
+		lodnum = 0;
+	} else
+#else
+	(void)casterContext;
+#endif
+	{
+		//
+		// cull the entire model if merged bounding box of both frames
+		// is outside the view frustum.
+		//
+		cull = R_MDRCullModel( header, ent );
+		if ( cull == CULL_OUT ) {
+			return;
+		}
 
-	// figure out the current LOD of the model we're rendering, and set the lod pointer respectively.
-	lodnum = R_ComputeLOD(ent);
-	// check whether this model has as that many LODs at all. If not, try the closest thing we got.
-	if(header->numLODs <= 0)
-		return;
-	if(header->numLODs <= lodnum)
-		lodnum = header->numLODs - 1;
+		// figure out the current LOD of the model we're rendering, and set the lod pointer respectively.
+		lodnum = R_ComputeLOD( ent );
+		// check whether this model has as that many LODs at all. If not, try the closest thing we got.
+		if ( header->numLODs <= 0 )
+			return;
+		if ( header->numLODs <= lodnum )
+			lodnum = header->numLODs - 1;
+	}
 
 	lod = (mdrLOD_t *)( (byte *)header + header->ofsLODs);
 	for(i = 0; i < lodnum; i++)
@@ -263,16 +283,16 @@ void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
 	}
 	
 	// set up lighting
-	if ( !personalModel || r_shadows->integer > 1 )
+	if ( !casterContext && ( !personalModel || r_shadows->integer > 1 ) )
 	{
 		R_SetupEntityLighting( &tr.refdef, ent );
 	}
 
 #ifdef USE_PMLIGHT
-	numDlights = 0;
-	if ( r_dlightMode->integer >= 2 && ( !personalModel || personalShadowCaster ) ) {
+	if ( !casterContext && r_dlightMode->integer >= 2 && !personalModel ) {
 		R_MDRModelBounds( header, ent, bounds[0], bounds[1] );
-		R_TransformDlights( tr.viewParms.num_dlights, tr.viewParms.dlights, &tr.or );
+		R_TransformDlights( tr.viewParms.num_dlights,
+			tr.viewParms.dlights, &tr.or );
 		for ( n = 0; n < tr.viewParms.num_dlights; n++ ) {
 			dl = &tr.viewParms.dlights[ n ];
 			if ( !R_LightCullBounds( dl, bounds[0], bounds[1] ) )
@@ -282,7 +302,7 @@ void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
 #endif
 
 	// fogNum?
-	fogNum = R_MDRComputeFogNum( header, ent );
+	fogNum = casterContext ? 0 : R_MDRComputeFogNum( header, ent );
 
 	surface = (mdrSurface_t *)( (byte *)lod + lod->ofsSurfaces );
 
@@ -309,6 +329,17 @@ void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
 			shader = R_GetShaderByHandle( surface->shaderIndex );
 		else
 			shader = tr.defaultShader;
+
+#ifdef USE_PMLIGHT
+		if ( casterContext ) {
+			if ( !R_AddDlightShadowEntityCasterSurface( casterContext,
+				(surfaceType_t *)surface, shader ) ) {
+				return;
+			}
+			surface = (mdrSurface_t *)( (byte *)surface + surface->ofsEnd );
+			continue;
+		}
+#endif
 
 		// we will add shadows even if the main object isn't visible in the view
 
@@ -341,12 +372,11 @@ void R_MDRAddAnimSurfaces( trRefEntity_t *ent ) {
 		}
 
 #ifdef USE_PMLIGHT
-		if ( numDlights && shader->lightingStage >= 0 ) {
+		if ( !personalModel && numDlights && shader->lightingStage >= 0 ) {
 			for ( n = 0; n < numDlights; n++ ) {
 				dl = dlights[ n ];
 				tr.light = dl;
-				R_AddLitSurfFlags( (void *)surface, shader, fogNum,
-					personalModel ? LSF_SHADOW_CASTER_ONLY : 0 );
+				R_AddLitSurf( (void *)surface, shader, fogNum );
 			}
 		}
 #endif

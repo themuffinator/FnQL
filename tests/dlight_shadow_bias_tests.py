@@ -78,13 +78,53 @@ class DlightShadowBiasTests(unittest.TestCase):
     def test_glx_receiver_bias_matches_vulkan_policy(self):
         source = read_text("code/renderer/tr_arb.c")
 
-        self.assertIn("shadowReceiverBiasScale =", source)
-        self.assertIn("r_dlightShadowBias ? r_dlightShadowBias->value : 4.0f ) / shadowAtlas[0]", source)
-        self.assertIn('"MAD local.x, local.x, -half.x, one.x; \\n"', source)
-        self.assertIn('"MUL local.x, local.x, half.x; \\n"', source)
+        self.assertIn("float shadowReceiverBias = 0.0f;", source)
+        self.assertIn(
+            "R_ShadowClampReceiverBias( r_dlightShadowBias ? "
+            "r_dlightShadowBias->value : 4.0f );",
+            source,
+        )
+        self.assertIn("dlightShadow[3] = shadowReceiverBias;", source)
+        self.assertIn(
+            '"PARAM receiverBiasConst = { 0.375, 0.125, 0.0, 0.0 }; \\n"',
+            source,
+        )
+        self.assertIn(
+            '"MAD local.x, local.x, -receiverBiasConst.x, half.x; \\n"',
+            source,
+        )
         self.assertIn('"MUL local.x, local.x, dlightShadow.w; \\n"', source)
-        self.assertIn('"MUL local.x, local.x, faceInfo.x; \\n"', source)
-        self.assertNotIn("biasShape", source)
+        self.assertIn('"RCP local.z, shadowAtlas.x; \\n"', source)
+        self.assertIn('"MUL local.y, faceInfo.x, two.x; \\n"', source)
+        self.assertIn('"MUL local.y, local.y, local.z; \\n"', source)
+        self.assertIn(
+            '"MAX local.y, local.y, receiverBiasConst.y; \\n"',
+            source,
+        )
+        self.assertIn('"MIN local.x, local.x, local.y; \\n"', source)
+        self.assertNotIn("shadowReceiverBiasScale", source)
+
+    def test_glx_lighting_parameter_cache_is_scoped_to_view_and_atlas(self):
+        source = read_text("code/renderer/tr_arb.c")
+        start = source.index("static qboolean GLX_LightingShadowParams(")
+        end = source.index("static qboolean GLX_LightingLinearVector(", start)
+        cache = source[start:end]
+
+        self.assertIn("static int cachedFrameCount = -1;", cache)
+        self.assertIn("static int cachedViewCount = -1;", cache)
+        self.assertIn("static unsigned int cachedAtlasGeneration;", cache)
+        self.assertIn(
+            "cachedFrameCount == backEnd.viewParms.frameCount",
+            cache,
+        )
+        self.assertIn("cachedViewCount == tr.shadowManager.viewCount", cache)
+        self.assertIn("cachedAtlasGeneration == atlasGeneration", cache)
+        self.assertIn(
+            "cachedFrameCount = backEnd.viewParms.frameCount;",
+            cache,
+        )
+        self.assertIn("cachedViewCount = tr.shadowManager.viewCount;", cache)
+        self.assertIn("cachedAtlasGeneration = atlasGeneration;", cache)
 
     def test_glx_shadow_program_avoids_short_source_swizzles(self):
         source = read_text("code/renderer/tr_arb.c")
@@ -136,21 +176,7 @@ class DlightShadowBiasTests(unittest.TestCase):
                 self.assertIn("r_csmCasterDepthBias ? r_csmCasterDepthBias->value : 1.5f", vk_backend)
                 self.assertIn("r_csmCasterSlopeBias ? r_csmCasterSlopeBias->value : 1.5f", vk_backend)
 
-    def test_glx_shadow_atlas_avoids_duplicate_caster_probe(self):
-        source = read_text("code/renderer/tr_backend.c")
-
-        self.assertNotIn("RB_DlightShadowFaceHasCasters", source)
-        self.assertIn("surfaces = RB_RenderDlightShadowCasters( dl );", source)
-
-    def test_glx_shadow_passes_avoid_per_entity_rescans(self):
-        source = read_text("code/renderer/tr_backend.c")
-
-        dlight_start = source.index("static int RB_RenderDlightShadowCasters(")
-        dlight_end = source.index("static void RB_RenderDlightShadowAtlas(", dlight_start)
-        dlight_block = source[dlight_start:dlight_end]
-        self.assertNotIn("RB_CollectDlightShadowCasterEntities", dlight_block)
-        self.assertIn("if ( entityNum != currentEntityNum )", dlight_block)
-
+    def test_shadow_atlas_avoids_duplicate_caster_probe(self):
         for path in (
             "code/renderer/tr_backend.c",
             "code/renderervk/tr_backend.c",
@@ -158,6 +184,42 @@ class DlightShadowBiasTests(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 source = read_text(path)
+                self.assertNotIn("RB_DlightShadowFaceHasCasters", source)
+                self.assertIn(
+                    "surfaces = RB_RenderDlightShadowCasters( dl );",
+                    source,
+                )
+
+    def test_glx_shadow_passes_avoid_per_entity_rescans(self):
+        for path in (
+            "code/renderer/tr_backend.c",
+            "code/renderervk/tr_backend.c",
+            "code/rendererrtx/tr_backend.c",
+        ):
+            with self.subTest(path=path):
+                source = read_text(path)
+                dlight_start = source.index(
+                    "static int RB_RenderDlightShadowCasters("
+                )
+                dlight_end = source.index(
+                    "static void RB_RenderDlightShadowAtlas(",
+                    dlight_start,
+                )
+                dlight_block = source[dlight_start:dlight_end]
+                self.assertNotIn(
+                    "RB_CollectDlightShadowCasterEntities",
+                    dlight_block,
+                )
+                self.assertNotIn(
+                    "RB_RenderDlightShadowEntityCasters",
+                    dlight_block,
+                )
+                self.assertNotIn("entityQueued[MAX_REFENTITIES]", dlight_block)
+                self.assertIn(
+                    "if ( entityNum != currentEntityNum )",
+                    dlight_block,
+                )
+
                 self.assertIn("static int RB_RenderCSMShadowCascade(", source)
                 self.assertIn("static void RB_CSMShadowReceiverPass(", source)
                 self.assertIn("static void RB_SetDlightShadowCasterEntity(", source)

@@ -520,7 +520,8 @@ static void R_RecursiveLightNode( const mnode_t* node )
 R_AddBrushModelSurfaces
 =================
 */
-void R_AddBrushModelSurfaces ( trRefEntity_t *ent ) {
+void R_AddBrushModelSurfaces( trRefEntity_t *ent,
+	dlightShadowCasterContext_t *shadowCtx ) {
 	bmodel_t	*bmodel;
 	int			clip;
 	const model_t		*pModel;
@@ -529,6 +530,23 @@ void R_AddBrushModelSurfaces ( trRefEntity_t *ent ) {
 	pModel = R_GetModelByHandle( ent->e.hModel );
 
 	bmodel = pModel->bmodel;
+
+	if ( shadowCtx ) {
+		if ( R_DlightShadowEntityBoundsCulled( shadowCtx, ent,
+			bmodel->bounds[0], bmodel->bounds[1] ) ) {
+			return;
+		}
+
+		for ( i = 0; i < bmodel->numSurfaces; i++ ) {
+			msurface_t *surf = bmodel->firstSurface + i;
+
+			if ( !R_AddDlightShadowEntityCasterSurface( shadowCtx,
+				surf->data, surf->shader ) ) {
+				return;
+			}
+		}
+		return;
+	}
 
 	clip = R_CullLocalBox( bmodel->bounds );
 	if ( clip == CULL_OUT ) {
@@ -1183,3 +1201,5 @@ void R_AddWorldSurfaces( void ) {
 	}
 #endif // USE_PMLIGHT
 }
+
+#include "../renderercommon/tr_dlight_shadow_casters.h"
