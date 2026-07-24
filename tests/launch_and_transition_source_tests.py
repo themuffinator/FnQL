@@ -27,7 +27,7 @@ def function_body(source: str, name: str) -> str:
 
 
 class LaunchAndTransitionSourceTests(unittest.TestCase):
-    def test_vscode_launches_force_steam_and_build_matching_target(self) -> None:
+    def test_vscode_launches_force_steam_and_target_matching_binary(self) -> None:
         launch = json.loads(read_source(".vscode/launch.json"))
 
         self.assertTrue(launch["configurations"])
@@ -35,13 +35,10 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
             args = configuration["args"]
             steam_index = args.index("com_steamIntegration")
             self.assertEqual(args[steam_index + 1], "1", configuration["name"])
-            if configuration["name"].startswith("RTX "):
-                expected_task = "meson: build RTX (Steam)"
-            else:
-                expected_task = "meson: build (Steam)"
-            self.assertEqual(
-                configuration.get("preLaunchTask"), expected_task, configuration["name"]
-            )
+            # Launching must not implicitly rebuild the engine. These profiles
+            # intentionally target the selected, already-built x86 binary;
+            # the separate build tasks below provide explicit Steam staging.
+            self.assertNotIn("preLaunchTask", configuration, configuration["name"])
             self.assertNotIn("disabled", configuration["name"].lower())
             self.assertIn("Retail QL / Win32", configuration["name"])
 
