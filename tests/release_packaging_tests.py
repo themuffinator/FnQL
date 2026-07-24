@@ -951,6 +951,8 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertIn("'zstd=disabled'", meson)
         self.assertIn("'brotli=disabled'", meson)
         self.assertIn("'ssh=disabled'", meson)
+        self.assertIn("if cc.get_argument_syntax() == 'gcc'", meson)
+        self.assertIn("find_program('windres', 'rc', 'llvm-rc'", meson)
         self.assertNotIn("verify_release_layout.py bin\n", workflow)
         self.assertNotIn("FNQ3_", workflow)
         self.assertNotIn("docs/fnquake3/", workflow)

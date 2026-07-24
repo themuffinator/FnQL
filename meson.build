@@ -625,7 +625,11 @@ endif
 
 if win32
   win_resource = []
-  rc_prog = find_program('rc', 'llvm-rc', 'windres', required: false)
+  if cc.get_argument_syntax() == 'gcc'
+    rc_prog = find_program('windres', 'rc', 'llvm-rc', required: false)
+  else
+    rc_prog = find_program('rc', 'llvm-rc', 'windres', required: false)
+  endif
   if rc_prog.found()
     if rc_prog.full_path().to_lower().contains('windres')
       win_resource = custom_target('win_resource',
