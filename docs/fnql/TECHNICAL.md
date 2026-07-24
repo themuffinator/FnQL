@@ -56,13 +56,23 @@ Keep observed QLSRP or retail facts distinct from inferred design intent.
 The collision-model parity contract reserves handles 254 and 255 for the
 temporary capsule and box hulls, respectively. Both handles resolve to the
 shared temporary model that owns their bounds; the trace path uses the handle
-to choose the shape-specific math. QLSRP records that retail QL additionally
-gates an entity's `SVF_CAPSULE` hull on the incoming trace type. Ordinary
-`G_TRACE` calls such as shotgun pellets therefore test the entity box, while
-`G_TRACECAPSULE` may select the capsule. A reported retail-module server run
-exposed the previous FnQL mismatch as `14 < 254 < 256`: the map had 14 inline
-models, and FnQL rejected the reserved capsule handle as though it were an
-invalid inline-model index.
+to choose the shape-specific math. The retail executable shows that an
+entity's `SVF_CAPSULE` hull is additionally gated on the incoming trace type:
+point/box traces test the entity box, while capsule traces may select the
+capsule. A reported retail-module server run exposed the previous FnQL mismatch
+as `14 < 254 < 256`: the map had 14 inline models, and FnQL rejected the
+reserved capsule handle as though it were an invalid inline-model index.
+
+The retail moving capsule path is not the inherited Quake III two-ended
+capsule sweep. Observed retail behavior expands the target radius by the moving
+radius, traces the moving center through a full target-height cylinder, and
+then tests a head sphere at 70 percent of that expanded radius. When the head
+sphere is the nearer contact, retail adds `0x0400` (`CONTENTS_HEAD`) to
+`trace.contents`; the retail game module consumes that bit during weapon
+damage. Retail also permits zero-fraction analytic contacts with no plane, or
+with a sub-unit radial plane inside its one-unit collision epsilon. FnQL
+preserves those outputs and restricts its debug unit-plane invariant to true
+fractional impacts.
 
 The subsystem inventory, execution order, and non-regression gates for the
 native API, WebUI/Awesomium, protocol/demos, BSP/advertisements, ZMQ, and

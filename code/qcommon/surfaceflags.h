@@ -36,6 +36,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define CONTENTS_NOTTEAM1		0x0080
 #define CONTENTS_NOTTEAM2		0x0100
 #define CONTENTS_NOBOTCLIP		0x0200
+// Retail QL trace metadata: the reduced capsule head sphere was hit.
+#define CONTENTS_HEAD			0x0400
 
 #define	CONTENTS_AREAPORTAL		0x8000
 

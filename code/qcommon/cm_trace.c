@@ -20,6 +20,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 ===========================================================================
 */
 #include "cm_local.h"
+#include "cm_trace_contract.h"
 
 // always use bbox vs. bbox collision and never capsule vs. bbox or vice versa
 //#define ALWAYS_BBOX_VS_BBOX
@@ -938,11 +939,10 @@ capsule vs. capsule collision (not rotated)
 ================
 */
 static void CM_TraceCapsuleThroughCapsule( traceWork_t *tw, clipHandle_t model ) {
-	int i;
 	vec3_t mins, maxs;
-	vec3_t top, bottom, starttop, startbottom, endtop, endbottom;
-	vec3_t offset, symetricSize[2];
-	float radius, halfwidth, halfheight, offs, h;
+	cm_retailCapsuleProfile_t profile;
+	float bodyFraction = 1.0f;
+	float headFraction = 1.0f;
 
 	CM_ModelBounds(model, mins, maxs);
 	// test trace bounds vs. capsule bounds
@@ -955,41 +955,31 @@ static void CM_TraceCapsuleThroughCapsule( traceWork_t *tw, clipHandle_t model )
 		) {
 		return;
 	}
-	// top origin and bottom origin of each sphere at start and end of trace
-	VectorAdd(tw->start, tw->sphere.offset, starttop);
-	VectorSubtract(tw->start, tw->sphere.offset, startbottom);
-	VectorAdd(tw->end, tw->sphere.offset, endtop);
-	VectorSubtract(tw->end, tw->sphere.offset, endbottom);
 
-	// calculate top and bottom of the capsule spheres to collide with
-	for ( i = 0 ; i < 3 ; i++ ) {
-		offset[i] = ( mins[i] + maxs[i] ) * 0.5;
-		symetricSize[0][i] = mins[i] - offset[i];
-		symetricSize[1][i] = maxs[i] - offset[i];
+	/*
+	 * Retail QL does not use the inherited two-ended capsule sweep here.
+	 * It traces the moving capsule center through an expanded body cylinder,
+	 * then through a reduced sphere at the target's head.  The nearer head
+	 * contact is reported through trace.contents for the retail game module.
+	 */
+	CM_BuildRetailCapsuleProfile(
+		mins, maxs, tw->sphere.radius, &profile );
+
+	CM_TraceThroughVerticalCylinder(
+		tw, profile.bodyOrigin, profile.bodyRadius,
+		profile.bodyHalfheight, tw->start, tw->end );
+	if ( tw->trace.contents & CONTENTS_BODY ) {
+		bodyFraction = tw->trace.fraction;
 	}
-	halfwidth = symetricSize[ 1 ][ 0 ];
-	halfheight = symetricSize[ 1 ][ 2 ];
-	radius = ( halfwidth > halfheight ) ? halfheight : halfwidth;
-	offs = halfheight - radius;
-	VectorCopy(offset, top);
-	top[2] += offs;
-	VectorCopy(offset, bottom);
-	bottom[2] -= offs;
-	// expand radius of spheres
-	radius += tw->sphere.radius;
-	// if there is horizontal movement
-	if ( tw->start[0] != tw->end[0] || tw->start[1] != tw->end[1] ) {
-		// height of the expanded cylinder is the height of both cylinders minus the radius of both spheres
-		h = halfheight + tw->sphere.halfheight - radius;
-		// if the cylinder has a height
-		if ( h > 0 ) {
-			// test for collisions between the cylinders
-			CM_TraceThroughVerticalCylinder(tw, offset, radius, h, tw->start, tw->end);
-		}
+
+	CM_TraceThroughSphere(
+		tw, profile.headOrigin, profile.headRadius, tw->start, tw->end );
+	if ( tw->trace.contents & CONTENTS_BODY ) {
+		headFraction = tw->trace.fraction;
 	}
-	// test for collision between the spheres
-	CM_TraceThroughSphere(tw, top, radius, startbottom, endbottom);
-	CM_TraceThroughSphere(tw, bottom, radius, starttop, endtop);
+
+	tw->trace.contents = CM_RetailCapsuleHitContents(
+		tw->trace.contents, bodyFraction, headFraction );
 }
 
 
@@ -1357,12 +1347,12 @@ static void CM_Trace( trace_t *results, const vec3_t start, const vec3_t end, co
 		}
 	}
 
-        // If allsolid is set (was entirely inside something solid), the plane is not valid.
-        // If fraction == 1.0, we never hit anything, and thus the plane is not valid.
-        // Otherwise, the normal on the plane should have unit length
-        assert(tw.trace.allsolid ||
-               tw.trace.fraction == 1.0 ||
-               VectorLengthSquared(tw.trace.plane.normal) > 0.9999);
+	/*
+	 * Retail capsule math permits a zero-fraction contact without a unit
+	 * plane.  Validate only the states in which the trace contract promises
+	 * one, while still catching corrupt fractions and fractional impacts.
+	 */
+	assert( CM_TraceResultHasValidPlaneContract( &tw.trace ) );
 	*results = tw.trace;
 }
 

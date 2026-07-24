@@ -17,9 +17,9 @@ version.
 namespace fnql::server::collision {
 
 /*
- * QLSRP records the retail QL contract: SVF_CAPSULE changes an entity hull
- * only for capsule traces.  Point/box traces, including hitscan weapon fire,
- * continue to test the entity's axis-aligned box.
+ * The retail QL engine gates an entity's SVF_CAPSULE hull on the incoming
+ * trace type. Point/box traces keep the entity's axis-aligned box; capsule
+ * traces can select the QL body-and-head collision profile.
  */
 [[nodiscard]] constexpr bool UseCapsuleEntityModel(
 	bool traceUsesCapsule, bool entitySupportsCapsule ) noexcept

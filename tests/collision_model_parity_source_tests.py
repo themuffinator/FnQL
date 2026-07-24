@@ -28,6 +28,8 @@ class CollisionModelParitySourceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.load = read("code/qcommon/cm_load.c")
+        cls.trace = read("code/qcommon/cm_trace.c")
+        cls.surfaceflags = read("code/qcommon/surfaceflags.h")
         cls.world = read("code/server/sv_world.cpp")
         cls.game = read("code/server/sv_game.cpp")
         cls.server_header = read("code/server/server.h")
@@ -69,6 +71,42 @@ class CollisionModelParitySourceTests(unittest.TestCase):
         )
         combined = self.world + self.game
         self.assertNotRegex(combined, r"SV_ClipHandleForEntity\(\s*\w+\s*\)")
+
+    def test_retail_capsule_body_and_head_trace_are_preserved(self) -> None:
+        capsule_trace = function_body(
+            self.trace,
+            "static void CM_TraceCapsuleThroughCapsule(",
+        )
+        self.assertIn("CM_BuildRetailCapsuleProfile(", capsule_trace)
+        self.assertIn("CM_TraceThroughVerticalCylinder(", capsule_trace)
+        self.assertIn("CM_TraceThroughSphere(", capsule_trace)
+        self.assertIn(
+            "tw->trace.contents = CM_RetailCapsuleHitContents(",
+            capsule_trace,
+        )
+        self.assertNotIn("startbottom", capsule_trace)
+        self.assertRegex(
+            self.surfaceflags,
+            re.compile(r"#define CONTENTS_HEAD\s+0x0400"),
+        )
+
+    def test_retail_cylinder_scale_and_zero_fraction_contract_are_preserved(
+        self,
+    ) -> None:
+        cylinder_trace = function_body(
+            self.trace,
+            "static void CM_TraceThroughVerticalCylinder(",
+        )
+        self.assertIn('"sv_cylinderScale", "1.1f"', cylinder_trace)
+        self.assertIn("radius *= cylinderScale->value", cylinder_trace)
+        core_trace = function_body(
+            self.trace,
+            "static void CM_Trace( trace_t *results,",
+        )
+        self.assertIn(
+            "CM_TraceResultHasValidPlaneContract( &tw.trace )",
+            core_trace,
+        )
 
 
 if __name__ == "__main__":
