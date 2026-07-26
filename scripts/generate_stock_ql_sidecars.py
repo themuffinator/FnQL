@@ -35,6 +35,31 @@ LUMP_LIGHTMAPS = 14
 DFOG_BYTES = 72
 DMODEL_BYTES = 40
 
+# Fog derivation.
+#
+# Density starts as 1.35/extent.  A map whose extent pushes that below
+# FOG_DENSITY_COMPUTED_FLOOR is large enough that the computed value is
+# invisible in play, so those take an explicit density rather than the clamped
+# one: the previous 0.00032 floor left the biggest arenas with no readable fog
+# at all.  Maps carrying authored BSP fog volumes stay thinner so the two layers
+# do not compound.
+FOG_DENSITY_COMPUTED_FLOOR = 0.00032
+FOG_DENSITY_COMPUTED_CEILING = 0.00085
+FOG_DENSITY_LARGE_MAP = 0.00096
+FOG_DENSITY_LARGE_MAP_NATIVE = 0.0008
+FOG_NATIVE_DENSITY_SCALE = 0.65
+FOG_OPACITY = 0.48
+FOG_OPACITY_NATIVE = 0.28
+
+# Maps whose derived density was overridden after looking at them in game.
+# These must match pkg/baseq3/maps/<name>.fog; the sidecar gate checks both.
+FOG_DENSITY_OVERRIDES = {
+    "campgrounds": 0.001,
+    "intervention": 0.0009,
+    "satanic": 0.0009,
+    "terminatria": 0.001,
+}
+
 
 @dataclass(frozen=True)
 class FogPreset:
@@ -185,7 +210,7 @@ def lightmap_color(data: bytes, offset: int, length: int) -> tuple[float, float,
     return tuple(clamp(target + (channel - average) * 0.16, 0.44, 0.68) for channel in source)
 
 
-def fog_preset_from_bsp(data: bytes) -> FogPreset:
+def fog_preset_from_bsp(data: bytes, map_name: str | None = None) -> FogPreset:
     lumps = bsp_lumps(data)
     model_offset, model_length = lumps[LUMP_MODELS]
     if model_length < DMODEL_BYTES:
@@ -204,11 +229,19 @@ def fog_preset_from_bsp(data: bytes) -> FogPreset:
 
     lightmap_offset, lightmap_length = lumps[LUMP_LIGHTMAPS]
     color = lightmap_color(data, lightmap_offset, lightmap_length)
-    density = clamp(1.35 / extent, 0.00032, 0.00085)
+    computed = 1.35 / extent
+    if computed <= FOG_DENSITY_COMPUTED_FLOOR:
+        density = (
+            FOG_DENSITY_LARGE_MAP_NATIVE if native_fog_count else FOG_DENSITY_LARGE_MAP
+        )
+    else:
+        density = min(computed, FOG_DENSITY_COMPUTED_CEILING)
+        if native_fog_count:
+            density *= FOG_NATIVE_DENSITY_SCALE
     start = int(clamp(round((extent * 0.075) / 16.0) * 16.0, 96.0, 384.0))
-    opacity = 0.14 if native_fog_count else 0.24
-    if native_fog_count:
-        density *= 0.65
+    opacity = FOG_OPACITY_NATIVE if native_fog_count else FOG_OPACITY
+    if map_name is not None:
+        density = FOG_DENSITY_OVERRIDES.get(map_name, density)
     return FogPreset(color, density, start, opacity, native_fog_count)
 
 
@@ -234,7 +267,7 @@ def generate_fog_sidecars(source_root: Path, output_root: Path) -> None:
     output_maps.mkdir(parents=True, exist_ok=True)
     for map_name in STOCK_QL_MAPS:
         bsp_path = source_root / "maps" / f"{map_name}.bsp"
-        preset = fog_preset_from_bsp(bsp_path.read_bytes())
+        preset = fog_preset_from_bsp(bsp_path.read_bytes(), map_name)
         (output_maps / f"{map_name}.fog").write_text(
             fog_sidecar_text(map_name, preset),
             encoding="ascii",

@@ -56,6 +56,15 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
   `resource.h`, or the version header changes. Neither resource compiler reports
   what the script pulls in, so those edits used to leave the previously compiled
   resource linked into the executable and appear to do nothing.
+- Global fog reaches the screen at its authored brightness. The layer is
+  composited into the scene colour buffer, which the output transform still
+  multiplies by the overbright scale — and by the tone-map exposure in the
+  scene-linear HDR mode — so an authored mid-grey arrived about twice as bright
+  and read as a flat wash instead of distance fog. All three renderers now
+  remove that scale before blending, and linearize the authored sRGB value in
+  scene-linear mode. The 149 stock Quake Live fog sidecars are retuned against
+  the corrected output: blend strength roughly doubles, and the largest arenas
+  get a thicker falloff where the previous values were effectively invisible.
 
 ### Audio
 - The settings menu now exposes the OpenAL backend, device, output mode, HRTF,
