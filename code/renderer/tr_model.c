@@ -393,6 +393,7 @@ static qboolean R_LoadMD3( model_t *mod, int lod, void *buffer, int fileSize, co
 	md3Tag_t			*tag;
 	int					version;
 	int					size;
+	int64_t				surfBase;
 
 	pinmodel = (md3Header_t *)buffer;
 
@@ -495,41 +496,45 @@ static qboolean R_LoadMD3( model_t *mod, int lod, void *buffer, int fileSize, co
 		LL(surf->ofsXyzNormals);
 		LL(surf->ofsEnd);
 
-		if ( surf->ofsEnd > fileSize || (((byte*)surf - (byte*)hdr) + surf->ofsEnd) > fileSize ) {
-			ri.Printf( PRINT_WARNING, "%s: %s has corrupted surface header\n", __func__, mod_name );
-			return qfalse;
-		}
-		if ( surf->ofsTriangles > fileSize || surf->ofsShaders > fileSize || surf->ofsSt > fileSize || surf->ofsXyzNormals > fileSize ) {
-			ri.Printf( PRINT_WARNING, "%s: %s has corrupted surface header\n", __func__, mod_name );
-			return qfalse;
-		}
-		if ( surf->ofsTriangles + surf->numTriangles * sizeof( md3Triangle_t ) > fileSize ) {
-			ri.Printf( PRINT_WARNING, "%s: %s has corrupted surface header\n", __func__, mod_name );
-			return qfalse;
-		}
-		if ( surf->ofsShaders + surf->numShaders * sizeof( md3Shader_t ) > fileSize || surf->numShaders > (1<<20) ) {
-			ri.Printf( PRINT_WARNING, "%s: %s has corrupted surface header\n", __func__, mod_name );
-			return qfalse;
-		}
-		if ( surf->ofsSt + surf->numVerts * sizeof( md3St_t ) > fileSize ) {
-			ri.Printf( PRINT_WARNING, "%s: %s has corrupted surface header\n", __func__, mod_name );
-			return qfalse;
-		}
-		if ( surf->ofsXyzNormals + surf->numVerts * sizeof( md3XyzNormal_t ) > fileSize ) {
-			ri.Printf( PRINT_WARNING, "%s: %s has corrupted surface header\n", __func__, mod_name );
-			return qfalse;
-		}
-
-		if ( surf->numVerts >= SHADER_MAX_VERTEXES ) {
+		// Bound the counts first: they are used as size terms below, and on the
+		// 32-bit target numVerts * numFrames * sizeof(md3XyzNormal_t) would
+		// otherwise be free to wrap.
+		if ( surf->numVerts < 0 || surf->numVerts >= SHADER_MAX_VERTEXES ) {
 			ri.Printf(PRINT_WARNING, "%s: %s has more than %i verts on %s (%i).\n", __func__,
 				mod_name, SHADER_MAX_VERTEXES - 1, surf->name[0] ? surf->name : "a surface",
 				surf->numVerts );
 			return qfalse;
 		}
-		if ( surf->numTriangles*3 >= SHADER_MAX_INDEXES ) {
+		if ( surf->numTriangles < 0 || surf->numTriangles*3 >= SHADER_MAX_INDEXES ) {
 			ri.Printf(PRINT_WARNING, "%s: %s has more than %i triangles on %s (%i).\n", __func__,
 				mod_name, ( SHADER_MAX_INDEXES / 3 ) - 1, surf->name[0] ? surf->name : "a surface",
 				surf->numTriangles );
+			return qfalse;
+		}
+		// A surface stores one XyzNormal set per model frame, and
+		// LerpMeshVertexes() indexes them with e.frame, which is clamped only
+		// against hdr->numFrames -- so a surface may not declare fewer.
+		if ( surf->numShaders < 0 || surf->numShaders > (1<<20) || surf->numFrames < hdr->numFrames ) {
+			ri.Printf( PRINT_WARNING, "%s: %s has corrupted surface header\n", __func__, mod_name );
+			return qfalse;
+		}
+
+		// Surface offsets are relative to the surface, and the data lives in the
+		// hunk block of hdr->ofsEnd (== size) bytes copied above -- not in the
+		// file, which may be longer. Measure from hdr and bound against size, or
+		// a model declaring a small ofsEnd with a large trailing payload passes
+		// while still reading and byte-swapping past the allocation.
+		surfBase = (int64_t)( (byte *)surf - (byte *)hdr );
+
+		if ( surf->ofsEnd < 0 || surf->ofsTriangles < 0 || surf->ofsShaders < 0
+			|| surf->ofsSt < 0 || surf->ofsXyzNormals < 0
+			|| surfBase + surf->ofsEnd > size
+			|| surfBase + surf->ofsTriangles + (int64_t)surf->numTriangles * sizeof( md3Triangle_t ) > size
+			|| surfBase + surf->ofsShaders + (int64_t)surf->numShaders * sizeof( md3Shader_t ) > size
+			|| surfBase + surf->ofsSt + (int64_t)surf->numVerts * sizeof( md3St_t ) > size
+			|| surfBase + surf->ofsXyzNormals
+				+ (int64_t)surf->numVerts * surf->numFrames * sizeof( md3XyzNormal_t ) > size ) {
+			ri.Printf( PRINT_WARNING, "%s: %s has corrupted surface header\n", __func__, mod_name );
 			return qfalse;
 		}
 
@@ -641,6 +646,21 @@ static qboolean R_LoadMDR( model_t *mod, void *buffer, int filesize, const char 
 	LL(pinmodel->numBones);
 	LL(pinmodel->ofsFrames);
 
+	// Validate the counts before they are used as size terms below: a negative
+	// numFrames makes the size arithmetic wrap, and RB_MDRSurfaceAnim() lerps
+	// into a fixed mdrBone_t[MDR_MAX_BONES] stack array using numBones.
+	if(pinmodel->numFrames < 1)
+	{
+		ri.Printf(PRINT_WARNING, "R_LoadMDR: %s has no frames\n", mod_name);
+		return qfalse;
+	}
+
+	if(pinmodel->numBones < 0 || pinmodel->numBones > MDR_MAX_BONES)
+	{
+		ri.Printf(PRINT_WARNING, "R_LoadMDR: %s has bad bone count %i\n", mod_name, pinmodel->numBones);
+		return qfalse;
+	}
+
 	// This is a model that uses some type of compressed Bones. We don't want to uncompress every bone for each rendered frame
 	// over and over again, we'll uncompress it in this function already, so we must adjust the size of the target mdr.
 	if(pinmodel->ofsFrames < 0)
@@ -650,10 +670,9 @@ static qboolean R_LoadMDR( model_t *mod, void *buffer, int filesize, const char 
 		// now add enough space for the uncompressed bones.
 		size += pinmodel->numFrames * pinmodel->numBones * ((sizeof(mdrBone_t) - sizeof(mdrCompBone_t)));
 	}
-	
+
 	// simple bounds check
-	if(pinmodel->numBones < 0 ||
-		sizeof(*mdr) + pinmodel->numFrames * (sizeof(*frame) + (pinmodel->numBones - 1) * sizeof(*frame->bones)) > size)
+	if(sizeof(*mdr) + pinmodel->numFrames * (sizeof(*frame) + (pinmodel->numBones - 1) * sizeof(*frame->bones)) > size)
 	{
 		ri.Printf(PRINT_WARNING, "R_LoadMDR: %s has broken structure.\n", mod_name);
 		return qfalse;

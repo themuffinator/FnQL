@@ -26,9 +26,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 static byte			 s_intensitytable[256];
 static unsigned char s_gammatable[256];
 
-#ifdef USE_VULKAN
 static unsigned char s_gammatable_linear[256];
-#endif
 
 GLint	gl_filter_min = GL_LINEAR_MIPMAP_NEAREST;
 GLint	gl_filter_max = GL_LINEAR;
@@ -1752,23 +1750,22 @@ void R_SetColorMappings( void ) {
 		s_intensitytable[i] = j;
 	}
 
+	if ( gls.deviceSupportsGamma ) {
 #ifdef USE_VULKAN
-	if ( gls.deviceSupportsGamma ) {
-		if ( vk.fboActive )
-			ri.GLimp_SetGamma( s_gammatable_linear, s_gammatable_linear, s_gammatable_linear );
-		else {
-			if ( applyGamma ) {
-				ri.GLimp_SetGamma( s_gammatable, s_gammatable, s_gammatable );
-			}
-		}
-	}
+		if ( !vk.fboActive && applyGamma ) {
 #else
-	if ( gls.deviceSupportsGamma ) {
 		if ( applyGamma ) {
+#endif
 			ri.GLimp_SetGamma( s_gammatable, s_gammatable, s_gammatable );
+		} else {
+			// Nothing left for the hardware ramp to do: either the shader path
+			// owns gamma or the settings resolve to pass-through. Ask for the
+			// identity ramp so the platform layer hands the LUT back to the
+			// desktop instead of holding the display on a flat curve, which is
+			// what makes the image jump between the game and other windows.
+			ri.GLimp_SetGamma( s_gammatable_linear, s_gammatable_linear, s_gammatable_linear );
 		}
 	}
-#endif
 }
 
 
@@ -1779,13 +1776,11 @@ R_InitImages
 */
 void R_InitImages( void ) {
 
-#ifdef USE_VULKAN
 	// initialize linear gamma table before setting color mappings for the first time
 	int i;
 
 	for ( i = 0; i < 256; i++ )
 		s_gammatable_linear[i] = (unsigned char)i;
-#endif
 
 	Com_Memset( hashTable, 0, sizeof( hashTable ) );
 

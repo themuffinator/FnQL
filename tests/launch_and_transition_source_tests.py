@@ -281,12 +281,55 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
         end = gamma.index("void GLW_RestoreGamma(", start)
         setter = gamma[start:end]
         guard = setter.index("if ( !glw_state.cdsFullscreen )")
-        ramp = setter.index("SetDeviceGammaRamp")
+        ramp = setter.index("GLW_WriteGammaRamp(")
         self.assertLess(guard, ramp)
         self.assertIn("GLW_RestoreGamma();", setter[guard:ramp])
 
+        # A pass-through request means the renderer already owns gamma, so the
+        # display keeps its own calibration instead of being flattened.
+        identity = setter.index("GLW_IsIdentityRamp(")
+        self.assertLess(identity, ramp)
+        self.assertIn("GLW_RestoreGamma();", setter[identity:ramp])
+
+        # Windows reports success for ramps it then reloads from the display
+        # profile, so every write is confirmed against a readback.
+        writer_start = gamma.index("static qboolean GLW_WriteGammaRamp(")
+        writer = gamma[writer_start : gamma.index("static qboolean GLW_CaptureBaseline(")]
+        self.assertIn("SetDeviceGammaRamp(", writer)
+        self.assertIn("GetDeviceGammaRamp(", writer)
+
+        # Sampling the desktop ramp while we still own the LUT would adopt the
+        # game's own ramp as the one we owe the user back.
+        init = gamma[gamma.index("void GLimp_InitGamma(") :]
+        self.assertLess(
+            init.index("GLW_RestoreGamma();"), init.index("GLW_CaptureBaseline(")
+        )
+
         close = wndproc[wndproc.index("case WM_CLOSE:") :]
         self.assertLess(close.index("GLW_RestoreGamma();"), close.index('"quit\\n"'))
+
+    def test_fullscreen_activation_reasserts_the_gamma_ramp_after_the_mode_set(self) -> None:
+        wndproc = read_source("code/win32/win_wndproc.cpp")
+
+        # ChangeDisplaySettings can still be settling when SetColorMappings
+        # writes the ramp, so activation also schedules a delayed re-apply.
+        activate = wndproc[
+            wndproc.index("case WM_ACTIVATE:") : wndproc.index("case WM_SETFOCUS:")
+        ]
+        self.assertLess(
+            activate.index("SetGameDisplaySettings();"),
+            activate.index("WIN_ScheduleGammaReapply();"),
+        )
+
+        display = wndproc[
+            wndproc.index("case WM_DISPLAYCHANGE:") : wndproc.index(
+                "case WM_SETTINGCHANGE:"
+            )
+        ]
+        self.assertIn("GLW_ReapplyGamma();", display)
+
+        timer = wndproc[wndproc.index("if ( wParam == TIMER_G ) {") :]
+        self.assertLess(timer.index("KillTimer"), timer.index("GLW_ReapplyGamma();"))
 
     def test_webui_searches_the_detected_retail_steam_install(self) -> None:
         webui = read_source("code/client/cl_webui.cpp")

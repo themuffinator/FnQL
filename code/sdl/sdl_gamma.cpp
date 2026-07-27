@@ -34,7 +34,14 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #endif
 
 #ifdef _WIN32
-static unsigned short s_oldHardwareGamma[3][256];
+// Drivers quantise ramps - many keep 8 or 10 significant bits - so a readback
+// never matches bit for bit. This tolerance stays far below the distance
+// between any two ramps the renderer asks for, so it still detects a LUT that
+// the desktop reloaded from the display profile behind our back.
+#define GAMMA_READBACK_TOLERANCE 0x0400
+
+static unsigned short s_oldHardwareGamma[3][256];	// ramp the desktop owned before we touched it
+static unsigned short s_activeGamma[3][256];		// ramp we last handed to the driver
 static qboolean s_deviceSupportsGamma = qfalse;
 static qboolean s_gammaSet = qfalse;
 static char s_gammaDisplayName[CCHDEVICENAME];
@@ -209,27 +216,100 @@ static qboolean SDLGamma_GetWindowDisplayName( char *displayName, size_t display
 	return qtrue;
 }
 
+static qboolean SDLGamma_RampsMatch( const unsigned short a[3][256], const unsigned short b[3][256] )
+{
+	int channel, i;
+
+	for ( channel = 0; channel < 3; channel++ ) {
+		for ( i = 0; i < 256; i++ ) {
+			if ( abs( (int)a[channel][i] - (int)b[channel][i] ) > GAMMA_READBACK_TOLERANCE ) {
+				return qfalse;
+			}
+		}
+	}
+
+	return qtrue;
+}
+
+
+/*
+=================
+SDLGamma_WriteRamp
+
+Hands a ramp to the driver and confirms it stuck. Windows accepts ramps and
+then silently reloads the LUT from the display profile while a mode set, an ICC
+reload or a desktop switch is in flight, so a TRUE return from
+SetDeviceGammaRamp is not proof that the ramp is live.
+=================
+*/
+static qboolean SDLGamma_WriteRamp( const char *displayName, const unsigned short table[3][256] )
+{
+	unsigned short readback[3][256];
+	LPVOID ramp = const_cast<unsigned short (*)[256]>( table );
+	qboolean accepted = qfalse;
+	int attempt;
+
+	for ( attempt = 0; attempt < 2; attempt++ ) {
+		ScopedGammaDC hDC = SDLGamma_OpenDC( displayName );
+
+		if ( !hDC ) {
+			break;
+		}
+
+		if ( !SetDeviceGammaRamp( hDC.get(), ramp ) ) {
+			continue;
+		}
+
+		accepted = qtrue;
+
+		// A driver that refuses the readback leaves us nothing to compare, so
+		// take the accepted write at face value rather than retrying forever.
+		if ( !GetDeviceGammaRamp( hDC.get(), readback ) || SDLGamma_RampsMatch( readback, table ) ) {
+			return qtrue;
+		}
+	}
+
+	if ( accepted ) {
+		Com_DPrintf( "gamma ramp did not survive readback verification.\n" );
+	}
+
+	return accepted;
+}
+
+
+static qboolean SDLGamma_IsIdentityRamp( const unsigned char red[256], const unsigned char green[256], const unsigned char blue[256] )
+{
+	int i;
+
+	for ( i = 0; i < 256; i++ ) {
+		if ( red[i] != i || green[i] != i || blue[i] != i ) {
+			return qfalse;
+		}
+	}
+
+	return qtrue;
+}
+
+
 static qboolean SDLGamma_RestoreSavedRamp( void )
 {
-	ScopedGammaDC hDC;
-	BOOL ret;
-
-	if ( !s_gammaSet || !s_deviceSupportsGamma ) {
+	if ( !s_gammaSet ) {
 		return qfalse;
 	}
 
-	hDC = SDLGamma_OpenDC( s_gammaDisplayName );
-	if ( !hDC ) {
-		return qfalse;
-	}
-
-	ret = SetDeviceGammaRamp( hDC.get(), s_oldHardwareGamma );
-
-	if ( ret ) {
+	if ( !s_deviceSupportsGamma ) {
+		// Nothing trustworthy to put back; stop claiming we own the LUT so a
+		// later restore cannot push a stale ramp at an unrelated display.
 		s_gammaSet = qfalse;
+		return qfalse;
 	}
 
-	return ret ? qtrue : qfalse;
+	if ( !SDLGamma_WriteRamp( s_gammaDisplayName, s_oldHardwareGamma ) ) {
+		return qfalse;
+	}
+
+	s_gammaSet = qfalse;
+	return qtrue;
 }
 
 static qboolean SDLGamma_BackupMonitorGamma( const char *displayName )
@@ -267,9 +347,9 @@ static qboolean SDLGamma_BackupMonitorGamma( const char *displayName )
 		Com_Printf( S_COLOR_CYAN "Gamma restoration: suspicious tables replaced with a linear ramp\n" );
 
 		for ( i = 0; i < 256; i++ ) {
-			s_oldHardwareGamma[0][i] = i << 8;
-			s_oldHardwareGamma[1][i] = i << 8;
-			s_oldHardwareGamma[2][i] = i << 8;
+			s_oldHardwareGamma[0][i] = ( i << 8 ) | i;
+			s_oldHardwareGamma[1][i] = ( i << 8 ) | i;
+			s_oldHardwareGamma[2][i] = ( i << 8 ) | i;
 		}
 	}
 
@@ -311,6 +391,10 @@ static qboolean SDLGamma_TrackWindowMonitor( qboolean restorePrevious )
 void GLimp_InitGamma( glconfig_t *config )
 {
 #ifdef _WIN32
+	// A renderer restart can reach this point while we still own the LUT. Hand
+	// it back before sampling or the game's ramp is what we later "restore".
+	SDLGamma_RestoreSavedRamp();
+
 	s_gammaSet = qfalse;
 	s_gammaDisplayName[0] = '\0';
 	config->deviceSupportsGamma = qfalse;
@@ -337,11 +421,36 @@ void GLimp_SetGamma( unsigned char red[256], unsigned char green[256], unsigned 
 {
 #ifdef _WIN32
 	unsigned short table[3][256];
-	ScopedGammaDC hDC;
-	BOOL ret;
 	int i, j;
 
-	if ( !SDL_window || !SDLGamma_TrackWindowMonitor( qtrue ) ) {
+	if ( !SDL_window ) {
+		return;
+	}
+
+	// A device gamma ramp is desktop-global on Windows. Retail rendering in a
+	// window must stay on the shader/FBO color path so an abnormal process exit
+	// cannot leave the user's desktop or ICC calibration altered.
+	if ( !glw_state.isFullscreen ) {
+		SDLGamma_RestoreSavedRamp();
+		return;
+	}
+
+	// An identity request means the renderer applies its own correction - the
+	// FBO shader path, or r_gamma 1 with overbright disabled. Give the monitor
+	// its own calibration back instead of flattening the LUT to a linear ramp,
+	// which is what made the image jump on every ALT+TAB.
+	if ( SDLGamma_IsIdentityRamp( red, green, blue ) ) {
+		SDLGamma_RestoreSavedRamp();
+		return;
+	}
+
+	if ( !gw_active ) {
+		// The desktop owns the LUT while we are in the background. Focus events
+		// drive SetColorMappings again on the way back in.
+		return;
+	}
+
+	if ( !SDLGamma_TrackWindowMonitor( qtrue ) ) {
 		return;
 	}
 
@@ -371,18 +480,13 @@ void GLimp_SetGamma( unsigned char red[256], unsigned char green[256], unsigned 
 		}
 	}
 
-	hDC = SDLGamma_OpenDC( s_gammaDisplayName );
-	if ( !hDC ) {
+	if ( !SDLGamma_WriteRamp( s_gammaDisplayName, table ) ) {
+		Com_Printf( S_COLOR_YELLOW "SetDeviceGammaRamp failed.\n" );
 		return;
 	}
 
-	ret = SetDeviceGammaRamp( hDC.get(), table );
-
-	if ( !ret ) {
-		Com_Printf( S_COLOR_YELLOW "SetDeviceGammaRamp failed.\n" );
-	} else {
-		s_gammaSet = qtrue;
-	}
+	memcpy( s_activeGamma, table, sizeof( s_activeGamma ) );
+	s_gammaSet = qtrue;
 #else
 	(void)red;
 	(void)green;
@@ -400,5 +504,30 @@ void GLW_RestoreGamma( void )
 	if ( !SDLGamma_RestoreSavedRamp() && s_gammaSet ) {
 		Com_DPrintf( "SDL gamma restore failed.\n" );
 	}
+#endif
+}
+
+
+/*
+** GLW_ReapplyGamma
+**
+** Mode sets, ICC profile reloads and desktop switches reload the LUT from the
+** display profile after the fact, which shows up as the game running on the
+** desktop ramp once it is back in the foreground. Re-assert the ramp we own
+** when the window system tells us the display changed underneath us.
+*/
+void GLW_ReapplyGamma( void )
+{
+#ifdef _WIN32
+	if ( !s_gammaSet || !s_deviceSupportsGamma ) {
+		return;
+	}
+
+	if ( !glw_state.isFullscreen || !gw_active ) {
+		SDLGamma_RestoreSavedRamp();
+		return;
+	}
+
+	SDLGamma_WriteRamp( s_gammaDisplayName, s_activeGamma );
 #endif
 }

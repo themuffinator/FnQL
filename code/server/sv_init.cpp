@@ -1037,6 +1037,16 @@ void SV_Shutdown( const char *finalmsg ) {
 	Zmq_ShutdownStatsPublisher();
 	SV_InitChallenger();
 
+	// Free the clients BEFORE SV_ClearServer(): it memsets sv, and SV_Clients()
+	// is bounded by sv.maxclients, so clearing first made this loop run zero
+	// times and leaked every client's download buffers, queued netchan
+	// fragments, demo handles and Steam auth sessions on each shutdown.
+	if ( svs.clients ) {
+		for ( client_t &client : SV_Clients() ) {
+			SV_FreeClient( &client );
+		}
+	}
+
 	// free current level
 	SV_ClearServer();
 
@@ -1044,10 +1054,6 @@ void SV_Shutdown( const char *finalmsg ) {
 
 	// free server static data
 	if ( svs.clients ) {
-		for ( client_t &client : SV_Clients() ) {
-			SV_FreeClient( &client );
-		}
-
 		SV_ZFree( svs.clients );
 	}
 	// Retail restores factory-backed cvars after GAME_SHUTDOWN, level clearing,

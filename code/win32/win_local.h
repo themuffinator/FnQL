@@ -168,6 +168,7 @@ extern WinVars_t	g_wv;
 void WIN_DisableHook( void );
 void WIN_EnableHook( void );
 void WIN_ReleaseTemporaryMouseCapture( void );
+void WIN_ProjectClientPointerToDrawable( int *x, int *y );
 
 void WIN_DisableAltTab( void );
 void WIN_EnableAltTab( void );
@@ -176,7 +177,22 @@ void WIN_Minimize( void );
 
 void GLW_HideFullscreenWindow( void );
 void GLW_RestoreGamma( void );
+void GLW_ReapplyGamma( void );
 
 #ifdef __cplusplus
 }
+
+namespace fnql::input {
+// Opaque declaration; enum class has a fixed underlying type, so consumers that
+// need the enumerators include ../client/input_compat.hpp themselves.
+enum class PointerOwner;
+}
+
+// Single owner of the Win32 pointer-ownership decision. win_input.cpp applies
+// grabbing, confinement, and cursor visibility from it; win_wndproc.cpp routes
+// mouse messages to the matching consumer. Keeping one resolver is what stops
+// the message pump and the per-frame update from disagreeing about who owns the
+// pointer. Declared outside the extern "C" block because common.c also includes
+// this header.
+fnql::input::PointerOwner WIN_ResolvePointerOwner( void );
 #endif

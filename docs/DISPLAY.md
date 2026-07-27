@@ -142,6 +142,7 @@ vid_restart
 These settings affect the rendered scene itself rather than the window mode.
 
 - `r_gamma`: Gamma correction factor. This is one of the first settings to check if the whole frame looks too dark or too washed out.
+- `r_ignorehwgamma`: Force the software/shader gamma path and never write the display's hardware ramp. Latched; requires `vid_restart`.
 - `r_tonemap`: Final-pass tone scale for `r_hdr 1`.
   - `0`: Legacy gamma/overbright behavior.
   - `1`: Simple Reinhard, the per-channel `x / (1 + x)` curve. Existing configs that referred to this as `Reinhard` keep the same behavior for this release cycle.
@@ -176,6 +177,28 @@ These settings affect the rendered scene itself rather than the window mode.
 - `r_greyscale`: Full-frame desaturation. Requires `r_fbo 1`.
 
 Use [ASPECT_CORRECTION.md](ASPECT_CORRECTION.md) for menu and cinematic layout. Native QL cgame geometry and world FOV are passed through without an engine-side post-correction.
+
+### Hardware Gamma Ramps
+
+A display's gamma ramp is owned by the desktop, not by the game: it is global to
+the monitor and survives the process. FnQL therefore takes it over only when it
+has something to add that the renderer cannot do itself.
+
+- With `r_fbo 1` (the default for every renderer) gamma is applied by the output
+  shader, so the ramp is left alone and the monitor keeps its ICC calibration.
+  Nothing changes on the desktop when you alt-tab.
+- The ramp is written only in fullscreen, only when `r_fbo` is off and `r_gamma`
+  or `r_overBrightBits` actually asks for a correction. It is handed back on
+  focus loss, monitor changes, `vid_restart`, quit, and crash.
+- Windows drops ramps while a mode set or ICC reload is in flight even after
+  reporting success, so each write is confirmed by reading the ramp back, and
+  the ramp is re-asserted after display changes and on returning to the game.
+- `r_ignorehwgamma 1` disables the hardware path outright. Remote Desktop
+  sessions and displays that report broken ramps are detected and skipped.
+
+If the game or the desktop looks too dark after alt-tabbing, check `r_gamma`
+first and confirm `r_fbo 1`; a monitor left on a stale ramp can also be reset by
+reapplying its color profile from Windows display settings.
 
 ## Soft Particles
 

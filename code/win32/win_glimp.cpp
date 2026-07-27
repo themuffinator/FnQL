@@ -701,6 +701,15 @@ static qboolean GLW_InitOpenGLDriver( int colorbits )
 		{
 			if ( tpfd == TRY_PFD_FAIL_HARD )
 			{
+				// the window class is registered without CS_OWNDC, so this is a
+				// cached common DC that must be released like the sibling exits
+				// below do -- GLW_CreateWindow() destroys the window without one
+				if ( glw_state.hDC )
+				{
+					ReleaseDC( g_wv.hWnd, glw_state.hDC );
+					glw_state.hDC = NULL;
+				}
+
 				Com_Printf( S_COLOR_YELLOW "...failed hard\n" );
 				return qfalse;
 			}
@@ -1010,6 +1019,12 @@ static qboolean GLW_CreateWindow( int width, int height, int colorbits, qboolean
 		//ShowWindow( g_wv.hWnd, SW_HIDE );
 		DestroyWindow( g_wv.hWnd );
 		g_wv.hWnd = NULL;
+		// The pixel format belonged to the window we just destroyed. Without
+		// this, GLW_InitOpenGLDriver's `if ( !glw_state.pixelFormatSet )` gate
+		// makes the 16-bit retry skip both GLW_MakeContext() attempts and
+		// return success with a NULL context. GLimp_Shutdown() clears this the
+		// same way.
+		glw_state.pixelFormatSet = qfalse;
 		return qfalse;
 	}
 
@@ -1638,6 +1653,10 @@ void GLimp_Shutdown( qboolean unloadDLL )
 	const char *success[] = { "failed", "success" };
 	int retVal;
 
+	// restore gamma before anything can bail out: the ramp is desktop-global,
+	// so a partially initialized subsystem must still hand the LUT back
+	GLW_RestoreGamma();
+
 	// FIXME: Brian, we need better fallbacks from partially initialized failures
 	if ( !qwglMakeCurrent ) {
 		return;
@@ -1646,9 +1665,6 @@ void GLimp_Shutdown( qboolean unloadDLL )
 	IN_Shutdown();
 
 	Com_Printf( "Shutting down OpenGL subsystem\n" );
-
-	// restore gamma.  We do this first because 3Dfx's extension needs a valid OGL subsystem
-	GLW_RestoreGamma();
 
 	// set current context to NULL
 	if ( qwglMakeCurrent )

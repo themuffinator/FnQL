@@ -796,6 +796,7 @@ static void CL_WriteSnapshot( void ) {
 	std::array<byte, MAX_MSGLEN_BUF> bufData;
 	msg_t	msg;
 	int		i, len;
+	int		savedEntities;
 
 	snap = &cl.snapshots[ cl.snap.messageNum & PACKET_MASK ]; // current snapshot
 	//if ( !snap->valid ) // should never happen?
@@ -844,10 +845,19 @@ static void CL_WriteSnapshot( void ) {
 	FileWrite( clc.recordfile, msg.data, msg.cursize );
 
 	// save last sent state so if there any need - we can skip any further incoming messages
-	for ( i = 0; i < snap->numEntities; i++ )
+	// CL_ParsePacketEntities() does not cap numEntities, so a hostile server or a
+	// crafted demo can report far more than saved_ents can hold. Clamp both the
+	// copy and the recorded count: the count feeds oldSnap->numEntities on the
+	// next pass through CL_EmitPacketEntities() above, which reads saved_ents.
+	savedEntities = snap->numEntities;
+	if ( savedEntities > MAX_SNAPSHOT_ENTITIES )
+		savedEntities = MAX_SNAPSHOT_ENTITIES;
+
+	for ( i = 0; i < savedEntities; i++ )
 		saved_ents[ i ] = cl.parseEntities[ (snap->parseEntitiesNum + i) % MAX_PARSE_ENTITIES ];
 
 	saved_snap = *snap;
+	saved_snap.numEntities = savedEntities;
 	saved_snap.parseEntitiesNum = 0;
 
 	clc.demoMessageSequence++;
@@ -4202,8 +4212,19 @@ void CL_Frame( int msec, int realMsec ) {
 		&& !com_sv_running->integer && uivm ) {
 		// Bring up the menu once.  UI_MENUS_ANY_VISIBLE covers menus whose input
 		// catcher was temporarily yielded during a renderer or browser transition.
-		S_StopAllSounds();
-		VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_MAIN );
+		//
+		// Every route back to CA_DISCONNECTED ends here: an explicit disconnect,
+		// a listen server shutdown, an error drop, a finished demo.  Only the
+		// Com_Error path runs CL_Disconnect, and CL_Disconnect_f returns early
+		// after SV_Shutdown on a local server, so restoring the retail WebUI has
+		// to happen here or a local game always came back to the native menu
+		// with the browser still paused and unfocused.
+		if ( !CL_WebHost_ShowAfterDisconnect() ) {
+			// Keep the retail native UI usable when the WebUI's external
+			// Awesomium runtime or web.pak is unavailable.
+			S_StopAllSounds();
+			VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_MAIN );
+		}
 	}
 
 	// Retail cl_avidemo is a deterministic screenshot-sequence path. It stays

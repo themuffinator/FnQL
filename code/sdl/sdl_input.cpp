@@ -29,6 +29,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <array>
 
 #include "../client/client.h"
+#include "../client/input_compat.hpp"
 #ifndef _WIN32
 #include "../unix/unix_syscon.h"
 #endif
@@ -51,11 +52,11 @@ static SDL_JoystickID stickInstance;
 #endif
 
 static qboolean mouseAvailable = qfalse;
-static qboolean mouseActive = qfalse;
-static qboolean mouseAbsoluteMode = qfalse;
-static qboolean mouseAbsolutePositionValid = qfalse;
-static int mouseAbsoluteX = 0;
-static int mouseAbsoluteY = 0;
+
+using fnql::input::PointerMode;
+using fnql::input::PointerOwner;
+
+static constexpr int kPointerMenuMask = KEYCATCH_UI | KEYCATCH_CGAME | KEYCATCH_BROWSER;
 
 static cvar_t *in_mouse;
 
@@ -84,15 +85,23 @@ static cvar_t *cl_consoleKeys;
 static int in_eventTime = 0;
 static qboolean mouse_focus;
 
-// In a windowed console the OS cursor is freed and hidden, and the engine
-// reports its absolute position so the software console cursor stays locked to
-// it. Retail browser/UI/cgame capture uses the separate pre-existing absolute
-// path below. See IN_ActivateMouse and IN_DriveAbsCursor.
-static qboolean s_absCursor;   // reporting the absolute pointer to the client
-static qboolean s_absHaveLast; // s_absLast{X,Y} hold a valid previous sample
-static int      s_absLastX;    // last reported position, to suppress duplicates
-static int      s_absLastY;
-static Uint32   s_absCaptureButtons;
+// Pointer ownership and presentation are resolved by the shared policy in
+// input_compat.hpp so this backend, the native Win32 backend, and the X11
+// backend cannot disagree about who owns the pointer for a given key catcher.
+// s_pointerMode is the presentation that was last applied to SDL; it is latched
+// so the per-frame update only issues SDL calls on an actual transition.
+static PointerOwner s_pointerOwner = PointerOwner::Gameplay;
+static PointerMode  s_pointerMode;
+static qboolean     s_pointerModeValid;
+
+// One dedup cache for every absolute owner. The owner is recorded with it so a
+// cached sample can never suppress the first sample the next owner receives
+// after a catcher change.
+static PointerOwner s_absLastOwner = PointerOwner::Gameplay;
+static qboolean     s_absHaveLast; // s_absLast{X,Y} hold a valid previous sample
+static int          s_absLastX;    // last reported position, to suppress duplicates
+static int          s_absLastY;
+static Uint32       s_absCaptureButtons;
 
 #define CTRL(a) ((a)-'a'+1)
 
@@ -112,6 +121,43 @@ static void IN_EndTemporaryMouseCapture( void )
 		SDL_CaptureMouse( false );
 		s_absCaptureButtons = 0;
 	}
+}
+
+
+/*
+===============
+IN_ResolvePointerOwner
+
+Cheap enough to re-evaluate per event, so a catcher change made while draining
+the SDL queue takes effect on the very next event instead of the next frame.
+===============
+*/
+static PointerOwner IN_ResolvePointerOwner( void )
+{
+	fnql::input::PointerOwnerInputs inputs;
+
+	inputs.catcher = Key_GetCatcher();
+	inputs.consoleMask = KEYCATCH_CONSOLE;
+	inputs.menuMask = kPointerMenuMask;
+	// A fullscreen window exposes no desktop for the OS pointer to reach, so the
+	// fullscreen console keeps the established relative gameplay pointer.
+	inputs.consoleUsesAbsolutePointer = !glw_state.isFullscreen;
+
+	return fnql::input::ResolvePointerOwner( inputs );
+}
+
+
+static PointerMode IN_ResolvePointerMode( PointerOwner owner )
+{
+	fnql::input::PointerModeInputs inputs;
+
+	inputs.owner = owner;
+	inputs.focused = ( gw_active && mouse_focus ) ? true : false;
+	inputs.minimized = gw_minimized ? true : false;
+	inputs.fullscreen = glw_state.isFullscreen ? true : false;
+	inputs.relativeAvailable = in_mouse->integer > 0;
+
+	return fnql::input::ResolvePointerMode( inputs );
 }
 
 /*
@@ -442,53 +488,76 @@ static void IN_GobbleMouseEvents( void )
 
 /*
 ===============
-IN_QueueAbsoluteMousePosition
+IN_PointerProjection
 
-Retail polls the window cursor while UI or cgame capture is active instead of
-depending solely on motion messages. Queue the first position after every
-capture transition, then only changes, so a join menu opened under a stationary
-pointer receives deterministic coordinates and can activate its drawn cursor.
+SDL reports motion in logical window coordinates. Every absolute consumer - the
+console, the WebUI browser, and retail's UI and cgame overlays - addresses
+renderer drawable pixels, so the two differ on a scaled desktop and whenever the
+renderer resolution is not the window size.
 ===============
 */
-static void IN_ProjectBrowserMousePosition( float windowX, float windowY,
-	int *positionX, int *positionY )
+static fnql::input::PointerProjection IN_PointerProjection( void )
 {
-	float scaleX = 1.0f;
-	float scaleY = 1.0f;
+	fnql::input::PointerProjection projection;
 
-	if ( glw_state.window_width > 0 && cls.glconfig.vidWidth > 0 ) {
-		scaleX = (float)cls.glconfig.vidWidth / (float)glw_state.window_width;
-	}
-	if ( glw_state.window_height > 0 && cls.glconfig.vidHeight > 0 ) {
-		scaleY = (float)cls.glconfig.vidHeight / (float)glw_state.window_height;
-	}
+	projection.hostWidth = glw_state.window_width;
+	projection.hostHeight = glw_state.window_height;
+	projection.drawableWidth = cls.glconfig.vidWidth;
+	projection.drawableHeight = cls.glconfig.vidHeight;
 
-	*positionX = static_cast<int>( windowX * scaleX );
-	*positionY = static_cast<int>( windowY * scaleY );
+	return projection;
 }
 
-static void IN_QueueAbsoluteMousePosition( void )
-{
-	float x;
-	float y;
 
-	SDL_GetMouseState( &x, &y );
-	int positionX = static_cast<int>( x );
-	int positionY = static_cast<int>( y );
-	if ( Key_GetCatcher() & KEYCATCH_BROWSER ) {
-		// SDL reports logical window coordinates while the renderer and WebUI
-		// projection use drawable pixels. These differ on a scaled desktop.
-		IN_ProjectBrowserMousePosition( x, y, &positionX, &positionY );
-	}
-	if ( mouseAbsolutePositionValid
-		&& positionX == mouseAbsoluteX && positionY == mouseAbsoluteY ) {
+/*
+===============
+IN_QueueAbsolutePointerPosition
+
+Single absolute-position lane for the console, retail UI/cgame, and the browser.
+
+Emitted only when the position or the owner changes: an unconditional per-drain
+event would keep the event queue perpetually non-empty and stall Com_EventLoop,
+which re-pumps input whenever the queue drains.
+===============
+*/
+static void IN_QueueAbsolutePointerPosition( PointerOwner owner,
+	float windowX, float windowY, int eventTime )
+{
+	const fnql::input::PointerPosition position =
+		fnql::input::ProjectPointerToDrawable(
+			static_cast<int>( windowX ), static_cast<int>( windowY ),
+			IN_PointerProjection() );
+
+	if ( s_absHaveLast && owner == s_absLastOwner
+		&& position.x == s_absLastX && position.y == s_absLastY ) {
 		return;
 	}
 
-	mouseAbsolutePositionValid = qtrue;
-	mouseAbsoluteX = positionX;
-	mouseAbsoluteY = positionY;
-	Com_QueueEvent( Sys_Milliseconds(), SE_MOUSE_ABSOLUTE, positionX, positionY, 0, NULL );
+	s_absLastOwner = owner;
+	s_absLastX = position.x;
+	s_absLastY = position.y;
+	s_absHaveLast = qtrue;
+
+	Com_QueueEvent( eventTime, SE_MOUSE_ABSOLUTE, position.x, position.y, 0, NULL );
+}
+
+
+/*
+===============
+IN_PollAbsolutePointerPosition
+
+Retail polls the window cursor while an absolute owner is active instead of
+depending solely on motion messages, so a menu or console opened under a
+stationary pointer still receives deterministic coordinates.
+===============
+*/
+static void IN_PollAbsolutePointerPosition( PointerOwner owner )
+{
+	float x = 0.0f;
+	float y = 0.0f;
+
+	SDL_GetMouseState( &x, &y );
+	IN_QueueAbsolutePointerPosition( owner, x, y, in_eventTime );
 }
 
 
@@ -496,138 +565,143 @@ static void IN_QueueAbsoluteMousePosition( void )
 
 /*
 ===============
-IN_ActivateMouse
+IN_RestoreDesktopPointer
+
+Run when the pointer stops being driven. Some SDL video drivers leave the
+pointer at the window edge after an ungrab, so relative gameplay ownership is
+released back to a predictable position. An absolute owner is left alone: its
+cursor is the one the user is still looking at.
 ===============
 */
-static void IN_ActivateMouse( void )
+static void IN_RestoreDesktopPointer( PointerOwner previousOwner )
 {
-	const int catcher = Key_GetCatcher();
-	const qboolean consoleActive = ( catcher & KEYCATCH_CONSOLE ) ? qtrue : qfalse;
-	const qboolean browserActive = ( catcher & KEYCATCH_BROWSER ) ? qtrue : qfalse;
-	const qboolean nativeUiActive = ( catcher & KEYCATCH_UI ) ? qtrue : qfalse;
-	const qboolean cgameUiActive = ( catcher & KEYCATCH_CGAME ) ? qtrue : qfalse;
-	// Retail QL's browser/UI/cgame owners consume host-absolute coordinates and
-	// may rely on the visible OS cursor. The console is different: in a window
-	// it draws its own cursor, so release the OS pointer and mirror its absolute
-	// position through SE_MOUSE_ABSOLUTE without changing retail UI semantics.
-	const qboolean retailAbsolute = ( !consoleActive &&
-		( browserActive || nativeUiActive || cgameUiActive ) ) ? qtrue : qfalse;
-	const qboolean consoleAbsolute = ( consoleActive && !glw_state.isFullscreen ) ? qtrue : qfalse;
-	const qboolean freeCursor = ( retailAbsolute || consoleAbsolute ||
-		( !glw_state.isFullscreen && in_nograb->integer ) ) ? qtrue : qfalse;
-	const qboolean grabMouse = freeCursor ? qfalse : qtrue;
-	const qboolean relativeMouse = ( in_mouse->integer > 0 && grabMouse ) ? qtrue : qfalse;
-	const qboolean showCursor = ( retailAbsolute || ( freeCursor && !consoleAbsolute ) ) ? qtrue : qfalse;
+	const char *drv;
 
-	// Re-evaluate this state every frame so catcher and fullscreen transitions
-	// update confinement without requiring a full input restart.
-	static qboolean haveState = qfalse;
-	static qboolean lastGrab = qfalse;
-	static qboolean lastRelative = qfalse;
-	static qboolean lastShow = qfalse;
-
-	if ( !mouseAvailable )
+	if ( fnql::input::PointerOwnerReportsAbsolute( previousOwner ) ) {
 		return;
-
-	if ( consoleAbsolute != s_absCursor ) {
-		if ( !consoleAbsolute ) {
-			IN_EndTemporaryMouseCapture();
-		}
-		s_absHaveLast = qfalse;
-	}
-	s_absCursor = consoleAbsolute;
-
-	if ( !mouseActive || mouseAbsoluteMode != retailAbsolute )
-	{
-		IN_GobbleMouseEvents();
-		mouseAbsolutePositionValid = qfalse;
-		haveState = qfalse;
-	}
-	mouseAbsoluteMode = retailAbsolute;
-
-	if ( !haveState || grabMouse != lastGrab || relativeMouse != lastRelative ||
-		showCursor != lastShow || in_nograb->modified )
-	{
-		// discard the motion spike SDL emits when relative mode is toggled
-		if ( haveState && relativeMouse != lastRelative )
-			IN_GobbleMouseEvents();
-
-		SDL_SetWindowRelativeMouseMode( SDL_window, relativeMouse ? true : false );
-		SDL_SetWindowMouseGrab( SDL_window, grabMouse ? true : false );
-
-		// Show the OS cursor for retail absolute owners. It stays hidden while
-		// confined (fullscreen/gameplay) and while the windowed console mirrors
-		// it with its own software cursor.
-		IN_ShowCursor( showCursor );
-
-		// Only re-center for the confined case. Warping a free cursor would fight
-		// the player as they move it outside the window.
-		if ( grabMouse )
-			SDL_WarpMouseInWindow( SDL_window, glw_state.window_width / 2, glw_state.window_height / 2 );
-
-		lastGrab = grabMouse;
-		lastRelative = relativeMouse;
-		lastShow = showCursor;
-		haveState = qtrue;
-		in_nograb->modified = qfalse;
-
-#ifdef DEBUG_EVENTS
-		Com_Printf( "%4i %s grab=%i relative=%i\n", Sys_Milliseconds(), __func__, grabMouse, relativeMouse );
-#endif
 	}
 
-	mouseActive = qtrue;
+	if ( gw_active ) {
+		SDL_WarpMouseInWindow( SDL_window,
+			glw_state.window_width / 2, glw_state.window_height / 2 );
+		return;
+	}
+
+	drv = SDL_GetCurrentVideoDriver();
+	if ( drv && strcmp( drv, "x11" ) == 0 ) {
+		SDL_WarpMouseGlobal( glw_state.desktop_width / 2, glw_state.desktop_height / 2 );
+	}
 }
 
 
 /*
 ===============
-IN_DeactivateMouse
+IN_ApplyPointerMode
+
+Re-evaluated every frame so catcher, focus, and fullscreen transitions update
+confinement, relative motion, and cursor visibility without an input restart.
+The applied mode is latched, so a steady state issues no SDL calls at all.
 ===============
 */
-static void IN_DeactivateMouse( void )
+static void IN_ApplyPointerMode( void )
 {
-	const char* drv = SDL_GetCurrentVideoDriver();
-	const qboolean absolutePointerOwned = ( s_absCursor || mouseAbsoluteMode ) ? qtrue : qfalse;
+	PointerOwner previousOwner;
+	PointerOwner owner;
+	PointerMode mode;
 
-	if ( !mouseAvailable )
+	if ( !mouseAvailable ) {
 		return;
-
-	if ( mouseActive )
-	{
-#ifdef DEBUG_EVENTS
-		Com_Printf( "%4i %s\n", Sys_Milliseconds(), __func__ );
-#endif
-		IN_GobbleMouseEvents();
-
-		SDL_SetWindowMouseGrab( SDL_window, false );
-		SDL_SetWindowRelativeMouseMode( SDL_window, false );
-
-		if ( gw_active && !absolutePointerOwned )
-			SDL_WarpMouseInWindow( SDL_window, glw_state.window_width / 2, glw_state.window_height / 2 );
-		else
-		{
-			if ( glw_state.isFullscreen )
-				IN_ShowCursor( qtrue );
-
-			if ( !absolutePointerOwned && drv && strcmp( drv, "x11" ) == 0 ) {
-				SDL_WarpMouseGlobal( glw_state.desktop_width / 2, glw_state.desktop_height / 2 );
-			}
-		}
-
-		mouseActive = qfalse;
 	}
-	mouseAbsoluteMode = qfalse;
-	mouseAbsolutePositionValid = qfalse;
+
+	previousOwner = s_pointerOwner;
+	owner = IN_ResolvePointerOwner();
+	mode = IN_ResolvePointerMode( owner );
+
+	// in_nograb releases the gameplay pointer for streaming and debugging.
+	// Overlay owners already run with a free pointer, so the request only has to
+	// suppress the relative gameplay path.
+	if ( in_nograb->integer && owner == PointerOwner::Gameplay ) {
+		mode = PointerMode{};
+	}
+
+	if ( owner != previousOwner ) {
+		// The coordinate lane changed. Drop drag capture and any pending
+		// relative motion so the new owner starts from a clean sample.
+		IN_EndTemporaryMouseCapture();
+		IN_GobbleMouseEvents();
+		s_absHaveLast = qfalse;
+		s_pointerOwner = owner;
+	}
+
+	if ( s_pointerModeValid && mode == s_pointerMode && !in_nograb->modified ) {
+		return;
+	}
+
+	// Discard the motion spike SDL emits when relative mode is toggled.
+	if ( s_pointerModeValid && mode.relativeMotion != s_pointerMode.relativeMotion ) {
+		IN_GobbleMouseEvents();
+	}
+
+	if ( !mode.driveInput ) {
+		IN_EndTemporaryMouseCapture();
+		s_absHaveLast = qfalse;
+	}
+
+	SDL_SetWindowRelativeMouseMode( SDL_window, mode.relativeMotion );
+	SDL_SetWindowMouseGrab( SDL_window, mode.confineToWindow );
+	IN_ShowCursor( mode.showSystemCursor ? qtrue : qfalse );
+
+	// Re-centre only when the confined relative pointer is entered. Warping a
+	// visible menu or console cursor would fight the player.
+	if ( mode.recenterPointer &&
+		( !s_pointerModeValid || !s_pointerMode.recenterPointer ) ) {
+		SDL_WarpMouseInWindow( SDL_window,
+			glw_state.window_width / 2, glw_state.window_height / 2 );
+	} else if ( s_pointerModeValid && s_pointerMode.driveInput && !mode.driveInput ) {
+		IN_RestoreDesktopPointer( previousOwner );
+	}
+
+	s_pointerMode = mode;
+	s_pointerModeValid = qtrue;
+	in_nograb->modified = qfalse;
+
+#ifdef DEBUG_EVENTS
+	Com_Printf( "%4i %s drive=%i abs=%i relative=%i confine=%i cursor=%i\n",
+		Sys_Milliseconds(), __func__, mode.driveInput, mode.reportAbsolute,
+		mode.relativeMotion, mode.confineToWindow, mode.showSystemCursor );
+#endif
+}
+
+
+/*
+===============
+IN_ReleasePointer
+
+Unconditional release for input shutdown. IN_ApplyPointerMode owns the per-frame
+transitions; this exists so a shutdown or restart cannot leave SDL confined,
+relative, or with a hidden cursor.
+===============
+*/
+static void IN_ReleasePointer( void )
+{
+	const PointerOwner previousOwner = s_pointerOwner;
+	const qboolean wasDriving = ( s_pointerModeValid && s_pointerMode.driveInput ) ? qtrue : qfalse;
 
 	IN_EndTemporaryMouseCapture();
-	s_absCursor = qfalse;
-	s_absHaveLast = qfalse;
+	IN_GobbleMouseEvents();
 
-	// Always show the cursor when the mouse is disabled,
-	// but not when fullscreen
-	if ( !glw_state.isFullscreen )
-		IN_ShowCursor( qtrue );
+	SDL_SetWindowMouseGrab( SDL_window, false );
+	SDL_SetWindowRelativeMouseMode( SDL_window, false );
+	IN_ShowCursor( qtrue );
+
+	if ( wasDriving ) {
+		IN_RestoreDesktopPointer( previousOwner );
+	}
+
+	s_pointerOwner = PointerOwner::Gameplay;
+	s_pointerMode = PointerMode{};
+	s_pointerModeValid = qfalse;
+	s_absHaveLast = qfalse;
 }
 
 
@@ -1346,6 +1420,8 @@ static void IN_HandleWindowEvent( Uint32 type, const SDL_WindowEvent *window, in
 			if ( gw_active && re.SetColorMappings ) {
 				re.SetColorMappings();
 			}
+			// the display swap reloaded the LUT from its profile
+			GLW_ReapplyGamma();
 			break;
 
 		case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
@@ -1354,6 +1430,7 @@ static void IN_HandleWindowEvent( Uint32 type, const SDL_WindowEvent *window, in
 			if ( gw_active && re.SetColorMappings ) {
 				re.SetColorMappings();
 			}
+			GLW_ReapplyGamma();
 			break;
 
 		case SDL_EVENT_WINDOW_HIDDEN:
@@ -1362,6 +1439,7 @@ static void IN_HandleWindowEvent( Uint32 type, const SDL_WindowEvent *window, in
 			gw_minimized = qtrue;
 			CL_WebHost_NotifyAppActivation( qfalse );
 			mouse_focus = qfalse;
+			GLW_RestoreGamma();
 			break;
 
 		case SDL_EVENT_WINDOW_OCCLUDED:
@@ -1392,6 +1470,9 @@ static void IN_HandleWindowEvent( Uint32 type, const SDL_WindowEvent *window, in
 			}
 			CL_WebHost_NotifyAppActivation( qfalse );
 			mouse_focus = qfalse;
+			// a device gamma ramp is desktop-global: give the user their own
+			// calibration back for as long as we are in the background
+			GLW_RestoreGamma();
 			break;
 
 		case SDL_EVENT_WINDOW_FOCUS_GAINED:
@@ -1509,67 +1590,6 @@ static void IN_QueueTextInput( const char *text )
 
 /*
 ===============
-IN_QueueConsoleAbsolutePosition
-
-Convert SDL's logical window coordinates to the framebuffer-pixel coordinates
-used by the console, then report the newest position through FnQL's existing
-SE_MOUSE_ABSOLUTE lane. Retail UI/cgame owners retain their raw host-coordinate
-path.
-
-Emitted only when the position changes: an unconditional per-drain event would
-keep the event queue perpetually non-empty and stall Com_EventLoop, which
-re-pumps input whenever the queue drains.
-===============
-*/
-static void IN_QueueConsoleAbsolutePosition( float windowX, float windowY, int eventTime )
-{
-	float scaleX = 1.0f;
-	float scaleY = 1.0f;
-	int x;
-	int y;
-
-	if ( glw_state.window_width > 0 && cls.glconfig.vidWidth > 0 ) {
-		scaleX = (float)cls.glconfig.vidWidth / (float)glw_state.window_width;
-	}
-	if ( glw_state.window_height > 0 && cls.glconfig.vidHeight > 0 ) {
-		scaleY = (float)cls.glconfig.vidHeight / (float)glw_state.window_height;
-	}
-
-	x = static_cast<int>( windowX * scaleX );
-	y = static_cast<int>( windowY * scaleY );
-
-	if ( s_absHaveLast && x == s_absLastX && y == s_absLastY )
-		return;
-
-	s_absLastX = x;
-	s_absLastY = y;
-	s_absHaveLast = qtrue;
-
-	Com_QueueEvent( eventTime, SE_MOUSE_ABSOLUTE, x, y, 0, NULL );
-}
-
-
-/*
-===============
-IN_DriveAbsCursor
-
-Poll after the event queue drains so entering the console under a stationary
-pointer still produces an initial position. Motion events use the same helper
-immediately, preserving position-before-click ordering.
-===============
-*/
-static void IN_DriveAbsCursor( void )
-{
-	float x = 0.0f;
-	float y = 0.0f;
-
-	SDL_GetMouseState( &x, &y );
-	IN_QueueConsoleAbsolutePosition( x, y, in_eventTime );
-}
-
-
-/*
-===============
 HandleEvents
 ===============
 */
@@ -1652,32 +1672,16 @@ void HandleEvents( void )
 
 			case SDL_EVENT_MOUSE_MOTION:
 			{
-				const int catcher = Key_GetCatcher();
-				if ( s_absCursor ) {
+				// Resolve the owner per event so a catcher change made earlier in
+				// this same drain takes effect immediately.
+				const PointerOwner owner = IN_ResolvePointerOwner();
+
+				if ( fnql::input::PointerOwnerReportsAbsolute( owner ) ) {
 					// Preserve OS event order so a click is hit-tested at the
 					// position from the immediately preceding motion event.
-					IN_QueueConsoleAbsolutePosition( e.motion.x, e.motion.y, in_eventTime );
-					break;
-				}
-				if ( catcher & KEYCATCH_CONSOLE ) {
-					if ( e.motion.xrel || e.motion.yrel ) {
-						Com_QueueEvent( in_eventTime, SE_MOUSE,
-							(int)e.motion.xrel, (int)e.motion.yrel, 0, NULL );
-					}
-				} else if ( catcher & KEYCATCH_BROWSER ) {
-					int browserX;
-					int browserY;
-
-					IN_ProjectBrowserMousePosition( e.motion.x, e.motion.y,
-						&browserX, &browserY );
-					Com_QueueEvent( in_eventTime, SE_MOUSE_ABSOLUTE,
-						browserX, browserY, 0, NULL );
-				} else if ( catcher & ( KEYCATCH_UI | KEYCATCH_CGAME ) ) {
-					// Preserve SDL's raw host-window coordinates for retail
-					// UI_MOUSE_EVENT and CG_MOUSE_EVENT projection.
-					Com_QueueEvent( in_eventTime, SE_MOUSE_ABSOLUTE,
-						(int)e.motion.x, (int)e.motion.y, 0, NULL );
-				} else if ( mouseActive && ( e.motion.xrel || e.motion.yrel ) ) {
+					IN_QueueAbsolutePointerPosition( owner,
+						e.motion.x, e.motion.y, in_eventTime );
+				} else if ( s_pointerMode.driveInput && ( e.motion.xrel || e.motion.yrel ) ) {
 					Com_QueueEvent( in_eventTime, SE_MOUSE,
 						(int)e.motion.xrel, (int)e.motion.yrel, 0, NULL );
 				}
@@ -1688,14 +1692,20 @@ void HandleEvents( void )
 			case SDL_EVENT_MOUSE_BUTTON_UP:
 				{
 					int b;
-					const int catcher = Key_GetCatcher();
-					if ( s_absCursor ) {
+					const PointerOwner owner = IN_ResolvePointerOwner();
+
+					if ( fnql::input::PointerOwnerReportsAbsolute( owner ) ) {
 						const Uint32 buttonMask = ( e.button.button > 0 && e.button.button <= 32 ) ?
 							( (Uint32)1u << ( e.button.button - 1 ) ) : 0;
 
 						// Button events carry a position too. Queue it before the key
 						// event in case no separate motion event preceded this click.
-						IN_QueueConsoleAbsolutePosition( e.button.x, e.button.y, in_eventTime );
+						IN_QueueAbsolutePointerPosition( owner,
+							e.button.x, e.button.y, in_eventTime );
+
+						// Every absolute owner holds the pointer for the duration of
+						// a press, matching the native Win32 and X11 backends, so a
+						// drag that leaves the window still delivers its release.
 						if ( e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && buttonMask ) {
 							if ( !s_absCaptureButtons ) {
 								SDL_CaptureMouse( true );
@@ -1707,17 +1717,6 @@ void HandleEvents( void )
 								SDL_CaptureMouse( false );
 							}
 						}
-					} else if ( catcher & KEYCATCH_BROWSER ) {
-						int browserX;
-						int browserY;
-
-						// Button events carry their own position. Project and queue it
-						// before the key so stationary-pointer clicks hit the same
-						// element that the browser draws on high-DPI desktops.
-						IN_ProjectBrowserMousePosition( e.button.x, e.button.y,
-							&browserX, &browserY );
-						Com_QueueEvent( in_eventTime, SE_MOUSE_ABSOLUTE,
-							browserX, browserY, 0, NULL );
 					}
 					switch( e.button.button )
 					{
@@ -1803,9 +1802,17 @@ void HandleEvents( void )
 		}
 	}
 
-	// With the SDL queue drained, sync the console cursor to the OS pointer.
-	if ( s_absCursor && gw_active && mouse_focus )
-		IN_DriveAbsCursor();
+	// With the SDL queue drained, sync the absolute owner's cursor to the OS
+	// pointer. Sys_SendKeyEvents runs whenever the event queue empties, so an
+	// overlay opened under a stationary pointer gets its first position without
+	// waiting for the next IN_Frame.
+	if ( s_pointerMode.driveInput ) {
+		const PointerOwner owner = IN_ResolvePointerOwner();
+
+		if ( fnql::input::PointerOwnerReportsAbsolute( owner ) ) {
+			IN_PollAbsolutePointerPosition( owner );
+		}
+	}
 
 #ifndef _WIN32
 	Sys_ConsoleFrame();
@@ -1833,24 +1840,14 @@ IN_Frame
 */
 void IN_Frame( void )
 {
-	const qboolean browserActive = ( Key_GetCatcher() & KEYCATCH_BROWSER ) ? qtrue : qfalse;
-	const qboolean nativeUiActive = ( Key_GetCatcher() & KEYCATCH_UI ) ? qtrue : qfalse;
-	const qboolean cgameUiActive = ( Key_GetCatcher() & KEYCATCH_CGAME ) ? qtrue : qfalse;
-
 #ifdef USE_JOYSTICK
 	IN_JoyMove();
 #endif
 
-	if ( !gw_active || !mouse_focus || ( in_nograb->integer &&
-		!( Key_GetCatcher() & KEYCATCH_CONSOLE ) && !browserActive
-		&& !nativeUiActive && !cgameUiActive ) ) {
-		IN_DeactivateMouse();
-		return;
-	}
+	IN_ApplyPointerMode();
 
-	IN_ActivateMouse();
-	if ( browserActive || nativeUiActive || cgameUiActive ) {
-		IN_QueueAbsoluteMousePosition();
+	if ( s_pointerMode.driveInput && s_pointerMode.reportAbsolute ) {
+		IN_PollAbsolutePointerPosition( s_pointerOwner );
 	}
 
 	//IN_ProcessEvents();
@@ -1947,11 +1944,18 @@ void IN_Init( void )
 	mouseAvailable = ( in_mouse->value != 0 ) ? qtrue : qfalse;
 	mouse_focus = ( SDL_GetMouseFocus() == SDL_window ) ? qtrue : ( glw_state.isFullscreen ? qtrue : qfalse );
 
+	// The window may have been recreated, so nothing about the previous SDL
+	// pointer state can be assumed. IN_ApplyPointerMode reapplies on the first
+	// frame because the latch starts invalid.
+	s_pointerOwner = PointerOwner::Gameplay;
+	s_pointerMode = PointerMode{};
+	s_pointerModeValid = qfalse;
+	s_absHaveLast = qfalse;
+	s_absCaptureButtons = 0;
+
 	if ( SDL_window && !SDL_StartTextInput( SDL_window ) ) {
 		Com_DPrintf( "SDL_StartTextInput failed: %s\n", SDL_GetError() );
 	}
-
-	//IN_DeactivateMouse();
 
 #ifdef USE_JOYSTICK
 	IN_InitJoystick();
@@ -1975,7 +1979,7 @@ void IN_Shutdown( void )
 		SDL_StopTextInput( SDL_window );
 	}
 
-	IN_DeactivateMouse();
+	IN_ReleasePointer();
 
 	mouseAvailable = qfalse;
 	mouse_focus = qfalse;

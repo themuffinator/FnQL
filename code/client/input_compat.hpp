@@ -48,6 +48,185 @@ owner of the ABI value.
 		GameplayCatcherBits( next, passThroughMask );
 }
 
+/*
+Pointer ownership.
+
+Gameplay, the engine console, and retail's absolute-input overlays (native UI,
+cgame, and the WebUI browser) each want different pointer handling, and every
+platform backend used to derive that decision with its own predicate. Resolve
+it once so the SDL, Win32, and X11 backends agree on the owner for a given key
+catcher and cannot drift apart again.
+
+Console toggling preserves any underlying menu catcher, so the console overlay
+is tested first. A backend that cannot present an absolute console cursor for
+the current display mode passes consoleUsesAbsolutePointer=false, which leaves
+the pointer in its established relative gameplay mode. q_shared.h stays the
+canonical owner of the catcher bit values, so the masks are parameters.
+*/
+enum class PointerOwner {
+	Gameplay, // relative motion drives the view
+	Console,  // the engine console draws its own cursor over the window
+	Menu      // a retail UI/cgame/browser overlay consumes absolute positions
+};
+
+struct PointerOwnerInputs {
+	int catcher = 0;
+	int consoleMask = 0;
+	int menuMask = 0;
+	bool consoleUsesAbsolutePointer = false;
+};
+
+[[nodiscard]] constexpr PointerOwner ResolvePointerOwner(
+	const PointerOwnerInputs& inputs ) noexcept
+{
+	if ( inputs.catcher & inputs.consoleMask ) {
+		return inputs.consoleUsesAbsolutePointer ? PointerOwner::Console
+		                                         : PointerOwner::Gameplay;
+	}
+	return ( inputs.catcher & inputs.menuMask ) ? PointerOwner::Menu
+	                                            : PointerOwner::Gameplay;
+}
+
+[[nodiscard]] constexpr bool PointerOwnerReportsAbsolute( PointerOwner owner ) noexcept
+{
+	return owner != PointerOwner::Gameplay;
+}
+
+/*
+Pointer presentation.
+
+Confinement, relative motion, and OS cursor visibility are independent axes.
+Binding them to a single "grabbed" flag is what left fullscreen menus with an
+unconfined pointer that could be moved onto another display and clicked, which
+drops the game out of focus mid-menu. Windowed overlays keep the free pointer
+retail exposes, because there the desktop has to stay reachable.
+
+An unfocused or minimized window drives no pointer input at all: it must not
+confine the pointer, hide the cursor, or keep reporting positions into a menu
+that the user is no longer looking at.
+*/
+struct PointerModeInputs {
+	PointerOwner owner = PointerOwner::Gameplay;
+	bool focused = true;
+	bool minimized = false;
+	bool fullscreen = false;
+	bool relativeAvailable = true; // in_mouse selects a relative device
+};
+
+struct PointerMode {
+	bool driveInput = false;      // sample or report the pointer at all
+	bool reportAbsolute = false;  // SE_MOUSE_ABSOLUTE lane
+	bool relativeMotion = false;  // SE_MOUSE lane from a captured pointer
+	bool confineToWindow = false; // clip/grab the pointer to the client area
+	bool showSystemCursor = true; // OS cursor over the client area
+	bool recenterPointer = false; // warp to the window centre when entered
+};
+
+[[nodiscard]] constexpr bool operator==( const PointerMode& a, const PointerMode& b ) noexcept
+{
+	return a.driveInput == b.driveInput &&
+		a.reportAbsolute == b.reportAbsolute &&
+		a.relativeMotion == b.relativeMotion &&
+		a.confineToWindow == b.confineToWindow &&
+		a.showSystemCursor == b.showSystemCursor &&
+		a.recenterPointer == b.recenterPointer;
+}
+
+[[nodiscard]] constexpr bool operator!=( const PointerMode& a, const PointerMode& b ) noexcept
+{
+	return !( a == b );
+}
+
+/*
+Absolute pointer coordinate space.
+
+Every absolute consumer works in renderer drawable pixels, not host-window
+coordinates:
+
+- retail's _UI_MouseEvent divides by uiInfo.uiDC.glconfig.vidWidth/vidHeight to
+  reach its 640x480 cursor space, and drops the event entirely when the result
+  leaves that range, so a mismatched space makes an in-game menu completely
+  unresponsive rather than merely inaccurate;
+- retail's CG_MouseEvent divides by cgs.glconfig.vidWidth/vidHeight and clamps;
+- the engine console and the WebUI browser address drawable pixels directly.
+
+The two spaces differ whenever the renderer resolution is not the window size,
+and on SDL they also differ on a scaled desktop, where motion events are
+reported in logical window coordinates. Backends project once, here, so no
+consumer has to guess which space it was handed.
+
+Truncation is deliberate: a host coordinate strictly inside the window stays
+strictly inside the drawable, which keeps the retail UI's upper-bound test from
+rejecting the last row and column.
+*/
+struct PointerProjection {
+	int hostWidth = 0;
+	int hostHeight = 0;
+	int drawableWidth = 0;
+	int drawableHeight = 0;
+};
+
+struct PointerPosition {
+	int x = 0;
+	int y = 0;
+};
+
+[[nodiscard]] inline PointerPosition ProjectPointerToDrawable(
+	int x, int y, const PointerProjection& projection ) noexcept
+{
+	PointerPosition projected{ x, y };
+
+	if ( projection.hostWidth > 0 && projection.drawableWidth > 0 ) {
+		projected.x = static_cast<int>( static_cast<float>( x ) *
+			( static_cast<float>( projection.drawableWidth ) /
+				static_cast<float>( projection.hostWidth ) ) );
+	}
+	if ( projection.hostHeight > 0 && projection.drawableHeight > 0 ) {
+		projected.y = static_cast<int>( static_cast<float>( y ) *
+			( static_cast<float>( projection.drawableHeight ) /
+				static_cast<float>( projection.hostHeight ) ) );
+	}
+
+	return projected;
+}
+
+[[nodiscard]] constexpr PointerMode ResolvePointerMode(
+	const PointerModeInputs& inputs ) noexcept
+{
+	PointerMode mode;
+
+	if ( !inputs.focused || inputs.minimized ) {
+		return mode;
+	}
+
+	mode.driveInput = true;
+	switch ( inputs.owner ) {
+		case PointerOwner::Console:
+			// The console draws its own cursor, so the OS pointer stays hidden
+			// over the client area and is mirrored through the absolute lane.
+			mode.reportAbsolute = true;
+			mode.showSystemCursor = false;
+			mode.confineToWindow = inputs.fullscreen;
+			break;
+
+		case PointerOwner::Menu:
+			mode.reportAbsolute = true;
+			mode.showSystemCursor = true;
+			mode.confineToWindow = inputs.fullscreen;
+			break;
+
+		case PointerOwner::Gameplay:
+		default:
+			mode.relativeMotion = inputs.relativeAvailable;
+			mode.confineToWindow = true;
+			mode.showSystemCursor = false;
+			mode.recenterPointer = true;
+			break;
+	}
+
+	return mode;
+}
+
 constexpr std::size_t kRetailMouseFilterCapacity = 32;
 constexpr int kRetailMouseFilterMaximum =
 	static_cast<int>( kRetailMouseFilterCapacity ) - 1;

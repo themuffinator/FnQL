@@ -169,7 +169,10 @@ void R_LoadBMP( const char *name, byte **pic, int *width, int *height )
 	{
 	  ri.Error (ERR_DROP, "LoadBMP: %s has an invalid image size", name);
 	}
-	if(buf_p + numPixels*bmpHeader.bitsPerPixel/8 > end)
+	// divide before multiplying: bitsPerPixel is one of 8/16/24/32 so the divide
+	// is exact, while numPixels*bitsPerPixel overflows 32 bits well inside the
+	// numPixels range the check above permits, letting a truncated file pass
+	if(buf_p + numPixels*(bmpHeader.bitsPerPixel/8) > end)
 	{
 	  ri.Error (ERR_DROP, "LoadBMP: file truncated (%s)", name);
 	}
@@ -203,8 +206,11 @@ void R_LoadBMP( const char *name, byte **pic, int *width, int *height )
 				*pixbuf++ = 0xff;
 				break;
 			case 16:
-				shortPixel = * ( unsigned short * ) pixbuf;
-				pixbuf += 2;
+				// read the pixel from the source, not the destination, and
+				// advance the destination by 4 like every other case: the old
+				// form stepped pixbuf 6 bytes per column and overran bmpRGBA
+				shortPixel = buf_p[0] | ( buf_p[1] << 8 );
+				buf_p += 2;
 				*pixbuf++ = ( shortPixel & ( 31 << 10 ) ) >> 7;
 				*pixbuf++ = ( shortPixel & ( 31 << 5 ) ) >> 2;
 				*pixbuf++ = ( shortPixel & ( 31 ) ) << 3;

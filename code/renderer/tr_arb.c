@@ -36,6 +36,7 @@ static qboolean globalFogProgramCompiled = qfalse;
 static qboolean globalFogCompositorStateLogged = qfalse;
 static qboolean globalFogCompositorActiveLogged = qfalse;
 static qboolean underwaterProgramCompiled = qfalse;
+static qboolean underwaterCompositorStateLogged = qfalse;
 static qboolean underwaterCompositorActiveLogged = qfalse;
 static qboolean dlightShadowProgramsCompiled = qfalse;
 static qboolean csmShadowProgramsCompiled = qfalse;
@@ -3474,6 +3475,7 @@ static void ARB_DeletePrograms( void )
 	globalFogCompositorStateLogged = qfalse;
 	globalFogCompositorActiveLogged = qfalse;
 	underwaterProgramCompiled = qfalse;
+	underwaterCompositorStateLogged = qfalse;
 	underwaterCompositorActiveLogged = qfalse;
 	dlightShadowProgramsCompiled = qfalse;
 	csmShadowProgramsCompiled = qfalse;
@@ -5198,6 +5200,18 @@ void FBO_DrawUnderwater( void )
 	int destinationIndex;
 	int i;
 
+	/* The resources this layer needs are established once per renderer session,
+	 * so report them once as well.  Without this the only trace of an enabled
+	 * but inert layer was silence: the "compositor active" line below never
+	 * printed and nothing said which prerequisite was missing. */
+	if ( r_underwater && r_underwater->integer && !underwaterCompositorStateLogged ) {
+		ri.Printf( PRINT_DEVELOPER,
+			"Underwater view: OpenGL compositor state fbo %i program %i depth %i rdflags 0x%x\n",
+			fboEnabled, underwaterProgramCompiled, FBO_DepthTextureAvailable(),
+			backEnd.refdef.rdflags );
+		underwaterCompositorStateLogged = qtrue;
+	}
+
 	if ( !r_underwater || !r_underwater->integer || !r_underwaterWarp ||
 		!r_underwaterDispersion || !r_underwaterFog || !r_underwaterVignette ||
 		!fboEnabled || !programCompiled || !underwaterProgramCompiled ||
@@ -5273,8 +5287,11 @@ void FBO_DrawUnderwater( void )
 
 	/* A multisample color target cannot be sampled directly.  Resolve scene
 	 * color and use the ping-pong pair so this pass never samples its own
-	 * color attachment. */
-	if ( frameBufferMultiSampling ) {
+	 * color attachment.  Gate on the pending-resolve flag rather than on the
+	 * multisample mode: the global-fog sidecar composites just before this and
+	 * leaves its result in the resolved buffer, so an unconditional re-resolve
+	 * would overwrite that layer with the raw multisample scene. */
+	if ( blitMSfbo ) {
 		FBO_BlitMS( qfalse );
 		blitMSfbo = qfalse;
 	}
@@ -5291,10 +5308,15 @@ void FBO_DrawUnderwater( void )
 	}
 
 	underwaterFrame = tr.frameCount;
+	/* The absorption drops out silently when the depth copy is unavailable, and
+	 * the live tuning cvars can zero the tint or the edge falloff on their own.
+	 * Report the resolved layer so a composite that only warps says which of
+	 * those it is instead of leaving it to guesswork. */
 	if ( !underwaterCompositorActiveLogged ) {
 		ri.Printf( PRINT_DEVELOPER,
-			"Underwater view: OpenGL compositor active (contents 0x%x, density %.6f, depth %i)\n",
-			contents, density, depthReady );
+			"Underwater view: OpenGL compositor active (contents 0x%x, density %.6f, depth %i,"
+			" warp %.2f px, fog %.2f, edge %.2f)\n",
+			contents, density, depthReady, warpPixels, fogScale, vignette );
 		underwaterCompositorActiveLogged = qtrue;
 	}
 

@@ -90,7 +90,7 @@ extern	int		s_rawend;
 }
 
 
-static void RoQ_init( void );
+static qboolean RoQ_init( void );
 static void CIN_SetLooping (int handle, qboolean loop);
 
 static const char *CL_CinematicBasename( const char *path )
@@ -172,7 +172,10 @@ static std::array<unsigned short, 256 * 256 * 4> vq8;
 
 struct cinematics_t {
 	std::array<byte, DEFAULT_CIN_WIDTH * DEFAULT_CIN_HEIGHT * 4 * 2> linbuf;
-	std::array<byte, 65536> file;
+	// a legal ROQ chunk may be a full 65536 bytes and RoQInterrupt() always
+	// reads/inspects the following 8-byte chunk header alongside it, so the
+	// buffer carries that header's worth of slack
+	std::array<byte, 65536 + 8> file;
 	std::array<short, 256> sqrTable;
 
 	std::array<int, 256> mcomp;
@@ -1197,7 +1200,11 @@ static void RoQReset( void ) {
 	cinTable[currentHandle].iFile.reset();
 	OpenFileRead( cinTable[currentHandle].fileName.data(), cinTable[currentHandle].iFile, qtrue );
 	FileRead( cinTable[currentHandle].iFile.get(), cin.file.data(), 16 );
-	RoQ_init();
+	if ( !RoQ_init() ) {
+		// do not re-enter playback with an unusable frame size
+		cinTable[currentHandle].status = FMV_EOF;
+		return;
+	}
 	cinTable[currentHandle].status = FMV_LOOPED;
 }
 
@@ -1264,7 +1271,11 @@ static void RoQInterrupt()
 				break;
 			case	ZA_SOUND_MONO:
 				if (!cinTable[currentHandle].silent) {
-					ssize = RllDecodeMonoToStereo( framedata, sbuf.data(), cinTable[currentHandle].RoQFrameSize, 0, static_cast<unsigned short>( cinTable[currentHandle].roq_flags ));
+					// two output shorts per input byte
+					unsigned int decodeBytes = cinTable[currentHandle].RoQFrameSize;
+					if ( decodeBytes > sbuf.size() / 2 )
+						decodeBytes = static_cast<unsigned int>( sbuf.size() / 2 );
+					ssize = RllDecodeMonoToStereo( framedata, sbuf.data(), decodeBytes, 0, static_cast<unsigned short>( cinTable[currentHandle].roq_flags ));
 						S_RawSamples( ssize, 22050, 2, 1, AsWritableBytes( sbuf.data() ), s_volume->value );
 				}
 				break;
@@ -1274,7 +1285,11 @@ static void RoQInterrupt()
 						S_Update( 333 );
 						s_rawend = s_soundtime;
 					}
-					ssize = RllDecodeStereoToStereo( framedata, sbuf.data(), cinTable[currentHandle].RoQFrameSize, 0, static_cast<unsigned short>( cinTable[currentHandle].roq_flags ));
+					// one output short per input byte
+					unsigned int decodeBytes = cinTable[currentHandle].RoQFrameSize;
+					if ( decodeBytes > sbuf.size() )
+						decodeBytes = static_cast<unsigned int>( sbuf.size() );
+					ssize = RllDecodeStereoToStereo( framedata, sbuf.data(), decodeBytes, 0, static_cast<unsigned short>( cinTable[currentHandle].roq_flags ));
 						S_RawSamples( ssize, 22050, 2, 2, AsWritableBytes( sbuf.data() ), s_volume->value );
 				}
 				break;
@@ -1315,7 +1330,23 @@ static void RoQInterrupt()
 			return;
 		}
 
-		framedata		 += cinTable[currentHandle].RoQFrameSize;
+		// The ROQ_PACKET "in memory" walk below can advance framedata many times
+		// within a single call, so bound the step instead of forming a pointer
+		// past cin.file and reading the next chunk header through it.
+		{
+			const size_t frameOffset = static_cast<size_t>( framedata - cin.file.data() )
+				+ cinTable[currentHandle].RoQFrameSize;
+
+			if ( frameOffset + 8 > cin.file.size() ) {
+				Com_DPrintf("RoQInterrupt: chunk header past end of buffer\n");
+				cinTable[currentHandle].status = FMV_EOF;
+				if (cinTable[currentHandle].looping) {
+					RoQReset();
+				}
+				return;
+			}
+			framedata = cin.file.data() + frameOffset;
+		}
 		cinTable[currentHandle].roq_id		 = framedata[0] + framedata[1]*256;
 		cinTable[currentHandle].RoQFrameSize = framedata[2] + framedata[3]*256 + framedata[4]*65536;
 		cinTable[currentHandle].roq_flags	 = framedata[6] + framedata[7]*256;
@@ -1354,15 +1385,18 @@ static void RoQInterrupt()
 *
 ******************************************************************************/
 
-static void RoQ_init( void )
+// Returns qfalse when the leading chunk header is unusable. Callers must not
+// start playback in that case: the 24-bit size field can reach 0xFFFFFF, and
+// RoQInterrupt() would hand it straight to FileRead() against cin.file.
+static qboolean RoQ_init( void )
 {
 	cinTable[currentHandle].startTime = cinTable[currentHandle].lastTime = CL_ScaledMilliseconds();
 
 	cinTable[currentHandle].RoQPlayed = 24;
 
-/*	get frame rate */	
+/*	get frame rate */
 	cinTable[currentHandle].roqFPS	 = cin.file[ 6] + cin.file[ 7]*256;
-	
+
 	if (!cinTable[currentHandle].roqFPS) cinTable[currentHandle].roqFPS = 30;
 
 	cinTable[currentHandle].numQuads = -1;
@@ -1371,10 +1405,12 @@ static void RoQ_init( void )
 	cinTable[currentHandle].RoQFrameSize	= cin.file[10] + cin.file[11]*256 + cin.file[12]*65536;
 	cinTable[currentHandle].roq_flags	= cin.file[14] + cin.file[15]*256;
 
-	if (cinTable[currentHandle].RoQFrameSize > 65536 || !cinTable[currentHandle].RoQFrameSize) { 
-		return;
+	if (cinTable[currentHandle].RoQFrameSize > 65536 || !cinTable[currentHandle].RoQFrameSize) {
+		cinTable[currentHandle].RoQFrameSize = 0;
+		return qfalse;
 	}
 
+	return qtrue;
 }
 
 
@@ -1594,9 +1630,8 @@ int CIN_PlayCinematic( const char *arg, int x, int y, int w, int h, int systemBi
 	FileRead( cinTable[currentHandle].iFile.get(), cin.file.data(), 16 );
 
 	RoQID = static_cast<unsigned short>( cin.file[0] ) + static_cast<unsigned short>( cin.file[1] ) * 256;
-	if (RoQID == 0x1084)
+	if (RoQID == 0x1084 && RoQ_init())
 	{
-		RoQ_init();
 //		FS_Read (cin.file, cinTable[currentHandle].RoQFrameSize+8, cinTable[currentHandle].iFile);
 
 		cinTable[currentHandle].status = FMV_PLAY;
@@ -1614,7 +1649,7 @@ int CIN_PlayCinematic( const char *arg, int x, int y, int w, int h, int systemBi
 
 		return currentHandle;
 	}
-	Com_DPrintf("trFMV::play(), invalid RoQ ID\n");
+	Com_DPrintf("trFMV::play(), invalid RoQ ID or frame size\n");
 
 	RoQShutdown();
 	return -1;

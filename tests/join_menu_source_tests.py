@@ -28,6 +28,10 @@ def read_linux_glimp() -> str:
     return (ROOT / "code/unix/linux_glimp.cpp").read_text(encoding="utf-8")
 
 
+def read_pointer_policy() -> str:
+    return (ROOT / "code/client/input_compat.hpp").read_text(encoding="utf-8")
+
+
 def function_body(source: str, name: str) -> str:
     match = re.search(
         rf"static\s+(?:qboolean|void)\s+{name}\s*\([^)]*\)\s*\{{",
@@ -126,29 +130,32 @@ class JoinMenuSourceTests(unittest.TestCase):
         common = (ROOT / "code/qcommon/common.c").read_text(encoding="utf-8")
         qcommon = (ROOT / "code/qcommon/qcommon.h").read_text(encoding="utf-8")
 
+        # The menu owner keeps the visible OS cursor and is fed by a poll, not
+        # only by motion events, so a menu opened under a stationary pointer
+        # still gets deterministic coordinates.
+        self.assertIn("case PointerOwner::Menu:", read_pointer_policy())
+        self.assertIn("mode.showSystemCursor = true;", read_pointer_policy())
+        self.assertIn("IN_ShowCursor( mode.showSystemCursor ? qtrue : qfalse );", sdl_input)
+        self.assertIn("static void IN_PollAbsolutePointerPosition", sdl_input)
         self.assertIn(
-            "if ( browserActive || nativeUiActive || cgameUiActive )",
+            "Com_QueueEvent( eventTime, SE_MOUSE_ABSOLUTE, position.x, position.y, 0, NULL );",
             sdl_input,
         )
-        self.assertIn("IN_ShowCursor( qtrue );", sdl_input)
-        self.assertIn("static void IN_QueueAbsoluteMousePosition", sdl_input)
-        self.assertIn("SE_MOUSE_ABSOLUTE, positionX, positionY", sdl_input)
         self.assertIn(
-            "if ( grabMouse )\n"
-            "\t\t\tSDL_WarpMouseInWindow",
+            "if ( s_pointerMode.driveInput && s_pointerMode.reportAbsolute ) {\n"
+            "\t\tIN_PollAbsolutePointerPosition( s_pointerOwner );",
             sdl_input,
         )
-        self.assertIn(
-            "if ( browserActive || nativeUiActive || cgameUiActive ) {\n"
-            "\t\tIN_QueueAbsoluteMousePosition();",
-            sdl_input,
-        )
+        # Only the confined relative pointer is warped to the window centre.
+        self.assertIn("mode.recenterPointer &&", sdl_input)
         self.assertIn("static void IN_WindowMouse", win_input)
-        self.assertIn("static int IN_AbsolutePointerOwnerKind", win_input)
-        self.assertIn("catcher & KEYCATCH_BROWSER", win_input)
-        self.assertIn("catcher & KEYCATCH_UI", win_input)
-        self.assertIn("catcher & KEYCATCH_CGAME", win_input)
-        self.assertIn("if ( absolutePointerOwner )", win_input)
+        self.assertIn("fnql::input::PointerOwner WIN_ResolvePointerOwner", win_input)
+        self.assertIn("inputs.menuMask = kPointerMenuMask;", win_input)
+        self.assertIn(
+            "kPointerMenuMask = KEYCATCH_UI | KEYCATCH_CGAME | KEYCATCH_BROWSER",
+            win_input,
+        )
+        self.assertIn("PointerOwnerReportsAbsolute( owner )", win_input)
         self.assertIn("IN_WindowMouse();", win_input)
         self.assertIn(
             "SetCursor( LoadCursor( NULL, IDC_ARROW ) );",
@@ -179,24 +186,26 @@ class JoinMenuSourceTests(unittest.TestCase):
         self.assertIn("VM_Call( uivm, 2, UI_MOUSE_EVENT, x, y );", client_input)
         self.assertIn("VM_Call( cgvm, 2, CG_MOUSE_EVENT, x, y );", client_input)
 
-        # SDL frees and hides the host pointer only for the windowed console;
-        # browser/UI/cgame retain their visible, raw-coordinate retail lane.
+        # The console hides the host pointer and mirrors it; browser/UI/cgame
+        # retain their visible retail lane. One shared policy decides both.
+        policy = read_pointer_policy()
+        console_case = policy[
+            policy.index("case PointerOwner::Console:") : policy.index("case PointerOwner::Menu:")
+        ]
+        self.assertIn("mode.reportAbsolute = true;", console_case)
+        self.assertIn("mode.showSystemCursor = false;", console_case)
         self.assertIn(
-            "const qboolean consoleAbsolute = ( consoleActive && !glw_state.isFullscreen )",
-            sdl_input,
+            "return inputs.consoleUsesAbsolutePointer ? PointerOwner::Console",
+            policy,
         )
-        self.assertIn(
-            "const qboolean retailAbsolute = ( !consoleActive &&",
-            sdl_input,
-        )
-        self.assertIn("s_absCursor = consoleAbsolute;", sdl_input)
-        self.assertIn("if ( s_absCursor )", sdl_input)
-        self.assertIn("IN_DriveAbsCursor();", sdl_input)
+
+        # SDL grants the console absolute ownership only in a window.
+        self.assertIn("inputs.consoleUsesAbsolutePointer = !glw_state.isFullscreen;", sdl_input)
+        self.assertIn("IN_PollAbsolutePointerPosition( owner );", sdl_input)
 
         # The non-SDL platform paths provide the same windowed-console policy.
-        self.assertIn("if ( catcher & KEYCATCH_CONSOLE )", win_input)
-        self.assertIn("return !glw_state.cdsFullscreen ? KEYCATCH_CONSOLE : 0", win_input)
-        self.assertIn("static qboolean WIN_ConsoleUsesAbsolutePointer", win_wndproc)
+        self.assertIn("inputs.consoleUsesAbsolutePointer = !glw_state.cdsFullscreen;", win_input)
+        self.assertIn("pointerOwner != fnql::input::PointerOwner::Gameplay", win_wndproc)
         self.assertIn("SE_MOUSE_ABSOLUTE, x, y", win_wndproc)
         self.assertIn("static qboolean IN_ConsoleUsesAbsolutePointer", linux_glimp)
         self.assertIn("if ( IN_AbsolutePointerOwner() )", linux_glimp)

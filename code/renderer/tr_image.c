@@ -1583,14 +1583,18 @@ void R_SetColorMappings( void ) {
 
 	if ( gls.deviceSupportsGamma ) {
 #ifdef USE_FBO
-		if ( fboEnabled )
-			ri.GLimp_SetGamma( s_gammatable_linear, s_gammatable_linear, s_gammatable_linear );
-		else
+		if ( !fboEnabled && applyGamma ) {
+#else
+		if ( applyGamma ) {
 #endif
-		{
-			if ( applyGamma ) {
-				ri.GLimp_SetGamma( s_gammatable, s_gammatable, s_gammatable );
-			}
+			ri.GLimp_SetGamma( s_gammatable, s_gammatable, s_gammatable );
+		} else {
+			// Nothing left for the hardware ramp to do: either the shader path
+			// owns gamma or the settings resolve to pass-through. Ask for the
+			// identity ramp so the platform layer hands the LUT back to the
+			// desktop instead of holding the display on a flat curve, which is
+			// what makes the image jump between the game and other windows.
+			ri.GLimp_SetGamma( s_gammatable_linear, s_gammatable_linear, s_gammatable_linear );
 		}
 	}
 }

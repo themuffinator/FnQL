@@ -357,7 +357,21 @@ static monitor_t *FindNearestMonitor( int x, int y, int w, int h )
 		}
 		slen = ( maxx - minx ) / cnt;
 
-		return list[ cx / slen ];
+		// the segments start at minx, so the centre has to be rebased before it
+		// is divided; using the absolute cx indexed past the end of list[] for
+		// any monitor group that does not begin at x == 0. Clamp regardless:
+		// list[] holds exactly cnt entries.
+		if ( slen > 0 )
+		{
+			i = ( cx - minx ) / slen;
+			if ( i < 0 )
+				i = 0;
+			else if ( i >= cnt )
+				i = cnt - 1;
+			return list[ i ];
+		}
+
+		return list[ 0 ];
 	}
 
 	// search by nearest distance to window center

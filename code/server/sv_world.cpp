@@ -495,7 +495,10 @@ SV_ClipMoveToEntities
 */
 static void SV_ClipMoveToEntities( moveclip_t &clip ) {
 	int			i, num;
-	std::array<int, MAX_GENTITIES> touchlist{};
+	// deliberately uninitialized: SV_AreaEntities() fills [0,count) and returns
+	// count, which bounds every read below. Value-initializing 1024 ints on
+	// every trace is pure memset in the hottest server path.
+	std::array<int, MAX_GENTITIES> touchlist;
 	sharedEntity_t *touch;
 	int			passOwnerNum;
 	trace_t		trace;
@@ -640,7 +643,8 @@ SV_PointContents
 =============
 */
 int SV_PointContents( const vec3_t p, int passEntityNum ) {
-	std::array<int, MAX_GENTITIES> touch{};
+	// see SV_ClipMoveToEntities(): write-before-read, bounded by the return value
+	std::array<int, MAX_GENTITIES> touch;
 	sharedEntity_t *hit;
 	int			i, num;
 	int			contents, c2;

@@ -69,6 +69,7 @@ void GLW_UpdateWindowState( void );
 void GLW_EnsureWindowOnScreen( void );
 void GLW_HideFullscreenWindow( void );
 void GLW_RestoreGamma( void );
+void GLW_ReapplyGamma( void );
 
 // signals.c
 void InitSig( void );

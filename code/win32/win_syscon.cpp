@@ -844,8 +844,16 @@ static LRESULT WINAPI InputLineWndProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPA
 			while ( *s == '\\' || *s == '/' ) // skip leading slashes
 				s++;
 
-			strncat( s_wcd.consoleText, s, sizeof( s_wcd.consoleText ) - strlen( s_wcd.consoleText ) - 2 );
-			strcat( s_wcd.consoleText, "\n" );
+			// The old size argument underflowed to SIZE_MAX once consoleText
+			// saturated (512 - 511 - 2 in size_t), letting strncat run past the
+			// buffer. Flush first, then append bounded, matching the unix
+			// SysCon_AppendSubmittedCommand() behaviour -- Q_strcat alone would
+			// silently drop the command instead of queueing it.
+			if ( strlen( s_wcd.consoleText ) + strlen( s ) + 2 >= sizeof( s_wcd.consoleText ) ) {
+				s_wcd.consoleText[0] = '\0';
+			}
+			Q_strcat( s_wcd.consoleText, sizeof( s_wcd.consoleText ), s );
+			Q_strcat( s_wcd.consoleText, sizeof( s_wcd.consoleText ), "\n" );
 
 			SetWindowText( s_wcd.hwndInputLine, T("") );
 			Field_Clear( &console );

@@ -50,6 +50,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <unistd.h>
 
 #include "../client/client.h"
+#include "../client/input_compat.hpp"
 #include "../platform/window_placement.hpp"
 #include "linux_local.h"
 #include "unix_glw.h"
@@ -135,11 +136,20 @@ static qboolean window_exposed;
 static qboolean mouse_avail;
 static qboolean mouse_active = qfalse;
 static Cursor invisible_cursor = None;
+static qboolean window_cursor_valid = qfalse;
+static qboolean window_cursor_shown = qtrue;
 static qboolean absolute_position_valid = qfalse;
 static int absolute_position_x;
 static int absolute_position_y;
-static int absolute_pointer_owner;
 static unsigned int temporary_capture_buttons;
+
+// X11 allows one pointer grab per client, so pointer confinement and the
+// temporary drag capture share it and the grab is re-issued whenever the set of
+// reasons changes.
+#define POINTER_GRAB_CONFINE 0x1
+#define POINTER_GRAB_DRAG    0x2
+static int pointer_grab_reasons;
+
 static int mwx, mwy;
 static int mx = 0, my = 0;
 
@@ -168,33 +178,66 @@ static int mouse_threshold;
 
 static int win_x, win_y;
 
+static constexpr int kPointerMenuMask = KEYCATCH_UI | KEYCATCH_CGAME | KEYCATCH_BROWSER;
+
+using fnql::input::PointerMode;
+using fnql::input::PointerOwner;
+
+static PointerOwner absolute_pointer_owner = PointerOwner::Gameplay;
+
+/*
+================
+IN_ConsoleUsesAbsolutePointer
+
+A fullscreen X11 window on a multi-monitor desktop still leaves the rest of the
+desktop reachable, so the console keeps its absolute cursor there. On a single
+display the fullscreen console keeps the relative gameplay pointer, matching the
+SDL and Win32 backends.
+================
+*/
 static qboolean IN_ConsoleUsesAbsolutePointer( void )
 {
-	return ( Key_GetCatcher() & KEYCATCH_CONSOLE ) &&
-		( !glw_state.cdsFullscreen || glw_state.monitorCount > 1 ) ? qtrue : qfalse;
+	return ( !glw_state.cdsFullscreen || glw_state.monitorCount > 1 ) ? qtrue : qfalse;
 }
 
-enum {
-	ABSOLUTE_POINTER_NONE,
-	ABSOLUTE_POINTER_CONSOLE,
-	ABSOLUTE_POINTER_RETAIL
-};
+/*
+================
+IN_AbsolutePointerOwnerKind
 
-static int IN_AbsolutePointerOwnerKind( void )
+Console toggling preserves any underlying UI/browser/cgame catcher, so the
+overlay on top owns the pointer. Shared with the SDL and Win32 backends through
+input_compat.hpp.
+================
+*/
+static PointerOwner IN_AbsolutePointerOwnerKind( void )
 {
-	const int catcher = Key_GetCatcher();
-	// Console toggling preserves any underlying UI/browser/cgame catcher. Give
-	// the overlay ownership first so fullscreen console input remains relative.
-	if ( catcher & KEYCATCH_CONSOLE ) {
-		return IN_ConsoleUsesAbsolutePointer() ? ABSOLUTE_POINTER_CONSOLE : ABSOLUTE_POINTER_NONE;
-	}
-	return ( catcher & ( KEYCATCH_BROWSER | KEYCATCH_UI | KEYCATCH_CGAME ) ) ?
-		ABSOLUTE_POINTER_RETAIL : ABSOLUTE_POINTER_NONE;
+	fnql::input::PointerOwnerInputs inputs;
+
+	inputs.catcher = Key_GetCatcher();
+	inputs.consoleMask = KEYCATCH_CONSOLE;
+	inputs.menuMask = kPointerMenuMask;
+	inputs.consoleUsesAbsolutePointer = IN_ConsoleUsesAbsolutePointer() ? true : false;
+
+	return fnql::input::ResolvePointerOwner( inputs );
+}
+
+static PointerMode IN_ResolvePointerMode( PointerOwner owner )
+{
+	fnql::input::PointerModeInputs inputs;
+
+	inputs.owner = owner;
+	inputs.focused = gw_active ? true : false;
+	inputs.minimized = gw_minimized ? true : false;
+	inputs.fullscreen = glw_state.cdsFullscreen ? true : false;
+	inputs.relativeAvailable = true;
+
+	return fnql::input::ResolvePointerMode( inputs );
 }
 
 static qboolean IN_AbsolutePointerOwner( void )
 {
-	return IN_AbsolutePointerOwnerKind() != ABSOLUTE_POINTER_NONE ? qtrue : qfalse;
+	return fnql::input::PointerOwnerReportsAbsolute( IN_AbsolutePointerOwnerKind() )
+		? qtrue : qfalse;
 }
 
 /*****************************************************************************
@@ -455,30 +498,121 @@ static Cursor CreateNullCursor( Display *display, Window root )
 	return cursor;
 }
 
+/*
+================
+IN_ShowWindowCursor
+
+Latched: IN_Frame evaluates the wanted cursor state every frame and this would
+otherwise cost an X round trip per frame while any overlay is open.
+================
+*/
 static void IN_ShowWindowCursor( qboolean show )
 {
-	if ( show ) {
-		XUndefineCursor( dpy, win );
+	if ( !dpy || !win ) {
 		return;
 	}
-	if ( invisible_cursor == None ) {
-		invisible_cursor = CreateNullCursor( dpy, win );
+	if ( window_cursor_valid && window_cursor_shown == show ) {
+		return;
 	}
-	XDefineCursor( dpy, win, invisible_cursor );
+
+	if ( show ) {
+		XUndefineCursor( dpy, win );
+	} else {
+		if ( invisible_cursor == None ) {
+			invisible_cursor = CreateNullCursor( dpy, win );
+		}
+		XDefineCursor( dpy, win, invisible_cursor );
+	}
+
+	window_cursor_shown = show;
+	window_cursor_valid = qtrue;
+}
+
+
+/*
+================
+IN_ApplyPointerGrab
+
+Confinement and drag capture share the single X11 client pointer grab.
+Confinement needs confine_to=win; a drag over an unconfined pointer must not
+confine, so the grab is re-issued whenever the reason set changes. A failed
+grab leaves the previous reasons in place so the next frame retries.
+================
+*/
+static void IN_ApplyPointerGrab( int reasons )
+{
+	Window confineTo;
+	int result;
+
+	if ( !dpy || !win ) {
+		pointer_grab_reasons = 0;
+		return;
+	}
+
+	if ( reasons == pointer_grab_reasons ) {
+		return;
+	}
+
+	if ( !reasons ) {
+		XUngrabPointer( dpy, CurrentTime );
+		pointer_grab_reasons = 0;
+		return;
+	}
+
+	confineTo = ( reasons & POINTER_GRAB_CONFINE ) ? win : None;
+	result = XGrabPointer( dpy, win, True, MOUSE_MASK,
+		GrabModeAsync, GrabModeAsync, confineTo, None, CurrentTime );
+	if ( result != GrabSuccess ) {
+		Com_DPrintf( "X11 pointer grab failed: %d\n", result );
+		return;
+	}
+
+	pointer_grab_reasons = reasons;
+}
+
+
+/*
+================
+IN_SetPointerConfinement
+
+A fullscreen window has no desktop edge to stop a freely moving overlay pointer,
+so without a confining grab it walks onto another display and a click there
+drops the game out of focus mid-menu.
+================
+*/
+static void IN_SetPointerConfinement( qboolean confine )
+{
+	if ( confine ) {
+		IN_ApplyPointerGrab( pointer_grab_reasons | POINTER_GRAB_CONFINE );
+	} else {
+		IN_ApplyPointerGrab( pointer_grab_reasons & ~POINTER_GRAB_CONFINE );
+	}
 }
 
 
 static void IN_QueueAbsolutePointerPosition( int eventTime, int x, int y )
 {
-	// X11 client coordinates are native framebuffer pixels here: retail owners
-	// receive them raw, while the console consumes them as its screen position.
-	if ( absolute_position_valid && x == absolute_position_x && y == absolute_position_y ) {
+	// X11 reports window coordinates, which are the renderer's drawable pixels
+	// only while the renderer resolution matches the window. Every absolute
+	// consumer - the console, the WebUI browser, and retail's UI and cgame
+	// overlays - works in drawable pixels, so project once here.
+	fnql::input::PointerProjection projection;
+	fnql::input::PointerPosition position;
+
+	projection.hostWidth = window_width;
+	projection.hostHeight = window_height;
+	projection.drawableWidth = cls.glconfig.vidWidth;
+	projection.drawableHeight = cls.glconfig.vidHeight;
+	position = fnql::input::ProjectPointerToDrawable( x, y, projection );
+
+	if ( absolute_position_valid && position.x == absolute_position_x
+		&& position.y == absolute_position_y ) {
 		return;
 	}
 	absolute_position_valid = qtrue;
-	absolute_position_x = x;
-	absolute_position_y = y;
-	Sys_QueEvent( eventTime, SE_MOUSE_ABSOLUTE, x, y, 0, NULL );
+	absolute_position_x = position.x;
+	absolute_position_y = position.y;
+	Sys_QueEvent( eventTime, SE_MOUSE_ABSOLUTE, position.x, position.y, 0, NULL );
 }
 
 
@@ -518,10 +652,8 @@ static void IN_BeginTemporaryPointerCapture( unsigned int button )
 	}
 
 	if ( !temporary_capture_buttons ) {
-		const int result = XGrabPointer( dpy, win, True, MOUSE_MASK,
-			GrabModeAsync, GrabModeAsync, None, None, CurrentTime );
-		if ( result != GrabSuccess ) {
-			Com_DPrintf( "Temporary X11 pointer capture failed: %d\n", result );
+		IN_ApplyPointerGrab( pointer_grab_reasons | POINTER_GRAB_DRAG );
+		if ( !( pointer_grab_reasons & POINTER_GRAB_DRAG ) ) {
 			return;
 		}
 	}
@@ -532,11 +664,10 @@ static void IN_BeginTemporaryPointerCapture( unsigned int button )
 static void IN_EndTemporaryPointerCapture( void )
 {
 	if ( temporary_capture_buttons ) {
-		if ( dpy ) {
-			XUngrabPointer( dpy, CurrentTime );
-		}
 		temporary_capture_buttons = 0;
 	}
+	// Confinement, if any, survives the drag.
+	IN_ApplyPointerGrab( pointer_grab_reasons & ~POINTER_GRAB_DRAG );
 }
 
 
@@ -546,8 +677,8 @@ static void IN_ReleaseTemporaryPointerButton( unsigned int button )
 		return;
 	}
 	temporary_capture_buttons &= ~IN_PointerButtonMask( button );
-	if ( !temporary_capture_buttons && dpy ) {
-		XUngrabPointer( dpy, CurrentTime );
+	if ( !temporary_capture_buttons ) {
+		IN_ApplyPointerGrab( pointer_grab_reasons & ~POINTER_GRAB_DRAG );
 	}
 }
 
@@ -568,6 +699,9 @@ static void install_mouse_grab( void )
 	XGetPointerControl( dpy, &mouse_accel_numerator, &mouse_accel_denominator, &mouse_threshold );
 
 	// do this earlier?
+	// Relative gameplay installs its own grab, so the shared confine/drag
+	// bookkeeping no longer describes the server state.
+	pointer_grab_reasons = 0;
 	res = XGrabPointer( dpy, win, False, MOUSE_MASK, GrabModeAsync, GrabModeAsync, win, None, CurrentTime );
 	if ( res != GrabSuccess )
 	{
@@ -645,10 +779,12 @@ static void uninstall_mouse_grab( void )
 
 	XUngrabPointer( dpy, CurrentTime );
 	XUngrabKeyboard( dpy, CurrentTime );
+	pointer_grab_reasons = 0;
 
-	// Retail UI owners retain the host cursor. The windowed console draws its
-	// own cursor, so hide the host cursor only over the client area.
-	IN_ShowWindowCursor( IN_ConsoleUsesAbsolutePointer() ? qfalse : qtrue );
+	// Retail UI owners retain the host cursor. The console draws its own cursor,
+	// so hide the host cursor only over the client area.
+	IN_ShowWindowCursor(
+		IN_AbsolutePointerOwnerKind() == PointerOwner::Console ? qfalse : qtrue );
 
 	XSync( dpy, False );
 }
@@ -744,10 +880,20 @@ static qboolean WindowMinimized( Display *dpy, Window win )
 		return qfalse;
 
 	atoms = NULL;
+	num_items = 0;
 
-	XGetWindowProperty( dpy, win, nws, 0, 0x7FFFFFFF, False, XA_ATOM,
-		&actual_type, &actual_format, &num_items,
-		&bytes_after, (unsigned char**)&atoms );
+	// Xlib returns early without assigning *nitems_return or *prop_return when
+	// the request fails, so both have to be validated before the loop -- the
+	// same way X11_ReadCardinals() and X11_WindowHasState() below already do.
+	if ( XGetWindowProperty( dpy, win, nws, 0, 0x7FFFFFFF, False, XA_ATOM,
+			&actual_type, &actual_format, &num_items,
+			&bytes_after, (unsigned char**)&atoms ) != Success ||
+		actual_type != XA_ATOM || actual_format != 32 || atoms == NULL )
+	{
+		if ( atoms )
+			XFree( atoms );
+		return qfalse;
+	}
 
 	for ( i = 0; i < num_items; i++ )
 	{
@@ -1318,6 +1464,9 @@ void HandleEvents( void )
 				Com_DPrintf( "FocusIn\n" );
 			} else {
 				IN_EndTemporaryPointerCapture();
+				// Never hold the pointer confined or hidden across focus loss.
+				IN_SetPointerConfinement( qfalse );
+				IN_ShowWindowCursor( qtrue );
 				gw_active = qfalse;
 				Com_DPrintf( "FocusOut\n" );
 			}
@@ -2036,6 +2185,13 @@ rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, qboolean
 	win = XCreateWindow( dpy, root, 0, 0, actualWidth, actualHeight,
 		0, visinfo->depth, InputOutput, visinfo->visual, mask, &attr );
 
+	// A fresh window inherits the default cursor and holds no grab, so the
+	// latched pointer presentation from the previous window is meaningless.
+	window_cursor_valid = qfalse;
+	window_cursor_shown = qtrue;
+	pointer_grab_reasons = 0;
+	temporary_capture_buttons = 0;
+
 	motifWMHints = XInternAtom( dpy, "_MOTIF_WM_HINTS", True );
 
 	if ( motifWMHints != None )
@@ -2515,7 +2671,9 @@ void IN_Init( void )
 void IN_Shutdown( void )
 {
 	IN_EndTemporaryPointerCapture();
-	absolute_pointer_owner = ABSOLUTE_POINTER_NONE;
+	IN_SetPointerConfinement( qfalse );
+	IN_ShowWindowCursor( qtrue );
+	absolute_pointer_owner = PointerOwner::Gameplay;
 	absolute_position_valid = qfalse;
 	mouse_avail = qfalse;
 
@@ -2540,36 +2698,45 @@ void IN_Restart_f( void )
 
 void IN_Frame( void )
 {
-	const int pointerOwner = IN_AbsolutePointerOwnerKind();
+	const PointerOwner pointerOwner = IN_AbsolutePointerOwnerKind();
+	const PointerMode mode = IN_ResolvePointerMode( pointerOwner );
 
 #ifdef USE_JOYSTICK
 	IN_JoyMove();
 #endif
 
-	if ( pointerOwner != ABSOLUTE_POINTER_NONE ) {
+	if ( fnql::input::PointerOwnerReportsAbsolute( pointerOwner ) ) {
 		if ( pointerOwner != absolute_pointer_owner ) {
+			// The coordinate lane changed; drop drag capture and the dedup cache
+			// so the new owner receives a deterministic first position.
 			IN_EndTemporaryPointerCapture();
 			absolute_position_valid = qfalse;
 		}
 		absolute_pointer_owner = pointerOwner;
 		IN_DeactivateMouse();
-		if ( !gw_active || gw_minimized ) {
+
+		if ( !mode.driveInput ) {
 			IN_EndTemporaryPointerCapture();
+			IN_SetPointerConfinement( qfalse );
 			IN_ShowWindowCursor( qtrue );
+			absolute_position_valid = qfalse;
 			return;
 		}
-		IN_ShowWindowCursor( pointerOwner == ABSOLUTE_POINTER_CONSOLE ? qfalse : qtrue );
+
+		IN_SetPointerConfinement( mode.confineToWindow ? qtrue : qfalse );
+		IN_ShowWindowCursor( mode.showSystemCursor ? qtrue : qfalse );
 		IN_PollAbsolutePointerPosition();
 		return;
 	}
 
-	if ( absolute_pointer_owner != ABSOLUTE_POINTER_NONE ) {
+	if ( absolute_pointer_owner != PointerOwner::Gameplay ) {
 		IN_EndTemporaryPointerCapture();
-		absolute_pointer_owner = ABSOLUTE_POINTER_NONE;
+		IN_SetPointerConfinement( qfalse );
+		absolute_pointer_owner = PointerOwner::Gameplay;
 		absolute_position_valid = qfalse;
 	}
 
-	if ( !gw_active || gw_minimized || in_nograb->integer ) {
+	if ( !mode.driveInput || in_nograb->integer ) {
 		IN_DeactivateMouse();
 		return;
 	}

@@ -2197,9 +2197,19 @@ qboolean CL_WebHost_ShowAfterDisconnect( void ) {
 	}
 
 	// The browser supersedes the native main menu as soon as its retained
-	// surface is ready. Pending surfaces remain explicitly visible in bridge
-	// state and acquire KEYCATCH_BROWSER on the next WebUI frame.
+	// surface is ready.
 	Key_SetCatcher( Key_GetCatcher() & ~KEYCATCH_UI );
+
+	// Publish ownership synchronously rather than waiting for the next WebUI
+	// frame. SCR_DrawScreenField force-activates UIMENU_MAIN on any
+	// CA_DISCONNECTED frame that sees no browser owner, and retail's
+	// _UI_SetActiveMenu( UIMENU_MAIN ) then takes KEYCATCH_UI - which suppresses
+	// the browser for good. A disconnect always reached that frame first, so the
+	// native fallback won every time.
+	//
+	// A ready surface publishes web_browserActive here; a pending one publishes
+	// ui_browserAwesomiumPending below. SCR_DrawScreenField accepts either.
+	CL_WebHost_UpdateOverlayOwnership();
 	CL_RefreshOnlineServicesBridgeState();
 	return qtrue;
 }

@@ -106,6 +106,7 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
 - _None yet._
 
 ### Fixes
+- Transparent surfaces behind an enhanced liquid (`r_liquid 1`) no longer vanish when you look through it. Fog volumes, items sorted to show through the water plane, and other transparent shaders drawn before the liquid were being erased by the refraction underlay, which replaces the background with a scene copy that was taken too early to contain them. The copy is now taken immediately before the first liquid surface, so that work is refracted along with the rest of the scene.
 - Enhanced liquid refraction (`r_liquid`) no longer leaves a faint double image of the scene behind the surface. The warped view now replaces the background instead of being blended over the unwarped copy of it, and `r_liquidRefraction` scales how far the view bends.
 - Liquid reflections use a proper Schlick falloff, so water is nearly clear when you look straight down at it and only turns mirror-like toward grazing angles, instead of carrying the same milky sheen from every direction.
 - Enhanced liquid refraction now keeps its crisp waterline on the Vulkan renderer when soft particles are disabled (`r_depthFade 0`); the depth used to reject foreground samples was previously never captured in that configuration.
@@ -113,6 +114,22 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
 - Sloped and vertical liquid surfaces now catch the wave shimmer at full strength; the highlight was being partly cancelled on anything that was not a flat pool.
 - Escape no longer gets stuck on the browser overlay after the overlay has lost the surface it was drawing, so a menu you cannot see cannot keep swallowing the key.
 - Detailed models that retail Quake Live loads no longer fail with "has more than 999 verts on a surface". The per-surface geometry budget was still Quake III's 1000 vertices rather than retail's 2000, which rejected stock content such as the heavy machine gun. All three renderers now accept every surface retail does.
+- Leaving a game returns you to the Quake Live menu instead of the plain fallback screen. Ending a local match shuts the server down and drops straight to the disconnected state without ever running the disconnect path that resumes the menu, so the browser stayed paused and the engine brought up the basic native menu in its place. Every route back out of a game — quitting a local match, disconnecting from a server, an error drop, the end of a demo — now restores the real menu, and falls back to the native one only when the menu runtime genuinely is not available.
+- In-game menus respond to the mouse again. The engine was handing the retail UI and cgame raw window coordinates, but both divide what they receive by the renderer resolution to reach their cursor space — and the UI throws the event away when the result lands outside it. So on a scaled desktop, or with any resolution that is not the window size, the menu cursor was either offset from your pointer or the menu ignored the mouse completely. Every absolute position is now converted once, the same way the console and the browser already were.
+- Opening an in-game menu in fullscreen no longer lets the mouse wander onto another display, where a stray click would drop the game out of focus in the middle of the menu. The pointer is now held inside a fullscreen window while a menu or the console owns it; windowed menus still leave it free so the desktop stays reachable.
+- An in-game menu no longer follows the desktop mouse while the game is in the background on the non-SDL Windows build, so alt-tabbing away and moving the mouse no longer leaves a different item highlighted when you come back.
+- Dragging inside a menu now keeps working if the mouse leaves the window mid-drag on the default SDL build, matching the other platform backends; the release used to be lost and the control stayed stuck to the pointer.
+- The console cursor no longer jitters between two positions when the console is opened on top of an in-game menu on a scaled desktop or a non-native renderer resolution.
+- Hardened the loaders that read untrusted content. Malformed maps, models, and images from a downloaded pk3 or workshop item are now rejected with a clear message instead of corrupting memory: BSP visibility and patch lumps, MD3 and MDR models, and the PCX and BMP image readers all validate their declared sizes against the data actually present. A stock, well-formed asset is unaffected.
+- A broken or hostile ROQ cinematic can no longer overrun the video decoder's buffers; an unusable header now stops playback instead of starting it.
+- A server no longer crashes when a client stops acknowledging reliable commands. The overflow path used to recurse into itself while announcing the disconnect until the stack ran out.
+- Recording a demo from a hostile server or replaying a crafted one no longer overflows the client's saved-snapshot buffer.
+- Shutting down a server now actually releases each client's download buffers, queued network fragments, demo handles, and Steam auth sessions; the cleanup loop was running zero times because the client count had already been cleared.
+- Fixed a shader referencing a lightmap the current map does not have; it now falls back to white instead of reading a stale pointer from the previously loaded map.
+- RTX: compacting the world acceleration structure no longer drops the world out of the ray-traced scene and forces a full rebuild every frame.
+- Vulkan: depth/stencil barriers now cover both aspects, clearing a stream of validation errors, and the descriptor pool accounts for every bloom pass so a full texture set can no longer exhaust it.
+- Server traces no longer clear a 4 KB scratch buffer on every call, removing a large amount of pointless work from the busiest server path.
+- Loading a map no longer prints a line per curved surface to the console and log.
 
 ### Documentation and Tooling
 - _None yet._

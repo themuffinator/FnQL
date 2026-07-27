@@ -638,6 +638,20 @@ static void record_image_layout_transition( VkCommandBuffer command_buffer, VkIm
 	VkImageMemoryBarrier barrier;
 	uint32_t src_stage, dst_stage;
 
+	/*
+	 * The renderer does not enable separateDepthStencilLayouts, so a barrier
+	 * covering any of our depth/stencil images must transition BOTH aspects
+	 * even where the image view and the copy regions intentionally address only
+	 * the depth aspect.  All of these are created with vk.depth_format, which
+	 * carries a stencil aspect whenever glConfig.stencilBits is non-zero.
+	 */
+	if ( glConfig.stencilBits > 0 && ( image_aspect_flags & VK_IMAGE_ASPECT_DEPTH_BIT ) &&
+		( image == vk.depth_image || image == vk.depth_fade_image ||
+		  image == vk.dlight_shadow_image || image == vk.spot_shadow_image ||
+		  image == vk.csm_shadow_image ) ) {
+		image_aspect_flags |= VK_IMAGE_ASPECT_STENCIL_BIT;
+	}
+
 	switch ( old_layout ) {
 		case VK_IMAGE_LAYOUT_UNDEFINED:
 			if ( src_stage_override != 0 )
@@ -7066,7 +7080,11 @@ void vk_initialize( void )
 		uint32_t poolIndex, maxSets;
 
 		pool_size[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-		pool_size[0].descriptorCount = MAX_DRAWIMAGES + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + VK_NUM_BLOOM_PASSES * 2; // color, motion, screenmap, liquid source/target, depth fade, shadow atlases, bloom descriptors
+		// color, motion, underwater, screenmap, liquid source/target, depth fade,
+		// dlight/spot/csm shadow atlases, then the bloom extract descriptor plus
+		// one pair per blur pass -- ARRAY_LEN( vk.bloom_image_descriptor ), which
+		// is 1 + VK_NUM_BLOOM_PASSES * 2, not VK_NUM_BLOOM_PASSES * 2
+		pool_size[0].descriptorCount = MAX_DRAWIMAGES + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + ( 1 + VK_NUM_BLOOM_PASSES * 2 );
 
 		pool_size[1].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
 		pool_size[1].descriptorCount = NUM_COMMAND_BUFFERS;
@@ -12622,6 +12640,9 @@ When the depth copy is unavailable the medium density is uploaded as zero, which
 leaves the warp and the edge falloff intact instead of dropping the whole layer.
 ====================
 */
+static int vk_underwater_logged_state = -1;
+
+
 qboolean vk_draw_underwater( void )
 {
 	vec4_t phaseCoeffs[UNDERWATER_WAVE_OCTAVES];
@@ -12650,7 +12671,13 @@ qboolean vk_draw_underwater( void )
 		!r_underwaterDispersion || !r_underwaterFog || !r_underwaterVignette ) {
 		return qfalse;
 	}
-	if ( backEnd.doneUnderwater || !backEnd.doneSurfaces || !vk.fboActive ||
+	/* Deliberately no backEnd.doneSurfaces test here.  The layer composites from
+	 * inside RB_DrawSurfs, right after the world pass and before that flag is
+	 * raised for bloom, so it is still clear at this point; requiring it skipped
+	 * the composite on every frame whose primary view was not preceded by
+	 * another 3D pass.  vk_draw_global_fog and the OpenGL FBO_DrawUnderwater
+	 * composite from the same place and do not test it either. */
+	if ( backEnd.doneUnderwater || !vk.fboActive ||
 		( backEnd.refdef.rdflags & RDF_NOWORLDMODEL ) ) {
 		return qfalse;
 	}
@@ -12722,6 +12749,18 @@ qboolean vk_draw_underwater( void )
 	R_UnderwaterSceneColor( contents, outputScale, sceneLinear, sceneColor );
 
 	backEnd.doneUnderwater = qtrue;
+
+	/* The absorption drops out silently when the depth copy is unavailable, and
+	 * the live tuning cvars can zero the tint or the edge falloff on their own.
+	 * Report the resolved layer whenever that mix changes, so a composite that
+	 * only warps says which of those it is instead of leaving it to guesswork. */
+	if ( vk_underwater_logged_state != ( contents | ( depthReady ? 0x10000 : 0 ) ) ) {
+		vk_underwater_logged_state = contents | ( depthReady ? 0x10000 : 0 );
+		ri.Printf( PRINT_DEVELOPER,
+			"Underwater view: Vulkan compositor active (contents 0x%x, density %.6f, depth %i,"
+			" warp %.2f px, fog %.2f, edge %.2f)\n",
+			contents, density, depthReady, warpPixels, fogScale, vignette );
+	}
 
 	waveTime = R_UnderwaterWaveTime( backEnd.refdef.floatTime );
 	for ( i = 0; i < UNDERWATER_WAVE_OCTAVES; i++ ) {

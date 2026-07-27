@@ -239,8 +239,6 @@ void SV_AddServerCommand( client_t *client, const char *cmd ) {
 	client->reliableSequence = fnql::net::NextCounter( client->reliableSequence );
 	// if we would be losing an old command that hasn't been acknowledged,
 	// we must drop the connection
-	// we check == instead of >= so a broadcast print added by SV_DropClient()
-	// doesn't cause a recursive drop client
 	if ( !fnql::net::PendingCounterCount( client->reliableSequence,
 		client->reliableAcknowledge, pendingCount ) ||
 		pendingCount >= MAX_RELIABLE_COMMANDS + 1u ) {
@@ -253,6 +251,14 @@ void SV_AddServerCommand( client_t *client, const char *cmd ) {
 			Com_Printf( "cmd %5d: %s\n", i, client->reliableCommands[ idx & ( MAX_RELIABLE_COMMANDS - 1 ) ] );
 		}
 		Com_Printf( "cmd %5u: %s\n", pendingCount, cmd );
+		// SV_DropClient() broadcasts a "print" reason to every client, which
+		// re-enters this function for this very client while it is still
+		// CS_ACTIVE. Collapse the reliable window first so the re-entrant add
+		// takes the normal path instead of recursing until the stack is gone.
+		// Only the local bookkeeping field is touched: the wire-visible
+		// acknowledge is read from the client's own packets, and
+		// reliableSequence must stay monotonic, so neither is disturbed.
+		client->reliableAcknowledge = client->reliableSequence;
 		SV_DropClient( client, "Server command overflow" );
 		return;
 	}

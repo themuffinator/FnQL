@@ -353,7 +353,10 @@ SV_LocateGameData
 static void SV_LocateGameData( sharedEntity_t *gEnts, int numGEntities, int sizeofGEntity_t, playerState_t *clients, int sizeofGameClient ) {
 
 	if ( !gvm->entryPoint && !gvm->dllExports ) {
-		if ( numGEntities > MAX_GENTITIES ) {
+		// <= 0 must be rejected here: numGEntities is the divisor below, and the
+		// mixed int/uint32_t operands make that an unsigned division, so zero
+		// traps rather than merely being undefined
+		if ( numGEntities <= 0 || numGEntities > MAX_GENTITIES ) {
 			Com_Error( ERR_DROP, "%s: bad entity count %i", __func__, numGEntities );
 		} else {
 			if ( sizeofGEntity_t < 0 || static_cast<uint32_t>( sizeofGEntity_t ) > gvm->exactDataLength / numGEntities ) {

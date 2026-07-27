@@ -959,6 +959,7 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs, rbDr
 #ifdef USE_VULKAN
 	qboolean		depthFadeSnapshot;
 	qboolean		liquidSnapshotPending;
+	qboolean		liquidDepthPending;
 	qboolean		worldCelOutlineDrawn;
 #endif
 	double			originalTime; // -EC-
@@ -984,6 +985,7 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs, rbDr
 	worldCelOutlineDrawn = qfalse;
 	liquidSnapshotPending = RB_DrawSurfListNeedsLiquidSnapshot(
 		drawSurfs, numDrawSurfs, mode );
+	liquidDepthPending = liquidSnapshotPending;
 #endif
 	depthRange = qfalse;
 
@@ -1071,15 +1073,30 @@ static void RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs, rbDr
 				RB_DrawWorldCelOutlineForScene( &worldCelOutlineDrawn );
 			}
 			/*
-			 * Snapshot only after opaque raster/PMLIGHT work, and before the
-			 * first fog/liquid/translucent batch. In RT composition this runs
-			 * in the overlay list, after the trace has produced the base.
+			 * Opaque depth for the waterline rejection is copied at the fixed
+			 * SS_FOG boundary, after opaque raster/PMLIGHT work, and before
+			 * the color capture: it must describe the solid scene and the copy
+			 * only runs inside the primary main pass.
 			 */
-			if ( liquidSnapshotPending && shader->sort >= SS_FOG ) {
+			if ( liquidDepthPending && shader->sort >= SS_FOG ) {
 				if ( !vk_depth_fade_ready() &&
 					vk_depth_fade_available() ) {
 					vk_copy_depth_fade();
 				}
+				liquidDepthPending = qfalse;
+			}
+			/*
+			 * Capture the color snapshot immediately before the first enhanced
+			 * liquid batch, not at the SS_FOG boundary. The underlay replaces
+			 * the destination at the liquid type's own opacity, so transparent
+			 * work already blended behind the face - fog, SS_UNDERWATER items,
+			 * earlier transparent shaders - is erased unless the snapshot
+			 * contains it. No authored liquid stage can reach the snapshot
+			 * because the capture precedes the first liquid draw, so it cannot
+			 * feed back into itself. In RT composition this runs in the overlay
+			 * list, after the trace has produced the base.
+			 */
+			if ( liquidSnapshotPending && RB_ShaderNeedsLiquidSnapshot( shader ) ) {
 				if ( vk_capture_liquid_scene() ) {
 					oldSort = MAX_UINT;
 					oldEntityNum = -1;

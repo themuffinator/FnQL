@@ -483,23 +483,52 @@ CMod_LoadVisibility
 =================
 */
 #define	VIS_HEADER	8
+
+// "everything is visible" fallback: used both for maps that ship no VIS lump at
+// all and as the degraded state for a lump whose cluster table does not agree
+// with the payload we were actually given. Keeps the cluster count derived from
+// the leafs rather than the one the file advertises.
+static void CMod_SetFullVisibility( void ) {
+	cm.vised = qfalse;
+	cm.clusterBytes = ( cm.numClusters + 31 ) & ~31;
+	cm.visibility = Hunk_Alloc( cm.clusterBytes, h_high );
+	Com_Memset( cm.visibility, 255, cm.clusterBytes );
+}
+
 static void CMod_LoadVisibility( const lump_t *l ) {
 	int		len;
+	int		numClusters, clusterBytes;
 	byte	*buf;
 
 	len = l->filelen;
-	if ( !len ) {
-		cm.clusterBytes = ( cm.numClusters + 31 ) & ~31;
-		cm.visibility = Hunk_Alloc( cm.clusterBytes, h_high );
-		Com_Memset( cm.visibility, 255, cm.clusterBytes );
+	if ( len < VIS_HEADER ) {
+		// a partial header would make the payload length below go negative and
+		// wrap when it reaches Com_Memcpy()'s size_t parameter
+		if ( len != 0 ) {
+			Com_Error( ERR_DROP, "%s: truncated visibility lump (%i bytes)", __func__, len );
+		}
+		CMod_SetFullVisibility();
 		return;
 	}
 	buf = cmod_base + l->fileofs;
 
+	numClusters = LittleLong( ((int *)buf)[0] );
+	clusterBytes = LittleLong( ((int *)buf)[1] );
+
+	// CM_ClusterPVS() hands out cm.visibility + cluster * cm.clusterBytes without
+	// consulting the allocation size, so the advertised table has to fit inside
+	// the payload. Compare by division: numClusters * clusterBytes would itself
+	// overflow on the 32-bit target and let the bad case through.
+	if ( numClusters < 0 || clusterBytes <= 0
+		|| numClusters > ( len - VIS_HEADER ) / clusterBytes ) {
+		CMod_SetFullVisibility();
+		return;
+	}
+
 	cm.vised = qtrue;
+	cm.numClusters = numClusters;
+	cm.clusterBytes = clusterBytes;
 	cm.visibility = Hunk_Alloc( len, h_high );
-	cm.numClusters = LittleLong( ((int *)buf)[0] );
-	cm.clusterBytes = LittleLong( ((int *)buf)[1] );
 	Com_Memcpy (cm.visibility, buf + VIS_HEADER, len - VIS_HEADER );
 }
 
@@ -522,6 +551,8 @@ static void CMod_LoadPatches( const lump_t *surfs, const lump_t *verts ) {
 	vec3_t		points[MAX_PATCH_VERTS];
 	int			width, height;
 	int			shaderNum;
+	int			firstVert;
+	int			numDrawVerts;
 
 	in = (void *)(cmod_base + surfs->fileofs);
 	if (surfs->filelen % sizeof(*in))
@@ -534,6 +565,8 @@ static void CMod_LoadPatches( const lump_t *surfs, const lump_t *verts ) {
 	if (verts->filelen % sizeof(*dv))
 		Com_Error( ERR_DROP, "%s: funny lump size", __func__ );
 
+	numDrawVerts = verts->filelen / sizeof(*dv);
+
 	// scan through all the surfaces, but only load patches,
 	// not planar faces
 	for ( i = 0 ; i < count ; i++, in++ ) {
@@ -541,14 +574,6 @@ static void CMod_LoadPatches( const lump_t *surfs, const lump_t *verts ) {
 			continue;		// ignore other surfaces
 		}
 		// FIXME: check for non-colliding patches
-
-		Com_Printf( "CM_LoadPatches: surface %d shader %d size %dx%d firstVert %d numVerts %d\n",
-			i,
-			LittleLong( in->shaderNum ),
-			LittleLong( in->patchWidth ),
-			LittleLong( in->patchHeight ),
-			LittleLong( in->firstVert ),
-			LittleLong( in->numVerts ) );
 
 		cm.surfaces[ i ] = patch = Hunk_Alloc( sizeof( *patch ), h_high );
 
@@ -560,7 +585,14 @@ static void CMod_LoadPatches( const lump_t *surfs, const lump_t *verts ) {
 			Com_Error( ERR_DROP, "%s: MAX_PATCH_VERTS", __func__ );
 		}
 
-		dv_p = dv + LittleLong( in->firstVert );
+		// the c < 0 term catches a width/height pair whose product overflows into
+		// a small positive value; MAX_PATCH_VERTS alone lets that through
+		firstVert = LittleLong( in->firstVert );
+		if ( c < 0 || firstVert < 0 || firstVert > numDrawVerts || c > numDrawVerts - firstVert ) {
+			Com_Error( ERR_DROP, "%s: bad patch vertex range", __func__ );
+		}
+
+		dv_p = dv + firstVert;
 		for ( j = 0 ; j < c ; j++, dv_p++ ) {
 			points[j][0] = LittleFloat( dv_p->xyz[0] );
 			points[j][1] = LittleFloat( dv_p->xyz[1] );
@@ -568,6 +600,9 @@ static void CMod_LoadPatches( const lump_t *surfs, const lump_t *verts ) {
 		}
 
 		shaderNum = LittleLong( in->shaderNum );
+		if ( shaderNum < 0 || shaderNum >= cm.numShaders ) {
+			Com_Error( ERR_DROP, "%s: bad shaderNum: %i", __func__, shaderNum );
+		}
 		patch->contents = cm.shaders[shaderNum].contentFlags;
 		patch->surfaceFlags = cm.shaders[shaderNum].surfaceFlags;
 
@@ -732,12 +767,7 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 
 	CMod_CheckLeafBrushes();
 
-	if ( translated.data ) {
-		Z_Free( translated.data );
-	} else {
-		// we are NOT freeing the file, because it is cached for the ref
-		FS_FreeFile( buf );
-	}
+	// must run while buf is still mapped: both branches below release it
 	if ( header.version == BSP_VERSION_QL ) {
 		const qlBspLumpResult_t lumpResult =
 			QLBSP_ReadAdvertisementLump( buf, (size_t)length, &qlAdvertisementsLump );
@@ -748,6 +778,13 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 			|| !QLBSP_AdvertisementLumpShapeValid( &qlAdvertisementsLump ) ) {
 			Com_Error( ERR_DROP, "%s: %s has invalid QL advertisement lump", __func__, name );
 		}
+	}
+
+	if ( translated.data ) {
+		Z_Free( translated.data );
+	} else {
+		// we are NOT freeing the file, because it is cached for the ref
+		FS_FreeFile( buf );
 	}
 
 	CM_InitBoxHull();

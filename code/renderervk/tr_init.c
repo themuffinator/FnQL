@@ -709,10 +709,13 @@ static void InitOpenGL( void )
 
 		ri.GLimp_InitGamma( &glConfig );
 
-		gls.deviceSupportsGamma = glConfig.deviceSupportsGamma;
-
+		// r_ignorehwgamma has to reach gls too: R_SetColorMappings gates the
+		// GLimp_SetGamma call on the gls copy, so latching it before the
+		// override left the hardware ramp being written anyway.
 		if ( r_ignorehwgamma->integer )
 			glConfig.deviceSupportsGamma = qfalse;
+
+		gls.deviceSupportsGamma = glConfig.deviceSupportsGamma;
 
 		// print info
 		GfxInfo();

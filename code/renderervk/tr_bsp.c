@@ -532,6 +532,9 @@ static void R_LoadLightmaps( const lump_t *l ) {
 	float		maxIntensity = 0;
 
 	tr.numLightmaps = 0;
+	// the early returns below leave tr.lightmaps pointing into the previous
+	// map's hunk block otherwise, and only R_Init() ever cleared it
+	tr.lightmaps = NULL;
 	tr.lightmapAverageColors = NULL;
 	tr.mergeLightmaps = qfalse;
 	tr.lightmapScale[0] = 1.0f;

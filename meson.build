@@ -1081,6 +1081,9 @@ test('fnql_levelshot_validation', levelshot_validation_tests)
 test('fnql_renderer_port_safety_source', python,
   args: files('tests/renderer_port_safety_tests.py'),
 )
+test('fnql_untrusted_asset_bounds_source', python,
+  args: files('tests/untrusted_asset_bounds_tests.py'),
+)
 
 netchan_safety_tests = executable('fnql_netchan_safety_tests',
   'tests/netchan_safety_tests.cpp',

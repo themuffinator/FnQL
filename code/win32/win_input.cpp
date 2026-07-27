@@ -52,29 +52,45 @@ static WinMouseVars_t s_wmv;
 
 static POINT window_center;
 static POINT client_center;
-static int s_absolutePointerOwner;
 
-static int IN_AbsolutePointerOwnerKind( void )
+using fnql::input::PointerMode;
+using fnql::input::PointerOwner;
+
+static constexpr int kPointerMenuMask = KEYCATCH_UI | KEYCATCH_CGAME | KEYCATCH_BROWSER;
+
+static PointerOwner s_pointerOwner = PointerOwner::Gameplay;
+static qboolean s_pointerConfined;
+static RECT s_pointerConfineRect;
+
+/*
+================
+WIN_ResolvePointerOwner
+
+Shared with the SDL and X11 backends through input_compat.hpp so the three
+cannot disagree about who owns the pointer for a given key catcher, and shared
+with win_wndproc.cpp so the message pump routes each mouse message to the owner
+this file is presenting. The console is an overlay that preserves the underlying
+UI/browser bits, so it is resolved first; a fullscreen console exposes no
+desktop and keeps the established relative gameplay pointer.
+================
+*/
+fnql::input::PointerOwner WIN_ResolvePointerOwner( void )
 {
-	const int catcher = Key_GetCatcher();
-	// The console is an overlay and preserves the underlying UI/browser bits.
-	// Give it ownership first so a fullscreen console keeps relative input.
-	if ( catcher & KEYCATCH_CONSOLE ) {
-		return !glw_state.cdsFullscreen ? KEYCATCH_CONSOLE : 0;
-	}
-	if ( catcher & KEYCATCH_BROWSER ) {
-		return KEYCATCH_BROWSER;
-	}
-	if ( catcher & KEYCATCH_UI ) {
-		return KEYCATCH_UI;
-	}
-	return ( catcher & KEYCATCH_CGAME ) ? KEYCATCH_CGAME : 0;
+	fnql::input::PointerOwnerInputs inputs;
+
+	inputs.catcher = Key_GetCatcher();
+	inputs.consoleMask = KEYCATCH_CONSOLE;
+	inputs.menuMask = kPointerMenuMask;
+	inputs.consoleUsesAbsolutePointer = !glw_state.cdsFullscreen;
+
+	return fnql::input::ResolvePointerOwner( inputs );
 }
 
 
 static qboolean IN_UseAbsolutePointer( void )
 {
-	return IN_AbsolutePointerOwnerKind() ? qtrue : qfalse;
+	return fnql::input::PointerOwnerReportsAbsolute( WIN_ResolvePointerOwner() )
+		? qtrue : qfalse;
 }
 
 #ifdef USE_MIDI
@@ -166,6 +182,53 @@ WIN32 MOUSE CONTROL
 */
 
 
+static PointerMode IN_ResolvePointerMode( PointerOwner owner )
+{
+	fnql::input::PointerModeInputs inputs;
+
+	inputs.owner = owner;
+	inputs.focused = gw_active ? true : false;
+	inputs.minimized = gw_minimized ? true : false;
+	inputs.fullscreen = glw_state.cdsFullscreen ? true : false;
+	inputs.relativeAvailable = in_mouse->integer != 0;
+
+	return fnql::input::ResolvePointerMode( inputs );
+}
+
+
+/*
+================
+IN_SetPointerConfinement
+
+Absolute owners keep a visible, freely moving pointer, but a fullscreen window
+has no desktop edge to stop it: without a clip region the pointer walks onto
+another display, and a click there drops the game out of focus mid-menu.
+Confinement is independent of the relative-input capture gameplay installs, so
+it is tracked separately from s_wmv.mouseActive. The clip region is re-asserted
+whenever the window rect moves, because Windows drops it on deactivation.
+================
+*/
+static void IN_SetPointerConfinement( qboolean confine )
+{
+	RECT window_rect;
+
+	if ( confine && g_wv.hWnd ) {
+		IN_UpdateWindow( &window_rect, qfalse );
+		if ( !s_pointerConfined || !EqualRect( &window_rect, &s_pointerConfineRect ) ) {
+			ClipCursor( &window_rect );
+			s_pointerConfineRect = window_rect;
+			s_pointerConfined = qtrue;
+		}
+		return;
+	}
+
+	if ( s_pointerConfined ) {
+		ClipCursor( NULL );
+		s_pointerConfined = qfalse;
+	}
+}
+
+
 /*
 ================
 IN_MouseActive
@@ -179,32 +242,71 @@ qboolean IN_MouseActive( void )
 
 /*
 ================
+WIN_ProjectClientPointerToDrawable
+
+Win32 reports mouse positions in client pixels, which are the renderer's
+drawable pixels only while the renderer resolution matches the client area.
+Every absolute consumer - the console, the WebUI browser, and retail's UI and
+cgame overlays - works in drawable pixels, so project once here. Shared with
+win_wndproc.cpp, which feeds the same lane from WM_MOUSEMOVE and the button
+messages.
+================
+*/
+void WIN_ProjectClientPointerToDrawable( int *x, int *y )
+{
+	fnql::input::PointerProjection projection;
+	fnql::input::PointerPosition position;
+	RECT client;
+
+	if ( !x || !y || !g_wv.hWnd || !GetClientRect( g_wv.hWnd, &client ) ) {
+		return;
+	}
+
+	projection.hostWidth = client.right - client.left;
+	projection.hostHeight = client.bottom - client.top;
+	projection.drawableWidth = cls.glconfig.vidWidth;
+	projection.drawableHeight = cls.glconfig.vidHeight;
+
+	position = fnql::input::ProjectPointerToDrawable( *x, *y, projection );
+	*x = position.x;
+	*y = position.y;
+}
+
+
+/*
+================
 IN_WindowMouse
 
-Retail browser/UI/cgame overlays consume raw Win32 client coordinates. The
-windowed console uses that same native client space as framebuffer pixels.
-Poll while either owner holds the pointer so opening it under a stationary
-cursor still delivers an initial position without a WM_MOUSEMOVE transition.
+Poll while an absolute owner holds the pointer so opening a menu or the console
+under a stationary cursor still delivers an initial position without waiting for
+a WM_MOUSEMOVE transition.
 ================
 */
 static void IN_WindowMouse( void )
 {
 	POINT position;
+	int x;
+	int y;
 
 	if ( !g_wv.hWnd || !GetCursorPos( &position )
 		|| !ScreenToClient( g_wv.hWnd, &position ) ) {
 		return;
 	}
+
+	x = position.x;
+	y = position.y;
+	WIN_ProjectClientPointerToDrawable( &x, &y );
+
 	if ( s_wmv.cursorPositionValid
-		&& position.x == s_wmv.oldCursorX
-		&& position.y == s_wmv.oldCursorY ) {
+		&& x == s_wmv.oldCursorX
+		&& y == s_wmv.oldCursorY ) {
 		return;
 	}
 
 	s_wmv.cursorPositionValid = qtrue;
-	s_wmv.oldCursorX = position.x;
-	s_wmv.oldCursorY = position.y;
-	Sys_QueEvent( Sys_Milliseconds(), SE_MOUSE_ABSOLUTE, position.x, position.y, 0, NULL );
+	s_wmv.oldCursorX = x;
+	s_wmv.oldCursorY = y;
+	Sys_QueEvent( Sys_Milliseconds(), SE_MOUSE_ABSOLUTE, x, y, 0, NULL );
 }
 
 
@@ -277,6 +379,10 @@ static void IN_CaptureMouse( const RECT *clipRect )
 {
 	CURSORINFO ci;
 
+	// Relative gameplay owns the clip region from here; drop the absolute
+	// owner's confinement bookkeeping so it re-asserts cleanly on the way back.
+	s_pointerConfined = qfalse;
+
 	ClipCursor( clipRect );
 	SetCursorPos( window_center.x, window_center.y );
 	SetCapture( g_wv.hWnd );
@@ -324,6 +430,7 @@ static void IN_DeactivateWin32Mouse( void )
 
 	ReleaseCapture();
 	ClipCursor( NULL );
+	s_pointerConfined = qfalse;
 
 	memset( &ci, 0, sizeof( ci ) );
 	ci.cbSize = sizeof( CURSORINFO );
@@ -1229,7 +1336,8 @@ IN_Shutdown
 */
 void IN_Shutdown( void ) {
 	WIN_ReleaseTemporaryMouseCapture();
-	s_absolutePointerOwner = 0;
+	IN_SetPointerConfinement( qfalse );
+	s_pointerOwner = PointerOwner::Gameplay;
 	IN_DeactivateMouse();
 	IN_ShutdownDIMouse();
 #ifdef USE_MIDI
@@ -1340,6 +1448,9 @@ between a deactivate and an activate.
 void IN_Activate( qboolean active ) {
 
 	if ( !active ) {
+		// Windows drops the clip region on deactivation, so the confinement
+		// latch has to be invalidated here or IN_Frame would never re-assert it.
+		IN_SetPointerConfinement( qfalse );
 		IN_DeactivateMouse();
 	}
 }
@@ -1353,31 +1464,54 @@ Called every frame, even if not generating commands
 ==================
 */
 void IN_Frame( void ) {
-	const int absolutePointerOwner = IN_AbsolutePointerOwnerKind();
+	PointerOwner owner;
+	PointerMode mode;
+
 	// post joystick events
 #ifdef USE_JOYSTICK
 	IN_JoyMove();
 #endif
 
+	// mouseInitialized implies IN_Init registered the input cvars the pointer
+	// mode is resolved from, so nothing above may dereference them.
 	if ( !s_wmv.mouseInitialized ) {
 		return;
 	}
 
-	if ( absolutePointerOwner ) {
-		if ( absolutePointerOwner != s_absolutePointerOwner ) {
+	owner = WIN_ResolvePointerOwner();
+	mode = IN_ResolvePointerMode( owner );
+
+	if ( fnql::input::PointerOwnerReportsAbsolute( owner ) ) {
+		if ( owner != s_pointerOwner ) {
+			// The coordinate lane changed; drop drag capture and the dedup
+			// cache so the new owner receives a deterministic first position.
 			WIN_ReleaseTemporaryMouseCapture();
 			s_wmv.cursorPositionValid = qfalse;
 		}
-		s_absolutePointerOwner = absolutePointerOwner;
+		s_pointerOwner = owner;
 		IN_DeactivateMouse();
+
+		if ( !mode.driveInput ) {
+			// Unfocused or minimized. Stop driving the overlay cursor from the
+			// desktop pointer, and give back capture and confinement, so the
+			// menu does not track the pointer while another app has focus.
+			WIN_ReleaseTemporaryMouseCapture();
+			IN_SetPointerConfinement( qfalse );
+			s_wmv.cursorPositionValid = qfalse;
+			return;
+		}
+
+		IN_SetPointerConfinement( mode.confineToWindow ? qtrue : qfalse );
 		IN_WindowMouse();
 		return;
 	}
+
 	WIN_ReleaseTemporaryMouseCapture();
-	s_absolutePointerOwner = 0;
+	IN_SetPointerConfinement( qfalse );
+	s_pointerOwner = owner;
 	s_wmv.cursorPositionValid = qfalse;
 
-	if ( !gw_active || gw_minimized || ( in_nograb->integer && !( Key_GetCatcher() & KEYCATCH_CONSOLE ) ) ) {
+	if ( !mode.driveInput || ( in_nograb->integer && !( Key_GetCatcher() & KEYCATCH_CONSOLE ) ) ) {
 		IN_DeactivateMouse();
 		return;
 	}

@@ -696,11 +696,18 @@ static qboolean ParseStage( shaderStage_t *stage, const char **text )
 			else if ( Q_stricmpn( token, "*lightmap", 9 ) == 0 && token[9] >= '0' && token[9] <= '9' )
 			{
 				const int lightmapIndex = atoi( token + 9 );
-				if ( lightmapIndex < 0 || tr.lightmaps == NULL ) {
+				// tr.lightmaps holds exactly tr.numLightmaps entries. On merged
+				// maps the shader index names a tile and the page is
+				// index / lightmapMod -- which is what R_GetLightmapCoords() and
+				// FinishStage() use. The old '%' both disagreed with them and
+				// left the index unbounded (lightmapMod is MAX_QINT when maps are
+				// not merged, so the modulo was the identity).
+				const int page = tr.mergeLightmaps ? ( lightmapIndex / tr.lightmapMod ) : lightmapIndex;
+				if ( lightmapIndex < 0 || tr.lightmaps == NULL || page >= tr.numLightmaps ) {
 					stage->bundle[0].image[0] = tr.whiteImage;
 				} else {
 					stage->bundle[0].lightmap = LIGHTMAP_INDEX_OFFSET + lightmapIndex; //custom index
-					stage->bundle[0].image[0] = tr.lightmaps[lightmapIndex % tr.lightmapMod];
+					stage->bundle[0].image[0] = tr.lightmaps[page];
 				}
 				continue;
 			}
@@ -1789,7 +1796,13 @@ static void FinishStage( shaderStage_t *stage )
 						tmi->translate[1] *= tr.lightmapScale[1];
 					}
 				}
-				bundle->image[0] = tr.lightmaps[lightmapIndex];
+				// a shader-supplied *lightmapN can name a page that this map
+				// does not have; R_GetLightmapCoords() does not bound its result
+				if ( tr.lightmaps != NULL && lightmapIndex >= 0 && lightmapIndex < tr.numLightmaps ) {
+					bundle->image[0] = tr.lightmaps[lightmapIndex];
+				} else {
+					bundle->image[0] = tr.whiteImage;
+				}
 				tmi->type = TMOD_OFFSET;
 				tmi->offset[0] = x - tr.lightmapOffset[0];
 				tmi->offset[1] = y - tr.lightmapOffset[1];

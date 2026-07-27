@@ -21,6 +21,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 #include "../client/client.h"
+#include "../client/input_compat.hpp"
 #include "../platform/window_placement.hpp"
 #include "win_local.h"
 #include "glw_win.h"
@@ -45,12 +46,6 @@ static qboolean temporaryMouseCapture;
 static qboolean WIN_ConsoleOwnsPointer( void )
 {
 	return ( Key_GetCatcher() & KEYCATCH_CONSOLE ) ? qtrue : qfalse;
-}
-
-
-static qboolean WIN_ConsoleUsesAbsolutePointer( void )
-{
-	return WIN_ConsoleOwnsPointer() && !glw_state.cdsFullscreen ? qtrue : qfalse;
 }
 
 
@@ -652,8 +647,31 @@ static VOID CALLBACK WinEventProc( HWINEVENTHOOK h_WinEventHook, DWORD dwEvent, 
 
 #define TIMER_M 11
 #define TIMER_T 12
+#define TIMER_G 13
 static UINT uTimerM;
 static UINT uTimerT;
+static UINT uTimerG;
+
+/*
+==================
+WIN_ScheduleGammaReapply
+
+A mode set or desktop switch reloads the display LUT from the ICC profile, and
+the driver can finish doing so after ChangeDisplaySettings and WM_DISPLAYCHANGE
+have already returned. Re-assert our ramp once the dust settles so returning to
+the game does not leave it running on the desktop ramp.
+==================
+*/
+static void WIN_ScheduleGammaReapply( void )
+{
+	if ( !g_wv.hWnd || !glw_state.gammaSet )
+		return;
+
+	if ( uTimerG )
+		KillTimer( g_wv.hWnd, uTimerG );
+
+	uTimerG = SetTimer( g_wv.hWnd, TIMER_G, 250, NULL );
+}
 
 void WIN_Minimize( void ) {
 	static int minimize = 0;
@@ -816,6 +834,7 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 		gw_minimized = qfalse;
 		uTimerM = 0;
 		uTimerT = 0;
+		uTimerG = 0;
 
 		in_forceCharset = Cvar_Get( "in_forceCharset", "1", CVAR_ARCHIVE_ND );
 		Cvar_SetDescription( in_forceCharset, "Try to translate non-ASCII chars in keyboard input or force EN/US keyboard layout." );
@@ -828,6 +847,9 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 			WIN_RecoverWindowPlacement( hWnd );
 			WIN_RefreshWindowPlacementState( hWnd );
 		}
+		// the mode set just reloaded the display LUT from its profile
+		GLW_ReapplyGamma();
+		WIN_ScheduleGammaReapply();
 		break;
 
 	case WM_SETTINGCHANGE:
@@ -865,6 +887,9 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 		}
 		if ( uTimerT ) {
 			KillTimer( g_wv.hWnd, uTimerT ); uTimerT = 0;
+		}
+		if ( uTimerG ) {
+			KillTimer( g_wv.hWnd, uTimerG ); uTimerG = 0;
 		}
 		hWinEventHook = NULL;
 		g_wv.hWnd = NULL;
@@ -954,6 +979,10 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 				SetGameDisplaySettings();
 				if ( re.SetColorMappings )
 					re.SetColorMappings();
+				// the mode set above can still be settling: the driver reloads
+				// the LUT from the display profile and drops the ramp we just
+				// wrote, which is what leaves the game dark after ALT+TAB
+				WIN_ScheduleGammaReapply();
 			} else {
 				// don't restore gamma if we have multiple monitors
 				if ( glw_state.monitorCount <= 1 || gw_minimized )
@@ -1080,6 +1109,11 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 			}
 			return 0;
 		}
+		if ( wParam == TIMER_G ) {
+			KillTimer( g_wv.hWnd, uTimerG ); uTimerG = 0;
+			GLW_ReapplyGamma();
+			return 0;
+		}
 		break;
 
 	case WM_WINDOWPOSCHANGING:
@@ -1141,16 +1175,37 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 	case WM_XBUTTONDOWN:
 	case WM_XBUTTONUP:
 	case WM_MOUSEMOVE:
-		if ( WIN_ConsoleUsesAbsolutePointer() ) {
-			const int x = (int)(short)LOWORD( lParam );
-			const int y = (int)(short)HIWORD( lParam );
+	{
+		// One resolver with win_input.cpp, so the message pump always routes to
+		// the owner that IN_Frame is presenting a pointer for.
+		const fnql::input::PointerOwner pointerOwner = WIN_ResolvePointerOwner();
+
+		if ( pointerOwner != fnql::input::PointerOwner::Gameplay ) {
+			// Every absolute consumer works in renderer drawable pixels, which
+			// are the client pixels Windows reports only while the renderer
+			// resolution matches the client area.
+			int x = (int)(short)LOWORD( lParam );
+			int y = (int)(short)HIWORD( lParam );
 			qboolean down = qfalse;
+			int key;
+
+			WIN_ProjectClientPointerToDrawable( &x, &y );
+			key = WIN_MouseMessageKey( uMsg, wParam, &down );
+
+			if ( pointerOwner == fnql::input::PointerOwner::Menu &&
+				( Key_GetCatcher() & KEYCATCH_BROWSER ) ) {
+				CL_WebView_OnMouseMove( x, y );
+				if ( key ) {
+					CL_WebView_OnMouseButtonEvent( key, down );
+					WIN_UpdateTemporaryMouseCapture( hWnd, uMsg, wParam );
+				}
+				return WIN_MouseMessageResult( uMsg );
+			}
 
 			if ( uMsg == WM_MOUSEMOVE ) {
 				Sys_QueEvent( g_wv.sysMsgTime, SE_MOUSE_ABSOLUTE, x, y, 0, NULL );
 				return 0;
 			}
-			const int key = WIN_MouseMessageKey( uMsg, wParam, &down );
 			if ( key ) {
 				// Keep position-before-click ordering even if Windows did not emit
 				// a distinct WM_MOUSEMOVE for this location.
@@ -1160,37 +1215,7 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 			}
 			return WIN_MouseMessageResult( uMsg );
 		}
-		if ( !WIN_ConsoleOwnsPointer() && ( Key_GetCatcher() & KEYCATCH_BROWSER ) ) {
-			const int x = (int)(short)LOWORD( lParam );
-			const int y = (int)(short)HIWORD( lParam );
-			qboolean down = qfalse;
-			const int key = WIN_MouseMessageKey( uMsg, wParam, &down );
-
-			CL_WebView_OnMouseMove( x, y );
-			if ( key ) {
-				CL_WebView_OnMouseButtonEvent( key, down );
-				WIN_UpdateTemporaryMouseCapture( hWnd, uMsg, wParam );
-			}
-			return WIN_MouseMessageResult( uMsg );
-		}
-		if ( !WIN_ConsoleOwnsPointer() && ( Key_GetCatcher() & ( KEYCATCH_UI | KEYCATCH_CGAME ) ) ) {
-			const int x = (int)(short)LOWORD( lParam );
-			const int y = (int)(short)HIWORD( lParam );
-			qboolean down = qfalse;
-
-			if ( uMsg == WM_MOUSEMOVE ) {
-				Sys_QueEvent( g_wv.sysMsgTime, SE_MOUSE_ABSOLUTE, x, y, 0, NULL );
-				return 0;
-			}
-
-			const int key = WIN_MouseMessageKey( uMsg, wParam, &down );
-			if ( key ) {
-				Sys_QueEvent( g_wv.sysMsgTime, SE_MOUSE_ABSOLUTE, x, y, 0, NULL );
-				Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, key, down, 0, NULL );
-				WIN_UpdateTemporaryMouseCapture( hWnd, uMsg, wParam );
-			}
-			return WIN_MouseMessageResult( uMsg );
-		}
+	}
 		if ( IN_MouseActive() ) {
 			int mstate = (wParam & (MK_LBUTTON|MK_RBUTTON)) + ((wParam & (MK_MBUTTON|MK_XBUTTON1|MK_XBUTTON2)) >> 2);
 			IN_Win32MouseEvent( LOWORD(lParam), HIWORD(lParam), mstate );

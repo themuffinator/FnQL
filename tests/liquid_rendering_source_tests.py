@@ -198,12 +198,23 @@ class LiquidRenderingSourceTests(unittest.TestCase):
         self.assertIn("liquidSheenFP", self.gl_arb)
         self.assertIn("LIQUID_REFLECT_PROXY_BASE", self.gl_arb)
 
-    def test_snapshot_capture_is_at_a_deterministic_sort_boundary(self) -> None:
-        trigger = "liquidSnapshotPending && shader->sort >= SS_FOG"
+    def test_colour_snapshot_is_captured_just_before_the_first_liquid(self) -> None:
+        # The underlay replaces the destination at the liquid type's opacity,
+        # so every transparent surface already blended behind the face has to
+        # be inside the snapshot or the underlay erases it. Capturing at the
+        # fixed SS_FOG boundary left fog, SS_UNDERWATER items and earlier
+        # transparent shaders out of the copy and wiped them from the view.
+        trigger = "liquidSnapshotPending && RB_ShaderNeedsLiquidSnapshot( shader )"
+        depth_trigger = "liquidDepthPending && shader->sort >= SS_FOG"
         lookahead = "RB_DrawSurfListNeedsLiquidSnapshot"
         for source in (self.gl_backend, self.vk_backend):
             self.assertIn(lookahead, source)
             self.assertIn(trigger, source)
+            # The waterline rejection wants the solid scene, so the opaque
+            # depth copy stays at the deterministic SS_FOG boundary and must
+            # still run before the colour capture.
+            self.assertIn(depth_trigger, source)
+            self.assertLess(source.index(depth_trigger), source.index(trigger))
             # A reflection-only configuration still captures: the mirrored
             # tap samples the same snapshot as the refraction underlay.
             self.assertIn("r_liquidReflection", source)

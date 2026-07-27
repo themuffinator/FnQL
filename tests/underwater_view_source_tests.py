@@ -333,6 +333,12 @@ class UnderwaterViewBackendParityTests(unittest.TestCase):
         # Ping-pong, never sampling the attachment being written.
         self.assertIn("FBO_BlitMS( qfalse );", draw)
         self.assertIn("destinationIndex = sourceIndex == 0 ? 1 : 0;", draw)
+        # The multisample resolve is gated on the pending-resolve flag, not on
+        # the multisample mode: the global-fog sidecar composites immediately
+        # before this and leaves its result in the resolved buffer, so an
+        # unconditional re-resolve would overwrite that layer.
+        self.assertIn("if ( blitMSfbo ) {", draw)
+        self.assertNotIn("if ( frameBufferMultiSampling ) {", draw)
         # Depth is optional: a missing copy zeroes the density instead of
         # dropping the whole layer.
         self.assertIn("density = depthReady ? R_UnderwaterContentsDensity( contents ) : 0.0f;", draw)
@@ -390,6 +396,16 @@ class UnderwaterViewBackendParityTests(unittest.TestCase):
                     "vk.underwater_pipeline == VK_NULL_HANDLE",
                 ):
                     self.assertIn(guard, draw)
+                # The composite runs from inside RB_DrawSurfs, before the
+                # doneSurfaces flag is raised for bloom, so that flag is still
+                # clear here and must not be a precondition: requiring it
+                # skipped the layer on every frame whose primary view was not
+                # preceded by another 3D pass.
+                self.assertNotIn("!backEnd.doneSurfaces", draw)
+                self.assertLess(
+                    backend.index("vk_draw_underwater();"),
+                    backend.index("backEnd.doneSurfaces = qtrue;"),
+                )
                 # Post-process binds bypass the descriptor and pipeline caches.
                 self.assertIn("vk.cmd->last_pipeline = VK_NULL_HANDLE;", draw)
                 self.assertIn("Com_Memset( &vk.cmd->scissor_rect, 0xff,", draw)
@@ -413,6 +429,26 @@ class UnderwaterViewBackendParityTests(unittest.TestCase):
         self.assertIn("cmd->refdef.underwaterStrength > 0.0f", request)
         self.assertIn("( r_underwater && r_underwater->integer ) ||",
                       read("code/renderervk/vk.c"))
+
+    def test_rtx_depth_attachment_is_sampleable_for_the_layer(self) -> None:
+        """RTX samples the scene depth attachment directly rather than a private
+        copy, so the layer has to claim the sampled usage and the post-main store
+        on its own account. Deriving both from the global-fog sidecar alone left
+        the absorption uploading a zero density on every map with no fog file:
+        the warp and the edge falloff still ran, the medium tint never did."""
+        vk = read("code/rendererrtx/vk.c")
+
+        start = vk.index("&vk.depth_image, &vk.depth_image_view,")
+        call = vk[vk.rindex("create_depth_attachment(", 0, start) :]
+        call = call[: call.index(");") + 2]
+        self.assertIn("vk_global_fog_enabled() || vk_underwater_depth_enabled()", call)
+        # The transient hint has to drop for the layer too, not just for fog.
+        transient = call[: call.index("? qfalse : qtrue")]
+        self.assertIn("vk_underwater_depth_enabled()", transient)
+
+        needs = vk[vk.index("const qboolean needsPostMainPass =") :]
+        needs = needs[: needs.index(";")]
+        self.assertIn("vk_underwater_depth_enabled()", needs)
 
     def test_rtx_transitions_the_sampled_depth_attachment(self) -> None:
         """RTX samples the depth attachment directly rather than a private copy."""

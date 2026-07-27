@@ -749,6 +749,7 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 	qboolean		depthFadeSnapshot;
 	qboolean		worldCelOutlineDrawn;
 	qboolean		liquidSnapshotPending;
+	qboolean		liquidDepthPending;
 #endif
 	double			originalTime; // -EC-
 
@@ -779,6 +780,7 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 	worldCelOutlineDrawn = qfalse;
 	liquidSnapshotPending = RB_DrawSurfListNeedsLiquidSnapshot( drawSurfs,
 		numDrawSurfs );
+	liquidDepthPending = liquidSnapshotPending;
 #endif
 	depthRange = qfalse;
 
@@ -850,14 +852,25 @@ static qboolean RB_RenderDrawSurfList( drawSurf_t *drawSurfs, int numDrawSurfs )
 			if ( shader->sort > SS_OPAQUE ) {
 				RB_DrawWorldCelOutlineForScene( &worldCelOutlineDrawn );
 			}
-			/* Capture at one deterministic boundary, after deferred opaque work and
-			 * before fog/underwater/regular transparency. */
-			if ( liquidSnapshotPending && shader->sort >= SS_FOG ) {
-				/* Opaque depth for waterline rejection. Must precede the color
-				 * capture: the copy only runs inside the primary main pass. */
+			/* Opaque depth for the waterline rejection is copied at the fixed
+			 * SS_FOG boundary, after deferred opaque work: it must describe the
+			 * solid scene, and it has to precede the color capture because the
+			 * copy only runs inside the primary main pass. */
+			if ( liquidDepthPending && shader->sort >= SS_FOG ) {
 				if ( !vk_depth_fade_ready() ) {
 					vk_copy_depth_fade();
 				}
+				liquidDepthPending = qfalse;
+			}
+			/* Capture the color snapshot immediately before the first enhanced
+			 * liquid batch, not at the SS_FOG boundary. The underlay replaces
+			 * the destination at the liquid type's own opacity, so transparent
+			 * work already blended behind the face - fog, SS_UNDERWATER items,
+			 * earlier transparent shaders - is erased unless the snapshot
+			 * contains it. No authored liquid stage can ever reach the snapshot
+			 * because the capture precedes the first liquid draw, so the sampled
+			 * copy still cannot feed back into itself. */
+			if ( liquidSnapshotPending && RB_ShaderNeedsLiquidSnapshot( shader ) ) {
 				if ( vk_capture_liquid_scene() ) {
 					oldSort = MAX_UINT;
 					oldEntityNum = -1;

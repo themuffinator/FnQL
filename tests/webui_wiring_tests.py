@@ -202,21 +202,62 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn('( Key_GetCatcher() & ~KEYCATCH_RETAIL_MOUSEPASS ) == 0', input_source)
         self.assertIn('Cvar_Get( "cg_ignoreMouseInput", "0", CVAR_ROM )', input_source)
 
+    def test_every_route_to_disconnected_restores_the_webui_menu(self) -> None:
+        """CL_Disconnect_f returns early after SV_Shutdown on a listen server, so
+        CL_Disconnect - and with it CL_WebHost_ShowAfterDisconnect - never runs.
+        The CL_Frame menu fallback is the one site every route to
+        CA_DISCONNECTED passes through, so the WebUI must be offered there."""
+        main = (ROOT / "code" / "client" / "cl_main.cpp").read_text(encoding="utf-8")
+        webui = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
+
+        fallback = main[main.index("cls.cddialog = qfalse;"):]
+        fallback = fallback[: fallback.index("cl_avidemo")]
+        self.assertIn("if ( !CL_WebHost_ShowAfterDisconnect() ) {", fallback)
+        self.assertLess(
+            fallback.index("CL_WebHost_ShowAfterDisconnect()"),
+            fallback.index("UI_SET_ACTIVE_MENU, UIMENU_MAIN"),
+        )
+        # The explicit-disconnect path keeps the same ordering.
+        disconnect = main[main.index("void CL_Disconnect_f"):]
+        self.assertIn("SV_Shutdown( \"Server quit\\n\" );", disconnect)
+
+        # Ownership is published synchronously; waiting for the next WebUI frame
+        # let the native menu take KEYCATCH_UI first and keep it.
+        show = webui[webui.index("qboolean CL_WebHost_ShowAfterDisconnect"):]
+        show = show[: show.index("\nvoid CL_WebHost_HideForGameTransition")]
+        self.assertIn("CL_WebHost_UpdateOverlayOwnership();", show)
+        self.assertLess(
+            show.index("CL_WebHost_UpdateOverlayOwnership();"),
+            show.index("return qtrue;"),
+        )
+
     def test_browser_input_releases_the_gameplay_mouse_and_uses_surface_coordinates(self) -> None:
         sdl_input = (ROOT / "code" / "sdl" / "sdl_input.cpp").read_text(encoding="utf-8")
         webui = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
         wndproc = (ROOT / "code" / "win32" / "win_wndproc.cpp").read_text(encoding="utf-8")
 
-        self.assertIn("static qboolean mouseAbsoluteMode", sdl_input)
-        self.assertIn("browserActive || nativeUiActive || cgameUiActive", sdl_input)
-        self.assertIn("const qboolean retailAbsolute = ( !consoleActive &&", sdl_input)
-        self.assertIn("const qboolean showCursor = ( retailAbsolute", sdl_input)
-        self.assertIn("IN_ShowCursor( showCursor );", sdl_input)
-        self.assertIn("mouseAbsoluteMode != retailAbsolute", sdl_input)
-        self.assertIn("(int)e.motion.x, (int)e.motion.y", sdl_input)
-        self.assertIn("static void IN_ProjectBrowserMousePosition", sdl_input)
-        self.assertIn("cls.glconfig.vidWidth / (float)glw_state.window_width", sdl_input)
-        self.assertIn("IN_ProjectBrowserMousePosition( e.button.x, e.button.y", sdl_input)
+        # The browser is a menu owner: absolute positions, visible OS cursor,
+        # no relative gameplay motion.
+        self.assertIn(
+            "kPointerMenuMask = KEYCATCH_UI | KEYCATCH_CGAME | KEYCATCH_BROWSER",
+            sdl_input,
+        )
+        self.assertIn("static PointerMode IN_ResolvePointerMode", sdl_input)
+        self.assertIn("IN_ShowCursor( mode.showSystemCursor ? qtrue : qfalse );", sdl_input)
+        self.assertIn(
+            "SDL_SetWindowRelativeMouseMode( SDL_window, mode.relativeMotion );",
+            sdl_input,
+        )
+        # Browser positions are projected to renderer drawable pixels, through
+        # the same lane the console and retail UI/cgame use.
+        self.assertIn("static fnql::input::PointerProjection IN_PointerProjection", sdl_input)
+        self.assertIn("projection.hostWidth = glw_state.window_width;", sdl_input)
+        self.assertIn("projection.drawableWidth = cls.glconfig.vidWidth;", sdl_input)
+        self.assertIn("fnql::input::ProjectPointerToDrawable(", sdl_input)
+        self.assertIn(
+            "IN_QueueAbsolutePointerPosition( owner,\n\t\t\t\t\t\t\te.button.x, e.button.y, in_eventTime );",
+            sdl_input,
+        )
         self.assertIn("static int CL_WebHost_MapCursorCoordinate", webui)
         self.assertIn("cls.glconfig.vidWidth", webui)
         self.assertIn("status.surface.width", webui)
@@ -1512,28 +1553,35 @@ class WebUiWiringTests(unittest.TestCase):
         win_input = (ROOT / "code" / "win32" / "win_input.cpp").read_text(encoding="utf-8")
         linux_input = (ROOT / "code" / "unix" / "linux_glimp.cpp").read_text(encoding="utf-8")
 
-        self.assertIn("browserActive = ( Key_GetCatcher() & KEYCATCH_BROWSER )", sdl_input)
-        self.assertIn("browserActive || nativeUiActive || cgameUiActive", sdl_input)
-        self.assertIn("const qboolean retailAbsolute = ( !consoleActive &&", sdl_input)
-        self.assertIn("relativeMouse = ( in_mouse->integer > 0 && grabMouse )", sdl_input)
-        self.assertIn("mouseAbsoluteMode != retailAbsolute", sdl_input)
-        self.assertIn("IN_ShowCursor( qtrue );", sdl_input)
-        self.assertIn("(int)e.motion.x, (int)e.motion.y", sdl_input)
-        self.assertIn("&& !nativeUiActive && !cgameUiActive", sdl_input)
+        policy = (ROOT / "code" / "client" / "input_compat.hpp").read_text(encoding="utf-8")
+        menu_case = policy[
+            policy.index("case PointerOwner::Menu:") : policy.index("case PointerOwner::Gameplay:")
+        ]
+        # A menu owner never enables relative motion and never re-centres.
+        self.assertNotIn("relativeMotion", menu_case)
+        self.assertNotIn("recenterPointer", menu_case)
+        self.assertIn("mode.reportAbsolute = true;", menu_case)
+
+        self.assertIn("inputs.relativeAvailable = in_mouse->integer > 0;", sdl_input)
+        self.assertIn("in_nograb->integer && owner == PointerOwner::Gameplay", sdl_input)
         self.assertIn("b = K_MOUSE6 + ( e.button.button - ( SDL_BUTTON_X2 + 1 ) );", sdl_input)
-        self.assertIn("catcher & KEYCATCH_BROWSER", win_input)
-        self.assertIn("catcher & KEYCATCH_UI", win_input)
-        self.assertIn("catcher & KEYCATCH_CGAME", win_input)
+        self.assertIn("inputs.consoleMask = KEYCATCH_CONSOLE;", win_input)
+        self.assertIn(
+            "kPointerMenuMask = KEYCATCH_UI | KEYCATCH_CGAME | KEYCATCH_BROWSER",
+            win_input,
+        )
         self.assertIn("kDInputMouseButtonKeys[]", win_input)
         self.assertIn("K_MOUSE5, K_MOUSE6, K_MOUSE7, K_MOUSE8", win_input)
         self.assertIn("buttonIndex < ARRAY_LEN( kDInputMouseButtonKeys )", win_input)
         self.assertIn("btn_code = event.xbutton.button - 8 + K_MOUSE6;", linux_input)
-        browser_input = win_input[
-            win_input.index("if ( absolutePointerOwner )"):
-            win_input.index("if ( !gw_active", win_input.index("if ( absolutePointerOwner )"))
+        branch_start = win_input.index(
+            "if ( fnql::input::PointerOwnerReportsAbsolute( owner ) ) {"
+        )
+        absolute_branch = win_input[
+            branch_start : win_input.index("IN_ActivateMouse();", branch_start)
         ]
-        self.assertIn("IN_DeactivateMouse();", browser_input)
-        self.assertNotIn("IN_MouseMove();", browser_input)
+        self.assertIn("IN_DeactivateMouse();", absolute_branch)
+        self.assertNotIn("IN_MouseMove();", absolute_branch)
 
     def test_screen_compositor_gives_webui_a_draw_pass(self) -> None:
         screen = (ROOT / "code" / "client" / "cl_scrn.cpp").read_text(encoding="utf-8")

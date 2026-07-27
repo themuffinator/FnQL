@@ -778,10 +778,14 @@ static LONG WINAPI ExceptionFilter( struct _EXCEPTION_POINTERS *ExceptionInfo )
 #ifndef DEDICATED
 	if ( com_dedicated->integer == 0 ) {
 		extern cvar_t *com_cl_running;
-		if ( com_cl_running  && com_cl_running->integer ) {
-			// assume we can restart client module
-		} else {
-			GLW_RestoreGamma();
+
+		// The gamma ramp is desktop-global and outlives the process, so it goes
+		// back unconditionally - a crash with the client up is exactly the case
+		// that used to strand the user's desktop on the game's ramp.
+		GLW_RestoreGamma();
+
+		if ( !com_cl_running || !com_cl_running->integer ) {
+			// no client module left to restart, so drop the fullscreen window too
 			GLW_HideFullscreenWindow();
 		}
 	}

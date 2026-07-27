@@ -106,6 +106,7 @@ void R_LoadPCX ( const char *filename, byte **pic, int *width, int *height)
 		|| h >= 1024)
 	{
 		ri.Printf (PRINT_ALL, "Bad or unsupported pcx file %s (%dx%d@%d)\n", filename, w, h, pcx->bits_per_pixel);
+		ri.FS_FreeFile (pcx);
 		return;
 	}
 
@@ -141,9 +142,15 @@ void R_LoadPCX ( const char *filename, byte **pic, int *width, int *height)
 		ri.Printf (PRINT_ALL, "PCX file truncated: %s\n", filename);
 		ri.FS_FreeFile (pcx);
 		ri.Free (pic8);
+		return;
 	}
 
-	if (raw.b-(byte*)pcx >= end - (byte*)769 || end[-769] != 0x0c)
+	// the original first clause compared a file offset against the absolute
+	// address of end minus 769, so it was never true and guarded nothing.
+	// Order matters: end - 769 and end[-769] must only be formed once the
+	// buffer is known to be long enough. A well-formed PCX ends its RLE
+	// stream exactly at the palette marker, so raw.b == end - 769 is legal.
+	if (len < 769 || raw.b > end - 769 || end[-769] != 0x0c)
 	{
 		ri.Printf (PRINT_ALL, "PCX missing palette: %s\n", filename);
 		ri.FS_FreeFile (pcx);
