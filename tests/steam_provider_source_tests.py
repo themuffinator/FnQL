@@ -455,6 +455,56 @@ class SteamProviderSourceTests(unittest.TestCase):
             source = (ROOT / path).read_text(encoding="utf-8")
             self.assertIn("re.RegisterShaderFromRGBA = RE_RegisterShaderFromRGBA;", source)
 
+    def test_avatar_cache_cannot_outlive_the_renderer_session_that_minted_it(self) -> None:
+        # Every renderer teardown rebuilds tr.shaders from zero, so a cached
+        # qhandle_t that survives one renders an unrelated shader as the avatar.
+        main = (ROOT / "code/client/cl_main.cpp").read_text(encoding="utf-8")
+        client = (ROOT / "code/client/cl_webui.cpp").read_text(encoding="utf-8")
+        teardowns = main.count("cls.rendererStarted = qfalse;")
+        self.assertEqual(teardowns, 2)
+        self.assertEqual(
+            main.count("CL_ClearAvatarImageHandles();"),
+            teardowns,
+            "every renderer teardown must drop the Steam avatar shader cache",
+        )
+        for teardown in range(teardowns):
+            start = 0
+            for _ in range(teardown + 1):
+                start = main.index("cls.rendererStarted = qfalse;", start) + 1
+            preceding = main[:start]
+            self.assertGreater(
+                preceding.count("CL_ClearAvatarImageHandles();"),
+                teardown,
+                "the cache must be cleared before the renderer is marked stopped",
+            )
+        # Second line of defence: entries record their renderer session and are
+        # discarded on mismatch even if a future teardown path forgets to clear.
+        self.assertIn("uint32_t session;", client)
+        self.assertIn("entry.session != cl_steamAvatarSession", client)
+        self.assertIn("target->session = cl_steamAvatarSession;", client)
+
+    def test_avatar_transfers_reject_extents_that_changed_between_provider_calls(self) -> None:
+        # Steam swaps a placeholder for the real portrait mid-download, so the
+        # sizing call's extents cannot be trusted to describe the transfer.
+        client = (ROOT / "code/client/cl_webui.cpp").read_text(encoding="utf-8")
+        self.assertEqual(client.count("uint32_t loadedWidth = 0;"), 2)
+        self.assertEqual(client.count("uint32_t loadedHeight = 0;"), 2)
+        self.assertEqual(client.count("uint32_t loadedRequired = 0;"), 2)
+        self.assertEqual(client.count("loadedWidth != width"), 1)
+        self.assertEqual(client.count("loadedWidth == width"), 1)
+        self.assertEqual(client.count("loadedRequired != required"), 1)
+        self.assertEqual(client.count("loadedRequired == required"), 1)
+        # RE_RegisterShaderFromImage returns the shader already bound to a name
+        # and drops the new pixels, so no two attempts may share a name.
+        self.assertIn("++cl_steamAvatarSerial", client)
+        # One shared parser keeps the shader and browser bridges in agreement.
+        self.assertEqual(client.count("static qboolean CL_Steam_ParseAvatarPath("), 2)
+        self.assertEqual(client.count("CL_Steam_ParseAvatarPath( url"), 1)
+        self.assertEqual(client.count("CL_Steam_ParseAvatarPath( path"), 1)
+        # A pending avatar must not re-query the provider on every frame.
+        self.assertIn("CL_STEAM_AVATAR_RETRY_MSEC", client)
+        self.assertIn("cls.realtime < entry.retryTime", client)
+
     def test_friend_snapshot_is_bounded_and_keeps_server_identity_fallback(self) -> None:
         source = (ROOT / "code/client/cl_webui.cpp").read_text(encoding="utf-8")
         self.assertIn("CL_STEAM_MAX_FRIENDS 512u", source)

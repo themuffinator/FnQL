@@ -214,6 +214,8 @@ static void CL_Steam_OverlayCommand_f( void );
 static void CL_Steam_OnProviderEvent( const fnqlSteamEvent_t *event, void *context );
 static qboolean CL_Steam_ResultAccepted( fnqlSteamResult_t result );
 static qboolean CL_Steam_ParseIdentity( const char *text, uint64_t *identity );
+static qboolean CL_Steam_ParseAvatarPath( const char *path, uint64_t *steamId,
+	uint32_t *avatarSize );
 static void CL_WebHost_BuildConfigJson( char *buffer, size_t bufferSize );
 static void CL_WebHost_BuildMapListJson( char *buffer, size_t bufferSize );
 static char *CL_WebHost_AllocateMapListJson( void );
@@ -1054,23 +1056,44 @@ qboolean CL_IsSubscribedApp( int appId ) {
 	return qfalse;
 }
 
+/* A cached avatar is only meaningful for the renderer session that minted it:
+ * qhandle_t values are indices into tr.shaders[], and every renderer teardown
+ * (CL_ShutdownAll on map load, CL_ShutdownRef on vid_restart) rebuilds that
+ * table from zero. Retaining a handle across the boundary makes the next map's
+ * shader in that slot render as the player's avatar, so the cache is dropped
+ * from both teardown paths and the entries carry the session that created them
+ * as a second line of defence. */
 struct clSteamAvatarCacheEntry_t {
 	uint64_t steamId;
 	uint32_t size;
+	uint32_t session;
+	int retryTime;
 	qhandle_t shader;
 };
 
-static std::array<clSteamAvatarCacheEntry_t, 64> cl_steamAvatarCache;
+// One slot per connected client plus headroom for the UI's small/medium
+// variants of the local player and the friend rows it draws alongside them.
+#define CL_STEAM_AVATAR_CACHE_SIZE 128u
+// Steam reports an avatar as unavailable while it is still downloading. The
+// provider's AVATAR_IMAGE_LOADED event clears the stamp as soon as the pixels
+// land, so this only bounds polling for providers that never emit one.
+#define CL_STEAM_AVATAR_RETRY_MSEC 500
+
+static std::array<clSteamAvatarCacheEntry_t,
+	CL_STEAM_AVATAR_CACHE_SIZE> cl_steamAvatarCache;
 static qboolean cl_steamVoiceRecording;
 static qboolean cl_steamVoicePacketLogged;
 static uint64_t cl_steamPendingP2PRemote;
 static uint64_t cl_steamAcceptedP2PServer;
-static uint32_t cl_steamAvatarGeneration = 1;
+static uint32_t cl_steamAvatarSession = 1;
+static uint32_t cl_steamAvatarSerial;
 
 void CL_ClearAvatarImageHandles( void ) {
 	cl_steamAvatarCache.fill( {} );
-	if ( ++cl_steamAvatarGeneration == 0 ) {
-		cl_steamAvatarGeneration = 1;
+	// Never reuse session 0: a zeroed entry must not compare equal to the live
+	// session, or CL_ClearAvatarImageHandles would leave the cache readable.
+	if ( ++cl_steamAvatarSession == 0 ) {
+		cl_steamAvatarSession = 1;
 	}
 }
 
@@ -1080,19 +1103,56 @@ static void CL_InvalidateAvatarImageHandle( uint64_t steamId ) {
 			entry = {};
 		}
 	}
-	if ( ++cl_steamAvatarGeneration == 0 ) {
-		cl_steamAvatarGeneration = 1;
+}
+
+static qhandle_t CL_RegisterSteamAvatarShader( uint64_t steamId,
+		uint32_t avatarSize ) {
+	uint32_t width = 0;
+	uint32_t height = 0;
+	uint32_t required = 0;
+	uint32_t loadedWidth = 0;
+	uint32_t loadedHeight = 0;
+	uint32_t loadedRequired = 0;
+	char shaderName[MAX_QPATH];
+	byte *rgba;
+	qhandle_t shader;
+
+	if ( FNQL_Steam_GetAvatarRGBA( steamId, avatarSize,
+		NULL, 0, &width, &height, &required ) != FNQL_STEAM_RESULT_BUFFER_TOO_SMALL
+		|| !width || !height
+		|| (uint64_t)width * (uint64_t)height * 4ull != (uint64_t)required
+		|| required > 4u * 1024u * 1024u ) {
+		return 0;
 	}
+	rgba = static_cast<byte *>( Z_Malloc( required ) );
+	if ( !rgba ) {
+		return 0;
+	}
+	// Read the transfer's own extents rather than reusing the sizing call's:
+	// Steam swaps a placeholder for the real portrait as the download lands, so
+	// the provider can legitimately describe a larger image on the second call.
+	// Uploading those extents from a buffer sized for the first would hand the
+	// renderer whatever zone memory follows the avatar.
+	if ( FNQL_Steam_GetAvatarRGBA( steamId, avatarSize, rgba, required,
+		&loadedWidth, &loadedHeight, &loadedRequired ) != FNQL_STEAM_RESULT_OK
+		|| loadedWidth != width || loadedHeight != height
+		|| loadedRequired != required ) {
+		Z_Free( rgba );
+		return 0;
+	}
+	// RE_RegisterShaderFromImage returns the existing shader whenever the name
+	// repeats and silently discards the pixels just uploaded, so every attempt
+	// gets its own name instead of one shared per avatar revision.
+	Com_sprintf( shaderName, sizeof( shaderName ), "*steam/avatar/%u/%u/%llu",
+		++cl_steamAvatarSerial, avatarSize, (unsigned long long)steamId );
+	shader = re.RegisterShaderFromRGBA( shaderName, rgba, (int)width, (int)height );
+	Z_Free( rgba );
+	return shader;
 }
 
 static qhandle_t CL_GetSteamAvatarImageHandle( uint64_t steamId,
 		uint32_t avatarSize ) {
-	clSteamAvatarCacheEntry_t *freeEntry = nullptr;
-	uint32_t width = 0;
-	uint32_t height = 0;
-	uint32_t required = 0;
-	char shaderName[MAX_QPATH];
-	byte *rgba;
+	clSteamAvatarCacheEntry_t *target = nullptr;
 	qhandle_t shader;
 
 	if ( !steamId || avatarSize > FNQL_STEAM_AVATAR_LARGE
@@ -1102,39 +1162,43 @@ static qhandle_t CL_GetSteamAvatarImageHandle( uint64_t steamId,
 	}
 	for ( clSteamAvatarCacheEntry_t &entry : cl_steamAvatarCache ) {
 		if ( entry.steamId == steamId && entry.size == avatarSize ) {
-			return entry.shader;
+			if ( entry.session != cl_steamAvatarSession ) {
+				// Reaching this means a renderer teardown ran without clearing
+				// the cache. The entry is dropped rather than returned, so the
+				// only symptom left is this line instead of cgame drawing
+				// whatever shader now sits at that index.
+				Com_DPrintf( "Discarded Steam avatar shader %d for %llu:"
+					" minted by renderer session %u, current is %u\n",
+					entry.shader, (unsigned long long)steamId, entry.session,
+					cl_steamAvatarSession );
+				entry = {};
+			} else if ( entry.shader ) {
+				return entry.shader;
+			} else if ( cls.realtime < entry.retryTime ) {
+				return 0;
+			}
+			target = &entry;
+			break;
 		}
-		if ( !entry.steamId && !freeEntry ) {
-			freeEntry = &entry;
+		if ( !target && ( !entry.steamId
+			|| entry.session != cl_steamAvatarSession || !entry.shader ) ) {
+			// Free slot, a leftover from a previous renderer session, or an
+			// avatar that never resolved: all three are safe to take over.
+			target = &entry;
 		}
 	}
-	if ( !freeEntry ) {
+	if ( !target ) {
 		return 0;
 	}
-	if ( FNQL_Steam_GetAvatarRGBA( steamId, avatarSize,
-		NULL, 0, &width, &height, &required ) != FNQL_STEAM_RESULT_BUFFER_TOO_SMALL
-		|| !width || !height || required != width * height * 4u
-		|| required > 4u * 1024u * 1024u ) {
-		return 0;
-	}
-	rgba = static_cast<byte *>( Z_Malloc( required ) );
-	if ( !rgba ) {
-		return 0;
-	}
-	if ( FNQL_Steam_GetAvatarRGBA( steamId, avatarSize,
-		rgba, required, &width, &height, &required ) != FNQL_STEAM_RESULT_OK ) {
-		Z_Free( rgba );
-		return 0;
-	}
-	Com_sprintf( shaderName, sizeof( shaderName ), "*steam/avatar/%u/%u/%llu",
-		cl_steamAvatarGeneration, avatarSize, (unsigned long long)steamId );
-	shader = re.RegisterShaderFromRGBA( shaderName, rgba, (int)width, (int)height );
-	Z_Free( rgba );
-	if ( shader ) {
-		freeEntry->steamId = steamId;
-		freeEntry->size = avatarSize;
-		freeEntry->shader = shader;
-	}
+
+	shader = CL_RegisterSteamAvatarShader( steamId, avatarSize );
+	target->steamId = steamId;
+	target->size = avatarSize;
+	target->session = cl_steamAvatarSession;
+	target->shader = shader;
+	// A pending avatar keeps its slot so the poll stays bounded; without it the
+	// provider is queried, and the pixels copied, once per player per frame.
+	target->retryTime = shader ? 0 : cls.realtime + CL_STEAM_AVATAR_RETRY_MSEC;
 	return shader;
 }
 
@@ -1145,32 +1209,14 @@ qhandle_t CL_GetAvatarImageHandle( unsigned int identityLow, unsigned int identi
 }
 
 qhandle_t CL_Steam_RegisterShader( const char *url ) {
-	struct AvatarPrefix {
-		const char *text;
-		uint32_t size;
-	};
-	static const AvatarPrefix avatarPrefixes[] = {
-		{ "asset://steam/avatar/small/", FNQL_STEAM_AVATAR_SMALL },
-		{ "asset://steam/avatar/medium/", FNQL_STEAM_AVATAR_MEDIUM },
-		{ "asset://steam/avatar/large/", FNQL_STEAM_AVATAR_LARGE },
-		{ "steam://avatar/small/", FNQL_STEAM_AVATAR_SMALL },
-		{ "steam://avatar/medium/", FNQL_STEAM_AVATAR_MEDIUM },
-		{ "steam://avatar/large/", FNQL_STEAM_AVATAR_LARGE },
-		// Retail web.pak uses the unqualified form for profile and friend rows.
-		{ "asset://steam/avatar/", FNQL_STEAM_AVATAR_LARGE },
-		{ "steam://avatar/", FNQL_STEAM_AVATAR_LARGE }
-	};
 	uint64_t avatarSteamId;
+	uint32_t avatarSize;
 
 	if ( !url || !url[0] || !re.RegisterShaderNoMip ) {
 		return 0;
 	}
-	for ( const AvatarPrefix &prefix : avatarPrefixes ) {
-		const size_t prefixLength = strlen( prefix.text );
-		if ( !Q_stricmpn( url, prefix.text, (int)prefixLength )
-			&& CL_Steam_ParseIdentity( url + prefixLength, &avatarSteamId ) ) {
-			return CL_GetSteamAvatarImageHandle( avatarSteamId, prefix.size );
-		}
+	if ( CL_Steam_ParseAvatarPath( url, &avatarSteamId, &avatarSize ) ) {
+		return CL_GetSteamAvatarImageHandle( avatarSteamId, avatarSize );
 	}
 
 	if ( !CL_WebHost_IsResourceURI( url ) ) {
@@ -7518,7 +7564,10 @@ static qboolean CL_WebUI_EncodeAvatarPng( const byte *rgba, uint32_t width,
 	return qtrue;
 }
 
-static qboolean CL_WebUI_ParseSteamAvatarPath( const char *path,
+/* Shared by the renderer shader bridge and the browser resource bridge so a URL
+ * that resolves for one can never resolve differently, or not at all, for the
+ * other. The unqualified forms are listed last: they prefix the sized ones. */
+static qboolean CL_Steam_ParseAvatarPath( const char *path,
 	uint64_t *steamId, uint32_t *avatarSize ) {
 	struct Prefix {
 		const char *text;
@@ -7531,9 +7580,16 @@ static qboolean CL_WebUI_ParseSteamAvatarPath( const char *path,
 		{ "steam://avatar/small/", FNQL_STEAM_AVATAR_SMALL },
 		{ "steam://avatar/medium/", FNQL_STEAM_AVATAR_MEDIUM },
 		{ "steam://avatar/large/", FNQL_STEAM_AVATAR_LARGE },
+		// Retail web.pak uses the unqualified form for profile and friend rows.
 		{ "asset://steam/avatar/", FNQL_STEAM_AVATAR_LARGE },
 		{ "steam://avatar/", FNQL_STEAM_AVATAR_LARGE }
 	};
+	if ( steamId ) {
+		*steamId = 0;
+	}
+	if ( avatarSize ) {
+		*avatarSize = FNQL_STEAM_AVATAR_LARGE;
+	}
 	if ( !path || !steamId || !avatarSize ) {
 		return qfalse;
 	}
@@ -7569,7 +7625,10 @@ static qboolean CL_WebUI_RequestSteamAvatarPng( const char *path,
 	uint32_t width = 0;
 	uint32_t height = 0;
 	uint32_t required = 0;
-	if ( !CL_WebUI_ParseSteamAvatarPath( path, &steamId, &avatarSize )
+	uint32_t loadedWidth = 0;
+	uint32_t loadedHeight = 0;
+	uint32_t loadedRequired = 0;
+	if ( !CL_Steam_ParseAvatarPath( path, &steamId, &avatarSize )
 		|| !FNQL_Steam_Available( FNQL_STEAM_CAP_AVATARS ) ) {
 		return qfalse;
 	}
@@ -7587,9 +7646,15 @@ static qboolean CL_WebUI_RequestSteamAvatarPng( const char *path,
 	if ( !rgba ) {
 		return qfalse;
 	}
+	// Keep the transfer's extents separate from the sizing call's: a provider
+	// that finished downloading a larger portrait between the two would
+	// otherwise have the encoder read past the buffer it just filled.
 	const fnqlSteamResult_t loaded = FNQL_Steam_GetAvatarRGBA( steamId,
-		avatarSize, rgba, required, &width, &height, &required );
+		avatarSize, rgba, required, &loadedWidth, &loadedHeight,
+		&loadedRequired );
 	const qboolean encoded = loaded == FNQL_STEAM_RESULT_OK
+		&& loadedWidth == width && loadedHeight == height
+		&& loadedRequired == required
 		? CL_WebUI_EncodeAvatarPng( rgba, width, height, outBuffer, outLength )
 		: qfalse;
 	Z_Free( rgba );

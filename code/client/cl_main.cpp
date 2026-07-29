@@ -1413,6 +1413,12 @@ void CL_ShutdownAll( void ) {
 		}
 	}
 
+	// RE_Shutdown drops every texture and the next RE_BeginRegistration rebuilds
+	// tr.shaders from zero, so any handle cached outside the renderer now names
+	// an unrelated shader. CL_ShutdownRef covers its own path; this one does not
+	// go through it.
+	CL_ClearAvatarImageHandles();
+
 	cls.rendererStarted = qfalse;
 	cls.soundRegistered = qfalse;
 

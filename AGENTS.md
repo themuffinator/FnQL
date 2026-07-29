@@ -141,6 +141,8 @@ Every change should protect these project constraints:
   from templates.
 - `scripts/release.py`: stages artifacts through `.install/` and produces
   release archives plus manifests.
+- `scripts/discord_release.py`: posts the release announcement embed to the
+  Discord webhook in `DISCORD_RELEASE_WEBHOOK` as the last publish stage.
 - `subprojects/*.wrap`: Meson fallback definitions for third-party dependencies
   such as SDL3, OpenAL Soft, libcurl, libjpeg-turbo, Ogg, and Vorbis.
 - `.github/workflows/release.yml`: main-branch build validation and manual
