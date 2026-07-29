@@ -1914,6 +1914,26 @@ static bool CL_RestoreOldGame( void )
 	return false;
 }
 
+/*
+=====================
+CL_RestoreMainMenuAfterDisconnect
+
+The retained retail WebUI owns terminal disconnects.  The native UI is only a
+fallback when that external browser runtime cannot resume.
+=====================
+*/
+static void CL_RestoreMainMenuAfterDisconnect( void ) {
+	if ( CL_WebHost_ShowAfterDisconnect() ) {
+		return;
+	}
+
+	if ( uivm ) {
+		S_StopAllSounds();
+		VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_MAIN );
+		Key_SetCatcher( ( Key_GetCatcher() & ~KEYCATCH_BROWSER ) | KEYCATCH_UI );
+	}
+}
+
 
 /*
 =====================
@@ -2038,11 +2058,8 @@ qboolean CL_Disconnect( qboolean showMainMenu ) {
 	else
 		cl_restarted = CL_RestoreOldGame();
 
-	if ( showMainMenu && !CL_WebHost_ShowAfterDisconnect() && uivm ) {
-		// The retail WebUI is the primary menu. Keep the retail native UI module
-		// usable when its external Awesomium runtime or web.pak is unavailable.
-		VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_MAIN );
-		Key_SetCatcher( ( Key_GetCatcher() & ~KEYCATCH_BROWSER ) | KEYCATCH_UI );
+	if ( showMainMenu ) {
+		CL_RestoreMainMenuAfterDisconnect();
 	}
 
 	cl_disconnecting = false;
@@ -2253,6 +2270,17 @@ void CL_Disconnect_f( void ) {
 		if ( com_sv_running && com_sv_running->integer
 			&& ( !com_dedicated || !com_dedicated->integer ) ) {
 			SV_Shutdown( "Server quit\n" );
+
+			// SV_Shutdown uses CL_Disconnect(qfalse), because most server
+			// shutdowns are map or process transitions. This command is the
+			// terminal exception: release the stale in-game native menu before
+			// offering the retained WebUI its post-game route.
+			if ( cls.state == CA_DISCONNECTED ) {
+				if ( uivm ) {
+					VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_NONE );
+				}
+				CL_RestoreMainMenuAfterDisconnect();
+			}
 			return;
 		}
 
@@ -4229,18 +4257,11 @@ void CL_Frame( int msec, int realMsec ) {
 		// Bring up the menu once.  UI_MENUS_ANY_VISIBLE covers menus whose input
 		// catcher was temporarily yielded during a renderer or browser transition.
 		//
-		// Every route back to CA_DISCONNECTED ends here: an explicit disconnect,
-		// a listen server shutdown, an error drop, a finished demo.  Only the
-		// Com_Error path runs CL_Disconnect, and CL_Disconnect_f returns early
-		// after SV_Shutdown on a local server, so restoring the retail WebUI has
-		// to happen here or a local game always came back to the native menu
-		// with the browser still paused and unfocused.
-		if ( !CL_WebHost_ShowAfterDisconnect() ) {
-			// Keep the retail native UI usable when the WebUI's external
-			// Awesomium runtime or web.pak is unavailable.
-			S_StopAllSounds();
-			VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_MAIN );
-		}
+		// Routes that reach CA_DISCONNECTED without requesting a terminal menu
+		// still converge here (for example a server-side shutdown or finished
+		// demo). CL_Disconnect_f handles its listen-server terminal exception
+		// directly because a stale native in-game menu would fail this guard.
+		CL_RestoreMainMenuAfterDisconnect();
 	}
 
 	// Retail cl_avidemo is a deterministic screenshot-sequence path. It stays

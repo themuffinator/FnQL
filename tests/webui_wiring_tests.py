@@ -204,22 +204,38 @@ class WebUiWiringTests(unittest.TestCase):
 
     def test_every_route_to_disconnected_restores_the_webui_menu(self) -> None:
         """CL_Disconnect_f returns early after SV_Shutdown on a listen server, so
-        CL_Disconnect - and with it CL_WebHost_ShowAfterDisconnect - never runs.
-        The CL_Frame menu fallback is the one site every route to
-        CA_DISCONNECTED passes through, so the WebUI must be offered there."""
+        SV_Shutdown's non-menu disconnect must be followed by the terminal
+        command's explicit WebUI-first restoration."""
         main = (ROOT / "code" / "client" / "cl_main.cpp").read_text(encoding="utf-8")
         webui = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
 
+        restore_start = main.index("static void CL_RestoreMainMenuAfterDisconnect")
+        restore_end = main.index("qboolean CL_Disconnect(", restore_start)
+        restore = main[restore_start:restore_end]
+        self.assertIn("if ( CL_WebHost_ShowAfterDisconnect() ) {", restore)
+        self.assertLess(
+            restore.index("CL_WebHost_ShowAfterDisconnect()"),
+            restore.index("UI_SET_ACTIVE_MENU, UIMENU_MAIN"),
+        )
+
         fallback = main[main.index("cls.cddialog = qfalse;"):]
         fallback = fallback[: fallback.index("cl_avidemo")]
-        self.assertIn("if ( !CL_WebHost_ShowAfterDisconnect() ) {", fallback)
-        self.assertLess(
-            fallback.index("CL_WebHost_ShowAfterDisconnect()"),
-            fallback.index("UI_SET_ACTIVE_MENU, UIMENU_MAIN"),
+        self.assertIn("CL_RestoreMainMenuAfterDisconnect();", fallback)
+
+        disconnect_start = main.index("void CL_Disconnect_f")
+        disconnect_end = main.index("void CL_Reconnect_f", disconnect_start)
+        disconnect = main[disconnect_start:disconnect_end]
+        shutdown = disconnect.index('SV_Shutdown( "Server quit\\n" );')
+        close_native = disconnect.index(
+            "UI_SET_ACTIVE_MENU, UIMENU_NONE", shutdown
         )
-        # The explicit-disconnect path keeps the same ordering.
-        disconnect = main[main.index("void CL_Disconnect_f"):]
-        self.assertIn("SV_Shutdown( \"Server quit\\n\" );", disconnect)
+        restore_webui = disconnect.index(
+            "CL_RestoreMainMenuAfterDisconnect();", close_native
+        )
+        terminal_return = disconnect.index("return;", restore_webui)
+        self.assertLess(shutdown, close_native)
+        self.assertLess(close_native, restore_webui)
+        self.assertLess(restore_webui, terminal_return)
 
         # Ownership is published synchronously; waiting for the next WebUI frame
         # let the native menu take KEYCATCH_UI first and keep it.

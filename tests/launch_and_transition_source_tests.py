@@ -155,11 +155,13 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
         main = read_source("code/client/cl_main.cpp")
         common = read_source("code/qcommon/common.c")
         keys = read_source("code/client/cl_keys.cpp")
+        server = read_source("code/server/sv_init.cpp")
         webui = read_source("code/client/cl_webui.cpp")
 
         disconnect_start = main.index("qboolean CL_Disconnect( qboolean showMainMenu )")
         disconnect_end = main.index("void CL_ForwardCommandToServer", disconnect_start)
         disconnect = main[disconnect_start:disconnect_end]
+        restore = function_body(main, "CL_RestoreMainMenuAfterDisconnect")
 
         self.assertLess(
             disconnect.index('Cvar_Set( "r_uiFullScreen", "1" );'),
@@ -168,11 +170,21 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
         self.assertIn('Cvar_Set( "timescale", "1" );', disconnect)
         self.assertIn('CL_AddReliableCommand( "disconnect", qtrue );', disconnect)
         self.assertIn("CL_WritePacket( 2 );", disconnect)
-        self.assertIn("CL_WebHost_ShowAfterDisconnect()", disconnect)
-        self.assertIn("UI_SET_ACTIVE_MENU, UIMENU_MAIN", disconnect)
+        self.assertIn("CL_RestoreMainMenuAfterDisconnect();", disconnect)
         self.assertLess(
             disconnect.index("cls.state = CA_DISCONNECTED;"),
-            disconnect.index("CL_WebHost_ShowAfterDisconnect()"),
+            disconnect.index("CL_RestoreMainMenuAfterDisconnect();"),
+        )
+        self.assertIn("CL_WebHost_ShowAfterDisconnect()", restore)
+        self.assertIn("UI_SET_ACTIVE_MENU, UIMENU_MAIN", restore)
+        self.assertIn(
+            "Key_SetCatcher( ( Key_GetCatcher() & ~KEYCATCH_BROWSER ) | "
+            "KEYCATCH_UI );",
+            restore,
+        )
+        self.assertLess(
+            restore.index("CL_WebHost_ShowAfterDisconnect()"),
+            restore.index("UI_SET_ACTIVE_MENU, UIMENU_MAIN"),
         )
 
         show = function_body(webui, "CL_WebHost_ShowAfterDisconnect")
@@ -193,6 +205,20 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
         command = main[command_start:command_end]
         self.assertIn('Com_Error( ERR_DISCONNECT, "Disconnected from server" );', command)
         self.assertNotIn("CL_Disconnect( qfalse )", command)
+        local_shutdown = command.index('SV_Shutdown( "Server quit\\n" );')
+        local_none = command.index("UI_SET_ACTIVE_MENU, UIMENU_NONE", local_shutdown)
+        local_restore = command.index(
+            "CL_RestoreMainMenuAfterDisconnect();", local_none
+        )
+        local_return = command.index("return;", local_restore)
+        self.assertLess(local_shutdown, local_none)
+        self.assertLess(local_none, local_restore)
+        self.assertLess(local_restore, local_return)
+        self.assertIn("if ( cls.state == CA_DISCONNECTED )", command)
+
+        server_shutdown_start = server.index("void SV_Shutdown( const char *finalmsg )")
+        server_shutdown = server[server_shutdown_start:]
+        self.assertIn("CL_Disconnect( qfalse );", server_shutdown)
 
         self.assertIn('if ( !Q_stricmp( c, "disconnect" ) )', main)
         self.assertIn("cls.realtime - clc.lastPacketTime >= 3000", main)
