@@ -31,4 +31,4 @@ release, CI resets `Unreleased` for the next cycle.
 - _None yet._
 
 ### Documentation and Tooling
-- Manual releases now finish by announcing the new build on Discord with the release highlights and per-platform download links.
+- _None yet._
