@@ -2677,6 +2677,10 @@ static void CL_Vid_Restart( refShutdownCode_t shutdownCode ) {
 	}
 
 	cls.startCgame = qfalse;
+	// Renderer, sound, UI, and cgame restarts can register a different set of
+	// public cvars. Refresh the retained WebUI schema once after that lifecycle
+	// boundary instead of rediscovering every cvar on a frame timer.
+	CL_WebHost_InvalidateConfigSnapshot();
 }
 
 
@@ -4093,6 +4097,12 @@ void CL_RefreshSteamIdentity( void ) {
 	const qboolean changed = CL_ReadSteamIdentity();
 
 	CL_PublishSteamIdentity();
+	if ( changed ) {
+		// qz_instance exposes identity outside the ordinary cvar map. Let the
+		// WebUI refresh that aggregate snapshot once, on its next visible
+		// frame, instead of relying on a periodic full-state rebuild.
+		CL_WebHost_InvalidateConfigSnapshot();
+	}
 	if ( !steamIdentity.available ) {
 		steamIdentity.announced = false;
 		return;

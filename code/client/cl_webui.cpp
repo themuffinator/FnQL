@@ -68,7 +68,7 @@ BackendHost &ClientBackendHost() noexcept {
 #define CL_WEB_NATIVE_REQUEST_LOADING_POLL_FRAMES 30
 #define CL_WEB_MAX_RESOURCE_BYTES ( 64 * 1024 * 1024 )
 #define CL_WEB_BRIDGE_RETRY_FRAMES 30
-#define CL_WEB_CONFIG_SYNC_FRAMES 300
+#define CL_WEB_SNAPSHOT_RETRY_FRAMES 30
 // The settings snapshot carries every cvar the retail settings sections and the
 // FnQL overlay bind rows to. Both retail components read their initial values
 // from this snapshot only, so a truncated snapshot presents rows with defaults
@@ -134,8 +134,14 @@ typedef struct {
 	int			frameSequence;
 	int			nextNativeRequestPollFrame;
 	int			nextBridgeRetryFrame;
-	int			nextConfigSnapshotFrame;
+	int			nextNativeStateRetryFrame;
+	int			nextConfigSnapshotRetryFrame;
+	int			nextFriendSnapshotRetryFrame;
+	qboolean	nativeStateSynced;
+	qboolean	nativePakPresent;
+	qboolean	nativeGameRunning;
 	qboolean	configSnapshotSynced;
+	qboolean	friendSnapshotSynced;
 	qboolean	demoSnapshotSynced;
 	qboolean	mapCatalogSynced;
 	qboolean	factoryCatalogSynced;
@@ -194,6 +200,16 @@ void CL_WebHost_InvalidateFactoryCatalog( void ) {
 
 void CL_WebHost_InvalidateMapCatalog( void ) {
 	cl_webui.mapCatalogSynced = qfalse;
+}
+
+void CL_WebHost_InvalidateConfigSnapshot( void ) {
+	cl_webui.configSnapshotSynced = qfalse;
+	cl_webui.nextConfigSnapshotRetryFrame = 0;
+}
+
+void CL_WebHost_InvalidateFriendSnapshot( void ) {
+	cl_webui.friendSnapshotSynced = qfalse;
+	cl_webui.nextFriendSnapshotRetryFrame = 0;
 }
 
 static void CL_WebHost_UpdateOverlayOwnership( void );
@@ -259,11 +275,11 @@ static void CL_WebUI_FreeSurfaceBuffer( void ) {
 	cl_webui.surfaceCopied = qfalse;
 }
 
-static void CL_WebUI_SetCvarIfChanged( const char *name, const char *value ) {
+static qboolean CL_WebUI_SetCvarIfChanged( const char *name, const char *value ) {
 	const char *current;
 
 	if ( !name || !value ) {
-		return;
+		return qfalse;
 	}
 
 	current = Cvar_VariableString( name );
@@ -272,7 +288,9 @@ static void CL_WebUI_SetCvarIfChanged( const char *name, const char *value ) {
 		// to the console and UI.  Internal state publication must bypass that
 		// user-facing protection or the failed set is retried every frame.
 		Cvar_Set2( name, value, qtrue );
+		return qtrue;
 	}
+	return qfalse;
 }
 
 static const char *CL_WebUI_BackendProviderLabel( void ) {
@@ -986,8 +1004,10 @@ static void CL_WebHost_InvalidateDocumentSnapshots( void ) {
 	cl_webui.fnqlOverlayInjected = qfalse;
 	cl_webui.nextBridgeRetryFrame = 0;
 	cl_webui.nextNativeRequestPollFrame = 0;
-	cl_webui.nextConfigSnapshotFrame = 0;
-	cl_webui.configSnapshotSynced = qfalse;
+	cl_webui.nextNativeStateRetryFrame = 0;
+	cl_webui.nativeStateSynced = qfalse;
+	CL_WebHost_InvalidateConfigSnapshot();
+	CL_WebHost_InvalidateFriendSnapshot();
 	cl_webui.demoSnapshotSynced = qfalse;
 	cl_webui.mapCatalogSynced = qfalse;
 	cl_webui.factoryCatalogSynced = qfalse;
@@ -1012,6 +1032,7 @@ void CL_RefreshOnlineServicesBridgeState( void ) {
 	const qboolean requested = CL_WebUI_RuntimeRequested();
 	const qboolean available = ( requested && CL_WebUI_RuntimeAvailable() ) ? qtrue : qfalse;
 	const qboolean pendingSurface = ( available && cl_webui.browserVisible && cl_webui.browserActive && !CL_WebHost_HasDrawableSurface() ) ? qtrue : qfalse;
+	qboolean configSnapshotChanged = qfalse;
 
 	CL_WebUI_SetCvarIfChanged( "ui_browserAwesomium", available ? "1" : "0" );
 	CL_WebUI_SetCvarIfChanged( "ui_browserAwesomiumPending", pendingSurface ? "1" : "0" );
@@ -1019,16 +1040,28 @@ void CL_RefreshOnlineServicesBridgeState( void ) {
 	CL_WebUI_SetCvarIfChanged( "ui_browserAwesomiumPolicy", CL_WebUI_BackendPolicyLabel() );
 	CL_WebUI_SetCvarIfChanged( "ui_browserAwesomiumParityScope", "retail Windows Awesomium/WebUI" );
 	CL_WebUI_SetCvarIfChanged( "ui_browserAwesomiumParityReason", "backend scaffold only; external Awesomium SDK/runtime is not bundled" );
-	CL_WebUI_SetCvarIfChanged( "ui_onlineServicesMode", CL_WebHost_OnlineServicesModeLabel() );
-	CL_WebUI_SetCvarIfChanged( "ui_onlineServicesPolicy", CL_WebHost_OnlineServicesPolicyLabel() );
+	if ( CL_WebUI_SetCvarIfChanged( "ui_onlineServicesMode", CL_WebHost_OnlineServicesModeLabel() ) ) {
+		configSnapshotChanged = qtrue;
+	}
+	if ( CL_WebUI_SetCvarIfChanged( "ui_onlineServicesPolicy", CL_WebHost_OnlineServicesPolicyLabel() ) ) {
+		configSnapshotChanged = qtrue;
+	}
 	CL_WebUI_SetCvarIfChanged( "ui_subscriptionBridgeMode", CL_WebHost_OnlineServicesModeLabel() );
 	CL_WebUI_SetCvarIfChanged( "ui_subscriptionBridgePolicy", CL_WebHost_OnlineServicesPolicyLabel() );
 	CL_WebUI_SetCvarIfChanged( "ui_subscriptionBridgeParityScope", CL_WebHost_OnlineServicesParityScopeLabel() );
 	CL_WebUI_SetCvarIfChanged( "ui_subscriptionBridgeParityReason", CL_WebHost_OnlineServicesParityReasonLabel() );
-	CL_WebUI_SetCvarIfChanged( "ui_matchmakingProvider", CL_WebHost_MatchmakingProviderLabel() );
-	CL_WebUI_SetCvarIfChanged( "ui_matchmakingPolicy", CL_WebHost_MatchmakingPolicyLabel() );
-	CL_WebUI_SetCvarIfChanged( "ui_workshopProvider", CL_WebHost_WorkshopProviderLabel() );
-	CL_WebUI_SetCvarIfChanged( "ui_workshopPolicy", CL_WebHost_WorkshopPolicyLabel() );
+	if ( CL_WebUI_SetCvarIfChanged( "ui_matchmakingProvider", CL_WebHost_MatchmakingProviderLabel() ) ) {
+		configSnapshotChanged = qtrue;
+	}
+	if ( CL_WebUI_SetCvarIfChanged( "ui_matchmakingPolicy", CL_WebHost_MatchmakingPolicyLabel() ) ) {
+		configSnapshotChanged = qtrue;
+	}
+	if ( CL_WebUI_SetCvarIfChanged( "ui_workshopProvider", CL_WebHost_WorkshopProviderLabel() ) ) {
+		configSnapshotChanged = qtrue;
+	}
+	if ( CL_WebUI_SetCvarIfChanged( "ui_workshopPolicy", CL_WebHost_WorkshopPolicyLabel() ) ) {
+		configSnapshotChanged = qtrue;
+	}
 	CL_WebUI_SetCvarIfChanged( "ui_resourceBridgeProvider", CL_WebHost_ResourceBridgeProviderLabel() );
 	CL_WebUI_SetCvarIfChanged( "ui_resourceBridgePolicy", CL_WebHost_ResourceBridgePolicyLabel() );
 	CL_WebUI_SetCvarIfChanged( "ui_resourceBridgeParityScope", CL_WebHost_ResourceBridgeParityScopeLabel() );
@@ -1042,6 +1075,9 @@ void CL_RefreshOnlineServicesBridgeState( void ) {
 	CL_WebUI_SetCvarIfChanged( "ui_resourceBridgeSteamDataSourceFallbackOwner", "Awesomium Steam DataSource and renderer shader registry" );
 	CL_AdvertisementBridge_UpdateCvars();
 	CL_WebHost_UpdateOverlayOwnership();
+	if ( configSnapshotChanged ) {
+		CL_WebHost_InvalidateConfigSnapshot();
+	}
 }
 
 qboolean CL_IsSubscribedApp( int appId ) {
@@ -1345,9 +1381,14 @@ static qboolean CL_WebHost_ResumeRetainedDocument( void ) {
 static qboolean CL_WebHost_SetLocationHash( const char *hash ) {
 	char escapedHash[MAX_STRING_CHARS * 2];
 	char script[MAX_STRING_CHARS * 3];
+	char nextUrl[MAX_STRING_CHARS];
 
 	CL_WebHost_NormalizeHash( hash, cl_webui.pendingHash, sizeof( cl_webui.pendingHash ) );
-	CL_WebHost_BuildCurrentURL( cl_webui.pendingHash, cl_webui.currentUrl, sizeof( cl_webui.currentUrl ) );
+	CL_WebHost_BuildCurrentURL( cl_webui.pendingHash, nextUrl, sizeof( nextUrl ) );
+	if ( strcmp( cl_webui.currentUrl, nextUrl ) ) {
+		Q_strncpyz( cl_webui.currentUrl, nextUrl, sizeof( cl_webui.currentUrl ) );
+		CL_WebHost_InvalidateConfigSnapshot();
+	}
 
 	if ( !CL_WebHost_HasLiveView() || !CL_WebHost_HasBoundWindowObject() ) {
 		return qfalse;
@@ -1896,10 +1937,17 @@ void CL_WebHost_Frame( void ) {
 			if ( !CL_WebHost_HasLiveView() ) {
 				CL_WebHost_MarkBrowserUnavailable();
 			} else {
-				CL_WebHost_EnsureFnqlOverlay();
-				CL_WebHost_EnsureStartupBridge();
+				if ( cl_webui.browserVisible && cl_webui.browserActive ) {
+					// A retained view stays alive while gameplay owns the
+					// screen. Defer document bootstrap and large native
+					// snapshots until it is visible again.
+					CL_WebHost_EnsureFnqlOverlay();
+					CL_WebHost_EnsureStartupBridge();
+					CL_WebHost_SyncNativeSnapshots( qfalse );
+				}
+				// Preserve the lightweight state/request handoff while hidden.
+				// Retail preload code can queue commands during a transition.
 				CL_WebHost_UpdateBrowserNativeState();
-				CL_WebHost_SyncNativeSnapshots( qfalse );
 				CL_WebHost_PumpNativeJavascriptRequests();
 			}
 		}
@@ -2487,6 +2535,11 @@ static qboolean CL_WebHost_InjectStartupBridge( qboolean retryOnly ) {
 
 	if ( !retryOnly ) {
 		cl_webui.startupBridgeInjected = qtrue;
+		// A pre-bridge state script can execute successfully while its setter
+		// is not installed yet. Force the newly injected document to receive
+		// the current values, while retaining change-only updates afterward.
+		cl_webui.nativeStateSynced = qfalse;
+		cl_webui.nextNativeStateRetryFrame = 0;
 		CL_WebHost_UpdateBrowserNativeState();
 		CL_WebHost_SyncNativeSnapshots( qtrue );
 		CL_WebView_ReplayRetainedEvents();
@@ -2676,20 +2729,21 @@ static void CL_WebHost_UpdateBrowserDemoList( const char *demoListJson ) {
 	CL_Awesomium_ExecuteJavascript( script, "" );
 }
 
-static void CL_WebHost_UpdateBrowserFriendList( const char *friendListJson ) {
+static qboolean CL_WebHost_UpdateBrowserFriendList( const char *friendListJson ) {
 	const char *json;
 	char *script;
 	int scriptSize;
+	qboolean executed;
 
 	if ( !CL_WebHost_HasLiveView() || !CL_WebHost_HasBoundWindowObject() ) {
-		return;
+		return qfalse;
 	}
 
 	json = ( friendListJson && friendListJson[0] ) ? friendListJson : "[]";
 	scriptSize = (int)strlen( json ) + 512;
 	script = (char *)Z_Malloc( scriptSize );
 	if ( !script ) {
-		return;
+		return qfalse;
 	}
 
 	Com_sprintf(
@@ -2700,8 +2754,9 @@ static void CL_WebHost_UpdateBrowserFriendList( const char *friendListJson ) {
 		"window.EnginePublish('users.persona.'+v.id+'.change',{id:v.id,friend:v});}}}})();",
 		json
 	);
-	CL_Awesomium_ExecuteJavascript( script, "" );
+	executed = CL_Awesomium_ExecuteJavascript( script, "" );
 	Z_Free( script );
+	return executed;
 }
 
 static void CL_WebHost_UpdateBrowserUGCList( const char *ugcListJson ) {
@@ -3032,8 +3087,19 @@ static qboolean CL_WebHost_IsGameRunning( void ) {
 
 static void CL_WebHost_UpdateBrowserNativeState( void ) {
 	char script[256];
+	const qboolean pakPresent = CL_WebPak_Available();
+	const qboolean gameRunning = CL_WebHost_IsGameRunning();
 
-	if ( !CL_WebHost_HasLiveView() || !CL_WebHost_HasBoundWindowObject() ) {
+	if ( !CL_WebHost_HasLiveView()
+		|| !CL_WebHost_HasBoundWindowObject() ) {
+		return;
+	}
+	if ( cl_webui.nativeStateSynced
+		&& cl_webui.nativePakPresent == pakPresent
+		&& cl_webui.nativeGameRunning == gameRunning ) {
+		return;
+	}
+	if ( cl_webui.frameSequence < cl_webui.nextNativeStateRetryFrame ) {
 		return;
 	}
 
@@ -3041,10 +3107,19 @@ static void CL_WebHost_UpdateBrowserNativeState( void ) {
 		script,
 		sizeof( script ),
 		"(function(){if(window.__qlr_set_native_state){window.__qlr_set_native_state({pakPresent:%s,gameRunning:%s});}})();",
-		CL_WebPak_Available() ? "true" : "false",
-		CL_WebHost_IsGameRunning() ? "true" : "false"
+		pakPresent ? "true" : "false",
+		gameRunning ? "true" : "false"
 	);
-	CL_Awesomium_ExecuteJavascript( script, "" );
+	if ( CL_Awesomium_ExecuteJavascript( script, "" ) ) {
+		cl_webui.nativePakPresent = pakPresent;
+		cl_webui.nativeGameRunning = gameRunning;
+		cl_webui.nativeStateSynced = qtrue;
+		cl_webui.nextNativeStateRetryFrame = 0;
+	} else {
+		cl_webui.nativeStateSynced = qfalse;
+		cl_webui.nextNativeStateRetryFrame =
+			cl_webui.frameSequence + CL_WEB_SNAPSHOT_RETRY_FRAMES;
+	}
 }
 
 static qboolean CL_WebHost_AppendConfigCvar( char *buffer, size_t bufferSize,
@@ -4042,18 +4117,19 @@ static void CL_WebHost_BuildConfigJson( char *buffer, size_t bufferSize ) {
 	Z_Free( cvarJson );
 }
 
-static void CL_WebHost_UpdateBrowserConfigCache( const char *configJson ) {
+static qboolean CL_WebHost_UpdateBrowserConfigCache( const char *configJson ) {
 	char *script;
 	int scriptSize;
+	qboolean executed;
 
 	if ( !configJson || !configJson[0] || !CL_WebHost_HasLiveView() || !CL_WebHost_HasBoundWindowObject() ) {
-		return;
+		return qfalse;
 	}
 
 	scriptSize = (int)strlen( configJson ) + 128;
 	script = (char *)Z_Malloc( scriptSize );
 	if ( !script ) {
-		return;
+		return qfalse;
 	}
 
 	Com_sprintf(
@@ -4062,8 +4138,9 @@ static void CL_WebHost_UpdateBrowserConfigCache( const char *configJson ) {
 		"(function(){if(window.__qlr_set_native_config){window.__qlr_set_native_config(%s);}})();",
 		configJson
 	);
-	CL_Awesomium_ExecuteJavascript( script, "" );
+	executed = CL_Awesomium_ExecuteJavascript( script, "" );
 	Z_Free( script );
+	return executed;
 }
 
 static void CL_WebHost_SyncNativeSnapshots( qboolean force ) {
@@ -4095,7 +4172,6 @@ static void CL_WebHost_SyncNativeSnapshots( qboolean force ) {
 	}
 
 	if ( !force && CL_Awesomium_IsLoading() ) {
-		cl_webui.nextConfigSnapshotFrame = cl_webui.frameSequence + CL_WEB_NATIVE_REQUEST_LOADING_POLL_FRAMES;
 		return;
 	}
 
@@ -4110,18 +4186,19 @@ static void CL_WebHost_SyncNativeSnapshots( qboolean force ) {
 		}
 	}
 
-	if ( !force && cl_webui.configSnapshotSynced &&
-		cl_webui.frameSequence < cl_webui.nextConfigSnapshotFrame ) {
-		return;
-	}
-
-	configJson = static_cast<char *>( Z_Malloc( CL_WEB_CONFIG_JSON_LENGTH ) );
-	if ( configJson ) {
-		CL_WebHost_BuildConfigJson( configJson, CL_WEB_CONFIG_JSON_LENGTH );
-		CL_WebHost_UpdateBrowserConfigCache( configJson );
-		Z_Free( configJson );
-		cl_webui.configSnapshotSynced = qtrue;
-		cl_webui.nextConfigSnapshotFrame = cl_webui.frameSequence + CL_WEB_CONFIG_SYNC_FRAMES;
+	if ( force || ( !cl_webui.configSnapshotSynced &&
+		cl_webui.frameSequence >= cl_webui.nextConfigSnapshotRetryFrame ) ) {
+		configJson = static_cast<char *>( Z_Malloc( CL_WEB_CONFIG_JSON_LENGTH ) );
+		if ( configJson ) {
+			CL_WebHost_BuildConfigJson( configJson, CL_WEB_CONFIG_JSON_LENGTH );
+			cl_webui.configSnapshotSynced =
+				CL_WebHost_UpdateBrowserConfigCache( configJson );
+			Z_Free( configJson );
+		}
+		cl_webui.nextConfigSnapshotRetryFrame =
+			cl_webui.configSnapshotSynced
+				? 0
+				: cl_webui.frameSequence + CL_WEB_SNAPSHOT_RETRY_FRAMES;
 	}
 
 	if ( force || !cl_webui.demoSnapshotSynced ) {
@@ -4141,13 +4218,19 @@ static void CL_WebHost_SyncNativeSnapshots( qboolean force ) {
 		}
 	}
 
-	{
+	if ( force || ( !cl_webui.friendSnapshotSynced &&
+		cl_webui.frameSequence >= cl_webui.nextFriendSnapshotRetryFrame ) ) {
 		char *friendJson = static_cast<char *>( Z_Malloc( CL_WEB_FRIEND_JSON_LENGTH ) );
 		if ( friendJson ) {
 			CL_WebHost_BuildFriendListJson( friendJson, CL_WEB_FRIEND_JSON_LENGTH );
-			CL_WebHost_UpdateBrowserFriendList( friendJson );
+			cl_webui.friendSnapshotSynced =
+				CL_WebHost_UpdateBrowserFriendList( friendJson );
 			Z_Free( friendJson );
 		}
+		cl_webui.nextFriendSnapshotRetryFrame =
+			cl_webui.friendSnapshotSynced
+				? 0
+				: cl_webui.frameSequence + CL_WEB_SNAPSHOT_RETRY_FRAMES;
 	}
 }
 
@@ -5853,6 +5936,20 @@ static void CL_Steam_OnProviderEvent( const fnqlSteamEvent_t *event, void *conte
 		return;
 	}
 	switch ( event->type ) {
+		case FNQL_STEAM_EVENT_PROVIDER_READY:
+		case FNQL_STEAM_EVENT_PROVIDER_STOPPED:
+			// Provider availability changes the service labels and the source
+			// of the projected friend list. Coalesce the callbacks into one
+			// refresh on the next visible WebUI frame.
+			CL_WebHost_InvalidateConfigSnapshot();
+			CL_WebHost_InvalidateFriendSnapshot();
+			break;
+		case FNQL_STEAM_EVENT_GAME_SERVER_CONNECTED:
+		case FNQL_STEAM_EVENT_GAME_SERVER_DISCONNECTED:
+			// A GameServer transition can change dynamically reported provider
+			// capabilities, including the Workshop projection.
+			CL_WebHost_InvalidateConfigSnapshot();
+			break;
 		case FNQL_STEAM_EVENT_SERVER_LIST_START:
 			/* The native provider owns this list. Do not erase or repurpose
 			 * legacy LAN/global/favorite caches while WebUI is displaying it. */
@@ -6094,6 +6191,7 @@ static void CL_Steam_OnProviderEvent( const fnqlSteamEvent_t *event, void *conte
 			fnqlSteamFriend_t friendInfo = {};
 			char friendJson[4096];
 			char eventName[112];
+			CL_WebHost_InvalidateFriendSnapshot();
 			friendInfo.size = sizeof( friendInfo );
 			friendJson[0] = '\0';
 			if ( FNQL_Steam_GetFriend( event->subject_id, &friendInfo )
@@ -7020,6 +7118,11 @@ void CL_WebView_PublishCvarChange( const char *name, const char *value, qboolean
 	if ( !Q_stricmp( name, "vid_xpos" ) || !Q_stricmp( name, "vid_ypos" ) ) {
 		return;
 	}
+	if ( !Q_stricmp( name, "name" ) ) {
+		// The aggregate config also exposes the unlocked player name at its
+		// top level, outside the live cvar map updated below.
+		CL_WebHost_InvalidateConfigSnapshot();
+	}
 
 	CL_WebUI_JsonEscape( name, escapedName, sizeof( escapedName ) );
 	CL_WebUI_JsonEscape( value ? value : "", escapedValue, sizeof( escapedValue ) );
@@ -7037,6 +7140,10 @@ void CL_WebView_PublishBindChanged( const char *name, const char *value ) {
 	CL_WebUI_JsonEscape( name ? name : "", escapedName, sizeof( escapedName ) );
 	CL_WebUI_JsonEscape( value ? value : "", escapedValue, sizeof( escapedValue ) );
 	Com_sprintf( payload, sizeof( payload ), "{\"name\":\"%s\",\"value\":\"%s\"}", escapedName, escapedValue );
+	// Binding events update mounted retail controls immediately. Mark the
+	// aggregate qz config dirty as well so a retained document is coherent
+	// when it becomes visible again, without periodically rebuilding it.
+	CL_WebHost_InvalidateConfigSnapshot();
 	CL_WebView_PublishEvent( "bind.changed", payload );
 }
 

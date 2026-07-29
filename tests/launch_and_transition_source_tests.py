@@ -237,12 +237,47 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
 
     def test_internal_webui_state_cvars_do_not_retry_user_facing_rom_sets(self) -> None:
         webui = read_source("code/client/cl_webui.cpp")
-        start = webui.index("static void CL_WebUI_SetCvarIfChanged")
+        start = webui.index("static qboolean CL_WebUI_SetCvarIfChanged")
         end = webui.index("static const char *CL_WebUI_BackendProviderLabel", start)
         setter = webui[start:end]
 
         self.assertIn("Cvar_Set2( name, value, qtrue );", setter)
         self.assertNotIn("Cvar_Set( name, value );", setter)
+
+    def test_webui_friend_snapshot_tracks_fallback_identity_changes(self) -> None:
+        cgame = read_source("code/client/cl_cgame.cpp")
+        config_start = cgame.index("static void CL_ConfigstringModified")
+        config_end = cgame.index("static qboolean CL_GetServerCommand", config_start)
+        config_update = cgame[config_start:config_end]
+        mute_start = cgame.index("qboolean CL_ToggleSteamIdentityMute")
+        mute_end = cgame.index("static uint64_t QL_CG_PackFloatBits64", mute_start)
+        mute_update = cgame[mute_start:mute_end]
+
+        self.assertIn(
+            "index >= CS_PLAYERS && index < CS_PLAYERS + MAX_CLIENTS",
+            config_update,
+        )
+        self.assertIn("CL_WebHost_InvalidateFriendSnapshot();", config_update)
+        self.assertEqual(
+            mute_update.count("CL_WebHost_InvalidateFriendSnapshot();"),
+            2,
+        )
+
+    def test_vid_restart_invalidates_dynamic_webui_cvar_schema(self) -> None:
+        client = read_source("code/client/cl_main.cpp")
+        restart_start = client.index(
+            "static void CL_Vid_Restart( refShutdownCode_t shutdownCode ) {"
+        )
+        restart_end = client.index("static void CL_Vid_Restart_f", restart_start)
+        restart = client[restart_start:restart_end]
+
+        self.assertIn("CL_StartHunkUsers();", restart)
+        self.assertIn("CL_InitCGame();", restart)
+        self.assertIn("CL_WebHost_InvalidateConfigSnapshot();", restart)
+        self.assertGreater(
+            restart.index("CL_WebHost_InvalidateConfigSnapshot();"),
+            restart.index("CL_InitCGame();"),
+        )
 
     def test_ip_database_shutdown_invalidates_aliases_before_freeing(self) -> None:
         server = read_source("code/server/sv_client.cpp")

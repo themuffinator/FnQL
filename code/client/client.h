@@ -734,6 +734,8 @@ void CL_WebHost_HideBrowser( void );
 void CL_WebHost_HideForGameTransition( void );
 void CL_WebHost_NotifySoundsStopped( void );
 void CL_WebHost_NotifyAppActivation( qboolean active );
+void CL_WebHost_InvalidateConfigSnapshot( void );
+void CL_WebHost_InvalidateFriendSnapshot( void );
 void CL_WebHost_OnServerInfoResponse( const netadr_t *address, const char *infoString, int ping );
 qboolean CL_WebHost_OnServerStatusResponseInfo( const netadr_t *address, const char *infoString );
 void CL_WebHost_OnServerStatusResponsePlayer( const netadr_t *address, const char *playerLine );

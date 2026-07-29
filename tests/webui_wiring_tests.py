@@ -993,7 +993,7 @@ class WebUiWiringTests(unittest.TestCase):
     def test_webui_native_friend_list_uses_client_identity_snapshot(self) -> None:
         source = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
 
-        self.assertIn("static void CL_WebHost_UpdateBrowserFriendList", source)
+        self.assertIn("static qboolean CL_WebHost_UpdateBrowserFriendList", source)
         self.assertIn("window.__qlr_set_friend_list", source)
         self.assertIn("window.EnginePublish('users.persona.'+v.id+'.change'", source)
         self.assertIn("static void CL_WebHost_BuildFriendListJson", source)
@@ -1046,7 +1046,7 @@ class WebUiWiringTests(unittest.TestCase):
         source = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
         client_header = (ROOT / "code" / "client" / "client.h").read_text(encoding="utf-8")
 
-        self.assertIn("#define CL_WEB_CONFIG_SYNC_FRAMES 300", source)
+        self.assertNotIn("CL_WEB_CONFIG_SYNC_FRAMES", source)
         self.assertIn("#define CL_WEB_CONFIG_CVAR_JSON_LENGTH 32768", source)
         self.assertIn("#define CL_WEB_CONFIG_BIND_JSON_LENGTH 8192", source)
         self.assertIn(
@@ -1063,11 +1063,12 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertNotIn("char configJson[CL_WEB_CONFIG_JSON_LENGTH]", source)
         self.assertIn("WebUI settings snapshot truncated at", source)
         self.assertIn("qboolean\tconfigSnapshotSynced;", source)
+        self.assertIn("qboolean\tfriendSnapshotSynced;", source)
         self.assertIn("qboolean\tdemoSnapshotSynced;", source)
         self.assertIn("static void CL_WebHost_BuildConfigJson", source)
         self.assertIn("static void CL_WebHost_BuildConfigCvarJson", source)
         self.assertIn("static void CL_WebHost_BuildConfigBindJson", source)
-        self.assertIn("static void CL_WebHost_UpdateBrowserConfigCache", source)
+        self.assertIn("static qboolean CL_WebHost_UpdateBrowserConfigCache", source)
         self.assertIn("static void CL_WebHost_SyncNativeSnapshots", source)
         self.assertIn("static const char *CL_WebHost_OnlineServicesModeLabel", source)
         self.assertIn("static const char *CL_WebHost_OnlineServicesParityScopeLabel", source)
@@ -1152,10 +1153,84 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("window.__qlr_set_native_config(%s)", source)
         self.assertIn("CL_WebHost_SyncNativeSnapshots( qtrue );", source)
         self.assertIn("CL_WebHost_SyncNativeSnapshots( qfalse );", source)
-        self.assertIn("cl_webui.configSnapshotSynced = qtrue;", source)
-        self.assertIn("cl_webui.nextConfigSnapshotFrame = cl_webui.frameSequence + CL_WEB_CONFIG_SYNC_FRAMES;", source)
+        self.assertIn(
+            "cl_webui.configSnapshotSynced =\n"
+            "\t\t\t\tCL_WebHost_UpdateBrowserConfigCache( configJson );",
+            source,
+        )
+        self.assertIn(
+            "cl_webui.friendSnapshotSynced =\n"
+            "\t\t\t\tCL_WebHost_UpdateBrowserFriendList( friendJson );",
+            source,
+        )
+        self.assertNotIn("nextConfigSnapshotFrame", source)
+        self.assertIn("nextConfigSnapshotRetryFrame", source)
+        self.assertIn("nextFriendSnapshotRetryFrame", source)
+        self.assertIn("CL_WEB_SNAPSHOT_RETRY_FRAMES", source)
+        self.assertIn("!cl_webui.configSnapshotSynced &&", source)
+        self.assertIn("!cl_webui.friendSnapshotSynced &&", source)
         self.assertIn("CL_WebHost_UpdateBrowserDemoList( demoJson );", source)
         self.assertIn("CL_WebHost_UpdateBrowserFriendList( friendJson );", source)
+
+        frame = source[
+            source.index("void CL_WebHost_Frame"):
+            source.index("void CL_WebHost_BootstrapAwesomiumMenu")
+        ]
+        self.assertIn(
+            "if ( cl_webui.browserVisible && cl_webui.browserActive ) {",
+            frame,
+        )
+        self.assertLess(
+            frame.index("CL_Awesomium_Update();"),
+            frame.index("cl_webui.browserVisible && cl_webui.browserActive"),
+        )
+        self.assertGreater(
+            frame.index("CL_WebHost_SyncNativeSnapshots( qfalse );"),
+            frame.index("cl_webui.browserVisible && cl_webui.browserActive"),
+        )
+        visible_work_start = frame.index(
+            "if ( cl_webui.browserVisible && cl_webui.browserActive ) {"
+        )
+        visible_work_end = frame.index(
+            "// Preserve the lightweight state/request handoff while hidden."
+        )
+        visible_work = frame[visible_work_start:visible_work_end]
+        self.assertIn("CL_WebHost_SyncNativeSnapshots( qfalse );", visible_work)
+        self.assertNotIn("CL_WebHost_PumpNativeJavascriptRequests();", visible_work)
+        self.assertGreater(
+            frame.index("CL_WebHost_PumpNativeJavascriptRequests();"),
+            visible_work_end,
+        )
+
+        bind_change = source[
+            source.index("void CL_WebView_PublishBindChanged"):
+            source.index("static unsigned int CL_WebView_PackAddressIP")
+        ]
+        self.assertIn("CL_WebHost_InvalidateConfigSnapshot();", bind_change)
+
+        provider_events = source[
+            source.index("static void CL_Steam_OnProviderEvent"):
+            source.index("qboolean CL_Steam_OpenOverlayUrl")
+        ]
+        self.assertIn("case FNQL_STEAM_EVENT_PROVIDER_READY:", provider_events)
+        self.assertIn("case FNQL_STEAM_EVENT_PROVIDER_STOPPED:", provider_events)
+        self.assertIn("case FNQL_STEAM_EVENT_GAME_SERVER_CONNECTED:", provider_events)
+        self.assertIn("CL_WebHost_InvalidateFriendSnapshot();", provider_events)
+        self.assertIn("void CL_WebHost_InvalidateFriendSnapshot( void );", client_header)
+        self.assertIn("qboolean configSnapshotChanged = qfalse;", source)
+        self.assertIn(
+            "if ( CL_WebUI_SetCvarIfChanged( "
+            '"ui_onlineServicesMode"',
+            source,
+        )
+        self.assertIn("CL_WebHost_InvalidateConfigSnapshot();", source)
+
+        location_hash = source[
+            source.index("static qboolean CL_WebHost_SetLocationHash"):
+            source.index("static qboolean CL_WebHost_OpenRequestedURL")
+        ]
+        self.assertIn("strcmp( cl_webui.currentUrl, nextUrl )", location_hash)
+        self.assertIn("CL_WebHost_InvalidateConfigSnapshot();", location_hash)
 
     def test_ui_shader_registration_uses_ql_resource_bridge(self) -> None:
         ui_source = (ROOT / "code" / "client" / "cl_ui.cpp").read_text(encoding="utf-8")
@@ -1171,9 +1246,28 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("static qboolean CL_WebHost_IsGameRunning", source)
         self.assertIn("cls.state >= CA_CONNECTED && cls.state < CA_CINEMATIC", source)
         self.assertIn("static void CL_WebHost_UpdateBrowserNativeState", source)
-        self.assertIn("CL_WebPak_Available() ? \"true\" : \"false\"", source)
-        self.assertIn("CL_WebHost_IsGameRunning() ? \"true\" : \"false\"", source)
+        self.assertIn("const qboolean pakPresent = CL_WebPak_Available();", source)
+        self.assertIn("const qboolean gameRunning = CL_WebHost_IsGameRunning();", source)
         self.assertGreaterEqual(source.count("CL_WebHost_UpdateBrowserNativeState();"), 2)
+        native_state = source[
+            source.index("static void CL_WebHost_UpdateBrowserNativeState( void ) {"):
+            source.index("static qboolean CL_WebHost_AppendConfigCvar")
+        ]
+        self.assertIn("cl_webui.nativeStateSynced", native_state)
+        self.assertIn("cl_webui.nativePakPresent == pakPresent", native_state)
+        self.assertIn("cl_webui.nativeGameRunning == gameRunning", native_state)
+        self.assertIn("nextNativeStateRetryFrame", native_state)
+        self.assertNotIn("!cl_webui.startupBridgeInjected", native_state)
+        bridge_start = source.index("static qboolean CL_WebHost_InjectStartupBridge")
+        bridge = source[
+            bridge_start:
+            source.index("static void CL_WebHost_EnsureStartupBridge( void ) {", bridge_start)
+        ]
+        self.assertIn("cl_webui.nativeStateSynced = qfalse;", bridge)
+        self.assertLess(
+            bridge.index("cl_webui.nativeStateSynced = qfalse;"),
+            bridge.index("CL_WebHost_UpdateBrowserNativeState();"),
+        )
         self.assertIn('!Q_stricmp( kind, "keycapture" )', source)
         self.assertIn("cl_webui.keyCaptureArmed = ( !payload[0] || atoi( payload ) != 0 ) ? qtrue : qfalse;", source)
         self.assertIn("cl_webui.keyCaptureArmed = qfalse;", source)
@@ -1190,6 +1284,12 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("static void CL_WebHost_UpdateBrowserCvarCache", source)
         self.assertIn("window.__qlr_set_native_cvar", source)
         self.assertIn("CL_WebHost_HasBoundWindowObject()", source)
+        publisher = source[
+            source.index("void CL_WebView_PublishCvarChange"):
+            source.index("void CL_WebView_PublishBindChanged")
+        ]
+        self.assertIn('if ( !Q_stricmp( name, "name" ) )', publisher)
+        self.assertIn("CL_WebHost_InvalidateConfigSnapshot();", publisher)
         self.assertIn("Cvar_Set( name, value );", source)
         self.assertIn("Cvar_Reset( name );", source)
         self.assertIn("Cvar_VariableStringBuffer( name, value, sizeof( value ) );", source)

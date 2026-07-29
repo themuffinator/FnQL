@@ -1339,6 +1339,12 @@ static void CL_ConfigstringModified( void ) {
 		// parse serverId and other cvars
 		CL_SystemInfoChanged( qfalse );
 	}
+	if ( index >= CS_PLAYERS && index < CS_PLAYERS + MAX_CLIENTS ) {
+		// The Steam-less WebUI friend projection is derived from replicated
+		// client identities. Refresh it only when one of those identities
+		// actually changes.
+		CL_WebHost_InvalidateFriendSnapshot();
+	}
 }
 
 
@@ -2185,6 +2191,7 @@ qboolean CL_ToggleSteamIdentityMute( unsigned int identityLow, unsigned int iden
 		--ql_cgame_mutedIdentityCount;
 		ql_cgame_mutedIdentitySet[index] = ql_cgame_mutedIdentitySet[ql_cgame_mutedIdentityCount];
 		ql_cgame_mutedIdentitySet[ql_cgame_mutedIdentityCount] = 0;
+		CL_WebHost_InvalidateFriendSnapshot();
 		return qfalse;
 	}
 
@@ -2193,6 +2200,7 @@ qboolean CL_ToggleSteamIdentityMute( unsigned int identityLow, unsigned int iden
 	}
 
 	ql_cgame_mutedIdentitySet[ql_cgame_mutedIdentityCount++] = identity;
+	CL_WebHost_InvalidateFriendSnapshot();
 	return qtrue;
 }
 
