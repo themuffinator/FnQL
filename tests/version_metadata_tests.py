@@ -136,6 +136,50 @@ class VersionMetadataTests(unittest.TestCase):
                     highlights_file=empty,
                 )
 
+    def test_curated_release_notes_take_precedence_and_keep_the_highlights_format(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            notes_dir = Path(tmp)
+            target_commit = manual_release.git("rev-parse", "HEAD")
+            (notes_dir / f"0.1.0.1-20260621-{fnql_meta.normalize_commit(target_commit)}.md").write_text(
+                "# FnQL 0.1.0.1 Release Notes\n\n"
+                "## Highlights\n\n"
+                "- Curated retail compatibility coverage.\n\n"
+                "## Known limitations\n\n"
+                "- Keep the retail Steam install available.\n",
+                encoding="utf-8",
+            )
+
+            rendered = manual_release.render_release_notes(
+                build_number=1,
+                build_date="2026-06-21",
+                from_commit=None,
+                to_commit=target_commit,
+                changelog=ROOT / "docs" / "fnql" / "CHANGELOG.md",
+                no_ai=True,
+                curated_notes_dir=notes_dir,
+            )
+
+        self.assertIn("## Highlights\n\n- Curated retail compatibility coverage.", rendered)
+        self.assertIn("## Known limitations", rendered)
+        self.assertNotIn("# FnQL 0.1.0.1 Release Notes", rendered)
+        self.assertNotIn("## Changelog highlights", rendered)
+
+    def test_tag_specific_curated_notes_win_over_version_notes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            notes_dir = Path(tmp)
+            version = notes_dir / "0.1.0.1.md"
+            tagged = notes_dir / "0.1.0.1-20260621-abcdef12.md"
+            version.write_text("## Highlights\n\n- Version notes.\n", encoding="utf-8")
+            tagged.write_text("## Highlights\n\n- Tag notes.\n", encoding="utf-8")
+
+            selected = manual_release.find_curated_release_notes(
+                notes_dir,
+                release_tag="0.1.0.1-20260621-abcdef12",
+                version_string="0.1.0.1",
+            )
+
+        self.assertEqual(selected, tagged)
+
 
 if __name__ == "__main__":
     unittest.main()

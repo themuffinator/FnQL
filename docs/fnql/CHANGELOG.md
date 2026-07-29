@@ -1,8 +1,14 @@
 # Changelog
 
-This is the pending release-note queue for the next FnQL release.
+This is the player-facing release-note queue for the next FnQL release.
 
-Keep short user-facing bullets under `Unreleased` as changes land. During release publishing, the workflow asks GitHub Copilot to dedupe and categorize the notes for the GitHub release details, then clears this section for the next cycle.
+Keep short user-facing bullets under `Unreleased` as changes land. Start with
+completed work in [`RELEASE_COMPLETION.md`](./RELEASE_COMPLETION.md), then
+distil it here without duplicating every implementation detail. When a release
+needs editorial control, add curated notes under
+[`releases/`](./releases/README.md); otherwise the workflow turns this queue,
+commits, and diffs into a compact `Highlights` section. After a successful
+release, CI resets `Unreleased` for the next cycle.
 
 ## [Unreleased]
 
@@ -25,4 +31,4 @@ Keep short user-facing bullets under `Unreleased` as changes land. During releas
 - _None yet._
 
 ### Documentation and Tooling
-- _None yet._
+- Manual releases now finish by announcing the new build on Discord with the release highlights and per-platform download links.

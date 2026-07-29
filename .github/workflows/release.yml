@@ -171,6 +171,7 @@ jobs:
       - name: Check release and WebUI source contracts
         run: |
           python tests/release_packaging_tests.py
+          python tests/discord_release_tests.py
           python tests/stock_ql_sidecar_tests.py
           python tests/webui_wiring_tests.py
           python tests/webui_backend_source_tests.py
@@ -267,6 +268,7 @@ jobs:
       pull-requests: read
     env:
       HAS_COPILOT_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN != '' }}
+      HAS_DISCORD_WEBHOOK: ${{ secrets.DISCORD_RELEASE_WEBHOOK != '' }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -345,6 +347,7 @@ jobs:
             --output .tmp/release-notes.md
 
       - name: Create release
+        id: create_release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -370,3 +373,26 @@ jobs:
           git add docs/fnql/CHANGELOG.md
           git commit -m "Reset pending changelog after release"
           git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Announce release on Discord
+        if: >-
+          ${{
+            always() &&
+            env.HAS_DISCORD_WEBHOOK == 'true' &&
+            steps.create_release.outcome == 'success'
+          }}
+        env:
+          FNQL_DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK }}
+          FNQL_DISCORD_RELEASE_EMOJI: ${{ vars.FNQL_DISCORD_RELEASE_EMOJI || '<:quakelive:1390987057454776481>' }}
+          FNQL_DISCORD_RELEASE_MENTIONS: ${{ vars.FNQL_DISCORD_RELEASE_MENTIONS || '<@&1424165541572120647> <@&1390287267276525628>' }}
+          FNQL_DISCORD_FEEDBACK_CHANNEL: ${{ vars.FNQL_DISCORD_FEEDBACK_CHANNEL || '<#1528370439997362216>' }}
+        run: |
+          python scripts/discord_release.py \
+            --manifest .install/release-manifest.json \
+            --notes-file .tmp/release-notes.md \
+            --release-tag "${FNQL_RELEASE_TAG}" \
+            --release-title "${FNQL_RELEASE_TITLE}" \
+            --version "${FNQL_VERSION}" \
+            --build-date "${FNQL_BUILD_DATE}" \
+            --commit "${FNQL_COMMIT}" \
+            --require-webhook

@@ -17,6 +17,7 @@ from fnql_meta import (
     ROOT,
     VERSION_HEADER,
     base_metadata,
+    channel_metadata,
     compose_version_string,
     compose_windows_version,
     normalize_commit,
@@ -28,6 +29,7 @@ from changelog import DEFAULT_CHANGELOG, clean_section_text, clear_unreleased
 GITHUB_MODELS_ENDPOINT = "https://models.github.ai/inference/chat/completions"
 DEFAULT_RELEASE_NOTES_MODEL = "openai/gpt-4.1"
 MAX_RELEASE_NOTES_CONTEXT_CHARS = 60000
+DEFAULT_CURATED_RELEASE_NOTES_DIRECTORY = ROOT / "docs" / "fnql" / "releases"
 FIELD_SEPARATOR = "\x1f"
 RECORD_SEPARATOR = "\x1e"
 
@@ -76,6 +78,12 @@ def parse_args() -> argparse.Namespace:
     notes.add_argument("--from-commit")
     notes.add_argument("--to-commit")
     notes.add_argument("--changelog", type=Path, default=DEFAULT_CHANGELOG)
+    notes.add_argument(
+        "--curated-notes-dir",
+        type=Path,
+        default=DEFAULT_CURATED_RELEASE_NOTES_DIRECTORY,
+        help="Directory containing optional tracked release notes (default: docs/fnql/releases)",
+    )
     notes.add_argument("--output", type=Path)
     notes.add_argument(
         "--highlights-file",
@@ -329,6 +337,28 @@ def meaningful_changelog_section(changelog: Path) -> str:
     return text if has_real_bullet else ""
 
 
+def find_curated_release_notes(
+    directory: Path,
+    *,
+    release_tag: str,
+    version_string: str,
+) -> Path | None:
+    for name in (f"{release_tag}.md", f"{version_string}.md"):
+        candidate = directory / name
+        if candidate.is_symlink():
+            raise RuntimeError(f"Tracked release notes must not be a symlink: {candidate}")
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def read_curated_release_notes(path: Path) -> str:
+    content = sanitize_generated_notes(path.read_text(encoding="utf-8"))
+    if not content:
+        raise ValueError(f"Tracked release notes are empty after removing their title: {path}")
+    return content
+
+
 def changed_file_summary(from_commit: str | None, to_commit: str) -> tuple[str, str]:
     range_spec = release_diff_spec(from_commit, to_commit)
     stat = git("diff", "--stat", "--find-renames", range_spec, check=False)
@@ -437,12 +467,10 @@ def github_models_highlights(context: str, *, model: str, timeout: int) -> str:
         """
         You write user-facing release notes for FnQL.
         Audience: players, server operators, mod users, and testers.
-        Produce concise Markdown with only useful highlights. Avoid duplicated ideas,
+        Produce 3-12 concise Markdown bullets with only useful highlights. Avoid duplicated ideas,
         merge noise, raw commit lists, tiny refactor details, and maintainer-only trivia.
         Mention compatibility, renderer, audio, platform, and packaging impact when relevant.
-        Use third-level headings such as "### Highlights", "### Rendering and Display",
-        "### Audio", "### Builds and Packaging", and "### Fixes"; omit empty headings.
-        Keep the whole answer under 12 bullets. Do not invent changes.
+        Do not include a title or headings. Do not invent changes.
         """
     ).strip()
 
@@ -487,19 +515,6 @@ def is_merge_subject(subject: str) -> bool:
     return subject.lower().startswith(("merge branch ", "merge pull request ", "merge remote-tracking "))
 
 
-def fallback_section_for_subject(subject: str) -> str:
-    lowered = subject.lower()
-    if re.search(r"\b(fix|fixed|repair|crash|regression|stability|bug)\b", lowered):
-        return "Fixes"
-    if any(token in lowered for token in ("glx", "renderer", "opengl", "vulkan", "bloom", "display", "screenshot", "cubemap", "wal")):
-        return "Rendering and Display"
-    if any(token in lowered for token in ("audio", "sound", "openal", "wasapi", "ogg", "vorbis")):
-        return "Audio"
-    if any(token in lowered for token in ("release", "package", "artifact", "workflow", "build", "meson", "ninja", "makefile", "msvc")):
-        return "Builds and Packaging"
-    return "Highlights"
-
-
 def humanize_subject(subject: str) -> str:
     cleaned = re.sub(r"\s+\(#\d+\)$", "", subject.strip())
     if not cleaned:
@@ -513,10 +528,18 @@ def humanize_subject(subject: str) -> str:
 def fallback_highlights(commits: list[dict[str, str]], changelog: Path) -> str:
     manual = meaningful_changelog_section(changelog)
     if manual:
-        return manual
+        bullets = [
+            line.strip()
+            for line in manual.splitlines()
+            if re.match(r"^[-*]\s+\S", line.strip())
+            and "none yet" not in line.lower()
+            and "no documented changes" not in line.lower()
+        ]
+        if bullets:
+            return "\n".join(bullets[:12])
 
-    sections: dict[str, list[str]] = {}
     seen: set[str] = set()
+    rendered: list[str] = []
 
     for entry in commits:
         subject = entry["subject"]
@@ -529,21 +552,11 @@ def fallback_highlights(commits: list[dict[str, str]], changelog: Path) -> str:
         if key in seen:
             continue
         seen.add(key)
-        section = fallback_section_for_subject(subject)
-        sections.setdefault(section, []).append(f"- {humanize_subject(subject)}")
+        rendered.append(f"- {humanize_subject(subject)}")
+        if len(rendered) == 12:
+            break
 
-    if not sections:
-        return "### Highlights\n- No user-facing changes were detected in this release range."
-
-    preferred_order = ["Highlights", "Rendering and Display", "Audio", "Builds and Packaging", "Fixes"]
-    rendered: list[str] = []
-    for section in preferred_order:
-        bullets = sections.get(section, [])
-        if not bullets:
-            continue
-        rendered.extend([f"### {section}", *bullets[:6], ""])
-
-    return "\n".join(rendered).strip()
+    return "\n".join(rendered) or "- No user-facing changes were detected in this release range."
 
 
 def generated_highlights(
@@ -598,6 +611,7 @@ def render_release_notes(
     notes_model: str = DEFAULT_RELEASE_NOTES_MODEL,
     ai_timeout: int = 45,
     highlights_file: Path | None = None,
+    curated_notes_dir: Path = DEFAULT_CURATED_RELEASE_NOTES_DIRECTORY,
 ) -> str:
     meta = base_metadata()
     target_commit = (to_commit or git("rev-parse", "HEAD")).strip()
@@ -608,19 +622,36 @@ def render_release_notes(
         int(meta["version_patch"]),
         build_number,
     )
-
-    highlights = generated_highlights(
-        build_number=build_number,
-        build_date=iso_date,
-        version_string=version_string,
-        from_commit=from_commit,
-        target_commit=target_commit,
-        changelog=changelog,
-        no_ai=no_ai,
-        notes_model=notes_model,
-        ai_timeout=ai_timeout,
-        highlights_file=highlights_file,
+    release_tag = str(
+        channel_metadata(
+            "manual",
+            build_number=build_number,
+            build_date=iso_date,
+            commit=target_commit,
+        )["release_tag"]
     )
+    curated_path = find_curated_release_notes(
+        curated_notes_dir,
+        release_tag=release_tag,
+        version_string=version_string,
+    )
+    if curated_path is not None:
+        release_body = read_curated_release_notes(curated_path)
+        print(f"Using tracked release notes from {curated_path}")
+    else:
+        highlights = generated_highlights(
+            build_number=build_number,
+            build_date=iso_date,
+            version_string=version_string,
+            from_commit=from_commit,
+            target_commit=target_commit,
+            changelog=changelog,
+            no_ai=no_ai,
+            notes_model=notes_model,
+            ai_timeout=ai_timeout,
+            highlights_file=highlights_file,
+        )
+        release_body = f"## Highlights\n\n{highlights}"
 
     previous_line: str
     if from_commit:
@@ -635,9 +666,7 @@ def render_release_notes(
     lines = [
         f"# {meta['project_name']} Release",
         "",
-        "## Changelog highlights",
-        "",
-        highlights,
+        release_body,
         "",
         "## Build details",
         "",
@@ -686,6 +715,7 @@ def main() -> int:
         notes_model=args.notes_model,
         ai_timeout=args.ai_timeout,
         highlights_file=args.highlights_file,
+        curated_notes_dir=args.curated_notes_dir,
     )
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

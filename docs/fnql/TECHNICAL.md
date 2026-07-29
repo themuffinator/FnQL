@@ -150,7 +150,8 @@ Current policy:
 - Tagged releases use semantic version tags in the form `vX.Y.Z`.
 - Manual release runs produce unique version/date/commit tags (e.g. `0.1.0.42-20240403-abc12345`) and matching package prefixes without a channel word.
 - The base version in `fnql_version.h` should always represent the next intended stable release line.
-- Pending release-note material lives in [`docs/fnql/CHANGELOG.md`](./CHANGELOG.md). Keep the `Unreleased` section current as work lands; GitHub release entries are the durable published history.
+- Completed work first lands in [`docs/fnql/RELEASE_COMPLETION.md`](./RELEASE_COMPLETION.md), then is distilled into the `Unreleased` queue in [`docs/fnql/CHANGELOG.md`](./CHANGELOG.md). GitHub release entries are the durable published history.
+- For a release that needs editorially reviewed prose, add a tracked note under [`docs/fnql/releases/`](./releases/README.md), named for the full release tag (preferred) or the display version. The manual release helper uses it before generated notes.
 - Use [`scripts/changelog.py`](../../scripts/changelog.py) to extract, clean up, promote, or reset the pending changelog section.
 
 Typical changelog helper usage:
@@ -226,7 +227,64 @@ macOS release jobs are absent because retail Quake Live has no macOS game
 modules or QVMs. Windows and Linux remain under the strict i386 retail-facing
 policy.
 
-Manual release publishing builds GitHub release details from the pending changelog, commits, and changed-file summary. If `COPILOT_GITHUB_TOKEN` is configured, the workflow uses GitHub Copilot release-note cleanup with [`.github/release-notes-instructions.md`](../../.github/release-notes-instructions.md); otherwise it falls back to the repo-local GitHub Models prompt in [`scripts/manual_release.py`](../../scripts/manual_release.py). After a release is created from a branch, CI resets `docs/fnql/CHANGELOG.md` back to an empty categorized `Unreleased` template and commits that reset to the release branch.
+Manual release publishing follows the same staged-maintenance model used by
+openQ4: completed work is collected in the release-completion list, promoted to
+the player-facing `Unreleased` queue, then either curated in a tracked release
+note or reduced to compact highlights from the changelog, commits, and changed
+files. A tag-specific curated note wins over a version-specific one. Without a
+curated note, the workflow uses GitHub Copilot with
+[`.github/release-notes-instructions.md`](../../.github/release-notes-instructions.md)
+when available and otherwise falls back to the repo-local GitHub Models prompt
+in [`scripts/manual_release.py`](../../scripts/manual_release.py). After a
+release is created from a branch, CI resets
+`docs/fnql/CHANGELOG.md` to an empty categorized `Unreleased` template and
+commits that reset to the release branch.
+
+## Discord Release Announcement
+
+The final stage of manual release publishing announces the release on Discord
+through [`scripts/discord_release.py`](../../scripts/discord_release.py). The
+step runs after the GitHub release is created and after the pending changelog is
+reset, and it only runs when the release itself was created successfully.
+
+The announcement webhook is never stored in the repository. Set the
+`DISCORD_RELEASE_WEBHOOK` repository secret; the publish job exposes it to the
+script as `FNQL_DISCORD_WEBHOOK_URL` and skips the announcement when the secret
+is absent.
+
+The script builds the payload from `.install/release-manifest.json` and
+`.tmp/release-notes.md`, so the embed always matches the published archives and
+release notes:
+
+- a short headline with the Quake Live emote and the `@quake-live` plus
+  playtester role mentions, followed by an embed titled `FnQL <version>`
+- a release-focused intro, a `#fnql` feedback line, and a single `Highlights`
+  block from the generated or curated release notes
+- a `Full release notes and downloads` link, then `Version`, `State`, and
+  `Downloads` fields, where downloads are ordered
+  Windows MSVC, Windows MinGW, Linux, then the source archive
+- a brilliant red (`0xE60000`) embed highlight
+- a feedback request in `#fnql`; only the two explicit headline roles are
+  allowed to notify, so generated notes can never trigger a mass ping
+
+Optional environment overrides: `FNQL_DISCORD_RELEASE_COLOR`,
+`FNQL_DISCORD_RELEASE_EMOJI`, `FNQL_DISCORD_RELEASE_MENTIONS`,
+`FNQL_DISCORD_USERNAME`, `FNQL_DISCORD_AVATAR_URL`, and
+`FNQL_DISCORD_FEEDBACK_CHANNEL` (a `<#channel-id>` mention). The release
+workflow maps the corresponding repository variables when present; its FnQL
+defaults use `<:quakelive:1390987057454776481>`,
+`<@&1424165541572120647> <@&1390287267276525628>`, and
+`<#1528370439997362216>`.
+
+Preview the exact payload before a release without posting anything:
+
+```powershell
+python scripts/discord_release.py --dry-run --release-tag 0.1.0.58-20260728-f35445c9
+```
+
+The script only posts to official Discord webhook hosts over HTTPS, retries rate
+limits and transient failures, and reports the delivery status without echoing
+the webhook URL.
 
 ## CI Notes
 
@@ -239,6 +297,8 @@ Expected behavior:
 - `main` pushes validate the main branch without publishing a release
 - manual `workflow_dispatch` runs publish a new version/date/commit release for the selected ref
 - published GitHub releases upload archives whose names match the release tag identity
+- a successful manual publish ends by announcing the release on Discord when
+  `DISCORD_RELEASE_WEBHOOK` is configured
 - every FnQL build, test, runtime proof, and release artifact is 32-bit x86 on
   Windows (MSYS2 and MSVC) and Linux;
   Windows matches the retail cgame/UI/Awesomium ABI, while Linux dedicated
