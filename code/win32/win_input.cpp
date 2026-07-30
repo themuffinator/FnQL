@@ -1048,6 +1048,31 @@ static void IN_StartupMouse( void )
 
 /*
 ===========
+IN_LegacyMouseDrivesInput
+
+The WM_MOUSEMOVE/WM_*BUTTON* fall-through in the message pump is a real input
+source only while neither raw input nor DirectInput owns the device. While raw
+input is registered Windows suppresses legacy mouse messages, so any that still
+arrive were queued before (re)registration: stale positions from the click that
+closed an in-game menu, or from crossing the window while regaining focus.
+Converting one of those into a delta kicks the view by (position - window
+centre) without any physical mouse motion, so the pump must drop them.
+===========
+*/
+qboolean IN_LegacyMouseDrivesInput( void )
+{
+	if ( !IN_MouseActive() ) {
+		return qfalse;
+	}
+	if ( raw_activated || g_pMouse ) {
+		return qfalse;
+	}
+	return qtrue;
+}
+
+
+/*
+===========
 IN_Win32MouseEvent
 ===========
 */

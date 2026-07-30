@@ -1309,17 +1309,19 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, int colorbits, qboolea
 			dm.dmDisplayFrequency = Cvar_VariableIntegerValue( "r_displayRefresh" );
 			dm.dmFields |= DM_DISPLAYFREQUENCY;
 		}
-		else // try to set at least desktop refresh rate?
-		if ( (dm_desktop.dmDisplayFrequency 
-				&& dm.dmPelsWidth <= dm_desktop.dmPelsWidth 
-				&& dm.dmPelsHeight <= dm_desktop.dmPelsWidth) 
-				|| (dm_current.dmDisplayFrequency 
-				&& dm.dmPelsWidth <= dm_current.dmPelsWidth 
-				&& dm.dmPelsHeight <= dm_current.dmPelsWidth)) {
-			//dm.dmDisplayFrequency = dm_desktop.dmDisplayFrequency;
-			//dm.dmFields |= DM_DISPLAYFREQUENCY;
-			//Com_Printf("...using display refresh rate: %iHz\n", 
-			//	dm_desktop.dmDisplayFrequency );
+		else if ( dm_desktop.dmDisplayFrequency
+				&& dm.dmPelsWidth <= dm_desktop.dmPelsWidth
+				&& dm.dmPelsHeight <= dm_desktop.dmPelsHeight )
+		{
+			// Without DM_DISPLAYFREQUENCY the driver falls back to the mode's
+			// default rate - typically 60Hz - whenever the requested resolution
+			// differs from the desktop's, which caps a high-refresh monitor and
+			// makes tearing far more visible. Ask for the desktop rate; the CDS
+			// call below retries without it if this mode cannot support it.
+			dm.dmDisplayFrequency = dm_desktop.dmDisplayFrequency;
+			dm.dmFields |= DM_DISPLAYFREQUENCY;
+			Com_Printf( "...using desktop refresh rate: %iHz\n",
+				(int)dm_desktop.dmDisplayFrequency );
 		}
 		
 		// try to change color depth if possible
@@ -1354,10 +1356,24 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, int colorbits, qboolea
 		else
 		{
 			Com_Printf( "...calling CDS: " );
-			
+
 			// try setting the exact mode requested, because some drivers don't report
 			// the low res modes in EnumDisplaySettings, but still work
-			if ( ( cdsRet = ApplyDisplaySettings( &dm ) ) == DISP_CHANGE_SUCCESSFUL )
+			cdsRet = ApplyDisplaySettings( &dm );
+
+			// the desktop refresh rate requested above may not exist at this
+			// resolution; retry at the driver default before hunting for a
+			// larger mode
+			if ( cdsRet != DISP_CHANGE_SUCCESSFUL
+				&& ( dm.dmFields & DM_DISPLAYFREQUENCY )
+				&& !Cvar_VariableIntegerValue( "r_displayRefresh" ) )
+			{
+				dm.dmFields &= ~DM_DISPLAYFREQUENCY;
+				dm.dmDisplayFrequency = 0;
+				cdsRet = ApplyDisplaySettings( &dm );
+			}
+
+			if ( cdsRet == DISP_CHANGE_SUCCESSFUL )
 			{
 				Com_Printf( "ok\n" );
 

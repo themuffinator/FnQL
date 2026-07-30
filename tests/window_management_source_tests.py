@@ -156,6 +156,23 @@ class WindowManagementSourceTests(unittest.TestCase):
         self.assertIn("clientWidth == glw_state.config->vidWidth", wndproc)
         self.assertIn("CL_CancelWindowResize();", wndproc)
 
+    def test_native_windows_fullscreen_keeps_the_desktop_refresh_rate(self) -> None:
+        """Without DM_DISPLAYFREQUENCY the driver picks the mode's default rate,
+        typically 60Hz, whenever the fullscreen resolution differs from the
+        desktop's. The mode set must request the desktop rate and gracefully
+        retry at the driver default if this resolution cannot support it."""
+        glimp = read_text("code/win32/win_glimp.cpp")
+
+        self.assertIn("dm.dmDisplayFrequency = dm_desktop.dmDisplayFrequency;", glimp)
+        self.assertIn("dm.dmPelsHeight <= dm_desktop.dmPelsHeight", glimp)
+        self.assertIn("...using desktop refresh rate: %iHz\\n", glimp)
+        # Fallback: strip the frequency and retry before hunting for a larger mode.
+        self.assertIn("dm.dmFields &= ~DM_DISPLAYFREQUENCY;", glimp)
+        retry = glimp.index("dm.dmFields &= ~DM_DISPLAYFREQUENCY;")
+        self.assertIn("ApplyDisplaySettings( &dm )", glimp[retry : retry + 200])
+        # An explicit r_displayRefresh remains authoritative: no silent retry.
+        self.assertIn('!Cvar_VariableIntegerValue( "r_displayRefresh" )', glimp)
+
     def test_native_x11_no_longer_locks_window_size(self) -> None:
         source = read_text("code/unix/linux_glimp.cpp")
         hints_start = source.index("memset( &sizehints")

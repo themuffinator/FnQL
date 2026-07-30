@@ -180,6 +180,11 @@ def read_repo_file(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
+def source_slice(source: str, start: str, end: str) -> str:
+    begin = source.index(start)
+    return source[begin : source.index(end, begin)]
+
+
 class CGameNativeBridgeSourceTests(unittest.TestCase):
     def test_cgame_public_exposes_recovered_ql_native_abi(self) -> None:
         cg_public = read_repo_file("code/cgame/cg_public.h")
@@ -598,6 +603,41 @@ class CGameNativeBridgeSourceTests(unittest.TestCase):
         self.assertIn("Con_GetChatFieldY()", notify)
         self.assertIn("Con_GetChatFieldPixelWidth()", notify)
         self.assertIn("Con_DrawInputText( &chatField", notify)
+
+    def test_cgame_keycatcher_preserves_retail_message_mode(self) -> None:
+        cl_cgame = read_repo_file("code/client/cl_cgame.cpp")
+        helper = source_slice(
+            cl_cgame,
+            "static void CL_SetCGameKeyCatcher( int catcher )",
+            "static int FloatAsInt",
+        )
+        syscall = source_slice(cl_cgame, "case CG_KEY_SETCATCHER:", "case CG_KEY_GETKEY:")
+
+        self.assertIn("KEYCATCH_CONSOLE | KEYCATCH_UI |", helper)
+        self.assertIn("KEYCATCH_MESSAGE | KEYCATCH_BROWSER", helper)
+        self.assertIn("KEYCATCH_CGAME | KEYCATCH_RETAIL_MOUSEPASS", helper)
+        self.assertIn("Key_SetCatcher( preserved | cgameOwned );", helper)
+        self.assertIn("CL_SetCGameKeyCatcher( args[1] );", syscall)
+        self.assertNotIn("Key_SetCatcher( args[1]", syscall)
+
+    def test_message_mode_key_dispatch_precedes_cgame_dispatch(self) -> None:
+        cl_keys = read_repo_file("code/client/cl_keys.cpp")
+        keydown = source_slice(
+            cl_keys,
+            "static void CL_KeyDownEvent( int key, unsigned time )",
+            "static void CL_KeyUpEvent",
+        )
+        dispatch = source_slice(
+            keydown,
+            "// distribute the key down event to the appropriate handler",
+            "} else if ( cls.state == CA_DISCONNECTED )",
+        )
+
+        self.assertLess(
+            dispatch.index("KEYCATCH_MESSAGE"),
+            dispatch.index("KEYCATCH_CGAME"),
+        )
+        self.assertIn("Message_Key( key );", dispatch)
 
     def test_recovered_cgame_exports_have_client_helpers(self) -> None:
         client_h = read_repo_file("code/client/client.h")

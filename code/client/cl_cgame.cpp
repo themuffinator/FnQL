@@ -1515,6 +1515,25 @@ void CL_ShutdownCGame( void ) {
 }
 
 
+/*
+====================
+CL_SetCGameKeyCatcher
+
+Applies cgame-owned catcher changes without letting retail cgame calls drop
+host-owned input modes.  Quake Live preserves the engine console, UI, live
+message field, and retained browser ownership while cgame may only change its
+own overlay and transparent mouse-pass bits.
+====================
+*/
+static void CL_SetCGameKeyCatcher( int catcher ) {
+	const int preserved = Key_GetCatcher() & ( KEYCATCH_CONSOLE | KEYCATCH_UI |
+		KEYCATCH_MESSAGE | KEYCATCH_BROWSER );
+	const int cgameOwned = catcher & ( KEYCATCH_CGAME | KEYCATCH_RETAIL_MOUSEPASS );
+
+	Key_SetCatcher( preserved | cgameOwned );
+}
+
+
 static int FloatAsInt( float f ) {
 	floatint_t fi;
 	fi.f = f;
@@ -1878,8 +1897,7 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 	case CG_KEY_GETCATCHER:
 		return Key_GetCatcher();
 	case CG_KEY_SETCATCHER:
-		// Console and browser ownership are controlled by their host subsystems.
-		Key_SetCatcher( args[1] | ( Key_GetCatcher( ) & ( KEYCATCH_CONSOLE | KEYCATCH_BROWSER ) ) );
+		CL_SetCGameKeyCatcher( args[1] );
 		return 0;
 	case CG_KEY_GETKEY:
 		return Key_GetKey( VMA(1) );

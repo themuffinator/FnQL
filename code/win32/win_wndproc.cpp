@@ -1217,8 +1217,16 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 		}
 	}
 		if ( IN_MouseActive() ) {
-			int mstate = (wParam & (MK_LBUTTON|MK_RBUTTON)) + ((wParam & (MK_MBUTTON|MK_XBUTTON1|MK_XBUTTON2)) >> 2);
-			IN_Win32MouseEvent( LOWORD(lParam), HIWORD(lParam), mstate );
+			// Legacy messages drive gameplay input only while the legacy Win32
+			// mouse is the active source. With raw input or DirectInput active,
+			// any legacy message still in the queue is a stale position from a
+			// menu or focus transition; converting it into a delta kicks the
+			// view by (position - window centre) without any physical mouse
+			// motion. Swallow it instead.
+			if ( IN_LegacyMouseDrivesInput() ) {
+				int mstate = (wParam & (MK_LBUTTON|MK_RBUTTON)) + ((wParam & (MK_MBUTTON|MK_XBUTTON1|MK_XBUTTON2)) >> 2);
+				IN_Win32MouseEvent( LOWORD(lParam), HIWORD(lParam), mstate );
+			}
 			return WIN_MouseMessageResult( uMsg );
 		}
 		break;

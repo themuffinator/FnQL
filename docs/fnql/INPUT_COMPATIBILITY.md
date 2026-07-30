@@ -168,7 +168,15 @@ Backend notes:
 - Win32 confines with `ClipCursor` and re-asserts it when the window rect moves,
   because Windows drops the clip region on deactivation. `win_wndproc.cpp`
   routes mouse messages through the same `WIN_ResolvePointerOwner` the frame
-  update presents for.
+  update presents for. Legacy `WM_MOUSEMOVE`/button messages feed the gameplay
+  delta lane only while the legacy Win32 mouse is the active source
+  (`IN_LegacyMouseDrivesInput`): while raw input or DirectInput owns the device,
+  any legacy message still in the queue predates the (re)registration — a stale
+  position from the click that closed a menu or from a focus change — and
+  converting it into a delta kicks the view by (position − window centre) with
+  no physical motion. The SDL backend gobbles queued motion on mode changes and
+  X11 re-bases its warp origin under a reset delay; this gate is the Win32
+  equivalent.
 - X11 shares its single client pointer grab between confinement and drag
   capture through a reason mask, and latches the window cursor attribute so the
   per-frame evaluation does not cost an X round trip per frame. A fullscreen

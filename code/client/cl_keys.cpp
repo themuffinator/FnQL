@@ -946,12 +946,12 @@ static void CL_KeyDownEvent( int key, unsigned time )
 		if ( uivm ) {
 			VM_Call( uivm, 3, UI_KEY_EVENT, key, qtrue, time );
 		}
+	} else if ( Key_GetCatcher( ) & KEYCATCH_MESSAGE ) {
+		Message_Key( key );
 	} else if ( Key_GetCatcher( ) & KEYCATCH_CGAME ) {
 		if ( cgvm ) {
 			VM_Call( cgvm, 2, CG_KEY_EVENT, key, qtrue );
 		}
-	} else if ( Key_GetCatcher( ) & KEYCATCH_MESSAGE ) {
-		Message_Key( key );
 	} else if ( cls.state == CA_DISCONNECTED ) {
 		Console_Key( key );
 	} else {

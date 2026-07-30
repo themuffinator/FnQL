@@ -248,6 +248,30 @@ class WindowedMouseSourceTests(unittest.TestCase):
         self.assertIn("IN_SetPointerConfinement( qfalse );",
                       function_body(win_input, "IN_Shutdown"))
 
+    def test_win32_legacy_mouse_messages_only_drive_the_legacy_source(self) -> None:
+        """A legacy WM_MOUSEMOVE that arrives while raw input or DirectInput owns
+        the device was queued before (re)registration: a stale position from the
+        click that closed an in-game menu, or from crossing the window while
+        regaining focus. Converting it into a delta kicks the view by
+        (position - window centre) with no physical mouse motion, so the pump
+        must feed the legacy lane only while the legacy Win32 mouse is the
+        active input source."""
+        win_input = read_text("code/win32/win_input.cpp")
+        win_local = read_text("code/win32/win_local.h")
+        wndproc = read_text("code/win32/win_wndproc.cpp")
+
+        gate = function_body(win_input, "IN_LegacyMouseDrivesInput")
+        self.assertIn("IN_MouseActive()", gate)
+        self.assertIn("raw_activated || g_pMouse", gate)
+        self.assertIn("qboolean IN_LegacyMouseDrivesInput( void );", win_local)
+        # The pump consults the gate before synthesizing gameplay deltas, and
+        # still swallows the stale message rather than handing it to Windows.
+        self.assertIn("if ( IN_LegacyMouseDrivesInput() ) {", wndproc)
+        self.assertLess(
+            wndproc.index("if ( IN_LegacyMouseDrivesInput() ) {"),
+            wndproc.index("IN_Win32MouseEvent( LOWORD(lParam), HIWORD(lParam), mstate );"),
+        )
+
     def test_x11_shares_one_grab_and_latches_the_cursor(self) -> None:
         source = read_text("code/unix/linux_glimp.cpp")
         show_cursor = function_body(source, "IN_ShowWindowCursor")
