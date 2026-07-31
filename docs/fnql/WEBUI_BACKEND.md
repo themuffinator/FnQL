@@ -31,6 +31,12 @@ user's legitimate Steam installation; they are not inferred from QLSRP:
   `steam_id`, `tags`, `gametype`, and `gamedir`. The browser's Friends filter
   is request value `2`, while the Steam matchmaking request selector uses
   value `5` for Friends.
+- The Match Browser restores `browser_filters` independently from its
+  session-cached `browser_data`. On mount it sorts cached rows with the restored
+  filters but does not recompute each row's `filtered` member. Its live row
+  handler also computes that member before subtracting `botPlayers` from
+  `numPlayers`, so the saved empty/full filters can disagree with the displayed
+  human player count until any filter control changes.
 - Engine renderer screenshots showed the complete retail menu surface under
   OpenGL, OpenGL2, GLx, and Vulkan,
   including Play, Statistics, Steam Workshop, Steam Community, Settings,
@@ -235,6 +241,15 @@ and `Cvar_WriteVariables` routes exactly that flag to `repconfig.cfg`. Refusing
 those writes left the corresponding rows present and inert, and the flag never
 provided a boundary here because a page can already run console commands through
 the `cmd` request.
+
+The startup bridge also closes the retail Match Browser's filter-order gap
+without replacing its list or filter policy. When the browser table mounts, and
+again after `servers.refresh.end`, it performs a paired click through the retail
+empty-filter control. The pair ends on the original value while making that
+control clone the already-restored complete filter object, which makes the
+retail component recompute every row after player-count normalization and
+re-sort the list while preserving the saved values. This covers both
+session-cached rows and newly received server rows.
 
 Build systems generate the sidecar alongside the executable, and the runtime
 checks the executable directory first so VS Code/Meson build trees discover it

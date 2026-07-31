@@ -36,6 +36,7 @@ extern "C" {
 }
 
 #include "../../client_cpp.h"
+#include "../shared/AudioInitPolicy.h"
 #include "../shared/AudioVoiceQueue.h"
 
 #include <algorithm>
@@ -272,6 +273,15 @@ static void S_Base_SoundInfo( void ) {
 	if ( !s_soundStarted ) {
 		Com_Printf( "sound system not started\n" );
 	} else {
+		const bool focusMuted =
+			( !gw_active && !gw_minimized && s_muteWhenUnfocused != nullptr && s_muteWhenUnfocused->integer ) ||
+			( gw_minimized && s_muteWhenMinimized != nullptr && s_muteWhenMinimized->integer );
+		Com_Printf( "Backend: legacy\n" );
+		Com_Printf( "Master volume: %.2f\n", s_volume != nullptr ? s_volume->value : 1.0f );
+		Com_Printf( "Mute state: %s%s\n",
+			s_soundMuted ? "registration-muted (normal during startup/registration)" :
+				( focusMuted ? "focus-muted" : "audible" ),
+			( s_volume != nullptr && s_volume->value <= 0.0f ) ? ", master volume is zero" : "" );
 		Com_Printf("%5d channels\n", dma.channels);
 		Com_Printf("%5d samples\n", dma.samples);
 		Com_Printf("%5d samplebits (%s)\n", dma.samplebits, dma.isfloat ? "float" : "int");
@@ -1678,10 +1688,12 @@ S_Init
 */
 extern "C" qboolean S_Base_Init( soundInterface_t *si ) {
 	bool r;
+	std::size_t mutedBytes = 0;
 
 	if ( !si ) {
 		return qfalse;
 	}
+	*si = {};
 
 	s_khz = Cvar_Get( "s_khz", "22", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	Cvar_CheckRange( s_khz, "0", "48", CV_INTEGER );
@@ -1727,6 +1739,22 @@ extern "C" qboolean S_Base_Init( soundInterface_t *si ) {
 	r = SNDDMA_Init();
 
 	if ( r ) {
+		if ( !fnql_audio_init::DmaConfigurationIsUsable(
+			dma.channels,
+			dma.samplebits,
+			dma.isfloat != qfalse,
+			dma.speed,
+			dma.samples,
+			dma.fullsamples,
+			mutedBytes ) ) {
+			Com_Printf( S_COLOR_YELLOW
+				"WARNING: legacy audio device returned an unsafe DMA format "
+				"(channels %d, bits %d, rate %d, samples %d, frames %d); rejecting it\n",
+				dma.channels, dma.samplebits, dma.speed, dma.samples, dma.fullsamples );
+			SNDDMA_Shutdown();
+			return qfalse;
+		}
+
 		s_soundStarted = true;
 		s_soundMuted = true;
 //		s_numSfx = 0;
@@ -1739,7 +1767,6 @@ extern "C" qboolean S_Base_Init( soundInterface_t *si ) {
 		S_Base_StopAllSounds();
 
 		// setup (likely) or allocate (unlikely) buffer for muted painting
-		const std::size_t mutedBytes = static_cast<std::size_t>( dma.samples ) * dma.samplebits / 8;
 		if ( mutedBytes <= mutedPaintBuffer.size() ) {
 			mutedPaintHeapBuffer.reset();
 			dma_buffer2 = mutedPaintBuffer.data();

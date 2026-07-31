@@ -211,16 +211,13 @@ GLimp_Shutdown
 */
 void GLimp_Shutdown( qboolean unloadDLL )
 {
-	const char* drv = SDL_GetCurrentVideoDriver();
-
 	IN_Shutdown();
 
 	if ( glw_state.isFullscreen ) {
-		if ( drv && strcmp( drv, "x11" ) == 0 ) {
-			SDL_WarpMouseGlobal( glw_state.desktop_width / 2, glw_state.desktop_height / 2 );
-		} else {
-			GLW_ShowCursor( qtrue );
-		}
+		// IN_Shutdown has already released relative/grab state. Never warp the
+		// global desktop pointer on X11: desktop_width/height describes only
+		// one display and can teleport the pointer onto another monitor.
+		GLW_ShowCursor( qtrue );
 	}
 
 	GLW_RestoreGamma();
@@ -444,7 +441,11 @@ void GLW_EnsureWindowOnScreen( void )
 
 static SDL_HitTestResult SDL_HitTestFunc( SDL_Window *win, const SDL_Point *area, void *data )
 {
-	if ( Key_GetCatcher() & KEYCATCH_CONSOLE && keys[ K_ALT ].down )
+	// Hit testing runs inside SDL's native pump, before queued Quake key events
+	// update keys[]. Read the current physical modifier state so Alt and the
+	// click may safely arrive in the same poll batch.
+	if ( ( Key_GetCatcher() & KEYCATCH_CONSOLE ) &&
+		( SDL_GetModState() & SDL_KMOD_ALT ) )
 		return SDL_HITTEST_DRAGGABLE;
 
 	return SDL_HITTEST_NORMAL;
@@ -1213,9 +1214,12 @@ void GLimp_Init( glconfig_t *config )
 	// This depends on SDL_INIT_VIDEO, hence having it here
 	IN_Init();
 
+	// Drain transitions retained by the old window first, then put a recovery
+	// barrier and the current physical modifier state behind them. No stale
+	// release can strand a binding, and a modifier held across the restart
+	// remains usable without requiring a release/repress cycle.
 	HandleEvents();
-
-	Key_ClearStates();
+	IN_QueueInputReset( qtrue );
 }
 
 
@@ -1465,8 +1469,7 @@ void VKimp_Init( glconfig_t *config )
 	IN_Init();
 
 	HandleEvents();
-
-	Key_ClearStates();
+	IN_QueueInputReset( qtrue );
 }
 
 
@@ -1502,16 +1505,10 @@ VKimp_Shutdown
 */
 void VKimp_Shutdown( qboolean unloadDLL )
 {
-	const char* drv = SDL_GetCurrentVideoDriver();
-
 	IN_Shutdown();
 
 	if ( glw_state.isFullscreen ) {
-		if ( drv && strcmp( drv, "x11" ) == 0 ) {
-			SDL_WarpMouseGlobal( glw_state.desktop_width / 2, glw_state.desktop_height / 2 );
-		} else {
-			GLW_ShowCursor( qtrue );
-		}
+		GLW_ShowCursor( qtrue );
 	}
 
 	if ( SDL_window ) {

@@ -30,6 +30,7 @@ extern "C" {
 #include "../qcommon/netchan_safety.hpp"
 
 #include <array>
+#include <cmath>
 #include <cstdlib>
 
 using fnql::ScopedFileHandle;
@@ -79,7 +80,7 @@ struct kbutton_t {
 static kbutton_t in_left, in_right, in_forward, in_back;
 static kbutton_t in_lookup, in_lookdown, in_moveleft, in_moveright;
 static kbutton_t in_strafe, in_speed;
-static kbutton_t in_up, in_down;
+static kbutton_t in_up, in_down, in_mlook;
 static std::array<kbutton_t, kInputButtonCount> in_buttons;
 
 static cvar_t *cl_nodelta;
@@ -113,23 +114,162 @@ static cvar_t *m_side;
 static cvar_t *m_filter;
 static cvar_t *m_cpi;
 
-static bool in_mlooking;
 static fnql::input::RetailViewAngleFilter retailMouseFilter;
 static ScopedFileHandle mouseAccelDebugLog;
 static bool mouseAccelDebugOpenFailed;
+
+/*
+Canonical engine-owned +/- binding commands carry a reserved generation tag as
+argv(3). Return their validated source key, reject stale/malformed reserved
+tags, and classify every untagged command as legacy so existing manual command
+forms retain their semantics.
+*/
+int CL_ValidateInputCommandSource( void ) {
+	const fnql::input::InputCommandGenerationTag tag =
+		fnql::input::ParseInputCommandGenerationTag( Cmd_Argv( 3 ) );
+	if ( !tag.tagged ) {
+		return CL_INPUT_COMMAND_LEGACY;
+	}
+
+	const std::optional<unsigned> sourceKey =
+		fnql::input::ParseUnsignedInputCommandArgument( Cmd_Argv( 1 ) );
+	if ( !tag.valid || !sourceKey || *sourceKey >= MAX_KEYS ) {
+		return CL_INPUT_COMMAND_STALE;
+	}
+
+	const int key = static_cast<int>( *sourceKey );
+	return tag.value == Key_GetBindingGeneration( key )
+		? key
+		: CL_INPUT_COMMAND_STALE;
+}
+
+
+static bool IN_CommandGenerationIsCurrent( void ) {
+	return CL_ValidateInputCommandSource() != CL_INPUT_COMMAND_STALE;
+}
+
+
+static std::array<kbutton_t *, 13> IN_CommandButtons( void ) {
+	return {
+		&in_left, &in_right, &in_forward, &in_back,
+		&in_lookup, &in_lookdown, &in_moveleft, &in_moveright,
+		&in_strafe, &in_speed, &in_up, &in_down, &in_mlook,
+	};
+}
+
+
+static void IN_CenterView( void );
+
+
+static void IN_ClearCommandInputState( void ) {
+	const bool recenterMlook =
+		in_mlook.active && cl_freelook && !cl_freelook->integer;
+	for ( kbutton_t *button : IN_CommandButtons() ) {
+		*button = kbutton_t{};
+	}
+	in_buttons.fill( kbutton_t{} );
+	if ( recenterMlook ) {
+		IN_CenterView();
+	}
+}
+
+
+static void IN_RemoveCommandInputSource( int sourceKey ) {
+	const bool mlookWasActive = in_mlook.active;
+	const auto removeSource = [sourceKey]( kbutton_t *button ) {
+		if ( !fnql::input::RemoveHeldInputSource(
+			button->down, sourceKey ) ) {
+			return;
+		}
+		if ( button->down[0] || button->down[1] ) {
+			button->active = true;
+			return;
+		}
+
+		if ( button->active ) {
+			// Match an untimed legacy release for the source that disappeared.
+			// Keep aggregate msec/wasPressed: without per-source provenance they
+			// may also contain a completed keyboard tap that must survive this
+			// deliberately narrow mouse-only recovery.
+			button->msec += frame_msec / 2;
+		}
+		button->active = false;
+		button->downtime = 0;
+	};
+
+	for ( kbutton_t *button : IN_CommandButtons() ) {
+		removeSource( button );
+	}
+	for ( kbutton_t& button : in_buttons ) {
+		removeSource( &button );
+	}
+	// Mlook shares the source/active mechanics but has no fractional-frame
+	// consumer, so do not let its otherwise-unused transient fields accumulate.
+	in_mlook.msec = 0;
+	in_mlook.wasPressed = false;
+
+	if ( mlookWasActive && !in_mlook.active &&
+		cl_freelook && !cl_freelook->integer ) {
+		IN_CenterView();
+	}
+}
+
+
+void CL_ClearKeyCommandInputState( void ) {
+	Key_AdvanceAllBindingGenerations();
+	IN_ClearCommandInputState();
+	CL_ClearGeneratedVoiceInputState();
+}
+
+/*
+Input cvars are persisted user data and can contain non-finite values from an
+older or hand-edited configuration. Keep normal finite arithmetic identical,
+but never let a float outside int's range reach ClampCharMove's int parameter.
+*/
+static int CL_SafeMoveValue( int current, float delta ) {
+	const float finiteDelta = fnql::input::FiniteOr( delta, 0.0f );
+	const float combined = fnql::input::FiniteOr(
+		static_cast<float>( current ) + finiteDelta,
+		static_cast<float>( current ) );
+	return fnql::input::TruncateFiniteFloatToInt( combined );
+}
+
+
+/*
+ANGLE2SHORT eventually converts view angles to int. Neutralize a non-finite
+input delta (or an overflowing addition) at its source so mouse, keyboard, and
+joystick look keep the last finite angle.
+*/
+static void CL_AddViewAngleDelta( int axis, float delta ) {
+	const float current =
+		fnql::input::FiniteOr( cl.viewangles[axis], 0.0f );
+	const float finiteDelta = fnql::input::FiniteOr( delta, 0.0f );
+	cl.viewangles[axis] =
+		fnql::input::FiniteOr( current + finiteDelta, current );
+}
+
 
 static void IN_CenterView( void ) {
 	cl.viewangles[PITCH] = -SHORT2ANGLE(cl.snap.ps.delta_angles[PITCH]);
 }
 
+static void IN_KeyDown( kbutton_t *b );
+static void IN_KeyUp( kbutton_t *b );
+
+
 static void IN_MLookDown( void ) {
-	in_mlooking = true;
+	IN_KeyDown( &in_mlook );
+	in_mlook.msec = 0;
+	in_mlook.wasPressed = false;
 }
 
 
 static void IN_MLookUp( void ) {
-	in_mlooking = false;
-	if ( !cl_freelook->integer ) {
+	const bool wasActive = in_mlook.active;
+	IN_KeyUp( &in_mlook );
+	in_mlook.msec = 0;
+	in_mlook.wasPressed = false;
+	if ( wasActive && !in_mlook.active && !cl_freelook->integer ) {
 		IN_CenterView ();
 	}
 }
@@ -138,6 +278,10 @@ static void IN_MLookUp( void ) {
 static void IN_KeyDown( kbutton_t *b ) {
 	const char *c;
 	int	k;
+
+	if ( !IN_CommandGenerationIsCurrent() ) {
+		return;
+	}
 
 	c = Cmd_Argv(1);
 	if ( c[0] ) {
@@ -176,6 +320,10 @@ static void IN_KeyUp( kbutton_t *b ) {
 	unsigned uptime;
 	const char *c;
 	int		k;
+
+	if ( !IN_CommandGenerationIsCurrent() ) {
+		return;
+	}
 
 	c = Cmd_Argv(1);
 	if ( c[0] ) {
@@ -360,6 +508,20 @@ static constexpr std::array kInputCommandBindings{
 };
 
 
+qboolean CL_IsEngineStatefulInputCommand( const char *command ) {
+	for ( const InputCommandBinding& binding : kInputCommandBindings ) {
+		if ( binding.name[0] == '+' &&
+			fnql::input::IsCanonicalCommandSegment(
+				command, binding.name ) ) {
+			return qtrue;
+		}
+	}
+	return fnql::input::IsCanonicalCommandSegment( command, "+voice" )
+		? qtrue
+		: qfalse;
+}
+
+
 static void IN_AddCommandBindings( void ) {
 	for ( const InputCommandBinding& binding : kInputCommandBindings ) {
 		Cmd_AddCommand( binding.name, binding.handler );
@@ -394,12 +556,16 @@ static void CL_AdjustAngles( void ) {
 	}
 
 	if ( !in_strafe.active ) {
-		cl.viewangles[YAW] -= speed*cl_yawspeed->value*CL_KeyState (&in_right);
-		cl.viewangles[YAW] += speed*cl_yawspeed->value*CL_KeyState (&in_left);
+		CL_AddViewAngleDelta(
+			YAW, -speed * cl_yawspeed->value * CL_KeyState( &in_right ) );
+		CL_AddViewAngleDelta(
+			YAW, speed * cl_yawspeed->value * CL_KeyState( &in_left ) );
 	}
 
-	cl.viewangles[PITCH] -= speed*cl_pitchspeed->value * CL_KeyState (&in_lookup);
-	cl.viewangles[PITCH] += speed*cl_pitchspeed->value * CL_KeyState (&in_lookdown);
+	CL_AddViewAngleDelta(
+		PITCH, -speed * cl_pitchspeed->value * CL_KeyState( &in_lookup ) );
+	CL_AddViewAngleDelta(
+		PITCH, speed * cl_pitchspeed->value * CL_KeyState( &in_lookdown ) );
 }
 
 
@@ -431,19 +597,27 @@ static void CL_KeyMove( usercmd_t *cmd ) {
 	side = 0;
 	up = 0;
 	if ( in_strafe.active ) {
-		side += movespeed * CL_KeyState (&in_right);
-		side -= movespeed * CL_KeyState (&in_left);
+		side = CL_SafeMoveValue(
+			side, movespeed * CL_KeyState( &in_right ) );
+		side = CL_SafeMoveValue(
+			side, -movespeed * CL_KeyState( &in_left ) );
 	}
 
-	side += movespeed * CL_KeyState (&in_moveright);
-	side -= movespeed * CL_KeyState (&in_moveleft);
+	side = CL_SafeMoveValue(
+		side, movespeed * CL_KeyState( &in_moveright ) );
+	side = CL_SafeMoveValue(
+		side, -movespeed * CL_KeyState( &in_moveleft ) );
 
 
-	up += movespeed * CL_KeyState (&in_up);
-	up -= movespeed * CL_KeyState (&in_down);
+	up = CL_SafeMoveValue(
+		up, movespeed * CL_KeyState( &in_up ) );
+	up = CL_SafeMoveValue(
+		up, -movespeed * CL_KeyState( &in_down ) );
 
-	forward += movespeed * CL_KeyState (&in_forward);
-	forward -= movespeed * CL_KeyState (&in_back);
+	forward = CL_SafeMoveValue(
+		forward, movespeed * CL_KeyState( &in_forward ) );
+	forward = CL_SafeMoveValue(
+		forward, -movespeed * CL_KeyState( &in_back ) );
 
 	cmd->forwardmove = ClampCharMove( forward );
 	cmd->rightmove = ClampCharMove( side );
@@ -459,19 +633,20 @@ CL_MouseEvent
 void CL_MouseEvent( int dx, int dy /*, int time*/ ) {
 	if ( Key_GetCatcher() & KEYCATCH_CONSOLE ) {
 		Con_MouseEvent( dx, dy );
-	} else if ( Key_GetCatcher() & KEYCATCH_BROWSER ) {
-		CL_WebView_OnMouseMove( dx, dy );
+	} else if ( Key_GetCatcher() & ( KEYCATCH_BROWSER | KEYCATCH_UI | KEYCATCH_CGAME ) ) {
+		// SE_MOUSE is a relative gameplay lane. An absolute owner may have been
+		// selected by an earlier queued key event (for example Escape) after the
+		// platform already queued this delta; never reinterpret it as a position.
+		return;
 	} else if ( !CL_AdvertisementBridge_IsDelayElapsed() ) {
 		return;
 	} else if ( Cvar_VariableIntegerValue( "cg_ignoreMouseInput" ) ) {
 		return;
-	} else if ( Key_GetCatcher() & KEYCATCH_UI ) {
-		VM_Call( uivm, 2, UI_MOUSE_EVENT, dx, dy );
-	} else if ( Key_GetCatcher() & KEYCATCH_CGAME ) {
-		VM_Call( cgvm, 2, CG_MOUSE_EVENT, dx, dy );
 	} else if ( ( Key_GetCatcher() & ~KEYCATCH_RETAIL_MOUSEPASS ) == 0 ) {
-		cl.mouseDx[cl.mouseIndex] += dx;
-		cl.mouseDy[cl.mouseIndex] += dy;
+		cl.mouseDx[cl.mouseIndex] =
+			fnql::input::SaturatingAddInt( cl.mouseDx[cl.mouseIndex], dx );
+		cl.mouseDy[cl.mouseIndex] =
+			fnql::input::SaturatingAddInt( cl.mouseDy[cl.mouseIndex], dy );
 	}
 }
 
@@ -480,10 +655,9 @@ void CL_MouseEvent( int dx, int dy /*, int time*/ ) {
 =================
 CL_MouseAbsoluteEvent
 
-Dispatch an absolute pointer position without converting it into a gameplay
-delta. Retail QL's browser, UI, and cgame consumers receive raw host-window
-coordinates and perform their own projection. Console producers supply
-framebuffer pixels, including SDL's logical-to-framebuffer scaling.
+Dispatch a renderer-drawable pointer position without converting it into a
+gameplay delta. Every platform producer projects from its host-window space
+before queueing this event.
 =================
 */
 void CL_MouseAbsoluteEvent( int x, int y ) {
@@ -496,9 +670,13 @@ void CL_MouseAbsoluteEvent( int x, int y ) {
 	} else if ( Cvar_VariableIntegerValue( "cg_ignoreMouseInput" ) ) {
 		return;
 	} else if ( Key_GetCatcher() & KEYCATCH_UI ) {
-		VM_Call( uivm, 2, UI_MOUSE_EVENT, x, y );
+		if ( uivm ) {
+			VM_Call( uivm, 2, UI_MOUSE_EVENT, x, y );
+		}
 	} else if ( Key_GetCatcher() & KEYCATCH_CGAME ) {
-		VM_Call( cgvm, 2, CG_MOUSE_EVENT, x, y );
+		if ( cgvm ) {
+			VM_Call( cgvm, 2, CG_MOUSE_EVENT, x, y );
+		}
 	}
 }
 
@@ -512,10 +690,15 @@ Joystick values stay set until changed
 */
 void CL_JoystickEvent( int axis, int value, int time ) {
 	if ( axis < 0 || axis >= MAX_JOYSTICK_AXIS ) {
-		Com_Error( ERR_DROP, "CL_JoystickEvent: bad axis %i", axis );
-	} else {
-		cl.joystickAxis[axis] = value;
+		// A corrupt journal or third-party platform producer must not turn a
+		// local input sample into a client disconnect.
+		Com_DPrintf( "CL_JoystickEvent: ignoring invalid axis %i\n", axis );
+		return;
 	}
+
+	// Every supported producer is ultimately a signed 16-bit device axis
+	// (retail movement producers use the narrower -127..127 subset).
+	cl.joystickAxis[axis] = std::clamp( value, -32768, 32767 );
 }
 
 
@@ -542,18 +725,27 @@ static void CL_JoystickMove( usercmd_t *cmd ) {
 	}
 
 	if ( !in_strafe.active ) {
-		cl.viewangles[YAW] += anglespeed * cl_yawspeed->value * cl.joystickAxis[AXIS_SIDE];
+		CL_AddViewAngleDelta( YAW,
+			anglespeed * cl_yawspeed->value *
+			cl.joystickAxis[AXIS_SIDE] );
 	} else {
-		cmd->rightmove = ClampCharMove( cmd->rightmove + cl.joystickAxis[AXIS_SIDE] );
+		cmd->rightmove = ClampCharMove( CL_SafeMoveValue(
+			cmd->rightmove, static_cast<float>(
+				cl.joystickAxis[AXIS_SIDE] ) ) );
 	}
 
-	if ( in_mlooking ) {
-		cl.viewangles[PITCH] += anglespeed * cl_pitchspeed->value * cl.joystickAxis[AXIS_FORWARD];
+	if ( in_mlook.active ) {
+		CL_AddViewAngleDelta( PITCH,
+			anglespeed * cl_pitchspeed->value *
+			cl.joystickAxis[AXIS_FORWARD] );
 	} else {
-		cmd->forwardmove = ClampCharMove( cmd->forwardmove + cl.joystickAxis[AXIS_FORWARD] );
+		cmd->forwardmove = ClampCharMove( CL_SafeMoveValue(
+			cmd->forwardmove, static_cast<float>(
+				cl.joystickAxis[AXIS_FORWARD] ) ) );
 	}
 
-	cmd->upmove = ClampCharMove( cmd->upmove + cl.joystickAxis[AXIS_UP] );
+	cmd->upmove = ClampCharMove( CL_SafeMoveValue(
+		cmd->upmove, static_cast<float>( cl.joystickAxis[AXIS_UP] ) ) );
 }
 
 
@@ -640,9 +832,13 @@ static void CL_RetailMouseMove( usercmd_t *cmd ) {
 	}
 
 	fnql::input::ViewAngles view = retailMouseFilter.Begin(
-		{ cl.viewangles[YAW], cl.viewangles[PITCH] }, filterSamples );
-	cl.viewangles[YAW] = view.yaw;
-	cl.viewangles[PITCH] = view.pitch;
+		{
+			fnql::input::FiniteOr( cl.viewangles[YAW], 0.0f ),
+			fnql::input::FiniteOr( cl.viewangles[PITCH], 0.0f )
+		},
+		filterSamples );
+	cl.viewangles[YAW] = fnql::input::FiniteOr( view.yaw, 0.0f );
+	cl.viewangles[PITCH] = fnql::input::FiniteOr( view.pitch, 0.0f );
 
 	const float mx = motion.x * cl.cgameSensitivity;
 	const float my = motion.y * cl.cgameSensitivity;
@@ -650,20 +846,29 @@ static void CL_RetailMouseMove( usercmd_t *cmd ) {
 		fnql::input::RetailMouseAxisMultiplier( parameters.countsPerInch );
 
 	if ( in_strafe.active ) {
-		cmd->rightmove = ClampCharMove( cmd->rightmove + m_side->value * mx );
+		cmd->rightmove = ClampCharMove( CL_SafeMoveValue(
+			cmd->rightmove, m_side->value * mx ) );
 	} else {
-		cl.viewangles[YAW] -= m_yaw->value * viewAxisMultiplier * mx;
+		CL_AddViewAngleDelta(
+			YAW, -m_yaw->value * viewAxisMultiplier * mx );
 	}
 
-	if ( ( in_mlooking || cl_freelook->integer ) && !in_strafe.active ) {
-		cl.viewangles[PITCH] += m_pitch->value * viewAxisMultiplier * my;
+	if ( ( in_mlook.active || cl_freelook->integer ) && !in_strafe.active ) {
+		CL_AddViewAngleDelta(
+			PITCH, m_pitch->value * viewAxisMultiplier * my );
 	} else {
-		cmd->forwardmove = ClampCharMove( cmd->forwardmove - m_forward->value * my );
+		cmd->forwardmove = ClampCharMove( CL_SafeMoveValue(
+			cmd->forwardmove, -m_forward->value * my ) );
 	}
 
-	view = retailMouseFilter.End( { cl.viewangles[YAW], cl.viewangles[PITCH] } );
-	cl.viewangles[YAW] = view.yaw;
-	cl.viewangles[PITCH] = view.pitch;
+	const fnql::input::ViewAngles unfiltered{
+		cl.viewangles[YAW], cl.viewangles[PITCH]
+	};
+	view = retailMouseFilter.End( unfiltered );
+	cl.viewangles[YAW] =
+		fnql::input::FiniteOr( view.yaw, unfiltered.yaw );
+	cl.viewangles[PITCH] =
+		fnql::input::FiniteOr( view.pitch, unfiltered.pitch );
 }
 
 
@@ -687,8 +892,12 @@ static void CL_MouseMove( usercmd_t *cmd )
 	// allow mouse smoothing
 	if (m_filter->integer)
 	{
-		mx = (cl.mouseDx[0] + cl.mouseDx[1]) * 0.5f;
-		my = (cl.mouseDy[0] + cl.mouseDy[1]) * 0.5f;
+		// Convert before adding: either accumulator can legitimately saturate
+		// under an event flood, and signed-int addition would otherwise overflow.
+		mx = ( static_cast<float>( cl.mouseDx[0] ) +
+			static_cast<float>( cl.mouseDx[1] ) ) * 0.5f;
+		my = ( static_cast<float>( cl.mouseDy[0] ) +
+			static_cast<float>( cl.mouseDy[1] ) ) * 0.5f;
 	}
 	else
 	{
@@ -760,14 +969,16 @@ static void CL_MouseMove( usercmd_t *cmd )
 
 	// add mouse X/Y movement to cmd
 	if ( in_strafe.active )
-		cmd->rightmove = ClampCharMove( cmd->rightmove + m_side->value * mx );
+		cmd->rightmove = ClampCharMove( CL_SafeMoveValue(
+			cmd->rightmove, m_side->value * mx ) );
 	else
-		cl.viewangles[YAW] -= m_yaw->value * mx;
+		CL_AddViewAngleDelta( YAW, -m_yaw->value * mx );
 
-	if ( (in_mlooking || cl_freelook->integer) && !in_strafe.active )
-		cl.viewangles[PITCH] += m_pitch->value * my;
+	if ( (in_mlook.active || cl_freelook->integer) && !in_strafe.active )
+		CL_AddViewAngleDelta( PITCH, m_pitch->value * my );
 	else
-		cmd->forwardmove = ClampCharMove( cmd->forwardmove - m_forward->value * my );
+		cmd->forwardmove = ClampCharMove( CL_SafeMoveValue(
+			cmd->forwardmove, -m_forward->value * my ) );
 }
 
 
@@ -808,6 +1019,79 @@ static void CL_CmdButtons( usercmd_t *cmd ) {
 
 
 /*
+=================
+CL_ResetInputState
+
+Ordered system-event barrier used for focus, window, and queue-overflow
+recovery. Key_ClearStates is the logical-key barrier; this full barrier also
+clears explicit/manual voice ownership and persistent motion state so input
+sampled before it cannot affect a later frame.
+=================
+*/
+void CL_ResetInputState( void ) {
+	Key_ClearStates();
+	CL_ResetVoiceInputState();
+
+	for ( int i = 0; i < 2; ++i ) {
+		cl.mouseDx[i] = 0;
+		cl.mouseDy[i] = 0;
+	}
+	for ( int& axis : cl.joystickAxis ) {
+		axis = 0;
+	}
+	retailMouseFilter.Reset( { cl.viewangles[YAW], cl.viewangles[PITCH] } );
+}
+
+
+/*
+=================
+CL_ResetMouseInputState
+
+Narrow recovery for loss in a mouse-only device buffer. Releasing the mouse
+range prevents a missing button-up from holding a binding, without disrupting
+keyboard movement or persistent joystick axes that the failed device cannot
+reconstruct. Backends that expose higher mouse buttons through K_AUX pass an
+ordered source-state mask with the reset so those bindings are balanced too.
+=================
+*/
+void CL_ResetMouseInputState( unsigned int auxiliaryKeyMask ) {
+	for ( int key = K_MOUSE1; key <= K_MWHEELUP; ++key ) {
+		if ( keys[key].down ) {
+			CL_KeyEvent( key, qfalse, 0 );
+		}
+	}
+	for ( unsigned int bit = 0; bit < 16; ++bit ) {
+		if ( ( auxiliaryKeyMask & ( 1u << bit ) ) &&
+			keys[K_AUX1 + bit].down ) {
+			CL_KeyEvent( K_AUX1 + bit, qfalse, 0 );
+		}
+	}
+
+	// Invalidate old commands even when the logical key is already up: its
+	// deferred press may still be waiting in the command buffer.
+	for ( int key = K_MOUSE1; key <= K_MWHEELUP; ++key ) {
+		Key_AdvanceBindingGeneration( key );
+		IN_RemoveCommandInputSource( key );
+		CL_RemoveVoiceInputSource( key );
+	}
+	for ( unsigned int bit = 0; bit < 16; ++bit ) {
+		if ( auxiliaryKeyMask & ( 1u << bit ) ) {
+			const int key = K_AUX1 + static_cast<int>( bit );
+			Key_AdvanceBindingGeneration( key );
+			IN_RemoveCommandInputSource( key );
+			CL_RemoveVoiceInputSource( key );
+		}
+	}
+
+	for ( int i = 0; i < 2; ++i ) {
+		cl.mouseDx[i] = 0;
+		cl.mouseDy[i] = 0;
+	}
+	retailMouseFilter.Reset( { cl.viewangles[YAW], cl.viewangles[PITCH] } );
+}
+
+
+/*
 ==============
 CL_FinishMove
 ==============
@@ -825,7 +1109,13 @@ static void CL_FinishMove( usercmd_t *cmd ) {
 	cmd->serverTime = cl.serverTime;
 
 	for (i=0 ; i<3 ; i++) {
-		cmd->angles[i] = ANGLE2SHORT(cl.viewangles[i]);
+		const float safeAngle = fnql::input::FiniteAngleForShort(
+			fnql::input::FiniteOr( cl.viewangles[i], 0.0f ) );
+		// Keep the reduced value as the next frame's accumulator. Retaining a
+		// pathological finite extreme would make ordinary look deltas disappear
+		// into float precision even though command serialization was safe.
+		cl.viewangles[i] = safeAngle;
+		cmd->angles[i] = ANGLE2SHORT( safeAngle );
 	}
 }
 

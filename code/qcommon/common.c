@@ -2553,8 +2553,8 @@ journaled file
 */
 
 #define	MAX_PUSHED_EVENTS 256
-static int com_pushedEventsHead = 0;
-static int com_pushedEventsTail = 0;
+static unsigned int com_pushedEventsHead = 0;
+static unsigned int com_pushedEventsTail = 0;
 static sysEvent_t com_pushedEvents[MAX_PUSHED_EVENTS];
 
 
@@ -2601,7 +2601,7 @@ EVENT LOOP
 ========================================================================
 */
 
-#define MAX_QUED_EVENTS		128
+#define MAX_QUED_EVENTS		256
 #define MASK_QUED_EVENTS	( MAX_QUED_EVENTS - 1 )
 
 static sysEvent_t			eventQue[ MAX_QUED_EVENTS ];
@@ -2618,7 +2618,9 @@ static const char *Sys_EventName( sysEventType_t evType ) {
 		"SE_MOUSE",
 		"SE_MOUSE_ABSOLUTE",
 		"SE_JOYSTICK_AXIS",
-		"SE_CONSOLE"
+		"SE_CONSOLE",
+		"SE_INPUT_RESET",
+		"SE_MOUSE_RESET"
 	};
 
 	if ( (unsigned)evType >= ARRAY_LEN( evNames ) ) {
@@ -2626,6 +2628,33 @@ static const char *Sys_EventName( sysEventType_t evType ) {
 	} else {
 		return evNames[ evType ];
 	}
+}
+
+
+static int Sys_SaturatingAddInt( int lhs, int rhs ) {
+	if ( rhs > 0 && lhs > INT_MAX - rhs ) {
+		return INT_MAX;
+	}
+	if ( rhs < 0 && lhs < INT_MIN - rhs ) {
+		return INT_MIN;
+	}
+	return lhs + rhs;
+}
+
+
+static void Sys_DiscardOldestEvent( void ) {
+	sysEvent_t *discarded;
+
+	if ( eventHead == eventTail ) {
+		return;
+	}
+
+	discarded = &eventQue[ eventTail & MASK_QUED_EVENTS ];
+	if ( discarded->evPtr ) {
+		Z_Free( discarded->evPtr );
+		discarded->evPtr = NULL;
+	}
+	eventTail++;
 }
 
 
@@ -2652,8 +2681,8 @@ void Sys_QueEvent( int evTime, sysEventType_t evType, int value, int value2, int
 
 	// try to combine all sequential mouse moves in one event
 	if ( evType == SE_MOUSE && lastEvent->evType == SE_MOUSE && eventHead != eventTail ) {
-		lastEvent->evValue += value;
-		lastEvent->evValue2 += value2;
+		lastEvent->evValue = Sys_SaturatingAddInt( lastEvent->evValue, value );
+		lastEvent->evValue2 = Sys_SaturatingAddInt( lastEvent->evValue2, value2 );
 		lastEvent->evTime = evTime;
 		return;
 	}
@@ -2668,17 +2697,21 @@ void Sys_QueEvent( int evTime, sysEventType_t evType, int value, int value2, int
 		return;
 	}
 
-	ev = &eventQue[ eventHead & MASK_QUED_EVENTS ];
-
 	if ( eventHead - eventTail >= MAX_QUED_EVENTS ) {
-		Com_Printf( "%s(type=%s,keys=(%i,%i),time=%i): overflow\n", __func__, Sys_EventName( evType ), value, value2, evTime );
-		// we are discarding an event, but don't leak memory
-		if ( ev->evPtr ) {
-			Z_Free( ev->evPtr );
+		Com_Printf( "%s(type=%s,keys=(%i,%i),time=%i): overflow; recovering input state\n",
+			__func__, Sys_EventName( evType ), value, value2, evTime );
+
+		// A silently discarded release can leave a +binding held forever. Make
+		// room for an ordered reset immediately before the newest event, so all
+		// retained transitions are balanced even under an input flood.
+		Sys_DiscardOldestEvent();
+		if ( evType != SE_INPUT_RESET ) {
+			Sys_DiscardOldestEvent();
+			Sys_QueEvent( evTime, SE_INPUT_RESET, 0, 0, 0, NULL );
 		}
-		eventTail++;
 	}
 
+	ev = &eventQue[ eventHead & MASK_QUED_EVENTS ];
 	eventHead++;
 
 	ev->evTime = evTime;
@@ -2802,6 +2835,23 @@ static void Com_InitPushEvent( void ) {
 }
 
 
+static void Com_DiscardOldestPushedEvent( void ) {
+	sysEvent_t *discarded;
+
+	if ( com_pushedEventsHead == com_pushedEventsTail ) {
+		return;
+	}
+
+	discarded = &com_pushedEvents[
+		com_pushedEventsTail & ( MAX_PUSHED_EVENTS - 1 ) ];
+	if ( discarded->evPtr ) {
+		Z_Free( discarded->evPtr );
+		discarded->evPtr = NULL;
+	}
+	com_pushedEventsTail++;
+}
+
+
 /*
 =================
 Com_PushEvent
@@ -2811,24 +2861,35 @@ static void Com_PushEvent( const sysEvent_t *event ) {
 	sysEvent_t		*ev;
 	static int printedWarning = 0;
 
-	ev = &com_pushedEvents[ com_pushedEventsHead & (MAX_PUSHED_EVENTS-1) ];
-
 	if ( com_pushedEventsHead - com_pushedEventsTail >= MAX_PUSHED_EVENTS ) {
+		sysEvent_t resetEvent;
 
 		// don't print the warning constantly, or it can give time for more...
 		if ( !printedWarning ) {
 			printedWarning = qtrue;
-			Com_Printf( "WARNING: Com_PushEvent overflow\n" );
+			Com_Printf( "WARNING: Com_PushEvent overflow; recovering input state\n" );
 		}
 
-		if ( ev->evPtr ) {
-			Z_Free( ev->evPtr );
+		// Match the system queue's recovery contract. Losing an arbitrary
+		// release while Com_Milliseconds temporarily owns events must not leave
+		// a binding held after those events are replayed.
+		Com_DiscardOldestPushedEvent();
+		if ( event->evType != SE_INPUT_RESET ) {
+			Com_DiscardOldestPushedEvent();
+			memset( &resetEvent, 0, sizeof( resetEvent ) );
+			resetEvent.evTime = event->evTime;
+			resetEvent.evType = SE_INPUT_RESET;
+			ev = &com_pushedEvents[
+				com_pushedEventsHead & ( MAX_PUSHED_EVENTS - 1 ) ];
+			*ev = resetEvent;
+			com_pushedEventsHead++;
 		}
-		com_pushedEventsTail++;
 	} else {
 		printedWarning = qfalse;
 	}
 
+	ev = &com_pushedEvents[
+		com_pushedEventsHead & ( MAX_PUSHED_EVENTS - 1 ) ];
 	*ev = *event;
 	com_pushedEventsHead++;
 }
@@ -2929,6 +2990,16 @@ int Com_EventLoop( void ) {
 			CL_JoystickEvent( ev.evValue, ev.evValue2, ev.evTime );
 			break;
 #endif // !DEDICATED
+		case SE_INPUT_RESET:
+#ifndef DEDICATED
+			CL_ResetInputState();
+#endif
+			break;
+		case SE_MOUSE_RESET:
+#ifndef DEDICATED
+			CL_ResetMouseInputState( (unsigned int)ev.evValue );
+#endif
+			break;
 		case SE_CONSOLE:
 			Cbuf_AddText( (char *)ev.evPtr );
 			Cbuf_AddText( "\n" );
@@ -4685,6 +4756,53 @@ static void *completionQueryContext;
 static qboolean completionQueryAppendSpace;
 static qboolean completionQueryCollectAll;
 
+static qboolean Field_IsUtf8ContinuationByte( unsigned char value )
+{
+	return ( value & 0xc0u ) == 0x80u ? qtrue : qfalse;
+}
+
+
+static size_t Field_ClampUtf8Boundary( const char *text, size_t offset )
+{
+	while ( offset > 0 &&
+		Field_IsUtf8ContinuationByte( (unsigned char)text[ offset ] ) ) {
+		offset--;
+	}
+
+	return offset;
+}
+
+
+static void Field_CopyUtf8Prefix( char *destination, size_t capacity,
+	const char *source )
+{
+	size_t sourceLength;
+	size_t copyLength;
+
+	if ( capacity == 0 ) {
+		return;
+	}
+
+	sourceLength = strlen( source );
+	copyLength = sourceLength < capacity ? sourceLength : capacity - 1;
+	if ( copyLength < sourceLength ) {
+		copyLength = Field_ClampUtf8Boundary( source, copyLength );
+	}
+
+	memcpy( destination, source, copyLength );
+	destination[ copyLength ] = '\0';
+}
+
+
+static unsigned char Field_FoldCompletionByte( unsigned char value )
+{
+	if ( value >= 'A' && value <= 'Z' ) {
+		return (unsigned char)( value + ( 'a' - 'A' ) );
+	}
+
+	return value;
+}
+
 /*
 ===============
 FindMatches
@@ -4712,7 +4830,7 @@ static void FindMatches( const char *s ) {
 
 	matchCount++;
 	if ( matchCount == 1 ) {
-		Q_strncpyz( shortestMatch, s, sizeof( shortestMatch ) );
+		Field_CopyUtf8Prefix( shortestMatch, sizeof( shortestMatch ), s );
 		return;
 	}
 
@@ -4724,8 +4842,11 @@ static void FindMatches( const char *s ) {
 			break;
 		}
 
-		if ( tolower(shortestMatch[i]) != tolower(s[i]) ) {
+		if ( Field_FoldCompletionByte( (unsigned char)shortestMatch[i] ) !=
+			Field_FoldCompletionByte( (unsigned char)s[i] ) ) {
+			i = (int)Field_ClampUtf8Boundary( shortestMatch, (size_t)i );
 			shortestMatch[i] = '\0';
+			break;
 		}
 	}
 }
@@ -4783,7 +4904,7 @@ Field_AddSpace
 static void Field_AddSpace( void )
 {
 	size_t len = strlen( completionField->buffer );
-	if ( len && len < sizeof( completionField->buffer ) - 1 && completionField->buffer[ len - 1 ] != ' ' )
+	if ( len && len < sizeof( completionField->buffer ) - 2 && completionField->buffer[ len - 1 ] != ' ' )
 	{
 		memcpy( completionField->buffer + len, " ", 2 );
 		completionField->cursor = (int)(len + 1);
@@ -4798,7 +4919,10 @@ Field_Complete
 */
 static qboolean Field_Complete( void )
 {
-	int completionOffset;
+	size_t bufferLength;
+	size_t completionLength;
+	size_t completionOffset;
+	size_t replacementLength;
 
 	if( matchCount == 0 )
 		return qtrue;
@@ -4808,12 +4932,22 @@ static qboolean Field_Complete( void )
 		return qtrue;
 	}
 
-	completionOffset = strlen( completionField->buffer ) - strlen( completionString );
+	bufferLength = strlen( completionField->buffer );
+	completionLength = strlen( completionString );
+	if ( completionLength > bufferLength ) {
+		return qtrue;
+	}
 
-	Q_strncpyz( &completionField->buffer[ completionOffset ], shortestMatch,
-		sizeof( completionField->buffer ) - completionOffset );
+	completionOffset = bufferLength - completionLength;
+	replacementLength = strlen( shortestMatch );
+	if ( completionOffset + replacementLength >
+		sizeof( completionField->buffer ) - 2 ) {
+		return qtrue;
+	}
 
-	completionField->cursor = strlen( completionField->buffer );
+	memcpy( &completionField->buffer[ completionOffset ], shortestMatch,
+		replacementLength + 1 );
+	completionField->cursor = (int)( completionOffset + replacementLength );
 
 	if( matchCount == 1 )
 	{
@@ -4868,7 +5002,7 @@ void Field_CompleteKeyBind( int key )
 		vlen += 2;
 	}
 
-	if ( vlen + blen > sizeof( completionField->buffer ) - 1 )
+	if ( vlen + blen > sizeof( completionField->buffer ) - 2 )
 	{
 		//vlen = sizeof( completionField->buffer ) - 1 - blen;
 		return;
@@ -4914,7 +5048,7 @@ static void Field_CompleteCvarValue( const char *value, const char *current )
 		vlen += 2;
 	}
 
-	if ( vlen + blen > sizeof( completionField->buffer ) - 1 )
+	if ( vlen + blen > sizeof( completionField->buffer ) - 2 )
 	{
 		//vlen = sizeof( completionField->buffer ) - 1 - blen;
 		return;
@@ -4963,6 +5097,9 @@ void Field_CompleteCommand( const char *cmd, qboolean doCommands, qboolean doCva
 
 	// Skip leading whitespace and quotes
 	cmd = Com_SkipCharset( cmd, " \"" );
+	if ( !cmd[0] ) {
+		return;
+	}
 
 	Cmd_TokenizeStringIgnoreQuotes( cmd );
 	completionArgument = Cmd_Argc();
@@ -4983,7 +5120,8 @@ void Field_CompleteCommand( const char *cmd, qboolean doCommands, qboolean doCva
 		completionField->buffer[ 0 ] != '/' )
 	{
 		// Buffer is full, refuse to complete
-		if ( strlen( completionField->buffer ) + 1 >= sizeof( completionField->buffer ) )
+		if ( strlen( completionField->buffer ) >=
+			sizeof( completionField->buffer ) - 2 )
 			return;
 
 		memmove( &completionField->buffer[ 1 ],
@@ -5082,9 +5220,22 @@ int Field_QueryCompletionMatches( const char *cmd, qboolean *appendSpace,
 	qboolean savedQueryMode;
 	qboolean savedAppendSpace;
 	qboolean savedCollectAll;
+	size_t commandLength;
+
+	if ( appendSpace ) {
+		*appendSpace = qfalse;
+	}
+	if ( !cmd ) {
+		return 0;
+	}
+
+	commandLength = strlen( cmd );
+	if ( commandLength > sizeof( queryField.buffer ) - 2 ) {
+		return 0;
+	}
 
 	Field_Clear( &queryField );
-	Q_strncpyz( queryField.buffer, cmd, sizeof( queryField.buffer ) );
+	memcpy( queryField.buffer, cmd, commandLength + 1 );
 	queryField.cursor = strlen( queryField.buffer );
 	queryField.widthInChars = MAX_EDIT_LINE - 1;
 
@@ -5136,9 +5287,19 @@ int Field_QueryCompletionCandidates( const char *cmd,
 	qboolean savedQueryMode;
 	qboolean savedAppendSpace;
 	qboolean savedCollectAll;
+	size_t commandLength;
+
+	if ( !cmd ) {
+		return 0;
+	}
+
+	commandLength = strlen( cmd );
+	if ( commandLength > sizeof( queryField.buffer ) - 2 ) {
+		return 0;
+	}
 
 	Field_Clear( &queryField );
-	Q_strncpyz( queryField.buffer, cmd, sizeof( queryField.buffer ) );
+	memcpy( queryField.buffer, cmd, commandLength + 1 );
 	queryField.cursor = strlen( queryField.buffer );
 	queryField.widthInChars = MAX_EDIT_LINE - 1;
 

@@ -406,6 +406,27 @@ These tools are only meaningful on the OpenAL backend.
 
 ## Troubleshooting
 
+### There is no sound at all
+
+- Open the console and run `s_info`. It now reports the configured backend,
+  active backend, master volume, and focus/registration mute state; when no
+  backend started, it says so explicitly. A registration mute in the initial
+  startup report is expected and should become `audible` once registration
+  finishes.
+- Confirm `s_initsound` is `1` and `s_volume` is above `0`. Then run
+  `snd_restart`.
+- Leave `s_alDevice ""` while diagnosing. A saved headset or HDMI device name
+  can become stale after hardware or driver changes.
+- If OpenAL is unavailable, FnQL automatically tries the legacy platform
+  backend. SDL builds use the SDL3 default output route; native Windows builds
+  try WASAPI and then DirectSound. The console records each failed stage
+  instead of reporting only a generic initialization failure.
+- To bypass OpenAL deliberately, set `s_backend legacy`, run `snd_restart`,
+  then run `s_info` again.
+- If both backends fail, attach the `------ Initializing Sound ------` section
+  from the console log. It contains the runtime/library, device, format, and
+  fallback failure that is needed for diagnosis.
+
 ### I changed a setting and nothing happened
 
 Some audio cvars are latched. If you change any of the following, run `snd_restart` before judging the result:

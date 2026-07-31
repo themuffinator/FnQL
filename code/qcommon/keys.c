@@ -32,6 +32,7 @@ int		 anykeydown;
 qkey_t	 keys[MAX_KEYS];
 
 qboolean key_overstrikeMode;
+static unsigned keyBindingGenerations[MAX_KEYS];
 
 typedef struct {
 	const char *name;
@@ -674,11 +675,16 @@ void Key_ParseBinding( int key, qboolean down, unsigned time )
 			*end = '\0';
 		if ( *p == '+' )
 		{
-			// button commands add keynum and time as parameters
-			// so that multiple sources can be discriminated and
-			// subframe corrected
+			// Engine-owned stateful button commands add a per-source generation
+			// so the client can reject them after an ordered input reset. Keep
+			// every other +command byte-for-byte compatible with retail.
 			char cmd[1024];
-			Com_sprintf( cmd, sizeof( cmd ), "%c%s %d %d\n", ( down ) ? '+' : '-', p + 1, key, time );
+#ifndef DEDICATED
+			if ( CL_IsEngineStatefulInputCommand( p ) )
+				Com_sprintf( cmd, sizeof( cmd ), "%c%s %d %d fnql-gen:%u\n", ( down ) ? '+' : '-', p + 1, key, time, Key_GetBindingGeneration( key ) );
+			else
+#endif
+				Com_sprintf( cmd, sizeof( cmd ), "%c%s %d %d\n", ( down ) ? '+' : '-', p + 1, key, time );
 			Cbuf_AddText( cmd );
 			if ( down )
 				keys[ key ].bound = qtrue;
@@ -693,6 +699,49 @@ void Key_ParseBinding( int key, qboolean down, unsigned time )
 			break;
 		p = end + 1;
 	}
+}
+
+
+/*
+========================
+Key_GetBindingGeneration
+========================
+*/
+unsigned Key_GetBindingGeneration( int keynum )
+{
+	if ( keynum < 0 || keynum >= MAX_KEYS )
+		return 0u;
+	return keyBindingGenerations[keynum];
+}
+
+
+/*
+============================
+Key_AdvanceBindingGeneration
+============================
+*/
+void Key_AdvanceBindingGeneration( int keynum )
+{
+	if ( keynum < 0 || keynum >= MAX_KEYS )
+		return;
+
+	++keyBindingGenerations[keynum];
+	if ( keyBindingGenerations[keynum] == 0u )
+		keyBindingGenerations[keynum] = 1u;
+}
+
+
+/*
+================================
+Key_AdvanceAllBindingGenerations
+================================
+*/
+void Key_AdvanceAllBindingGenerations( void )
+{
+	int keynum;
+
+	for ( keynum = 0; keynum < MAX_KEYS; ++keynum )
+		Key_AdvanceBindingGeneration( keynum );
 }
 
 

@@ -454,17 +454,23 @@ public:
 	{
 		reset();
 		result_ = CoInitialize( reserved );
-		initialized_ = result_ == S_OK;
+		// S_FALSE is a successful, reference-counted initialization and must
+		// be balanced with CoUninitialize. RPC_E_CHANGED_MODE means another
+		// component already initialized COM with a different apartment model;
+		// COM services remain usable, but this owner must not uninitialize it.
+		ownsReference_ = SUCCEEDED( result_ );
+		usable_ = ownsReference_ || result_ == RPC_E_CHANGED_MODE;
 		return result_;
 	}
 
 	void reset() noexcept
 	{
-		if ( initialized_ )
+		if ( ownsReference_ )
 		{
 			CoUninitialize();
-			initialized_ = false;
 		}
+		ownsReference_ = false;
+		usable_ = false;
 		result_ = E_UNEXPECTED;
 	}
 
@@ -475,12 +481,13 @@ public:
 
 	explicit operator bool() const noexcept
 	{
-		return initialized_;
+		return usable_;
 	}
 
 private:
 	HRESULT result_ = E_UNEXPECTED;
-	bool initialized_ = false;
+	bool ownsReference_ = false;
+	bool usable_ = false;
 };
 
 template <typename T>

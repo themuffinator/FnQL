@@ -42,10 +42,30 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "glw_win.h"
 #include "win_raii.h"
 
+#define FNQL_WIDE_LITERAL_INNER( value ) L##value
+#define FNQL_WIDE_LITERAL( value ) FNQL_WIDE_LITERAL_INNER( value )
+
+static constexpr const wchar_t *kFnqlWindowClassName =
+	FNQL_WIDE_LITERAL( CLIENT_WINDOW_TITLE );
+
 #ifdef USE_OPENGL_API
 #include "../renderer/qgl.h"
 
 #endif
+
+
+static const wchar_t *GLW_WideWindowTitle( void )
+{
+	static wchar_t title[MAX_CVAR_VALUE_STRING];
+
+	if ( MultiByteToWideChar( CP_UTF8, MB_ERR_INVALID_CHARS, cl_title, -1,
+			title, ARRAY_LEN( title ) ) <= 0 &&
+		MultiByteToWideChar( CP_ACP, 0, cl_title, -1,
+			title, ARRAY_LEN( title ) ) <= 0 ) {
+		lstrcpynW( title, kFnqlWindowClassName, ARRAY_LEN( title ) );
+	}
+	return title;
+}
 
 
 static UINT GLW_GetMonitorDpi( HMONITOR monitor )
@@ -828,7 +848,7 @@ static qboolean GLW_CreateWindow( int width, int height, int colorbits, qboolean
 	//
 	if ( !s_classRegistered )
 	{
-		WNDCLASS wc;
+		WNDCLASSW wc;
 
 		memset( &wc, 0, sizeof( wc ) );
 
@@ -841,9 +861,9 @@ static qboolean GLW_CreateWindow( int width, int height, int colorbits, qboolean
 		wc.hCursor       = LoadCursor( NULL, IDC_ARROW );
 		wc.hbrBackground = (HBRUSH)(LRESULT)COLOR_GRAYTEXT;
 		wc.lpszMenuName  = 0;
-		wc.lpszClassName = T(CLIENT_WINDOW_TITLE);
+		wc.lpszClassName = kFnqlWindowClassName;
 
-		if ( !RegisterClass( &wc ) )
+		if ( !RegisterClassW( &wc ) )
 		{
 			Com_Error( ERR_FATAL, "%s: could not register window class", __func__ );
 			return qfalse;
@@ -922,7 +942,8 @@ static qboolean GLW_CreateWindow( int width, int height, int colorbits, qboolean
 		oldFullscreen = glw_state.cdsFullscreen;
 		glw_state.cdsFullscreen = cdsFullscreen;
 
-		g_wv.hWnd = CreateWindowEx( exstyle, TEXT(CLIENT_WINDOW_TITLE), AtoW(cl_title),
+		g_wv.hWnd = CreateWindowExW( exstyle, kFnqlWindowClassName,
+			GLW_WideWindowTitle(),
 			 stylebits, x, y, w, h, NULL, NULL, g_wv.hInstance,  NULL );
 
 		if ( !g_wv.hWnd )
@@ -1649,12 +1670,12 @@ void GLimp_Init( glconfig_t *config )
 
 	// show main window after all initializations
 	ShowWindow( g_wv.hWnd, SW_SHOW );
-
 	IN_Init();
 
 	HandleEvents();
-
-	Key_ClearStates();
+	// ShowWindow dispatches synchronously. Put the final barrier behind every
+	// retained transition, then rebuild modifiers held across the restart.
+	WIN_QueueInputReset( qtrue );
 }
 
 
@@ -1794,12 +1815,10 @@ void VKimp_Init( glconfig_t *config )
 
 	// show main window after all initializations
 	ShowWindow( g_wv.hWnd, SW_SHOW );
-
 	IN_Init();
 
 	HandleEvents();
-
-	Key_ClearStates();
+	WIN_QueueInputReset( qtrue );
 }
 
 

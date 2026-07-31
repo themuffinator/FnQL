@@ -55,6 +55,7 @@ engine owner.
 |---|---|
 | Console chat | `cl_allowConsoleChat` owns the retail bare-console-chat gate. Existing `con_autoSay` and raw-chat handling remain supported. |
 | Console notifications | Retail registers no `con_notifytime`; `Con_DrawNotify` renders only the live chat-entry strip and never overlays general console print. The retained `con.times` / `[skipnotify]` bookkeeping remains intact because it is still present in the retail print pipeline. |
+| Chat entry overlay | `Con_DrawNotify` reproduces retail's strip at virtual `(6, chatFieldY - 3, chatFieldPixelWidth - 12, 22)`, its `say:` / `say team:` prompt from virtual `(8, chatFieldY)` at 6 and 11 cells, and its field from the console origin in unscaled 12x24 cells, all in the retail prompt color. Retail hides it for a full-screen menu only, refreshes `chatField.widthInChars` from cgame every frame, and reads the origin and width from cgame exports 17 and 18, which return floats in `ST(0)` rather than integers in `EAX`. |
 | Time nudge | `cl_timeNudge` uses the retail `[-20, 0]` bound; `cl_autoTimeNudge` applies the spectator/local-server gates and retained negative half-ping selection. |
 | Demo capture | `cl_avidemo`, its latch, minimum time, and maximum time drive deterministic silent screenshot capture and fixed frame timing. This stays separate from FnQL's AVI/video-pipe recorder. |
 | Demo lifecycle | `cl_quitOnDemoCompleted` queues a clean quit after the next-demo action; `cl_freezeDemo` behavior remains intact. |

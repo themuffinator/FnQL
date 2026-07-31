@@ -44,6 +44,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <signal.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <locale.h>
 
 #include <sys/time.h>
 #include <sys/types.h>
@@ -117,6 +118,13 @@ Display *dpy = NULL;
 int scrnum;
 
 Window win = 0;
+#ifdef X_HAVE_UTF8_STRING
+static XIM x11_input_method;
+static XIC x11_input_context;
+static qboolean x11_input_context_focused;
+static qboolean x11_input_method_failure_reported;
+static qboolean x11_input_method_reopen_pending;
+#endif
 #ifdef USE_OPENGL_API
 static GLXContext ctx = NULL;
 #endif
@@ -131,7 +139,8 @@ static qboolean window_exposed;
 
 #define KEY_MASK (KeyPressMask | KeyReleaseMask)
 #define MOUSE_MASK (ButtonPressMask | ButtonReleaseMask | PointerMotionMask | ButtonMotionMask )
-#define X_MASK (KEY_MASK | MOUSE_MASK | VisibilityChangeMask | StructureNotifyMask | FocusChangeMask | ExposureMask )
+#define X_MASK (KEY_MASK | MOUSE_MASK | VisibilityChangeMask | \
+	StructureNotifyMask | FocusChangeMask | ExposureMask | PropertyChangeMask )
 
 static qboolean mouse_avail;
 static qboolean mouse_active = qfalse;
@@ -139,9 +148,11 @@ static Cursor invisible_cursor = None;
 static qboolean window_cursor_valid = qfalse;
 static qboolean window_cursor_shown = qtrue;
 static qboolean absolute_position_valid = qfalse;
+static int absolute_position_consumer = 0;
 static int absolute_position_x;
 static int absolute_position_y;
 static unsigned int temporary_capture_buttons;
+static unsigned int mouse_aux_button_state;
 
 // X11 allows one pointer grab per client, so pointer confinement and the
 // temporary drag capture share it and the grab is re-issued whenever the set of
@@ -149,6 +160,9 @@ static unsigned int temporary_capture_buttons;
 #define POINTER_GRAB_CONFINE 0x1
 #define POINTER_GRAB_DRAG    0x2
 static int pointer_grab_reasons;
+static qboolean gameplay_grab_failure_reported;
+static qboolean keyboard_grabbed;
+static qboolean keyboard_regrab_pending;
 
 static int mwx, mwy;
 static int mx = 0, my = 0;
@@ -179,11 +193,550 @@ static int mouse_threshold;
 static int win_x, win_y;
 
 static constexpr int kPointerMenuMask = KEYCATCH_UI | KEYCATCH_CGAME | KEYCATCH_BROWSER;
+static constexpr int kTextInputCatcherMask =
+	KEYCATCH_CONSOLE | KEYCATCH_UI | KEYCATCH_MESSAGE |
+	KEYCATCH_BROWSER;
 
 using fnql::input::PointerMode;
 using fnql::input::PointerOwner;
 
 static PointerOwner absolute_pointer_owner = PointerOwner::Gameplay;
+static unsigned int physical_modifier_state;
+static int translated_key_by_keycode[256];
+static qboolean suppressed_key_by_keycode[256];
+
+enum {
+	X11_MOD_LSHIFT = 1u << 0,
+	X11_MOD_RSHIFT = 1u << 1,
+	X11_MOD_LCTRL  = 1u << 2,
+	X11_MOD_RCTRL  = 1u << 3,
+	X11_MOD_LALT   = 1u << 4,
+	X11_MOD_RALT   = 1u << 5,
+	X11_MOD_LSUPER = 1u << 6,
+	X11_MOD_RSUPER = 1u << 7,
+	X11_MOD_LEVEL3 = 1u << 8,
+	X11_MOD_MODE_SWITCH = 1u << 9
+};
+
+
+static unsigned int X11_ModifierSideBit( KeySym keysym )
+{
+	switch ( keysym ) {
+		case XK_Shift_L:   return X11_MOD_LSHIFT;
+		case XK_Shift_R:   return X11_MOD_RSHIFT;
+		case XK_Control_L: return X11_MOD_LCTRL;
+		case XK_Control_R: return X11_MOD_RCTRL;
+		case XK_Alt_L:
+		case XK_Meta_L:    return X11_MOD_LALT;
+		case XK_Alt_R:
+		case XK_Meta_R:    return X11_MOD_RALT;
+		case XK_Super_L:     return X11_MOD_LSUPER;
+		case XK_Super_R:     return X11_MOD_RSUPER;
+		case XK_ISO_Level3_Shift: return X11_MOD_LEVEL3;
+		case XK_Mode_switch: return X11_MOD_MODE_SWITCH;
+		default:           return 0;
+	}
+}
+
+
+static unsigned int X11_ModifierFamilyMask( unsigned int side )
+{
+	if ( side & ( X11_MOD_LSHIFT | X11_MOD_RSHIFT ) ) {
+		return X11_MOD_LSHIFT | X11_MOD_RSHIFT;
+	}
+	if ( side & ( X11_MOD_LCTRL | X11_MOD_RCTRL ) ) {
+		return X11_MOD_LCTRL | X11_MOD_RCTRL;
+	}
+	if ( side & ( X11_MOD_LALT | X11_MOD_RALT ) ) {
+		return X11_MOD_LALT | X11_MOD_RALT;
+	}
+	if ( side & ( X11_MOD_LSUPER | X11_MOD_RSUPER ) ) {
+		return X11_MOD_LSUPER | X11_MOD_RSUPER;
+	}
+	if ( side & ( X11_MOD_LEVEL3 | X11_MOD_MODE_SWITCH ) ) {
+		return X11_MOD_LEVEL3 | X11_MOD_MODE_SWITCH;
+	}
+	return 0;
+}
+
+
+static qboolean X11_ShouldQueueModifierTransition(
+	KeySym keysym, qboolean down )
+{
+	const unsigned int side = X11_ModifierSideBit( keysym );
+	if ( !side ) {
+		return qtrue;
+	}
+
+	const unsigned int family = X11_ModifierFamilyMask( side );
+	const qboolean sideWasDown =
+		( physical_modifier_state & side ) ? qtrue : qfalse;
+	const qboolean familyWasDown =
+		( physical_modifier_state & family ) ? qtrue : qfalse;
+	if ( down ) {
+		physical_modifier_state |= side;
+		return ( !familyWasDown || sideWasDown ) ? qtrue : qfalse;
+	} else {
+		physical_modifier_state &= ~side;
+	}
+	return ( physical_modifier_state & family ) ? qfalse : qtrue;
+}
+
+
+static qboolean X11_KeySymIsDown( const char keymap[32], KeySym keysym )
+{
+	const KeyCode keycode = XKeysymToKeycode( dpy, keysym );
+	return keycode && ( static_cast<unsigned char>( keymap[keycode >> 3] ) &
+		( 1u << ( keycode & 7 ) ) )
+		? qtrue : qfalse;
+}
+
+
+static unsigned int X11_ReadPhysicalModifiers( void )
+{
+	char keymap[32] = {};
+	unsigned int state = 0;
+	if ( !dpy ) {
+		return state;
+	}
+	XQueryKeymap( dpy, keymap );
+
+	if ( X11_KeySymIsDown( keymap, XK_Shift_L ) ) state |= X11_MOD_LSHIFT;
+	if ( X11_KeySymIsDown( keymap, XK_Shift_R ) ) state |= X11_MOD_RSHIFT;
+	if ( X11_KeySymIsDown( keymap, XK_Control_L ) ) state |= X11_MOD_LCTRL;
+	if ( X11_KeySymIsDown( keymap, XK_Control_R ) ) state |= X11_MOD_RCTRL;
+	if ( X11_KeySymIsDown( keymap, XK_Alt_L ) ||
+		X11_KeySymIsDown( keymap, XK_Meta_L ) ) state |= X11_MOD_LALT;
+	if ( X11_KeySymIsDown( keymap, XK_Alt_R ) ||
+		X11_KeySymIsDown( keymap, XK_Meta_R ) ) state |= X11_MOD_RALT;
+	if ( X11_KeySymIsDown( keymap, XK_Super_L ) ) state |= X11_MOD_LSUPER;
+	if ( X11_KeySymIsDown( keymap, XK_Super_R ) ) state |= X11_MOD_RSUPER;
+	if ( X11_KeySymIsDown(
+			keymap, XK_ISO_Level3_Shift ) ) state |= X11_MOD_LEVEL3;
+	if ( X11_KeySymIsDown(
+			keymap, XK_Mode_switch ) ) state |= X11_MOD_MODE_SWITCH;
+	return state;
+}
+
+
+static void X11_QueueHeldModifiers( int eventTime )
+{
+	physical_modifier_state =
+		gw_active ? X11_ReadPhysicalModifiers() : 0;
+
+	if ( physical_modifier_state & ( X11_MOD_LSHIFT | X11_MOD_RSHIFT ) ) {
+		Sys_QueEvent( eventTime, SE_KEY, K_SHIFT, qtrue, 0, NULL );
+	}
+	if ( physical_modifier_state & ( X11_MOD_LCTRL | X11_MOD_RCTRL ) ) {
+		Sys_QueEvent( eventTime, SE_KEY, K_CTRL, qtrue, 0, NULL );
+	}
+	if ( physical_modifier_state & ( X11_MOD_LALT | X11_MOD_RALT ) ) {
+		Sys_QueEvent( eventTime, SE_KEY, K_ALT, qtrue, 0, NULL );
+	}
+	if ( physical_modifier_state & ( X11_MOD_LSUPER | X11_MOD_RSUPER ) ) {
+		Sys_QueEvent( eventTime, SE_KEY, K_SUPER, qtrue, 0, NULL );
+	}
+	if ( physical_modifier_state &
+		( X11_MOD_LEVEL3 | X11_MOD_MODE_SWITCH ) ) {
+		Sys_QueEvent( eventTime, SE_KEY, K_MODE, qtrue, 0, NULL );
+	}
+}
+
+static void X11_ResetInputContext( void );
+
+
+/*
+================
+X11_TextInputOwnerActive
+
+XIM composition belongs to the character-input lane, not to gameplay key
+translation. Keeping the XIC focused while no text consumer is active lets an
+input method filter compose/dead-key presses before the engine can bind them.
+================
+*/
+static qboolean X11_TextInputOwnerActive( void )
+{
+	if ( !gw_active || gw_minimized ) {
+		return qfalse;
+	}
+
+	return ( cls.state == CA_DISCONNECTED ||
+		( Key_GetCatcher() & kTextInputCatcherMask ) ) ? qtrue : qfalse;
+}
+
+
+/*
+================
+X11_PrepareInputReset
+
+Clear platform-side identity immediately before appending an ordered client
+reset. A release after focus loss or window recreation must not target a key
+translated in the previous context.
+================
+*/
+static void X11_PrepareInputReset( void )
+{
+	// Reset producer caches before placing the ordered client barrier. XPending
+	// may expose newer native events in the same drain, and those transitions
+	// must rebuild state that barrier consumption will leave untouched.
+	IN_ResetInputState();
+	memset( translated_key_by_keycode, 0,
+		sizeof( translated_key_by_keycode ) );
+	memset( suppressed_key_by_keycode, 0,
+		sizeof( suppressed_key_by_keycode ) );
+	physical_modifier_state = 0;
+	mouse_aux_button_state = 0;
+	X11_ResetInputContext();
+}
+
+
+/*
+================
+X11_QueueInputReset
+
+Append one ordered reset after clearing native producer identity. A caller may
+request held modifiers to be rebuilt, but they are never reasserted while the
+window is inactive or minimized.
+================
+*/
+void X11_QueueInputReset( qboolean rebuildModifiers )
+{
+	X11_PrepareInputReset();
+	Sys_QueEvent( 0, SE_INPUT_RESET, 0, 0, 0, NULL );
+	if ( rebuildModifiers && gw_active && !gw_minimized ) {
+		X11_QueueHeldModifiers( 0 );
+	}
+}
+
+
+#ifdef X_HAVE_UTF8_STRING
+/*
+================
+X11_SelectInputStyle
+
+FnQL has no native preedit/status widgets in the game window. Prefer styles
+that require no engine-owned preedit/status surfaces, and reject callback/area
+styles that the engine cannot present safely.
+================
+*/
+static XIMStyle X11_SelectInputStyle( const XIMStyles *styles )
+{
+	static const XIMStyle preferredStyles[] = {
+		XIMPreeditNothing | XIMStatusNothing,
+		XIMPreeditNone | XIMStatusNone,
+		XIMPreeditNothing | XIMStatusNone,
+		XIMPreeditNone | XIMStatusNothing
+	};
+
+	if ( !styles ) {
+		return 0;
+	}
+
+	for ( const XIMStyle preferred : preferredStyles ) {
+		for ( unsigned short i = 0; i < styles->count_styles; ++i ) {
+			if ( styles->supported_styles[i] == preferred ) {
+				return preferred;
+			}
+		}
+	}
+	return 0;
+}
+
+
+static void X11_SetInputContextFocus( qboolean focused )
+{
+	if ( !x11_input_context || x11_input_context_focused == focused ) {
+		return;
+	}
+
+	if ( focused ) {
+		XSetICFocus( x11_input_context );
+	} else {
+		XUnsetICFocus( x11_input_context );
+	}
+	x11_input_context_focused = focused;
+}
+
+
+static void X11_DestroyInputContext( void )
+{
+	if ( x11_input_context ) {
+		X11_SetInputContextFocus( qfalse );
+		XDestroyIC( x11_input_context );
+		x11_input_context = NULL;
+	}
+	x11_input_context_focused = qfalse;
+}
+
+
+static void X11_ResetInputContext( void )
+{
+	if ( x11_input_context ) {
+		char *discardedText = Xutf8ResetIC( x11_input_context );
+		if ( discardedText ) {
+			XFree( discardedText );
+		}
+	}
+}
+
+
+static void X11_InputMethodDestroyed(
+	XIM inputMethod, XPointer, XPointer )
+{
+	if ( inputMethod != x11_input_method ) {
+		return;
+	}
+
+	// Xlib owns destruction of every associated XIC and the XIM after this
+	// callback returns. Drop our borrowed handles without closing either one.
+	x11_input_context = NULL;
+	x11_input_context_focused = qfalse;
+	x11_input_method = NULL;
+	x11_input_method_reopen_pending = qtrue;
+}
+
+
+static void X11_CloseInputMethod( void )
+{
+	X11_DestroyInputContext();
+	if ( x11_input_method ) {
+		XCloseIM( x11_input_method );
+		x11_input_method = NULL;
+	}
+	x11_input_method_failure_reported = qfalse;
+	x11_input_method_reopen_pending = qfalse;
+}
+
+
+static qboolean X11_OpenInputMethod( void )
+{
+	XIMCallback destroyCallback = {};
+
+	if ( x11_input_method ) {
+		return qtrue;
+	}
+	if ( !dpy ) {
+		return qfalse;
+	}
+
+	if ( !setlocale( LC_CTYPE, "" ) || !XSupportsLocale() ) {
+		if ( !x11_input_method_failure_reported ) {
+			Com_DPrintf(
+				"X11 locale input is unavailable; using legacy key text\n" );
+			x11_input_method_failure_reported = qtrue;
+		}
+		return qfalse;
+	}
+
+	// Honour the user's configured input method first. If its server is not
+	// reachable, Xlib's local IM still provides locale-aware UTF-8 lookup.
+	if ( XSetLocaleModifiers( "" ) ) {
+		x11_input_method = XOpenIM( dpy, NULL, NULL, NULL );
+	}
+	if ( !x11_input_method && XSetLocaleModifiers( "@im=none" ) ) {
+		x11_input_method = XOpenIM( dpy, NULL, NULL, NULL );
+	}
+	if ( !x11_input_method ) {
+		if ( !x11_input_method_failure_reported ) {
+			Com_DPrintf(
+				"XOpenIM failed; using legacy XLookupString text\n" );
+			x11_input_method_failure_reported = qtrue;
+		}
+		return qfalse;
+	}
+
+	destroyCallback.callback = X11_InputMethodDestroyed;
+	if ( XSetIMValues( x11_input_method,
+			XNDestroyCallback, &destroyCallback, NULL ) != NULL ) {
+		Com_DPrintf(
+			"X11 input method has no destroy notification; recovery may require vid_restart\n" );
+	}
+
+	x11_input_method_failure_reported = qfalse;
+	x11_input_method_reopen_pending = qfalse;
+	return qtrue;
+}
+
+
+/*
+================
+X11_CreateInputContext
+
+The XIM belongs to the Display and may survive a renderer-window recreation;
+the XIC belongs to one Window and is rebuilt for every new native window.
+================
+*/
+static void X11_CreateInputContext( void )
+{
+	XIMStyles *styles = NULL;
+	XIMStyle style;
+	long filterEvents = 0;
+
+	X11_DestroyInputContext();
+	if ( !dpy || !win || !X11_OpenInputMethod() ) {
+		return;
+	}
+
+	if ( XGetIMValues( x11_input_method,
+			XNQueryInputStyle, &styles, NULL ) != NULL || !styles ) {
+		Com_DPrintf(
+			"X11 input method exposes no usable input styles; using legacy key text\n" );
+		return;
+	}
+
+	style = X11_SelectInputStyle( styles );
+	XFree( styles );
+	if ( !style ) {
+		Com_DPrintf(
+			"X11 input method requires unsupported preedit/status UI; using legacy key text\n" );
+		return;
+	}
+
+	x11_input_context = XCreateIC( x11_input_method,
+		XNInputStyle, style,
+		XNClientWindow, win,
+		XNFocusWindow, win,
+		NULL );
+	if ( !x11_input_context ) {
+		Com_DPrintf(
+			"XCreateIC failed; using legacy XLookupString text\n" );
+		return;
+	}
+
+	if ( XGetICValues( x11_input_context,
+			XNFilterEvents, &filterEvents, NULL ) == NULL ) {
+		XSelectInput( dpy, win, X_MASK | filterEvents );
+	}
+	X11_SetInputContextFocus( X11_TextInputOwnerActive() );
+}
+
+
+static void X11_ReopenInputMethodIfNeeded( void )
+{
+	if ( !x11_input_method_reopen_pending ) {
+		return;
+	}
+
+	x11_input_method_reopen_pending = qfalse;
+	if ( dpy && win ) {
+		X11_CreateInputContext();
+	}
+}
+
+
+static qboolean X11_FilterInputEvent( XEvent *event )
+{
+	// Focus transitions are engine ownership changes even if an IM would also
+	// like to observe them. The handler below explicitly focuses/unfocuses the
+	// XIC, so never let XFilterEvent hide these transitions from the engine.
+	if ( !x11_input_context || !x11_input_context_focused ||
+		event->type == FocusIn || event->type == FocusOut ||
+		!XFilterEvent( event, None ) ) {
+		return qfalse;
+	}
+
+	// Xlib requires a client-owned keyboard grab to be released when an input
+	// method consumes an event. Restore it after this X event batch once no
+	// text-input catcher owns the keyboard.
+	if ( keyboard_grabbed ) {
+		XUngrabKeyboard( dpy, CurrentTime );
+		XFlush( dpy );
+		keyboard_grabbed = qfalse;
+		keyboard_regrab_pending = qtrue;
+	}
+	return qtrue;
+}
+
+
+static void X11_QueueUtf8Text(
+	const char *text, int textLength, int eventTime )
+{
+	const unsigned char *bytes =
+		reinterpret_cast<const unsigned char *>( text );
+	std::size_t remaining = textLength > 0
+		? static_cast<std::size_t>( textLength ) : 0;
+	qboolean reportedMalformed = qfalse;
+
+	while ( remaining > 0 ) {
+		const fnql::input::Utf8DecodeResult decoded =
+			fnql::input::DecodeUtf8( bytes, remaining );
+		bytes += decoded.size;
+		remaining -= decoded.size;
+
+		if ( !decoded.valid || decoded.codepoint == 0 ) {
+			if ( !reportedMalformed ) {
+				Com_DPrintf( "Ignoring malformed XIM UTF-8 text input\n" );
+				reportedMalformed = qtrue;
+			}
+			continue;
+		}
+		Sys_QueEvent( eventTime, SE_CHAR,
+			static_cast<int>( decoded.codepoint ), 0, 0, NULL );
+	}
+}
+
+
+/*
+================
+X11_QueueInputMethodText
+
+Returns qtrue whenever an active XIC handled the text lane, including a valid
+key event that commits no characters. This prevents a dead/preedit key from
+falling through and producing a duplicate legacy byte.
+================
+*/
+static qboolean X11_QueueInputMethodText(
+	XKeyEvent *event, int eventTime )
+{
+	char stackBuffer[64];
+	char *buffer = stackBuffer;
+	int bufferSize = static_cast<int>( sizeof( stackBuffer ) );
+	int textLength;
+	KeySym keysym = NoSymbol;
+	Status status = XLookupNone;
+	qboolean allocated = qfalse;
+
+	if ( !x11_input_context || !x11_input_context_focused ) {
+		return qfalse;
+	}
+
+	textLength = Xutf8LookupString( x11_input_context, event,
+		buffer, bufferSize, &keysym, &status );
+	if ( status == XBufferOverflow ) {
+		if ( textLength <= 0 || textLength > MAX_EDIT_LINE * 4 ) {
+			Com_DPrintf( "Ignoring oversized XIM text commit (%d bytes)\n",
+				textLength );
+			return qtrue;
+		}
+
+		bufferSize = textLength;
+		buffer = static_cast<char *>( Z_Malloc( bufferSize ) );
+		allocated = qtrue;
+		textLength = Xutf8LookupString( x11_input_context, event,
+			buffer, bufferSize, &keysym, &status );
+	}
+
+	if ( ( status == XLookupChars || status == XLookupBoth ) &&
+		textLength > 0 && textLength <= bufferSize ) {
+		X11_QueueUtf8Text( buffer, textLength, eventTime );
+	}
+	if ( allocated ) {
+		Z_Free( buffer );
+	}
+	return qtrue;
+}
+#else
+static void X11_SetInputContextFocus( qboolean ) {}
+static void X11_DestroyInputContext( void ) {}
+static void X11_ResetInputContext( void ) {}
+static void X11_CloseInputMethod( void ) {}
+static void X11_CreateInputContext( void ) {}
+static void X11_ReopenInputMethodIfNeeded( void ) {}
+static qboolean X11_FilterInputEvent( XEvent * ) { return qfalse; }
+static qboolean X11_QueueInputMethodText(
+	XKeyEvent *, int ) { return qfalse; }
+#endif
+
 
 /*
 ================
@@ -229,7 +782,7 @@ static PointerMode IN_ResolvePointerMode( PointerOwner owner )
 	inputs.focused = gw_active ? true : false;
 	inputs.minimized = gw_minimized ? true : false;
 	inputs.fullscreen = glw_state.cdsFullscreen ? true : false;
-	inputs.relativeAvailable = true;
+	inputs.relativeAvailable = mouse_avail ? true : false;
 
 	return fnql::input::ResolvePointerMode( inputs );
 }
@@ -238,6 +791,18 @@ static qboolean IN_AbsolutePointerOwner( void )
 {
 	return fnql::input::PointerOwnerReportsAbsolute( IN_AbsolutePointerOwnerKind() )
 		? qtrue : qfalse;
+}
+
+
+static int IN_PointerConsumerIdentity( void )
+{
+	const int catcher = Key_GetCatcher();
+
+	if ( catcher & KEYCATCH_CONSOLE ) return KEYCATCH_CONSOLE;
+	if ( catcher & KEYCATCH_BROWSER ) return KEYCATCH_BROWSER;
+	if ( catcher & KEYCATCH_UI ) return KEYCATCH_UI;
+	if ( catcher & KEYCATCH_CGAME ) return KEYCATCH_CGAME;
+	return 0;
 }
 
 /*****************************************************************************
@@ -272,29 +837,41 @@ void IN_DeactivateMouse( void );
 qboolean IN_MouseActive( void );
 
 
-static char *XLateKey( XKeyEvent *ev, int *key )
+static char *XLateKey( XKeyEvent *ev, int *key, int *textLength )
 {
   static unsigned char buf[64];
   static unsigned char bufnomod[2];
   KeySym keysym;
-  int XLookupRet;
+  int lookupLength;
+  int unmodifiedLength = 0;
 
   *key = 0;
 
-  XLookupRet = XLookupString(ev, (char*)buf, sizeof(buf), &keysym, 0);
+  lookupLength = XLookupString(ev, (char*)buf, sizeof(buf), &keysym, 0);
+  if ( lookupLength < 0 ) {
+    lookupLength = 0;
+  } else if ( lookupLength > (int)sizeof(buf) ) {
+    lookupLength = sizeof(buf);
+  }
+  *textLength = lookupLength;
 #ifdef KBD_DBG
-  Com_Printf( "XLookupString ret: %d buf: %s keysym: %x\n", XLookupRet, buf, (int)keysym) ;
+  Com_Printf( "XLookupString ret: %d buf: %.*s keysym: %x\n",
+    lookupLength, lookupLength, buf, (int)keysym );
 #endif
 
   if (!in_shiftedKeys->integer) {
     // also get a buffer without modifiers held
     ev->state = 0;
-    XLookupRet = XLookupString(ev, (char*)bufnomod, sizeof(bufnomod), &keysym, 0);
+    unmodifiedLength = XLookupString(ev, (char*)bufnomod, sizeof(bufnomod), &keysym, 0);
+    if ( unmodifiedLength < 0 ) {
+      unmodifiedLength = 0;
+    } else if ( unmodifiedLength > (int)sizeof(bufnomod) ) {
+      unmodifiedLength = sizeof(bufnomod);
+    }
 #ifdef KBD_DBG
-    Com_Printf( "XLookupString (minus modifiers) ret: %d buf: %s keysym: %x\n", XLookupRet, buf, (int)keysym );
+    Com_Printf( "XLookupString (minus modifiers) ret: %d buf: %.*s keysym: %x\n",
+      unmodifiedLength, unmodifiedLength, bufnomod, (int)keysym );
 #endif
-  } else {
-    bufnomod[0] = '\0';
   }
 
   switch (keysym)
@@ -302,7 +879,7 @@ static char *XLateKey( XKeyEvent *ev, int *key )
   case XK_grave:
   case XK_twosuperior:
     *key = K_CONSOLE;
-    buf[0] = '\0';
+    *textLength = 0;
     return (char*)buf;
 
   case XK_KP_Page_Up:
@@ -330,7 +907,8 @@ static char *XLateKey( XKeyEvent *ev, int *key )
   case XK_Right:  *key = K_RIGHTARROW;    break;
 
   case XK_KP_Down:
-  case XK_KP_2:  if ( Key_GetCatcher() && (buf[0] || bufnomod[0]) )
+  case XK_KP_2:  if ( Key_GetCatcher() &&
+                       ( lookupLength > 0 || unmodifiedLength > 0 ) )
                    *key = 0;
                  else
                    *key = K_KP_DOWNARROW;
@@ -339,7 +917,8 @@ static char *XLateKey( XKeyEvent *ev, int *key )
   case XK_Down:  *key = K_DOWNARROW; break;
 
   case XK_KP_Up:
-  case XK_KP_8:  if ( Key_GetCatcher() && (buf[0] || bufnomod[0]) )
+  case XK_KP_8:  if ( Key_GetCatcher() &&
+                       ( lookupLength > 0 || unmodifiedLength > 0 ) )
                    *key = 0;
                  else
                    *key = K_KP_UPARROW;
@@ -399,6 +978,8 @@ static char *XLateKey( XKeyEvent *ev, int *key )
   case XK_Meta_L:
   case XK_Alt_R:
   case XK_Meta_R: *key = K_ALT;     break;
+  case XK_ISO_Level3_Shift:
+  case XK_Mode_switch: *key = K_MODE; break;
 
   case XK_KP_Begin: *key = K_KP_5;  break;
 
@@ -407,6 +988,7 @@ static char *XLateKey( XKeyEvent *ev, int *key )
   case XK_KP_0: *key = K_KP_INS; break;
 
   case XK_KP_Multiply: *key = '*'; break;
+  case XK_KP_Equal: *key = K_KP_EQUALS; break;
   case XK_KP_Add:  *key = K_KP_PLUS; break;
   case XK_KP_Subtract: *key = K_KP_MINUS; break;
   case XK_KP_Divide: *key = K_KP_SLASH; break;
@@ -432,7 +1014,12 @@ static char *XLateKey( XKeyEvent *ev, int *key )
   case XK_KP_Space: *key = K_SPACE; break;
 
   case XK_Menu:	*key = K_MENU; break;
+  case XK_Multi_key: *key = K_COMPOSE; break;
+  case XK_Help: *key = K_HELP; break;
   case XK_Print: *key = K_PRINT; break;
+  case XK_Sys_Req: *key = K_SYSREQ; break;
+  case XK_Break: *key = K_BREAK; break;
+  case XK_Undo: *key = K_UNDO; break;
   case XK_Super_L:
   case XK_Super_R: *key = K_SUPER; break;
   case XK_Num_Lock: *key = K_KP_NUMLOCK; break;
@@ -442,13 +1029,14 @@ static char *XLateKey( XKeyEvent *ev, int *key )
 
   default:
     //Com_Printf( "unknown keysym: %08X\n", keysym );
-    if (XLookupRet == 0)
+    if ( ( in_shiftedKeys->integer && lookupLength == 0 ) ||
+      ( !in_shiftedKeys->integer && unmodifiedLength == 0 ) )
     {
       if (com_developer->value)
       {
         Com_Printf( "Warning: XLookupString failed on KeySym %d\n", (int)keysym );
       }
-      buf[0] = '\0';
+      *textLength = 0;
       return (char*)buf;
     }
     else
@@ -590,8 +1178,10 @@ static void IN_SetPointerConfinement( qboolean confine )
 }
 
 
-static void IN_QueueAbsolutePointerPosition( int eventTime, int x, int y )
+static void IN_QueueAbsolutePointerPosition(
+	int eventTime, int x, int y, qboolean force = qfalse )
 {
+	const int consumer = IN_PointerConsumerIdentity();
 	// X11 reports window coordinates, which are the renderer's drawable pixels
 	// only while the renderer resolution matches the window. Every absolute
 	// consumer - the console, the WebUI browser, and retail's UI and cgame
@@ -605,14 +1195,85 @@ static void IN_QueueAbsolutePointerPosition( int eventTime, int x, int y )
 	projection.drawableHeight = cls.glconfig.vidHeight;
 	position = fnql::input::ProjectPointerToDrawable( x, y, projection );
 
-	if ( absolute_position_valid && position.x == absolute_position_x
+	if ( !force && absolute_position_valid
+		&& consumer == absolute_position_consumer
+		&& position.x == absolute_position_x
 		&& position.y == absolute_position_y ) {
 		return;
 	}
-	absolute_position_valid = qtrue;
-	absolute_position_x = position.x;
-	absolute_position_y = position.y;
+	if ( !force ) {
+		absolute_position_valid = qtrue;
+		absolute_position_consumer = consumer;
+		absolute_position_x = position.x;
+		absolute_position_y = position.y;
+	}
 	Sys_QueEvent( eventTime, SE_MOUSE_ABSOLUTE, position.x, position.y, 0, NULL );
+}
+
+
+static void IN_BeginTemporaryPointerCapture( unsigned int button );
+static void IN_EndTemporaryPointerCapture( void );
+
+
+static void IN_QueueMouseReset( int eventTime )
+{
+	Sys_QueEvent( eventTime, SE_MOUSE_RESET,
+		static_cast<int>( mouse_aux_button_state ), 0, 0, NULL );
+	mouse_aux_button_state = 0;
+}
+
+
+/*
+================
+IN_ReconcileAbsolutePointerButtons
+
+XQueryPointer supplies position and the physical core-button snapshot in one
+server round trip. Use that snapshot to recover from a lost release and to
+establish a drag grab when an absolute-pointer owner takes over while a button
+is already held.
+================
+*/
+static void IN_ReconcileAbsolutePointerButtons(
+	unsigned int physicalState, int eventTime )
+{
+	struct CoreButton {
+		unsigned int button;
+		unsigned int physicalMask;
+		int key;
+	};
+	static const CoreButton coreButtons[] = {
+		{ Button1, Button1Mask, K_MOUSE1 },
+		{ Button2, Button2Mask, K_MOUSE3 },
+		{ Button3, Button3Mask, K_MOUSE2 }
+	};
+	qboolean lostRelease = qfalse;
+
+	for ( const CoreButton &button : coreButtons ) {
+		const qboolean physicalDown =
+			( physicalState & button.physicalMask ) ? qtrue : qfalse;
+		const qboolean logicalDown = Key_IsDown( button.key );
+		if ( logicalDown && !physicalDown ) {
+			lostRelease = qtrue;
+			break;
+		}
+	}
+
+	if ( lostRelease ) {
+		// A grab can disappear without delivering its final release. Balance
+		// every logical mouse button before accepting another overlay drag.
+		IN_QueueMouseReset( eventTime );
+		IN_EndTemporaryPointerCapture();
+		return;
+	}
+
+	for ( const CoreButton &button : coreButtons ) {
+		if ( ( physicalState & button.physicalMask ) &&
+			Key_IsDown( button.key ) ) {
+			// A failed XGrabPointer leaves no temporary button latch, so this
+			// naturally retries on the next successful pointer snapshot.
+			IN_BeginTemporaryPointerCapture( button.button );
+		}
+	}
 }
 
 
@@ -628,7 +1289,9 @@ static void IN_PollAbsolutePointerPosition( void )
 
 	if ( dpy && win && XQueryPointer( dpy, win, &root, &child, &rootX, &rootY,
 		&windowX, &windowY, &mask ) ) {
-		IN_QueueAbsolutePointerPosition( Sys_Milliseconds(), windowX, windowY );
+		const int eventTime = Sys_Milliseconds();
+		IN_ReconcileAbsolutePointerButtons( mask, eventTime );
+		IN_QueueAbsolutePointerPosition( eventTime, windowX, windowY );
 	}
 }
 
@@ -683,7 +1346,7 @@ static void IN_ReleaseTemporaryPointerButton( unsigned int button )
 }
 
 
-static void install_mouse_grab( void )
+static qboolean install_mouse_grab( void )
 {
 	int res;
 
@@ -705,13 +1368,21 @@ static void install_mouse_grab( void )
 	res = XGrabPointer( dpy, win, False, MOUSE_MASK, GrabModeAsync, GrabModeAsync, win, None, CurrentTime );
 	if ( res != GrabSuccess )
 	{
-		//Com_Printf( S_COLOR_YELLOW "Warning: XGrabPointer() failed\n" );
+		IN_ShowWindowCursor( qtrue );
+		if ( !gameplay_grab_failure_reported ) {
+			Com_Printf( S_COLOR_YELLOW
+				"Warning: XGrabPointer() failed (%d); retrying\n", res );
+			gameplay_grab_failure_reported = qtrue;
+		}
+		XSync( dpy, False );
+		return qfalse;
 	}
 	else
 	{
 		// set new mouse settings
 		XChangePointerControl( dpy, True, True, 1, 1, 1 );
 	}
+	gameplay_grab_failure_reported = qfalse;
 
 	XSync( dpy, False );
 
@@ -739,6 +1410,7 @@ static void install_mouse_grab( void )
 	}
 
 	XSync( dpy, False );
+	return qtrue;
 }
 
 
@@ -749,7 +1421,14 @@ static void install_kb_grab( void )
 	res = XGrabKeyboard( dpy, win, False, GrabModeAsync, GrabModeAsync, CurrentTime );
 	if ( res != GrabSuccess )
 	{
-		//Com_Printf( S_COLOR_YELLOW "Warning: XGrabKeyboard() failed\n" );
+		Com_DPrintf( "Warning: XGrabKeyboard() failed (%d)\n", res );
+		keyboard_grabbed = qfalse;
+		keyboard_regrab_pending = qfalse;
+	}
+	else
+	{
+		keyboard_grabbed = qtrue;
+		keyboard_regrab_pending = qfalse;
 	}
 
 	XSync( dpy, False );
@@ -773,26 +1452,20 @@ static void uninstall_mouse_grab( void )
 	XChangePointerControl( dpy, qtrue, qtrue, mouse_accel_numerator, 
 		mouse_accel_denominator, mouse_threshold );
 
-	if ( !IN_AbsolutePointerOwner() ) {
+	if ( gw_active && !gw_minimized && !IN_AbsolutePointerOwner() ) {
 		XWarpPointer( dpy, None, win, 0, 0, 0, 0, window_width / 2, window_height / 2 );
 	}
 
 	XUngrabPointer( dpy, CurrentTime );
 	XUngrabKeyboard( dpy, CurrentTime );
+	keyboard_grabbed = qfalse;
+	keyboard_regrab_pending = qfalse;
 	pointer_grab_reasons = 0;
 
 	// Retail UI owners retain the host cursor. The console draws its own cursor,
 	// so hide the host cursor only over the client area.
 	IN_ShowWindowCursor(
 		IN_AbsolutePointerOwnerKind() == PointerOwner::Console ? qfalse : qtrue );
-
-	XSync( dpy, False );
-}
-
-
-static void uninstall_kb_grab( void )
-{
-	XUngrabKeyboard( dpy, CurrentTime );
 
 	XSync( dpy, False );
 }
@@ -865,47 +1538,107 @@ static qboolean repeated_press( XEvent *event )
 }
 
 
-static qboolean WindowMinimized( Display *dpy, Window win )
+static qboolean WindowMinimized(
+	Display *display, Window window, qboolean *minimized )
 {
-	unsigned long i, num_items, bytes_after;
-	Atom actual_type, *atoms, nws, nwsh;
-	int actual_format;
+	static constexpr long kMaximumWindowStateAtoms = 64;
+	unsigned long numItems = 0;
+	unsigned long bytesAfter = 0;
+	Atom actualType = None;
+	unsigned char *propertyData = NULL;
+	int actualFormat = 0;
 
-	nws = XInternAtom( dpy, "_NET_WM_STATE", True );
-	if ( nws == BadValue || nws == None )
-		return qfalse;
-
-	nwsh = XInternAtom( dpy, "_NET_WM_STATE_HIDDEN", True );
-	if ( nwsh == BadValue || nwsh == None )
-		return qfalse;
-
-	atoms = NULL;
-	num_items = 0;
-
-	// Xlib returns early without assigning *nitems_return or *prop_return when
-	// the request fails, so both have to be validated before the loop -- the
-	// same way X11_ReadCardinals() and X11_WindowHasState() below already do.
-	if ( XGetWindowProperty( dpy, win, nws, 0, 0x7FFFFFFF, False, XA_ATOM,
-			&actual_type, &actual_format, &num_items,
-			&bytes_after, (unsigned char**)&atoms ) != Success ||
-		actual_type != XA_ATOM || actual_format != 32 || atoms == NULL )
-	{
-		if ( atoms )
-			XFree( atoms );
+	if ( !display || !window || !minimized ) {
 		return qfalse;
 	}
 
-	for ( i = 0; i < num_items; i++ )
-	{
-		if ( atoms[i] == nwsh )
-		{
-			XFree( atoms );
-			return qtrue;
+	const Atom netWMState =
+		XInternAtom( display, "_NET_WM_STATE", True );
+	const Atom netWMStateHidden =
+		XInternAtom( display, "_NET_WM_STATE_HIDDEN", True );
+	if ( netWMState == None || netWMStateHidden == None ) {
+		return qfalse;
+	}
+
+	if ( XGetWindowProperty( display, window, netWMState,
+			0, kMaximumWindowStateAtoms, False, XA_ATOM,
+			&actualType, &actualFormat,
+			&numItems, &bytesAfter, &propertyData ) != Success ) {
+		if ( propertyData ) {
+			XFree( propertyData );
+		}
+		return qfalse;
+	}
+
+	// An absent state property is a valid normal-window snapshot. Other types
+	// or malformed item storage are unknown, not evidence of a restore.
+	if ( actualType == None && actualFormat == 0 && numItems == 0 ) {
+		if ( propertyData ) {
+			XFree( propertyData );
+		}
+		*minimized = qfalse;
+		return qtrue;
+	}
+	if ( actualType != XA_ATOM || actualFormat != 32 || bytesAfter != 0 ||
+		( numItems > 0 && !propertyData ) ) {
+		if ( propertyData ) {
+			XFree( propertyData );
+		}
+		return qfalse;
+	}
+
+	const Atom *atoms =
+		reinterpret_cast<const Atom *>( propertyData );
+	*minimized = qfalse;
+	for ( unsigned long i = 0; i < numItems; ++i ) {
+		if ( atoms[i] == netWMStateHidden ) {
+			*minimized = qtrue;
+			break;
 		}
 	}
+	if ( propertyData ) {
+		XFree( propertyData );
+	}
+	return qtrue;
+}
 
-	XFree( atoms );
-	return qfalse;
+
+/*
+================
+X11_UpdateMinimizedState
+
+FocusOut is not guaranteed for every window-manager minimize. Treat only a
+real state transition as a reset boundary; focus notifications may still add
+their own ordered barriers when the WM emits both.
+================
+*/
+static void X11_UpdateMinimizedState(
+	qboolean minimized, qboolean *dowarp )
+{
+	if ( minimized == gw_minimized ) {
+		return;
+	}
+
+	gw_minimized = minimized;
+	if ( minimized ) {
+		if ( dowarp ) {
+			*dowarp = qfalse;
+		}
+		IN_DeactivateMouse();
+		IN_EndTemporaryPointerCapture();
+		IN_SetPointerConfinement( qfalse );
+		IN_ShowWindowCursor( qtrue );
+		X11_SetInputContextFocus( qfalse );
+		X11_QueueInputReset( qfalse );
+		Com_DPrintf( "Window minimized\n" );
+		return;
+	}
+
+	Com_DPrintf( "Window restored\n" );
+	if ( gw_active ) {
+		X11_SetInputContextFocus( X11_TextInputOwnerActive() );
+		X11_QueueInputReset( qtrue );
+	}
 }
 
 
@@ -1217,19 +1950,30 @@ void HandleEvents( void )
 	XEvent event;
 	int btn_code;
 	int key;
+	int textLength;
+	KeySym physicalKeysym;
 	qboolean dowarp = qfalse;
 	const char *p;
 	int dx, dy;
 	int t = 0; // default to 0 in case we don't set
 	qboolean btn_press;
+	qboolean textHandled;
 	char buf[2];
 
 	if ( !dpy )
 		return;
 
+	// Com_EventLoop can consume a catcher-changing key event and immediately
+	// re-enter this native drain before IN_Frame runs. Reconcile here as well
+	// so XFilterEvent never sees gameplay through a stale text-owner focus.
+	X11_SetInputContextFocus( X11_TextInputOwnerActive() );
+
 	while( XPending( dpy ) )
 	{
 		XNextEvent( dpy, &event );
+		if ( X11_FilterInputEvent( &event ) ) {
+			continue;
+		}
 
 		switch( event.type )
 		{
@@ -1242,31 +1986,46 @@ void HandleEvents( void )
 			}
 			break;
 
-		case KeyPress:
+		case KeyPress: {
+			if ( !gw_active || gw_minimized ) {
+				break;
+			}
 			// Com_Printf("^2K+^7 %08X\n", event.xkey.keycode );
 			t = Sys_XTimeToSysTime( event.xkey.time );
+			physicalKeysym = XLookupKeysym( &event.xkey, 0 );
+			const qboolean isRepeat =
+				event.xkey.keycode < ARRAY_LEN( translated_key_by_keycode ) &&
+				translated_key_by_keycode[event.xkey.keycode] != 0
+					? qtrue : qfalse;
 			if ( event.xkey.keycode == 0x31 )
 			{
 				key = K_CONSOLE;
 				p = "";
+				textLength = 0;
 			}
 			else
 			{
+				XKeyEvent translatedEvent = event.xkey;
 				int shift = (event.xkey.state & 1);
-				p = XLateKey( &event.xkey, &key );
-				if ( *p && event.xkey.keycode == 0x5B )
+				p = XLateKey( &translatedEvent, &key, &textLength );
+				if ( textLength > 0 && event.xkey.keycode == 0x5B )
 				{
 					p = ".";
+					textLength = 1;
 				}
 				else
-				if ( !directMap( *p ) && event.xkey.keycode < 0x3F )
+				if ( textLength > 0 &&
+					!directMap( (unsigned char)p[0] ) &&
+					event.xkey.keycode < 0x3F )
 				{
 					char ch;
 					ch = s_keytochar[ event.xkey.keycode ];
 					if ( ch >= 'a' && ch <= 'z' )
 					{
-						unsigned int capital;
-						XkbGetIndicatorState( dpy, XkbUseCoreKbd, &capital );
+						unsigned int capital = 0;
+						if ( XkbGetIndicatorState( dpy, XkbUseCoreKbd, &capital ) != Success ) {
+							capital = 0;
+						}
 						capital &= 1;
 						if ( capital ^ shift )
 						{
@@ -1280,35 +2039,99 @@ void HandleEvents( void )
 					buf[0] = ch;
 					buf[1] = '\0';
 					p = buf;
+					textLength = 1;
 				}
 			}
-			if (key)
+			if ( key == K_ENTER &&
+				( event.xkey.state & Mod1Mask ||
+					physical_modifier_state &
+						( X11_MOD_LALT | X11_MOD_RALT ) ) ) {
+				if ( event.xkey.keycode <
+					ARRAY_LEN( translated_key_by_keycode ) ) {
+					translated_key_by_keycode[event.xkey.keycode] =
+						K_ENTER;
+					suppressed_key_by_keycode[event.xkey.keycode] =
+						qtrue;
+				}
+				if ( !isRepeat ) {
+					Cvar_SetIntegerValue( "r_fullscreen",
+						glw_state.cdsFullscreen ? 0 : 1 );
+					Cbuf_AddText( "vid_restart\n" );
+				}
+				break;
+			}
+			if ( isRepeat && ( key == K_CONSOLE || key == K_ESCAPE ) ) {
+				break;
+			}
+			if ( key && event.xkey.keycode < ARRAY_LEN( translated_key_by_keycode ) &&
+				translated_key_by_keycode[event.xkey.keycode] == 0 ) {
+				translated_key_by_keycode[event.xkey.keycode] = key;
+			}
+			if ( key && X11_ShouldQueueModifierTransition(
+				physicalKeysym, qtrue ) )
 			{
 				Sys_QueEvent( t, SE_KEY, key, qtrue, 0, NULL );
 			}
-			while (*p)
-			{
-				Sys_QueEvent( t, SE_CHAR, *p++, 0, 0, NULL );
+			textHandled = qfalse;
+			if ( key == K_CONSOLE ) {
+				textHandled = qtrue;
+			} else if ( !textHandled ) {
+				textHandled =
+					X11_QueueInputMethodText( &event.xkey, t );
+			}
+			if ( !textHandled ) {
+				for ( int i = 0; i < textLength; ++i )
+				{
+					Sys_QueEvent( t, SE_CHAR,
+						(unsigned char)p[i], 0, 0, NULL );
+				}
 			}
 			break; // case KeyPress
+		}
 
 		case KeyRelease:
+			if ( !gw_active || gw_minimized ) {
+				break;
+			}
 
 			if ( repeated_press( &event ) )
 				break; // XNextEvent( dpy, &event )
 
+			if ( event.xkey.keycode <
+					ARRAY_LEN( suppressed_key_by_keycode ) &&
+				suppressed_key_by_keycode[event.xkey.keycode] ) {
+				suppressed_key_by_keycode[event.xkey.keycode] = qfalse;
+				translated_key_by_keycode[event.xkey.keycode] = 0;
+				break;
+			}
+
 			t = Sys_XTimeToSysTime( event.xkey.time );
+			physicalKeysym = XLookupKeysym( &event.xkey, 0 );
 #if 0
 			Com_Printf("^5K-^7 %08X %s\n",
 				event.xkey.keycode,
 				X11_PendingInput()?"pending":"");
 #endif
-			XLateKey( &event.xkey, &key );
-			Sys_QueEvent( t, SE_KEY, key, qfalse, 0, NULL );
+			if ( event.xkey.keycode < ARRAY_LEN( translated_key_by_keycode ) &&
+				translated_key_by_keycode[event.xkey.keycode] ) {
+				key = translated_key_by_keycode[event.xkey.keycode];
+				translated_key_by_keycode[event.xkey.keycode] = 0;
+			} else {
+				XKeyEvent translatedEvent = event.xkey;
+				XLateKey( &translatedEvent, &key, &textLength );
+			}
+			if ( key && X11_ShouldQueueModifierTransition(
+				physicalKeysym, qfalse ) )
+			{
+				Sys_QueEvent( t, SE_KEY, key, qfalse, 0, NULL );
+			}
 
 			break; // case KeyRelease
 
 		case MotionNotify:
+			if ( !gw_active || gw_minimized ) {
+				break;
+			}
 			if ( IN_AbsolutePointerOwner() )
 			{
 				t = Sys_XTimeToSysTime( event.xmotion.time );
@@ -1316,12 +2139,14 @@ void HandleEvents( void )
 			}
 			else if ( IN_MouseActive() )
 			{
-				t = Sys_XTimeToSysTime( event.xkey.time );
+				t = Sys_XTimeToSysTime( event.xmotion.time );
 #ifdef HAVE_XF86DGA
 				if ( in_dgamouse->integer )
 				{
-					mx += event.xmotion.x_root;
-					my += event.xmotion.y_root;
+					mx = fnql::input::SaturatingAddInt(
+						mx, event.xmotion.x_root );
+					my = fnql::input::SaturatingAddInt(
+						my, event.xmotion.y_root );
 					if (t - mouseResetTime > MOUSE_RESET_DELAY )
 					{
 						Sys_QueEvent( t, SE_MOUSE, mx, my, 0, NULL );
@@ -1346,8 +2171,8 @@ void HandleEvents( void )
 
 					dx = ((int)event.xmotion.x - mwx);
 					dy = ((int)event.xmotion.y - mwy);
-					mx += dx;
-					my += dy;
+					mx = fnql::input::SaturatingAddInt( mx, dx );
+					my = fnql::input::SaturatingAddInt( my, dy );
 					mwx = event.xmotion.x;
 					mwy = event.xmotion.y;
 					dowarp = qtrue;
@@ -1357,6 +2182,9 @@ void HandleEvents( void )
 
 		case ButtonPress:
 		case ButtonRelease:
+			if ( !gw_active || gw_minimized ) {
+				break;
+			}
 			if ( !IN_MouseActive() && !IN_AbsolutePointerOwner() )
 				break;
 
@@ -1365,10 +2193,15 @@ void HandleEvents( void )
 			else
 				btn_press = qfalse;
 			t = Sys_XTimeToSysTime( event.xkey.time );
+			if ( !btn_press &&
+				( event.xbutton.button == 4 || event.xbutton.button == 5 ) ) {
+				break;
+			}
+			// Preserve pointer-position-before-click/wheel ordering even if an
+			// earlier Escape in this same X event drain changes ownership.
+			IN_QueueAbsolutePointerPosition(
+				t, event.xbutton.x, event.xbutton.y, qtrue );
 			if ( IN_AbsolutePointerOwner() ) {
-				// Preserve pointer-position-before-click ordering, including when
-				// the click is the first event after an absolute owner opens.
-				IN_QueueAbsolutePointerPosition( t, event.xbutton.x, event.xbutton.y );
 				if ( btn_press ) {
 					IN_BeginTemporaryPointerCapture( event.xbutton.button );
 				}
@@ -1380,22 +2213,45 @@ void HandleEvents( void )
 				case 1: btn_code = K_MOUSE1; break;
 				case 2: btn_code = K_MOUSE3; break;
 				case 3: btn_code = K_MOUSE2; break;
-				case 4: Sys_QueEvent( t, SE_KEY, K_MWHEELUP, btn_press, 0, NULL ); break;
-				case 5: Sys_QueEvent( t, SE_KEY, K_MWHEELDOWN, btn_press, 0, NULL ); break;
+				case 4:
+					if ( btn_press ) {
+						Sys_QueEvent( t, SE_KEY, K_MWHEELUP, qtrue, 0, NULL );
+						Sys_QueEvent( t, SE_KEY, K_MWHEELUP, qfalse, 0, NULL );
+					}
+					break;
+				case 5:
+					if ( btn_press ) {
+						Sys_QueEvent( t, SE_KEY, K_MWHEELDOWN, qtrue, 0, NULL );
+						Sys_QueEvent( t, SE_KEY, K_MWHEELDOWN, qfalse, 0, NULL );
+					}
+					break;
 				case 6: btn_code = K_MOUSE4; break;
 				case 7: btn_code = K_MOUSE5; break;
 				case 8: case 9:
 				case 10: case 11:
 					btn_code = event.xbutton.button - 8 + K_MOUSE6;
 					break;
-				case 12: case 13:       // K_AUX1..K_AUX4
-				case 14: case 15:
-					btn_code = event.xbutton.button - 12 + K_AUX1;
+				default:
+					if ( event.xbutton.button >= 12 &&
+						event.xbutton.button <= 27 ) {
+						btn_code =
+							event.xbutton.button - 12 + K_AUX1;
+					}
 					break;
 			}
 
 			if ( btn_code != -1 )
 			{
+				if ( btn_code >= K_AUX1 && btn_code < K_AUX1 + 16 ) {
+					const unsigned int mask =
+						1u << static_cast<unsigned int>(
+							btn_code - K_AUX1 );
+					if ( btn_press ) {
+						mouse_aux_button_state |= mask;
+					} else {
+						mouse_aux_button_state &= ~mask;
+					}
+				}
 				Sys_QueEvent( t, SE_KEY, btn_code, btn_press, 0, NULL );
 			}
 			if ( !btn_press && IN_AbsolutePointerOwner() ) {
@@ -1409,8 +2265,37 @@ void HandleEvents( void )
 			Com_DPrintf( "CreateNotify: x=%i, y=%i\n", win_x, win_y );
 			break;
 
-		case ConfigureNotify:
-			gw_minimized = WindowMinimized( dpy, win );
+		case MapNotify:
+			if ( event.xmap.window == win ) {
+				X11_UpdateMinimizedState( qfalse, &dowarp );
+			}
+			break;
+
+		case UnmapNotify:
+			if ( event.xunmap.window == win &&
+				!event.xunmap.from_configure ) {
+				X11_UpdateMinimizedState( qtrue, &dowarp );
+			}
+			break;
+
+		case PropertyNotify: {
+			const Atom netWMState =
+				XInternAtom( dpy, "_NET_WM_STATE", True );
+			qboolean minimizedState;
+			if ( event.xproperty.window == win &&
+				netWMState != None &&
+				event.xproperty.atom == netWMState &&
+				WindowMinimized( dpy, win, &minimizedState ) ) {
+				X11_UpdateMinimizedState( minimizedState, &dowarp );
+			}
+			break;
+		}
+
+		case ConfigureNotify: {
+			qboolean minimizedState;
+			if ( WindowMinimized( dpy, win, &minimizedState ) ) {
+				X11_UpdateMinimizedState( minimizedState, &dowarp );
+			}
 			win_x = event.xconfigure.x;
 			win_y = event.xconfigure.y;
 
@@ -1454,23 +2339,38 @@ void HandleEvents( void )
 					event.xconfigure.width,
 					event.xconfigure.height );
 			}
-			Key_ClearStates();
 			break;
+		}
 
 		case FocusIn:
 		case FocusOut:
+			if ( event.xfocus.mode == NotifyGrab ||
+				event.xfocus.mode == NotifyUngrab ) {
+				break;
+			}
 			if ( event.type == FocusIn ) {
+				if ( gw_active ) {
+					break;
+				}
 				gw_active = qtrue;
+				X11_SetInputContextFocus( X11_TextInputOwnerActive() );
 				Com_DPrintf( "FocusIn\n" );
 			} else {
+				if ( !gw_active ) {
+					break;
+				}
+				X11_SetInputContextFocus( qfalse );
+				gw_active = qfalse;
+				dowarp = qfalse;
+				IN_DeactivateMouse();
 				IN_EndTemporaryPointerCapture();
 				// Never hold the pointer confined or hidden across focus loss.
 				IN_SetPointerConfinement( qfalse );
 				IN_ShowWindowCursor( qtrue );
-				gw_active = qfalse;
 				Com_DPrintf( "FocusOut\n" );
 			}
-			Key_ClearStates();
+			X11_QueueInputReset(
+				event.type == FocusIn ? qtrue : qfalse );
 			break;
 
 		case Expose:
@@ -1483,7 +2383,7 @@ void HandleEvents( void )
 		}
 	}
 
-	if ( dowarp )
+	if ( dowarp && gw_active && !gw_minimized )
 	{
 		XWarpPointer( dpy, None, win, 0, 0, 0, 0, window_width/2, window_height/2 );
 	}
@@ -1522,9 +2422,10 @@ void IN_ActivateMouse( void )
 		{
 			Cvar_Set( "in_dgamouse", "0" );
 		}
-		install_mouse_grab();
-		install_kb_grab();
-		mouse_active = qtrue;
+		if ( install_mouse_grab() ) {
+			install_kb_grab();
+			mouse_active = qtrue;
+		}
 	}
 }
 
@@ -1544,7 +2445,6 @@ void IN_DeactivateMouse( void )
 	if ( mouse_active )
 	{
 		uninstall_mouse_grab();
-		uninstall_kb_grab();
 		if ( in_dgamouse->integer && in_nograb->integer ) // force dga mouse to 0 if using nograb
 		{
 			Cvar_Set( "in_dgamouse", "0" );
@@ -1663,6 +2563,7 @@ void GLimp_Shutdown( qboolean unloadDLL )
 	if ( dpy )
 	{
 		XSync( dpy, True );
+		X11_DestroyInputContext();
 
 		if ( glw_state.randr_gamma && glw_state.gammaSet )
 		{
@@ -1702,6 +2603,7 @@ void GLimp_Shutdown( qboolean unloadDLL )
 		// ( https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=33 )
 		if ( unloadDLL )
 		{
+			X11_CloseInputMethod();
 			if ( invisible_cursor != None ) {
 				XFreeCursor( dpy, invisible_cursor );
 				invisible_cursor = None;
@@ -1740,6 +2642,7 @@ void VKimp_Shutdown( qboolean unloadDLL )
 	if ( dpy )
 	{
 		XSync( dpy, True );
+		X11_DestroyInputContext();
 
 		if ( glw_state.randr_gamma && glw_state.gammaSet )
 		{
@@ -1772,6 +2675,7 @@ void VKimp_Shutdown( qboolean unloadDLL )
 		// ( https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=33 )
 		if ( unloadDLL )
 		{
+			X11_CloseInputMethod();
 			if ( invisible_cursor != None ) {
 				XFreeCursor( dpy, invisible_cursor );
 				invisible_cursor = None;
@@ -2039,6 +2943,7 @@ rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, qboolean
 	window_width = 0;
 	window_height = 0;
 	window_created = qfalse;
+	X11_DestroyInputContext();
 
 	glw_state.dga_ext = qfalse;
 	glw_state.randr_ext = qfalse;
@@ -2191,6 +3096,8 @@ rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, qboolean
 	window_cursor_shown = qtrue;
 	pointer_grab_reasons = 0;
 	temporary_capture_buttons = 0;
+	keyboard_grabbed = qfalse;
+	keyboard_regrab_pending = qfalse;
 
 	motifWMHints = XInternAtom( dpy, "_MOTIF_WM_HINTS", True );
 
@@ -2217,6 +3124,7 @@ rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, qboolean
 	sizehints.min_height = 240;
 
 	XSetWMNormalHints( dpy, win, &sizehints );
+	X11_CreateInputContext();
 
 	XMapWindow( dpy, win );
 
@@ -2269,7 +3177,8 @@ rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, qboolean
 	}
 #endif
 
-	Key_ClearStates();
+	X11_PrepareInputReset();
+	Sys_QueEvent( 0, SE_INPUT_RESET, 0, 0, 0, NULL );
 
 	if ( fullscreen )
 	{
@@ -2501,7 +3410,9 @@ void GLimp_Init( glconfig_t *config )
 		Com_Printf( "...GLX_EXT_swap_control not found\n" );
 	}
 
-	Key_ClearStates();
+	X11_PrepareInputReset();
+	Sys_QueEvent( 0, SE_INPUT_RESET, 0, 0, 0, NULL );
+	X11_QueueHeldModifiers( 0 );
 
 	IN_Init();
 }
@@ -2616,7 +3527,9 @@ void VKimp_Init( glconfig_t *config )
 	config->driverType = GLDRV_ICD;
 	config->hardwareType = GLHW_GENERIC;
 
-	Key_ClearStates();
+	X11_PrepareInputReset();
+	Sys_QueEvent( 0, SE_INPUT_RESET, 0, 0, 0, NULL );
+	X11_QueueHeldModifiers( 0 );
 
 	IN_Init();
 }
@@ -2634,7 +3547,9 @@ void IN_Init( void )
 	Com_DPrintf( "\n------- Input Initialization -------\n" );
 
 	// mouse variables
-	in_mouse = Cvar_Get( "in_mouse", "1", CVAR_ARCHIVE );
+	in_mouse = Cvar_Get(
+		"in_mouse", "1", CVAR_ARCHIVE | CVAR_LATCH | CVAR_CLOUD );
+	Cvar_CheckRange( in_mouse, "0", "1", CV_INTEGER );
 	Cvar_SetDescription( in_mouse,
 		"Mouse data input source:\n" \
 		"  0 - disable mouse input\n" \
@@ -2656,6 +3571,7 @@ void IN_Init( void )
 	// bk001130 - changed this to match win32
 	in_joystickDebug = Cvar_Get( "in_debugjoystick", "0", CVAR_TEMP );
 	joy_threshold = Cvar_Get( "joy_threshold", "0.15", CVAR_ARCHIVE_ND ); // FIXME: in_joythreshold
+	Cvar_CheckRange( joy_threshold, "0", "1", CV_FLOAT );
 	Cvar_SetDescription( joy_threshold, "Threshold of joystick moving distance." );
 
 	IN_StartupJoystick(); // bk001130 - from cvs1.17 (mkv)
@@ -2670,15 +3586,40 @@ void IN_Init( void )
 
 void IN_Shutdown( void )
 {
+#ifdef USE_JOYSTICK
+	IN_ShutdownJoystick();
+#endif
 	IN_EndTemporaryPointerCapture();
 	IN_SetPointerConfinement( qfalse );
 	IN_ShowWindowCursor( qtrue );
 	absolute_pointer_owner = PointerOwner::Gameplay;
 	absolute_position_valid = qfalse;
+	absolute_position_consumer = 0;
 	mouse_avail = qfalse;
 
 	Cmd_RemoveCommand( "minimize" );
 	Cmd_RemoveCommand( "in_restart" );
+}
+
+
+void IN_ResetInputState( void )
+{
+#ifdef USE_JOYSTICK
+	IN_ResetJoystickState();
+#endif
+	absolute_position_valid = qfalse;
+	absolute_position_consumer = 0;
+	mx = my = 0;
+	mwx = window_width / 2;
+	mwy = window_height / 2;
+	mouseResetTime = Sys_Milliseconds();
+	physical_modifier_state =
+		gw_active ? X11_ReadPhysicalModifiers() : 0;
+	memset( translated_key_by_keycode, 0,
+		sizeof( translated_key_by_keycode ) );
+	memset( suppressed_key_by_keycode, 0,
+		sizeof( suppressed_key_by_keycode ) );
+	IN_EndTemporaryPointerCapture();
 }
 
 
@@ -2691,6 +3632,10 @@ Restart the input subsystem
 */
 void IN_Restart_f( void )
 {
+	X11_PrepareInputReset();
+	Sys_QueEvent( 0, SE_INPUT_RESET, 0, 0, 0, NULL );
+	X11_QueueHeldModifiers( 0 );
+	IN_DeactivateMouse();
 	IN_Shutdown();
 	IN_Init();
 }
@@ -2698,11 +3643,16 @@ void IN_Restart_f( void )
 
 void IN_Frame( void )
 {
+	X11_ReopenInputMethodIfNeeded();
+	X11_SetInputContextFocus( X11_TextInputOwnerActive() );
+
 	const PointerOwner pointerOwner = IN_AbsolutePointerOwnerKind();
 	const PointerMode mode = IN_ResolvePointerMode( pointerOwner );
 
 #ifdef USE_JOYSTICK
-	IN_JoyMove();
+	if ( gw_active && !gw_minimized ) {
+		IN_JoyMove();
+	}
 #endif
 
 	if ( fnql::input::PointerOwnerReportsAbsolute( pointerOwner ) ) {
@@ -2711,6 +3661,7 @@ void IN_Frame( void )
 			// so the new owner receives a deterministic first position.
 			IN_EndTemporaryPointerCapture();
 			absolute_position_valid = qfalse;
+			absolute_position_consumer = 0;
 		}
 		absolute_pointer_owner = pointerOwner;
 		IN_DeactivateMouse();
@@ -2720,6 +3671,7 @@ void IN_Frame( void )
 			IN_SetPointerConfinement( qfalse );
 			IN_ShowWindowCursor( qtrue );
 			absolute_position_valid = qfalse;
+			absolute_position_consumer = 0;
 			return;
 		}
 
@@ -2734,6 +3686,7 @@ void IN_Frame( void )
 		IN_SetPointerConfinement( qfalse );
 		absolute_pointer_owner = PointerOwner::Gameplay;
 		absolute_position_valid = qfalse;
+		absolute_position_consumer = 0;
 	}
 
 	if ( !mode.driveInput || in_nograb->integer ) {
@@ -2742,6 +3695,10 @@ void IN_Frame( void )
 	}
 
 	IN_ActivateMouse();
+	if ( mouse_active && keyboard_regrab_pending &&
+		!( Key_GetCatcher() & kTextInputCatcherMask ) ) {
+		install_kb_grab();
+	}
 }
 
 
@@ -2750,36 +3707,104 @@ void IN_Frame( void )
 Sys_GetClipboardData
 =================
 */
+struct X11ClipboardSelectionMatch {
+	Window requestor;
+	Atom selection;
+	Atom target;
+};
+
+
+static Bool X11_MatchClipboardSelection(
+	Display *, XEvent *event, XPointer opaque )
+{
+	const X11ClipboardSelectionMatch *match =
+		reinterpret_cast<const X11ClipboardSelectionMatch *>( opaque );
+	return event->type == SelectionNotify &&
+		event->xselection.requestor == match->requestor &&
+		event->xselection.selection == match->selection &&
+		event->xselection.target == match->target;
+}
+
+
 char *Sys_GetClipboardData( void )
 {
+	if ( !dpy || !win ) {
+		return NULL;
+	}
+
 	const Atom xtarget = XInternAtom( dpy, "UTF8_STRING", 0 );
+	const Atom property = XInternAtom( dpy, "FNQL_CLIPBOARD", 0 );
 	unsigned long nitems, rem;
-	unsigned char *data;
+	unsigned char *data = NULL;
 	Atom type;
 	XEvent ev;
-	char *buf;
+	char *buf = NULL;
 	char *cutBuffer;
 	int cutBufferLength;
 	int format;
+	qboolean selectionReceived = qfalse;
+	X11ClipboardSelectionMatch match = {
+		win, XA_PRIMARY, xtarget
+	};
 
-	XConvertSelection( dpy, XA_PRIMARY, xtarget, XA_PRIMARY, win, CurrentTime );
-	XSync( dpy, False );
-	XNextEvent( dpy, &ev );
-	if ( !XFilterEvent( &ev, None ) && ev.type == SelectionNotify ) {
-		if ( XGetWindowProperty( dpy, win, XA_PRIMARY, 0, MAX_EDIT_LINE/4, False, AnyPropertyType,
-			&type, &format, &nitems, &rem, &data ) == 0 ) {
-			if ( format == 8 ) {
-				if ( nitems > 0 ) {
-					buf = static_cast<char *>( Z_Malloc( nitems + 1 ) );
-					Q_strncpyz( buf, (char*)data, nitems + 1 );
-					strtok( buf, "\n\r\b" );
-					return buf;
-				}
-			} else {
-				fprintf( stderr, "Bad clipboard format %i\n", format );
+	if ( dpy && win && xtarget != None && property != None ) {
+		XConvertSelection(
+			dpy, XA_PRIMARY, xtarget, property, win, CurrentTime );
+		XFlush( dpy );
+
+		const std::uint32_t waitStart =
+			static_cast<std::uint32_t>( Sys_Milliseconds() );
+		for (;;) {
+			if ( XCheckIfEvent( dpy, &ev, X11_MatchClipboardSelection,
+					reinterpret_cast<XPointer>( &match ) ) ) {
+				selectionReceived = qtrue;
+				break;
 			}
-		} else {
-			fprintf( stderr, "Clipboard allocation failed\n" );
+
+			const std::uint32_t elapsed =
+				static_cast<std::uint32_t>( Sys_Milliseconds() ) - waitStart;
+			if ( elapsed >= 250u ) {
+				break;
+			}
+
+			fd_set readSet;
+			FD_ZERO( &readSet );
+			FD_SET( ConnectionNumber( dpy ), &readSet );
+			const std::uint32_t remaining = 250u - elapsed;
+			struct timeval timeout;
+			timeout.tv_sec = remaining / 1000u;
+			timeout.tv_usec = ( remaining % 1000u ) * 1000u;
+			const int selected = select(
+				ConnectionNumber( dpy ) + 1,
+				&readSet, NULL, NULL, &timeout );
+			if ( selected <= 0 ) {
+				break;
+			}
+			XEventsQueued( dpy, QueuedAfterReading );
+		}
+	}
+
+	if ( selectionReceived && ev.xselection.property != None ) {
+		if ( XGetWindowProperty( dpy, win, property, 0,
+				( MAX_EDIT_LINE + 3 ) / 4, True, AnyPropertyType,
+				&type, &format, &nitems, &rem, &data ) == Success ) {
+			if ( format == 8 && nitems > 0 &&
+				nitems < static_cast<unsigned long>( MAX_EDIT_LINE ) ) {
+				buf = static_cast<char *>( Z_Malloc(
+					static_cast<int>( nitems ) + 1 ) );
+				memcpy( buf, data, nitems );
+				buf[nitems] = '\0';
+				strtok( buf, "\n\r\b" );
+			} else if ( format != 8 ) {
+				Com_DPrintf( "Bad X11 clipboard format %i\n", format );
+			}
+		}
+		if ( data ) {
+			XFree( data );
+			data = NULL;
+		}
+		if ( buf ) {
+			return buf;
 		}
 	}
 
@@ -2840,6 +3865,8 @@ void Sys_SetClipboardBitmap( const byte *bitmap, int length )
 
 #if (defined( __FreeBSD__ ) || defined( __sun)) // rb010123
 void IN_StartupJoystick( void ) {}
+void IN_ShutdownJoystick( void ) {}
+void IN_ResetJoystickState( void ) {}
 void IN_JoyMove( void ) {}
 #endif
 #endif

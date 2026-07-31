@@ -2010,6 +2010,9 @@ qboolean CL_Disconnect( qboolean showMainMenu ) {
 	S_StopAllSounds();
 	CL_WebHost_NotifySoundsStopped();
 	Key_ClearStates();
+	// Ordinary catcher changes preserve an explicitly started voice session,
+	// but disconnect is a session boundary and must stop it unconditionally.
+	CL_ResetVoiceInputState();
 
 	if ( uivm && showMainMenu ) {
 		VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_NONE );

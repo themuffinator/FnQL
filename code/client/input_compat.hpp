@@ -49,6 +49,130 @@ owner of the ABI value.
 }
 
 /*
+Deferred engine-owned +/- commands carry a per-source generation. Keep both
+the command-segment match and numeric parsing locale-independent and exact so
+ordinary cgame, UI, and server +commands retain their retail command text.
+*/
+[[nodiscard]] constexpr bool IsAsciiCommandWhitespace( char ch ) noexcept
+{
+	return ch == ' ' || ch == '\t' || ch == '\r' ||
+		ch == '\n' || ch == '\v' || ch == '\f';
+}
+
+[[nodiscard]] constexpr char AsciiCommandLower( char ch ) noexcept
+{
+	return ch >= 'A' && ch <= 'Z'
+		? static_cast<char>( ch + ( 'a' - 'A' ) )
+		: ch;
+}
+
+[[nodiscard]] constexpr bool IsCanonicalCommandSegment(
+	const char* segment, const char* command ) noexcept
+{
+	if ( !segment || !command || !segment[0] || !command[0] ) {
+		return false;
+	}
+
+	std::size_t index = 0;
+	while ( segment[index] &&
+		!IsAsciiCommandWhitespace( segment[index] ) ) {
+		if ( !command[index] ||
+			AsciiCommandLower( segment[index] ) !=
+				AsciiCommandLower( command[index] ) ) {
+			return false;
+		}
+		++index;
+	}
+	if ( command[index] ) {
+		return false;
+	}
+
+	while ( IsAsciiCommandWhitespace( segment[index] ) ) {
+		++index;
+	}
+	return segment[index] == '\0';
+}
+
+[[nodiscard]] inline std::optional<unsigned>
+ParseUnsignedInputCommandArgument( const char* text ) noexcept
+{
+	if ( !text || !text[0] ) {
+		return std::nullopt;
+	}
+
+	unsigned value = 0;
+	for ( const char* cursor = text; *cursor; ++cursor ) {
+		if ( *cursor < '0' || *cursor > '9' ) {
+			return std::nullopt;
+		}
+		const unsigned digit = static_cast<unsigned>( *cursor - '0' );
+		if ( value >
+			( ( std::numeric_limits<unsigned>::max )() - digit ) / 10u ) {
+			return std::nullopt;
+		}
+		value = value * 10u + digit;
+	}
+	return value;
+}
+
+struct InputCommandGenerationTag {
+	bool tagged = false;
+	bool valid = false;
+	unsigned value = 0;
+};
+
+[[nodiscard]] inline InputCommandGenerationTag ParseInputCommandGenerationTag(
+	const char* text ) noexcept
+{
+	static constexpr char prefix[] = "fnql-gen:";
+	if ( !text ) {
+		return {};
+	}
+
+	const char* cursor = text;
+	for ( const char expected : prefix ) {
+		if ( expected == '\0' ) {
+			break;
+		}
+		if ( *cursor != expected ) {
+			return {};
+		}
+		++cursor;
+	}
+
+	const std::optional<unsigned> value =
+		ParseUnsignedInputCommandArgument( cursor );
+	return value
+		? InputCommandGenerationTag{ true, true, *value }
+		: InputCommandGenerationTag{ true, false, 0 };
+}
+
+/*
+Remove one physical source from a two-source engine button without disturbing
+the other source or aggregate per-frame state.
+*/
+[[nodiscard]] constexpr bool RemoveHeldInputSource(
+	std::array<int, 2>& sources, int source ) noexcept
+{
+	if ( source == 0 ) {
+		return false;
+	}
+
+	bool removed = false;
+	for ( int& heldSource : sources ) {
+		if ( heldSource == source ) {
+			heldSource = 0;
+			removed = true;
+		}
+	}
+	if ( sources[0] == 0 && sources[1] != 0 ) {
+		sources[0] = sources[1];
+		sources[1] = 0;
+	}
+	return removed;
+}
+
+/*
 Pointer ownership.
 
 Gameplay, the engine console, and retail's absolute-input overlays (native UI,
@@ -171,23 +295,120 @@ struct PointerPosition {
 	int y = 0;
 };
 
+[[nodiscard]] constexpr int SaturatingIntFromInt64( std::int64_t value ) noexcept
+{
+	return value > ( std::numeric_limits<int>::max )()
+		? ( std::numeric_limits<int>::max )()
+		: value < ( std::numeric_limits<int>::min )()
+			? ( std::numeric_limits<int>::min )()
+			: static_cast<int>( value );
+}
+
+[[nodiscard]] constexpr int SaturatingAddInt( int lhs, int rhs ) noexcept
+{
+	return SaturatingIntFromInt64(
+		static_cast<std::int64_t>( lhs ) + static_cast<std::int64_t>( rhs ) );
+}
+
+[[nodiscard]] inline float FiniteOr( float value, float fallback ) noexcept
+{
+	return std::isfinite( value ) ? value : fallback;
+}
+
+[[nodiscard]] inline int TruncateFiniteFloatToInt( float value ) noexcept
+{
+	if ( !std::isfinite( value ) ) {
+		return 0;
+	}
+	if ( value >= static_cast<float>( ( std::numeric_limits<int>::max )() ) ) {
+		return ( std::numeric_limits<int>::max )();
+	}
+	if ( value <= static_cast<float>( ( std::numeric_limits<int>::min )() ) ) {
+		return ( std::numeric_limits<int>::min )();
+	}
+	return static_cast<int>( value );
+}
+
+/*
+ANGLE2SHORT's legacy float-to-int cast is correct for ordinary accumulated
+view angles, but undefined for NaN, infinity, or a finite value whose scaled
+form is outside int. Preserve the ordinary value byte-for-byte; only reduce a
+pathological finite extreme to its equivalent turn before the legacy macro.
+*/
+[[nodiscard]] inline float FiniteAngleForShort( float angle ) noexcept
+{
+	angle = FiniteOr( angle, 0.0f );
+	const float scaled = angle * 65536.0f / 360.0f;
+	if ( std::isfinite( scaled ) &&
+		scaled < static_cast<float>( ( std::numeric_limits<int>::max )() ) &&
+		scaled >= static_cast<float>( ( std::numeric_limits<int>::min )() ) ) {
+		return angle;
+	}
+	return std::fmod( angle, 360.0f );
+}
+
+[[nodiscard]] constexpr int ProjectPointerCoordinate(
+	int value, int hostExtent, int drawableExtent ) noexcept
+{
+	if ( hostExtent <= 0 || drawableExtent <= 0 ) {
+		return value;
+	}
+
+	// int is at most 32 bits on every supported FnQL target. The product
+	// therefore fits in int64_t, and integer division preserves the deliberate
+	// truncate-toward-zero mapping without an out-of-range float-to-int cast.
+	const std::int64_t scaled = static_cast<std::int64_t>( value ) *
+		static_cast<std::int64_t>( drawableExtent ) /
+		static_cast<std::int64_t>( hostExtent );
+	return SaturatingIntFromInt64( scaled );
+}
+
+[[nodiscard]] inline int ProjectPointerCoordinate(
+	float value, int hostExtent, int drawableExtent ) noexcept
+{
+	if ( !std::isfinite( value ) ) {
+		return 0;
+	}
+
+	// SDL preserves subpixel window coordinates. Scale in a wider type before
+	// the one deliberate truncate so a logical 10.5 coordinate at 2x becomes
+	// drawable pixel 21, rather than losing the half-pixel before projection.
+	double scaled = static_cast<double>( value );
+	if ( hostExtent > 0 && drawableExtent > 0 ) {
+		scaled = scaled * static_cast<double>( drawableExtent ) /
+			static_cast<double>( hostExtent );
+	}
+	if ( scaled >= static_cast<double>(
+			( std::numeric_limits<int>::max )() ) ) {
+		return ( std::numeric_limits<int>::max )();
+	}
+	if ( scaled <= static_cast<double>(
+			( std::numeric_limits<int>::min )() ) ) {
+		return ( std::numeric_limits<int>::min )();
+	}
+	return static_cast<int>( scaled );
+}
+
 [[nodiscard]] inline PointerPosition ProjectPointerToDrawable(
 	int x, int y, const PointerProjection& projection ) noexcept
 {
-	PointerPosition projected{ x, y };
+	return {
+		ProjectPointerCoordinate(
+			x, projection.hostWidth, projection.drawableWidth ),
+		ProjectPointerCoordinate(
+			y, projection.hostHeight, projection.drawableHeight )
+	};
+}
 
-	if ( projection.hostWidth > 0 && projection.drawableWidth > 0 ) {
-		projected.x = static_cast<int>( static_cast<float>( x ) *
-			( static_cast<float>( projection.drawableWidth ) /
-				static_cast<float>( projection.hostWidth ) ) );
-	}
-	if ( projection.hostHeight > 0 && projection.drawableHeight > 0 ) {
-		projected.y = static_cast<int>( static_cast<float>( y ) *
-			( static_cast<float>( projection.drawableHeight ) /
-				static_cast<float>( projection.hostHeight ) ) );
-	}
-
-	return projected;
+[[nodiscard]] inline PointerPosition ProjectPointerToDrawable(
+	float x, float y, const PointerProjection& projection ) noexcept
+{
+	return {
+		ProjectPointerCoordinate(
+			x, projection.hostWidth, projection.drawableWidth ),
+		ProjectPointerCoordinate(
+			y, projection.hostHeight, projection.drawableHeight )
+	};
 }
 
 [[nodiscard]] constexpr PointerMode ResolvePointerMode(
@@ -217,6 +438,12 @@ struct PointerPosition {
 
 		case PointerOwner::Gameplay:
 		default:
+			if ( !inputs.relativeAvailable ) {
+				// Retail keeps absolute menus usable with in_mouse 0, but does
+				// not capture or hide the desktop pointer for gameplay when no
+				// relative source is enabled.
+				return PointerMode{};
+			}
 			mode.relativeMotion = inputs.relativeAvailable;
 			mode.confineToWindow = true;
 			mode.showSystemCursor = false;
@@ -252,11 +479,6 @@ struct RetailMouseMotion {
 	float accelerationExponent = 0.0f;
 	bool cpiEnabled = false;
 };
-
-[[nodiscard]] inline float FiniteOr( float value, float fallback ) noexcept
-{
-	return std::isfinite( value ) ? value : fallback;
-}
 
 [[nodiscard]] inline int RoundAwayFromZero( float value ) noexcept
 {
@@ -446,6 +668,47 @@ private:
 	return std::clamp( RoundAwayFromZero( movement ), -127, 127 );
 }
 
+[[nodiscard]] inline float FiniteJoystickDeadzone( float deadzone ) noexcept
+{
+	return std::clamp( FiniteOr( deadzone, 1.0f ), 0.0f, 1.0f );
+}
+
+/*
+SDL gamepad axes smoothly ramp from the configured deadzone to full scale.
+A threshold of one has no non-dead region and is therefore neutral, avoiding
+the legacy division by zero. The -32768 endpoint remains representable.
+*/
+[[nodiscard]] inline int ApplyJoystickDeadzone(
+	int axis, float deadzone ) noexcept
+{
+	axis = std::clamp( axis, -32768, 32767 );
+	deadzone = FiniteJoystickDeadzone( deadzone );
+	if ( axis == 0 || deadzone >= 1.0f ) {
+		return 0;
+	}
+
+	const float magnitude =
+		static_cast<float>( axis < 0 ? -axis : axis ) / 32767.0f;
+	const float ramp =
+		( std::max )( ( magnitude - deadzone ) / ( 1.0f - deadzone ), 0.0f );
+	const float signedValue =
+		32767.0f * ( axis < 0 ? -ramp : ramp );
+	return std::clamp(
+		TruncateFiniteFloatToInt( signedValue ), -32768, 32767 );
+}
+
+[[nodiscard]] constexpr int StrongerJoystickAxis(
+	int current, int candidate ) noexcept
+{
+	const std::int64_t currentMagnitude = current < 0
+		? -static_cast<std::int64_t>( current )
+		: static_cast<std::int64_t>( current );
+	const std::int64_t candidateMagnitude = candidate < 0
+		? -static_cast<std::int64_t>( candidate )
+		: static_cast<std::int64_t>( candidate );
+	return candidateMagnitude > currentMagnitude ? candidate : current;
+}
+
 [[nodiscard]] inline int RetailJoystickLookDelta(
 	float axis, float deadzone, float sensitivity, float exponent, bool invert ) noexcept
 {
@@ -462,7 +725,10 @@ private:
 	}
 
 	exponent = ( std::max )( FiniteOr( exponent, 1.0f ), 0.0f );
-	float accelerated = std::pow( static_cast<float>( std::abs( linear ) ), exponent );
+	// Converting to float before taking the magnitude also covers INT_MIN,
+	// whose positive counterpart is not representable as an int.
+	float accelerated = std::pow(
+		std::fabs( static_cast<float>( linear ) ), exponent );
 	if ( !std::isfinite( accelerated ) ) {
 		return 0;
 	}
@@ -480,6 +746,88 @@ struct Utf8Codepoint {
 	std::array<unsigned char, 4> bytes{};
 	std::size_t size = 0;
 };
+
+struct Utf8DecodeResult {
+	std::uint32_t codepoint = 0;
+	std::size_t size = 0;
+	bool valid = false;
+};
+
+[[nodiscard]] constexpr bool IsUtf8ContinuationByte( unsigned char value ) noexcept
+{
+	return ( value & 0xc0u ) == 0x80u;
+}
+
+/*
+Decode one strictly formed UTF-8 scalar. Malformed input consumes one byte so
+callers can always make progress and decide whether to ignore or replace it.
+*/
+[[nodiscard]] constexpr Utf8DecodeResult DecodeUtf8(
+	const unsigned char *bytes, std::size_t available ) noexcept
+{
+	Utf8DecodeResult decoded;
+	if ( !bytes || available == 0 ) {
+		return decoded;
+	}
+
+	const unsigned char lead = bytes[0];
+	decoded.size = 1;
+	if ( lead <= 0x7fu ) {
+		decoded.codepoint = lead;
+		decoded.valid = true;
+		return decoded;
+	}
+
+	if ( lead >= 0xc2u && lead <= 0xdfu ) {
+		if ( available < 2 || !IsUtf8ContinuationByte( bytes[1] ) ) {
+			return decoded;
+		}
+		decoded.codepoint =
+			( static_cast<std::uint32_t>( lead & 0x1fu ) << 6 ) |
+			static_cast<std::uint32_t>( bytes[1] & 0x3fu );
+		decoded.size = 2;
+		decoded.valid = true;
+		return decoded;
+	}
+
+	if ( lead >= 0xe0u && lead <= 0xefu ) {
+		if ( available < 3 || !IsUtf8ContinuationByte( bytes[1] ) ||
+			!IsUtf8ContinuationByte( bytes[2] ) ) {
+			return decoded;
+		}
+		if ( ( lead == 0xe0u && bytes[1] < 0xa0u ) ||
+			( lead == 0xedu && bytes[1] > 0x9fu ) ) {
+			return decoded; // overlong form or UTF-16 surrogate
+		}
+		decoded.codepoint =
+			( static_cast<std::uint32_t>( lead & 0x0fu ) << 12 ) |
+			( static_cast<std::uint32_t>( bytes[1] & 0x3fu ) << 6 ) |
+			static_cast<std::uint32_t>( bytes[2] & 0x3fu );
+		decoded.size = 3;
+		decoded.valid = true;
+		return decoded;
+	}
+
+	if ( lead >= 0xf0u && lead <= 0xf4u ) {
+		if ( available < 4 || !IsUtf8ContinuationByte( bytes[1] ) ||
+			!IsUtf8ContinuationByte( bytes[2] ) ||
+			!IsUtf8ContinuationByte( bytes[3] ) ) {
+			return decoded;
+		}
+		if ( ( lead == 0xf0u && bytes[1] < 0x90u ) ||
+			( lead == 0xf4u && bytes[1] > 0x8fu ) ) {
+			return decoded; // overlong form or above U+10FFFF
+		}
+		decoded.codepoint =
+			( static_cast<std::uint32_t>( lead & 0x07u ) << 18 ) |
+			( static_cast<std::uint32_t>( bytes[1] & 0x3fu ) << 12 ) |
+			( static_cast<std::uint32_t>( bytes[2] & 0x3fu ) << 6 ) |
+			static_cast<std::uint32_t>( bytes[3] & 0x3fu );
+		decoded.size = 4;
+		decoded.valid = true;
+	}
+	return decoded;
+}
 
 [[nodiscard]] inline Utf8Codepoint EncodeUtf8( std::uint32_t codepoint ) noexcept
 {

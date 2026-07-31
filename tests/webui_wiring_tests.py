@@ -196,7 +196,21 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("fnql::input::EncodeUtf8( *codepoint )", keys)
         self.assertIn("CL_WebView_OnCharEvent( static_cast<int>( *codepoint ) );", keys)
         self.assertIn("Key_GetCatcher( ) & KEYCATCH_BROWSER", keys)
-        self.assertIn("CL_WebView_OnMouseMove( dx, dy );", input_source)
+        relative_mouse = input_source[
+            input_source.index("void CL_MouseEvent(") :
+            input_source.index("void CL_MouseAbsoluteEvent(")
+        ]
+        absolute_mouse = input_source[
+            input_source.index("void CL_MouseAbsoluteEvent(") :
+            input_source.index("void CL_JoystickEvent(")
+        ]
+        self.assertIn(
+            "KEYCATCH_BROWSER | KEYCATCH_UI | KEYCATCH_CGAME",
+            relative_mouse,
+        )
+        self.assertNotIn("CL_WebView_OnMouseMove", relative_mouse)
+        self.assertIn("Key_GetCatcher() & KEYCATCH_BROWSER", absolute_mouse)
+        self.assertIn("CL_WebView_OnMouseMove( x, y );", absolute_mouse)
         self.assertIn("CL_AdvertisementBridge_IsDelayElapsed()", input_source)
         self.assertIn('Cvar_VariableIntegerValue( "cg_ignoreMouseInput" )', input_source)
         self.assertIn('( Key_GetCatcher() & ~KEYCATCH_RETAIL_MOUSEPASS ) == 0', input_source)
@@ -250,6 +264,7 @@ class WebUiWiringTests(unittest.TestCase):
     def test_browser_input_releases_the_gameplay_mouse_and_uses_surface_coordinates(self) -> None:
         sdl_input = (ROOT / "code" / "sdl" / "sdl_input.cpp").read_text(encoding="utf-8")
         webui = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
+        client_input = (ROOT / "code" / "client" / "cl_input.cpp").read_text(encoding="utf-8")
         wndproc = (ROOT / "code" / "win32" / "win_wndproc.cpp").read_text(encoding="utf-8")
 
         # The browser is a menu owner: absolute positions, visible OS cursor,
@@ -261,7 +276,7 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("static PointerMode IN_ResolvePointerMode", sdl_input)
         self.assertIn("IN_ShowCursor( mode.showSystemCursor ? qtrue : qfalse );", sdl_input)
         self.assertIn(
-            "SDL_SetWindowRelativeMouseMode( SDL_window, mode.relativeMotion );",
+            "SDL_SetWindowRelativeMouseMode( SDL_window, mode.relativeMotion )",
             sdl_input,
         )
         # Browser positions are projected to renderer drawable pixels, through
@@ -270,16 +285,32 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("projection.hostWidth = glw_state.window_width;", sdl_input)
         self.assertIn("projection.drawableWidth = cls.glconfig.vidWidth;", sdl_input)
         self.assertIn("fnql::input::ProjectPointerToDrawable(", sdl_input)
+        self.assertIn("IN_QueueAbsolutePointerPosition( owner,", sdl_input)
         self.assertIn(
-            "IN_QueueAbsolutePointerPosition( owner,\n\t\t\t\t\t\t\te.button.x, e.button.y, in_eventTime );",
+            "e.button.x, e.button.y, in_eventTime, qtrue );",
             sdl_input,
         )
         self.assertIn("static int CL_WebHost_MapCursorCoordinate", webui)
         self.assertIn("cls.glconfig.vidWidth", webui)
         self.assertIn("status.surface.width", webui)
-        self.assertIn("CL_WebView_OnMouseMove( x, y );", wndproc)
-        self.assertIn("CL_WebView_OnMouseButtonEvent( key, down );", wndproc)
-        self.assertIn("CL_WebView_OnMouseWheelEvent( 1 );", wndproc)
+        self.assertIn(
+            "const fnql::input::PointerOwner pointerOwner = "
+            "WIN_ResolvePointerOwner();",
+            wndproc,
+        )
+        self.assertIn(
+            "pointerOwner != fnql::input::PointerOwner::Gameplay",
+            wndproc,
+        )
+        self.assertIn("WIN_ProjectClientPointerToDrawable(", wndproc)
+        self.assertIn("SE_MOUSE_ABSOLUTE", wndproc)
+        self.assertIn(
+            "Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, key, down",
+            wndproc,
+        )
+        self.assertIn("void CL_MouseAbsoluteEvent( int x, int y )", client_input)
+        self.assertIn("CL_WebView_OnMouseMove( x, y );", client_input)
+        self.assertNotIn("CL_WebView_OnMouseMove", wndproc)
 
     def test_demo_playback_keys_use_retail_mousepass_and_freeze_bridge(self) -> None:
         client_h = (ROOT / "code" / "client" / "client.h").read_text(encoding="utf-8")
@@ -493,6 +524,18 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("RequestServers:function(source){return queue('servers',String(typeof source==='undefined'?2:source));}", source)
         self.assertIn("RequestServerDetails:function(ip,port){return queue('serverdetails',String(ip||'')+'\\\\n'+String(port||''));}", source)
         self.assertIn("RefreshList:function(){return queue('refreshservers','');}", source)
+        self.assertIn("var reapplyBrowserFilters=function(force)", source)
+        self.assertIn("document.querySelector('table.match-browser')", source)
+        self.assertIn("document.querySelector('.filters input[name=\\\"empty\\\"]')", source)
+        self.assertIn("var c=!!e.checked;e.click();e.click();", source)
+        self.assertIn("if(!!e.checked!==c){return false;}", source)
+        self.assertIn("t.__fnqlFiltersApplied=true", source)
+        self.assertIn("window.__fnql_reapply_browser_filters=reapplyBrowserFilters", source)
+        self.assertIn("String(topic)==='servers.refresh.end'", source)
+        self.assertIn("reapplyBrowserFilters(true)", source)
+        self.assertIn("reapplyBrowserFilters(false)", source)
+        self.assertIn("'DOMContentLoaded',function(){syncQzBridge();setTimeout(reapplyBrowserFilters,0);}", source)
+        self.assertIn("'hashchange',function(){setTimeout(reapplyBrowserFilters,0);}", source)
         self.assertIn("SetFavoriteServer:function(ip,port,add){var addText=String(add).toLowerCase();var addValue=(add===false||addText==='false')?0:parseInt(add,10);return queue('favorite',String(ip||'')+'\\\\n'+String(port||'')+'\\\\n'+((isNaN(addValue)?1:addValue)!==0?'1':'0'));}", source)
         self.assertNotIn("RefreshList:function(source)", source)
         self.assertNotIn("CreateLobby:function(maxMembers)", source)
@@ -564,7 +607,11 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("window.__qlr_commit_native_factories=commitNativeFactories", source)
         self.assertIn("window.__qlr_browser_helpers_ready=true", source)
         self.assertIn("window.__fnql_retry_qz_bridge=syncQzBridge", source)
-        self.assertIn("document.addEventListener('DOMContentLoaded',syncQzBridge,false)", source)
+        self.assertIn(
+            "document.addEventListener('DOMContentLoaded',function(){"
+            "syncQzBridge();setTimeout(reapplyBrowserFilters,0);},false)",
+            source,
+        )
         self.assertIn("var qlrBridgeTries=0", source)
         self.assertIn("setInterval(function(){syncQzBridge();", source)
         self.assertNotIn("setInterval(function(){window.main_hook_v2();", source)
@@ -1678,9 +1725,16 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertNotIn("recenterPointer", menu_case)
         self.assertIn("mode.reportAbsolute = true;", menu_case)
 
-        self.assertIn("inputs.relativeAvailable = in_mouse->integer > 0;", sdl_input)
+        for backend in (sdl_input, win_input, linux_input):
+            with self.subTest(backend="shared pointer owner policy"):
+                self.assertIn("inputs.menuMask = kPointerMenuMask;", backend)
+                self.assertIn(
+                    "fnql::input::ResolvePointerOwner( inputs )",
+                    backend,
+                )
+        self.assertIn("inputs.relativeAvailable = in_mouse->integer != 0;", sdl_input)
         self.assertIn("in_nograb->integer && owner == PointerOwner::Gameplay", sdl_input)
-        self.assertIn("b = K_MOUSE6 + ( e.button.button - ( SDL_BUTTON_X2 + 1 ) );", sdl_input)
+        self.assertIn("b = K_MOUSE6 +", sdl_input)
         self.assertIn("inputs.consoleMask = KEYCATCH_CONSOLE;", win_input)
         self.assertIn(
             "kPointerMenuMask = KEYCATCH_UI | KEYCATCH_CGAME | KEYCATCH_BROWSER",

@@ -77,7 +77,20 @@ class MacOSSupportSourceTests(unittest.TestCase):
         input_source = read("code/sdl/sdl_input.cpp")
         network = read("code/qcommon/net_ip.c")
         vm = read("code/qcommon/vm.c")
-        self.assertIn("keys[K_COMMAND].down = (mod & SDL_KMOD_GUI)", input_source)
+        self.assertIn("static SDL_Keymod   s_physicalModifiers;", input_source)
+        self.assertIn(
+            "static qboolean IN_ShouldQueueModifierTransition(",
+            input_source,
+        )
+        self.assertIn(
+            "s_physicalModifiers & SDL_KMOD_GUI",
+            input_source,
+        )
+        self.assertIn(
+            "Com_QueueEvent( eventTime, SE_KEY, K_COMMAND, qtrue",
+            input_source,
+        )
+        self.assertNotIn("keys[K_COMMAND].down =", input_source)
         self.assertIn("if ( search->ifa_flags & IFF_UP )", network)
         self.assertNotIn("if ( ifap->ifa_flags & IFF_UP )", network)
         self.assertIn("Retail Quake Live ships no macOS game modules", vm)

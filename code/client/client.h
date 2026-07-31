@@ -552,6 +552,15 @@ void CL_InitInput( void );
 void CL_ClearInput( void );
 void CL_SendCmd( void );
 void CL_WritePacket( int repeat );
+typedef enum {
+	CL_INPUT_COMMAND_STALE = -2,
+	CL_INPUT_COMMAND_LEGACY = -1
+} clInputCommandSource_t;
+int CL_ValidateInputCommandSource( void );
+void CL_ClearKeyCommandInputState( void );
+void CL_ClearGeneratedVoiceInputState( void );
+void CL_ResetVoiceInputState( void );
+void CL_RemoveVoiceInputSource( int sourceKey );
 void CL_SetRetailClientMessageViewangleDeltaFlag( void );
 void CL_SetRetailClientMessageCGameImportGuardFlag( void );
 void CL_SetRetailClientMessageRendererNodeCount( int nodeCount );
@@ -598,6 +607,7 @@ void Con_SetMousePos( int x, int y );
 qboolean Con_KeyEvent( int key, qboolean down );
 qboolean Con_InputKey( int key );
 void Con_CharEvent( int key );
+void Con_CharEventUtf8( const unsigned char *bytes, int byteCount );
 qboolean Con_UseAutoSay( void );
 qboolean Con_UseRawSay( void );
 void Con_PageUp( int lines );

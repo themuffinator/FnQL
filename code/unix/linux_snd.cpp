@@ -8,7 +8,10 @@
 #include <sys/types.h>
 #include <alsa/asoundlib.h>
 #include <pthread.h>
+#include <atomic>
 #include <cstddef>
+#include <memory>
+#include <new>
 
 #include "../client/audio/snd_local.h"
 #include "../qcommon/q_shared.h"
@@ -214,6 +217,8 @@ static pthread_mutex_t mutex;
 #endif
 
 static qboolean snd_inited = qfalse;
+static qboolean sync_initialized = qfalse;
+static qboolean thread_started = qfalse;
 
 /* we will use static dma buffer */
 static unsigned char buffer[ BUFFER_SIZE ];
@@ -222,8 +227,8 @@ static unsigned int period_time;  // wishable latency
 static snd_pcm_t *handle;
 
 
-static volatile qboolean snd_loop;
-static volatile qboolean snd_async;
+static std::atomic_bool snd_loop{ false };
+static std::atomic_bool snd_async{ false };
 
 static snd_pcm_uframes_t period_size;
 static snd_pcm_sframes_t buffer_pos;	// buffer position, in mono samples
@@ -283,8 +288,13 @@ static qboolean setup_ALSA( smode_t mode )
 	snd_async_handler_t *ahandler;
 	snd_pcm_hw_params_t *hwparams;
 	snd_pcm_sw_params_t *swparams;
+	std::unique_ptr<unsigned char[]> hwparamsStorage;
+	std::unique_ptr<unsigned char[]> swparamsStorage;
+	size_t hwparamsSize;
+	size_t swparamsSize;
+	constexpr size_t kMaximumAlsaParameterBytes = 1024 * 1024;
 	unsigned int speed, rrate;
-	int err, dir, bps, channels;
+	int err, dir = 0, bps, channels;
 	qboolean use_mmap;
 
 	if ( snd_inited == qtrue )
@@ -293,7 +303,11 @@ static qboolean setup_ALSA( smode_t mode )
 	}
 
 	alsa_used = qfalse;
-	snd_async = qfalse;
+	snd_async.store( false, std::memory_order_release );
+	snd_loop.store( false, std::memory_order_release );
+	sync_initialized = qfalse;
+	thread_started = qfalse;
+	handle = NULL;
 	use_mmap = qfalse;
 
 #ifndef USE_ALSA_STATIC
@@ -336,19 +350,25 @@ static qboolean setup_ALSA( smode_t mode )
 		goto __fail;
 	}
 
-	hwparams = static_cast<snd_pcm_hw_params_t *>( alloca( _snd_pcm_hw_params_sizeof() ) );
-	if ( hwparams == NULL )
+	hwparamsSize = _snd_pcm_hw_params_sizeof();
+	swparamsSize = _snd_pcm_sw_params_sizeof();
+	if ( hwparamsSize == 0 || hwparamsSize > kMaximumAlsaParameterBytes ||
+		swparamsSize == 0 || swparamsSize > kMaximumAlsaParameterBytes )
 	{
-		Com_Printf( "Error allocating %i bytes of memory for hwparams\n", (int)_snd_pcm_hw_params_sizeof() );
+		Com_Printf( "ALSA returned invalid parameter storage sizes (%lu hardware, %lu software)\n",
+			static_cast<unsigned long>( hwparamsSize ),
+			static_cast<unsigned long>( swparamsSize ) );
 		goto __fail;
 	}
-
-	swparams = static_cast<snd_pcm_sw_params_t *>( alloca( _snd_pcm_sw_params_sizeof() ) );
-	if ( swparams == NULL )
+	hwparamsStorage.reset( new ( std::nothrow ) unsigned char[hwparamsSize] );
+	swparamsStorage.reset( new ( std::nothrow ) unsigned char[swparamsSize] );
+	if ( !hwparamsStorage || !swparamsStorage )
 	{
-		Com_Printf( "Error allocating %i bytes of memory for swparams\n", (int)_snd_pcm_sw_params_sizeof() );
+		Com_Printf( "Could not allocate ALSA parameter storage\n" );
 		goto __fail;
 	}
+	hwparams = reinterpret_cast<snd_pcm_hw_params_t *>( hwparamsStorage.get() );
+	swparams = reinterpret_cast<snd_pcm_sw_params_t *>( swparamsStorage.get() );
 
 	err = _snd_pcm_hw_params_any( handle, hwparams );
 	if ( err < 0 )
@@ -366,7 +386,7 @@ static qboolean setup_ALSA( smode_t mode )
 						goto __fail;
 					/* set the interleaved read/write format */
 					err = _snd_pcm_hw_params_set_access( handle, hwparams, SND_PCM_ACCESS_RW_INTERLEAVED );
-					snd_async = qtrue;
+					snd_async.store( true, std::memory_order_release );
 					break;
 		case SND_MODE_MMAP:
 					err = _snd_pcm_hw_params_set_access( handle, hwparams, SND_PCM_ACCESS_MMAP_INTERLEAVED );
@@ -445,9 +465,9 @@ static qboolean setup_ALSA( smode_t mode )
 	}
 	if ( rrate != speed )
 	{
-		Com_Printf( "Rate doesn't match (requested %iHz, get %iHz)\n",
-			speed, err );
-		goto __fail;
+		Com_Printf( "ALSA adjusted playback rate from %u Hz to %u Hz\n",
+			speed, rrate );
+		speed = rrate;
 	}
 
 	/* set the period time */
@@ -476,6 +496,12 @@ static qboolean setup_ALSA( smode_t mode )
 	{
 		Com_Printf( "Unable to get period size for playback: %s\n",
 			_snd_strerror( err ) );
+		goto __fail;
+	}
+	if ( period_size == 0 || period_size > BUFFER_SIZE / static_cast<unsigned int>( channels * ( bps / 8 ) ) )
+	{
+		Com_Printf( "ALSA returned invalid period size %lu\n",
+			static_cast<unsigned long>( period_size ) );
 		goto __fail;
 	}
 
@@ -549,15 +575,19 @@ static qboolean setup_ALSA( smode_t mode )
 
 	memset( buffer, 0, sizeof( buffer ) );
 
-	snd_inited = qtrue;
-
 #ifdef USE_SPINLOCK
-	_pthread_spin_init( &lock, 0 );
+	err = _pthread_spin_init( &lock, 0 );
 #else
-	_pthread_mutex_init( &mutex, NULL );
+	err = _pthread_mutex_init( &mutex, NULL );
 #endif
+	if ( err != 0 )
+	{
+		Com_Printf( "Error creating sound synchronization primitive (%i)\n", err );
+		goto __fail;
+	}
+	sync_initialized = qtrue;
 
-	if ( snd_async )
+	if ( snd_async.load( std::memory_order_acquire ) )
 	{
 		const snd_pcm_sframes_t written = _snd_pcm_writei( handle, dma.buffer, period_size * 2 );
 		if ( written < 0 )
@@ -584,14 +614,7 @@ static qboolean setup_ALSA( smode_t mode )
 	}
 	else
 	{
-		snd_loop = qtrue;
-
-		 /* will be unlocked after thread creation */
-#ifdef USE_SPINLOCK
-		_pthread_spin_lock( &lock );
-#else
-		_pthread_mutex_lock( &mutex );
-#endif
+		snd_loop.store( true, std::memory_order_release );
 	
 		if ( use_mmap )
 			err = _pthread_create( &thread, NULL, thread_proc_mmap_entry, NULL );
@@ -601,29 +624,41 @@ static qboolean setup_ALSA( smode_t mode )
 		if ( err != 0 )
 		{
 			Com_Printf( "Error creating sound thread (%i)\n", err );
-#ifdef USE_SPINLOCK
-			_pthread_spin_unlock( &lock );
-#else
-			_pthread_mutex_unlock( &mutex );
-#endif
+			snd_loop.store( false, std::memory_order_release );
 			goto __fail;
 		}
-
-		/* wait for thread creation */
-#ifdef USE_SPINLOCK
-		_pthread_spin_lock( &lock );
-		_pthread_spin_unlock( &lock );
-#else
-		_pthread_mutex_lock( &mutex );
-		_pthread_mutex_unlock( &mutex );
-#endif
+		thread_started = qtrue;
 	}
 
+	snd_inited = qtrue;
 	alsa_used = qtrue;
 	return qtrue;
 
 __fail:
-	_snd_pcm_close( handle );
+	if ( thread_started )
+	{
+		snd_loop.store( false, std::memory_order_release );
+		_pthread_join( thread, NULL );
+		thread_started = qfalse;
+	}
+	if ( sync_initialized )
+	{
+#ifdef USE_SPINLOCK
+		_pthread_spin_destroy( &lock );
+#else
+		_pthread_mutex_destroy( &mutex );
+#endif
+		sync_initialized = qfalse;
+	}
+	if ( handle != NULL )
+	{
+		_snd_pcm_close( handle );
+		handle = NULL;
+	}
+	snd_inited = qfalse;
+	snd_loop.store( false, std::memory_order_release );
+	snd_async.store( false, std::memory_order_release );
+	Com_Memset( &dma, 0, sizeof( dma ) );
 	UnloadLibs();
 	alsa_used = qfalse;
 	return qfalse;
@@ -655,30 +690,38 @@ void SNDDMA_Shutdown( void )
 	if ( snd_inited == qfalse )
 		return;
 
-	if ( !snd_async )
+	if ( !snd_async.load( std::memory_order_acquire ) )
 	{
-		snd_loop = qfalse;
+		snd_loop.store( false, std::memory_order_release );
 
 		/* wait for thread loop exit */
-		_pthread_join( thread, NULL );
+		if ( thread_started ) {
+			_pthread_join( thread, NULL );
+			thread_started = qfalse;
+		}
 	}
 	else
 	{
 		_snd_pcm_drain( handle );
 	}
 
-	snd_async = qfalse;
+	snd_async.store( false, std::memory_order_release );
 	snd_inited = qfalse;
 
 	_snd_pcm_close( handle );
+	handle = NULL;
 
+	if ( sync_initialized ) {
 #ifdef USE_SPINLOCK
-	_pthread_spin_destroy( &lock );
+		_pthread_spin_destroy( &lock );
 #else
-	_pthread_mutex_destroy( &mutex );
+		_pthread_mutex_destroy( &mutex );
 #endif
+		sync_initialized = qfalse;
+	}
 
 	UnloadLibs();
+	alsa_used = qfalse;
 }
 
 #define CASE_STR(x) case (x): s = #x; break;
@@ -728,7 +771,7 @@ static int xrun_recovery( snd_pcm_t *handle, int err )
 		while ( ( err = _snd_pcm_resume( handle ) ) == -EAGAIN )
 		{
 			nanosleep( &req, NULL );
-			if ( tries++ < 16 )
+			if ( tries++ >= 16 )
 			{
 				break;
 			}
@@ -838,19 +881,12 @@ static void thread_proc_mmap( void )
 	thread_id = syscall( SYS_gettid );
 	setpriority( PRIO_PROCESS, thread_id, -10 );
 
-	// thread is running now
-#ifdef USE_SPINLOCK
-	_pthread_spin_unlock( &lock );
-#else
-	_pthread_mutex_unlock( &mutex );
-#endif
-
-	while ( snd_loop )
+	while ( snd_loop.load( std::memory_order_acquire ) )
 	{
 		if ( restore_transfer() < 0 )
 			break;
 
-		_snd_pcm_wait( handle, period_time );
+		_snd_pcm_wait( handle, static_cast<int>( ( period_time + 999 ) / 1000 ) );
 		avail = _snd_pcm_avail_update( handle );
 
 		if ( avail < 0 )
@@ -952,25 +988,18 @@ static void thread_proc_direct( void )
 	/* buffer size in full samples */
 	size = dma.samples / dma.channels;
 
-	// thread is running now
-#ifdef USE_SPINLOCK
-	_pthread_spin_unlock( &lock );
-#else
-	_pthread_mutex_unlock( &mutex );
-#endif
-
-	while ( snd_loop )
+	while ( snd_loop.load( std::memory_order_acquire ) )
 	{
 		if ( restore_transfer() < 0 )
 			break;
 
-		_snd_pcm_wait( handle, period_time );
+		_snd_pcm_wait( handle, static_cast<int>( ( period_time + 999 ) / 1000 ) );
 		avail = _snd_pcm_avail_update( handle );
 
 		if ( avail < 0 )
 			continue;
 
-		if ( snd_loop == qfalse )
+		if ( !snd_loop.load( std::memory_order_acquire ) )
 			break;
 
 		state = __snd_pcm_state( handle );
@@ -1033,7 +1062,7 @@ static void async_proc( snd_async_handler_t *ahandler )
 	snd_pcm_uframes_t size;
 	int err;
 
-	if ( !snd_async || !dma.samples )
+	if ( !snd_async.load( std::memory_order_acquire ) || !dma.samples )
 		return;
 
 	if ( restore_transfer() < 0 )
@@ -1094,6 +1123,7 @@ static void async_proc( snd_async_handler_t *ahandler )
 #include <sys/mman.h>
 #include <sys/shm.h>
 #include <sys/wait.h>
+#include <limits>
 #ifdef __linux__
 #include <linux/soundcard.h>
 #endif
@@ -1251,10 +1281,17 @@ qboolean SNDDMA_Init( void )
 		return qfalse;
 	}
 
-	dma.samples = info.fragstotal * info.fragsize / (dma.samplebits/8);
-	dma.submission_chunk = 1;
-
+	if ( info.fragstotal <= 0 || info.fragsize <= 0 ||
+		info.fragstotal > ( std::numeric_limits<int>::max )() / info.fragsize )
+	{
+		Com_Printf( "Sound driver returned an invalid DMA buffer layout\n" );
+		audio_fd.reset();
+		return qfalse;
+	}
 	map_size = info.fragstotal * info.fragsize;
+	dma.samples = map_size / (dma.samplebits/8);
+	dma.fullsamples = dma.samples / dma.channels;
+	dma.submission_chunk = 1;
 
 	// memory map the dma buffer
 

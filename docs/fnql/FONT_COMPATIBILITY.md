@@ -60,6 +60,13 @@ remains an availability fallback only. Console cell metrics are private to the
 console; inherited `smallchar_*` metrics used by unrelated overlays retain
 their existing FnQL scaling.
 
+`con_scale` owns the drop-down console alone. Retail applies it at each console
+draw site and leaves the live chat line on the unscaled 12x24 cell, so
+`Con_DrawNotify` runs the shared text helpers under a scoped cell of its own
+(still multiplied by the supersample capture factor, which retail has no
+equivalent for). Chat therefore keeps one on-screen size whatever `con_scale`
+is set to.
+
 Client-owned large strings use the same retail mono host lane after conversion
 from 640x480 virtual coordinates to screen pixels. The explicit small-string
 API remains on the legacy bitmap charset, matching retail's two-path client

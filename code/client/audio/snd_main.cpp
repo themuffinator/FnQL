@@ -387,7 +387,18 @@ static void S_SoundInfo( void )
 {
 	if( si.SoundInfo ) {
 		si.SoundInfo();
+		return;
 	}
+
+	Com_Printf( "----- Sound Info -----\n" );
+	Com_Printf( "No sound backend is active.\n" );
+	Com_Printf( "Configured backend: %s\n",
+		s_backend != nullptr ? s_backend->string : "not initialized" );
+	Com_Printf( "s_initsound: %s\n",
+		Cvar_VariableIntegerValue( "s_initsound" ) ? "enabled" : "disabled" );
+	Com_Printf( "Master volume: %.2f\n", s_volume != nullptr ? s_volume->value : 0.0f );
+	Com_Printf( "Run snd_restart after correcting the device or sound settings.\n" );
+	Com_Printf( "----------------------\n" );
 }
 
 
@@ -589,6 +600,13 @@ extern "C" void S_Init( void )
 	bool		started = false;
 
 	Com_Printf( "------ Initializing Sound ------\n" );
+	if ( si.Shutdown != nullptr ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: sound initialization requested while backend '%s' is already active\n",
+			s_backendActive != nullptr ? s_backendActive->string : "unknown" );
+		Com_Printf( "--------------------------------\n" );
+		return;
+	}
+	si = {};
 
 	s_volume = Cvar_Get( "s_volume", "0.8", CVAR_ARCHIVE );
 	Cvar_CheckRange( s_volume, "0", "2", CV_FLOAT );
@@ -661,7 +679,7 @@ extern "C" void S_Init( void )
 	cv = Cvar_Get( "s_initsound", "1", 0 );
 	Cvar_SetDescription( cv, "Whether or not to startup the sound system." );
 	if ( !cv->integer ) {
-		Com_Printf( "Sound disabled.\n" );
+		Com_Printf( "Sound disabled by s_initsound 0. Set s_initsound 1 and run snd_restart to enable it.\n" );
 	} else {
 
 		S_CodecInit();
@@ -702,10 +720,21 @@ extern "C" void S_Init( void )
 			}
 
 			S_SoundInfo();
+			if ( s_volume != nullptr && s_volume->value <= 0.0f ) {
+				Com_Printf( S_COLOR_YELLOW "WARNING: s_volume is 0; the backend is active but all game audio is silent.\n" );
+			}
+			if ( ( !gw_active && !gw_minimized && s_muteWhenUnfocused->integer ) ||
+				( gw_minimized && s_muteWhenMinimized->integer ) ) {
+				Com_Printf( S_COLOR_YELLOW "WARNING: audio is currently muted by the window focus/minimize settings.\n" );
+			}
 			Com_Printf( "Sound initialization successful.\n" );
 		} else {
+			si = {};
 			Cvar_Set( "s_backendActive", "none" );
-			Com_Printf( "Sound initialization failed.\n" );
+			Com_Printf( S_COLOR_YELLOW "WARNING: no sound backend could initialize.\n" );
+			Com_Printf( S_COLOR_YELLOW "         Check the earlier OpenAL/platform-device errors, then run snd_restart.\n" );
+			Com_Printf( S_COLOR_YELLOW "         You can also try s_backend legacy (or clear s_alDevice) before snd_restart.\n" );
+			S_SoundInfo();
 		}
 	}
 

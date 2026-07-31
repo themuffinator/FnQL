@@ -112,8 +112,15 @@ extern "C" {
 
 qboolean IN_MouseActive( void );
 qboolean IN_LegacyMouseDrivesInput( void );
+qboolean IN_RawMouseDrivesInput( void );
+void	WIN_ResetMessageInputState( void );
+void	WIN_QueueInputReset( qboolean rebuildModifiers );
 void	IN_Win32MouseEvent( int x, int y, int mstate );
 void	IN_RawMouseEvent( LPARAM lParam );
+void	IN_RawInputDeviceChange( WPARAM change, LPARAM device );
+#ifdef USE_MIDI
+void	IN_MIDIMessage( HMIDIIN device, DWORD packedMessage );
+#endif
 
 void	Sys_CreateConsole( const char *title, int xPos, int yPos, qboolean usePos );
 void	Sys_DestroyConsole( void );
@@ -169,7 +176,10 @@ extern WinVars_t	g_wv;
 void WIN_DisableHook( void );
 void WIN_EnableHook( void );
 void WIN_ReleaseTemporaryMouseCapture( void );
+void WIN_RebuildTemporaryMouseCapture( void );
 void WIN_ProjectClientPointerToDrawable( int *x, int *y );
+qboolean WIN_InputSuspended( void );
+qboolean WIN_WindowFocused( void );
 
 void WIN_DisableAltTab( void );
 void WIN_EnableAltTab( void );

@@ -26,11 +26,13 @@ extern "C" {
 }
 
 #include "client_cpp.h"
+#include "input_compat.hpp"
 #include "ql_font_bridge.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstring>
 
 using fnql::FileWrite;
 using fnql::ScopedFileHandle;
@@ -690,54 +692,85 @@ static void Con_SelectAllInput( void ) {
 }
 
 
-static void Con_InsertInputChar( int ch ) {
-	int len;
-	const bool utf8Continuation = fnql::font::IsUtf8ContinuationByte(
-		static_cast<unsigned char>( ch ) );
+static constexpr unsigned char conUtf8ReplacementCharacter[] = {
+	0xefu, 0xbfu, 0xbdu
+};
 
-	if ( ch < ' ' ) {
-		return;
+
+/*
+==================
+Con_InsertInputUtf8Scalar
+
+Replaces the active selection (or the current overstrike scalar) only after the
+complete encoded scalar has been validated and proven to fit. Failed insertion
+therefore cannot delete a selection or leave a truncated UTF-8 tail.
+==================
+*/
+static bool Con_InsertInputUtf8Scalar( const unsigned char *bytes,
+	std::size_t byteCount, bool allowOverstrike = true ) {
+	constexpr int inputCapacity = MAX_EDIT_LINE - 2;
+
+	if ( !bytes || byteCount == 0 || byteCount > 4 ) {
+		return false;
 	}
 
-	Con_DeleteInputSelection();
-	len = strlen( g_consoleField.buffer );
-
-	if ( key_overstrikeMode && !utf8Continuation ) {
-		if ( g_consoleField.cursor == MAX_EDIT_LINE - 2 ) {
-			return;
-		}
-		if ( g_consoleField.cursor < len ) {
-			const int overwriteEnd = fnql::font::NextUtf8Boundary(
-				g_consoleField.buffer, g_consoleField.cursor );
-			if ( overwriteEnd > g_consoleField.cursor + 1 ) {
-				std::copy( g_consoleField.buffer + overwriteEnd,
-					g_consoleField.buffer + len + 1,
-					g_consoleField.buffer + g_consoleField.cursor + 1 );
-				len -= overwriteEnd - ( g_consoleField.cursor + 1 );
-			}
-		}
-
-		g_consoleField.buffer[ g_consoleField.cursor ] = ch;
-		g_consoleField.cursor++;
-		if ( g_consoleField.cursor > len ) {
-			g_consoleField.buffer[ g_consoleField.cursor ] = '\0';
-		}
-	} else {
-		if ( len == MAX_EDIT_LINE - 2 ) {
-			return;
-		}
-
-		std::copy_backward( g_consoleField.buffer + g_consoleField.cursor,
-			g_consoleField.buffer + len + 1, g_consoleField.buffer + len + 2 );
-		g_consoleField.buffer[ g_consoleField.cursor ] = ch;
-		g_consoleField.cursor++;
+	const fnql::input::Utf8DecodeResult decoded =
+		fnql::input::DecodeUtf8( bytes, byteCount );
+	if ( !decoded.valid || decoded.size != byteCount ||
+		decoded.codepoint < ' ' || decoded.codepoint == 0x7fu ) {
+		return false;
 	}
+
+	const int len = static_cast<int>( strlen( g_consoleField.buffer ) );
+	if ( g_consoleField.cursor < 0 || g_consoleField.cursor > len ||
+		fnql::font::ClampUtf8Boundary( g_consoleField.buffer,
+			g_consoleField.cursor ) != g_consoleField.cursor ) {
+		return false;
+	}
+
+	int replaceStart = g_consoleField.cursor;
+	int replaceEnd = g_consoleField.cursor;
+	if ( Con_HasInputSelection() ) {
+		Con_GetInputSelectionRange( &replaceStart, &replaceEnd );
+		replaceStart = ( std::clamp )( replaceStart, 0, len );
+		replaceEnd = ( std::clamp )( replaceEnd, 0, len );
+		replaceStart = fnql::font::ClampUtf8Boundary(
+			g_consoleField.buffer, replaceStart );
+		replaceEnd = fnql::font::ClampUtf8Boundary(
+			g_consoleField.buffer, replaceEnd );
+	} else if ( allowOverstrike && key_overstrikeMode && replaceEnd < len ) {
+		replaceEnd = fnql::font::NextUtf8Boundary(
+			g_consoleField.buffer, replaceEnd );
+	}
+
+	const int insertLength = static_cast<int>( byteCount );
+	const int newLength = len - ( replaceEnd - replaceStart ) + insertLength;
+	if ( newLength > inputCapacity ) {
+		return false;
+	}
+
+	std::memmove( g_consoleField.buffer + replaceStart + insertLength,
+		g_consoleField.buffer + replaceEnd,
+		static_cast<std::size_t>( len - replaceEnd + 1 ) );
+	std::memcpy( g_consoleField.buffer + replaceStart, bytes, byteCount );
+	g_consoleField.cursor = replaceStart + insertLength;
 
 	Con_AdjustInputScroll( &g_consoleField );
 	Con_ClearInputSelection();
 	con.focus = ConFocus::Input;
 	Con_ClearLogSelection();
 	Con_InvalidateCompletionState();
+	return true;
+}
+
+
+static bool Con_InsertInputChar( int ch, bool allowOverstrike = true ) {
+	if ( ch < 0 || ch > 0xff ) {
+		return false;
+	}
+
+	const unsigned char byte = static_cast<unsigned char>( ch );
+	return Con_InsertInputUtf8Scalar( &byte, 1, allowOverstrike );
 }
 
 
@@ -787,8 +820,6 @@ static void Con_CutInputSelection( void ) {
 
 
 static void Con_PasteClipboardToInput( void ) {
-	int i;
-
 	ScopedZoneMemory clipboardText( Sys_GetClipboardData() );
 	char *text = clipboardText.as<char>();
 	if ( !text ) {
@@ -796,12 +827,25 @@ static void Con_PasteClipboardToInput( void ) {
 	}
 
 	con.focus = ConFocus::Input;
-	Con_DeleteInputSelection();
+	const std::size_t textLength = strlen( text );
+	for ( std::size_t i = 0; i < textLength; ) {
+		const auto *bytes =
+			reinterpret_cast<const unsigned char *>( text + i );
+		const fnql::input::Utf8DecodeResult decoded =
+			fnql::input::DecodeUtf8( bytes, textLength - i );
 
-	for ( i = 0; text[ i ]; i++ ) {
-		const int ch = static_cast<unsigned char>( text[ i ] );
-		if ( ch >= ' ' ) {
-			Con_InsertInputChar( ch );
+		if ( decoded.valid ) {
+			if ( decoded.codepoint >= ' ' && decoded.codepoint != 0x7fu &&
+				!Con_InsertInputUtf8Scalar( bytes, decoded.size ) ) {
+				break;
+			}
+			i += decoded.size;
+		} else {
+			if ( !Con_InsertInputUtf8Scalar( conUtf8ReplacementCharacter,
+					sizeof( conUtf8ReplacementCharacter ) ) ) {
+				break;
+			}
+			i += decoded.size;
 		}
 	}
 }
@@ -1025,7 +1069,6 @@ static void Con_InvalidateCompletionState( void ) {
 
 static void Con_InsertInputTextAt( const char *text, int cursor ) {
 	bool lastWasConvertedSpace;
-	int i;
 
 	if ( !text || !text[ 0 ] ) {
 		Con_SetInputCursor( cursor, qfalse );
@@ -1035,23 +1078,52 @@ static void Con_InsertInputTextAt( const char *text, int cursor ) {
 	Con_SetInputCursor( cursor, qfalse );
 	lastWasConvertedSpace = false;
 
-	for ( i = 0; text[ i ]; i++ ) {
-		int ch = static_cast<unsigned char>( text[ i ] );
+	const std::size_t textLength = strlen( text );
+	for ( std::size_t i = 0; i < textLength; ) {
+		const auto *bytes =
+			reinterpret_cast<const unsigned char *>( text + i );
+		const fnql::input::Utf8DecodeResult decoded =
+			fnql::input::DecodeUtf8( bytes, textLength - i );
 
+		if ( !decoded.valid ) {
+			lastWasConvertedSpace = false;
+			if ( !Con_InsertInputUtf8Scalar( conUtf8ReplacementCharacter,
+					sizeof( conUtf8ReplacementCharacter ), false ) ) {
+				break;
+			}
+			i += decoded.size;
+			continue;
+		}
+
+		if ( decoded.size > 1 ) {
+			lastWasConvertedSpace = false;
+			if ( !Con_InsertInputUtf8Scalar( bytes, decoded.size, false ) ) {
+				break;
+			}
+			i += decoded.size;
+			continue;
+		}
+
+		int ch = bytes[ 0 ];
 		if ( ch == '\r' || ch == '\n' || ch == '\t' ) {
 			if ( lastWasConvertedSpace ) {
+				++i;
 				continue;
 			}
 			ch = ' ';
 			lastWasConvertedSpace = true;
 		} else {
 			lastWasConvertedSpace = false;
-			if ( ch < ' ' ) {
+			if ( ch < ' ' || ch == 0x7f ) {
+				++i;
 				continue;
 			}
 		}
 
-		Con_InsertInputChar( ch );
+		if ( !Con_InsertInputChar( ch, false ) ) {
+			break;
+		}
+		++i;
 	}
 }
 
@@ -1927,8 +1999,8 @@ static void Con_ApplySelectedCompletion( int direction ) {
 	int suffixOffset;
 	int outLen = 0;
 	int matchLen;
-	int copyLen;
 	int suffixLen;
+	int requiredLength;
 	bool addSpace = false;
 
 	if ( !Con_CompletionPopupEnabled() ) {
@@ -1967,9 +2039,10 @@ static void Con_ApplySelectedCompletion( int direction ) {
 		replaceLength = 0;
 	}
 
-	suffixOffset = replaceOffset + replaceLength;
-	if ( suffixOffset > len ) {
+	if ( replaceLength > len - replaceOffset ) {
 		suffixOffset = len;
+	} else {
+		suffixOffset = replaceOffset + replaceLength;
 	}
 
 	if ( con.completionAppendSpace ) {
@@ -1980,41 +2053,40 @@ static void Con_ApplySelectedCompletion( int direction ) {
 		}
 	}
 
+	// Apply the completion as one transaction. Raw byte truncation can split a
+	// UTF-8 scalar, and deriving the cursor from an untruncated match can leave
+	// it beyond the resulting string.
+	suffixLen = len - suffixOffset;
+	requiredLength = ( con.completionPrependSlash ? 1 : 0 ) +
+		replaceOffset + matchLen + ( addSpace ? 1 : 0 ) + suffixLen;
+	if ( requiredLength > MAX_EDIT_LINE - 2 ) {
+		return;
+	}
+
 	if ( con.completionPrependSlash ) {
 		completed[ outLen++ ] = '/';
 	}
 
-	copyLen = replaceOffset;
-	if ( copyLen > static_cast<int>( completed.size() ) - 1 - outLen ) {
-		copyLen = static_cast<int>( completed.size() ) - 1 - outLen;
-	}
-	if ( copyLen > 0 ) {
-		std::copy_n( buffer, copyLen, completed.data() + outLen );
-		outLen += copyLen;
+	if ( replaceOffset > 0 ) {
+		std::copy_n( buffer, replaceOffset, completed.data() + outLen );
+		outLen += replaceOffset;
 	}
 
-	copyLen = matchLen;
-	if ( copyLen > static_cast<int>( completed.size() ) - 1 - outLen ) {
-		copyLen = static_cast<int>( completed.size() ) - 1 - outLen;
-	}
-	if ( copyLen > 0 ) {
-		std::copy_n( match, copyLen, completed.data() + outLen );
-		outLen += copyLen;
+	if ( matchLen > 0 ) {
+		std::copy_n( match, matchLen, completed.data() + outLen );
+		outLen += matchLen;
 	}
 
-	if ( addSpace && outLen < static_cast<int>( completed.size() ) - 1 ) {
+	if ( addSpace ) {
 		completed[ outLen++ ] = ' ';
 	}
 
-	suffixLen = len - suffixOffset;
-	if ( suffixLen > static_cast<int>( completed.size() ) - 1 - outLen ) {
-		suffixLen = static_cast<int>( completed.size() ) - 1 - outLen;
-	}
 	if ( suffixLen > 0 ) {
 		std::copy_n( buffer + suffixOffset, suffixLen, completed.data() + outLen );
 		outLen += suffixLen;
 	}
 
+	assert( outLen == requiredLength );
 	completed[ outLen ] = '\0';
 	Q_strncpyz( g_consoleField.buffer, completed.data(), sizeof( g_consoleField.buffer ) );
 	g_consoleField.cursor = ( con.completionPrependSlash ? 1 : 0 ) +
@@ -2784,7 +2856,7 @@ static void Con_DrawLogSelectionRow( int line, float y, float alphaScale ) {
 
 
 static void Con_DrawInputText( field_t *edit, float x, float y, float alphaScale,
-	bool drawSelection ) {
+	bool drawSelection, const vec4_t baseColor ) {
 	fnql::font::Utf8FieldWindow window;
 	int drawBytes;
 	int cursorChar;
@@ -2794,6 +2866,7 @@ static void Con_DrawInputText( field_t *edit, float x, float y, float alphaScale
 	float cursorX;
 	float prefixWidth;
 	bool hostTextDrawn;
+	bool colorCarried;
 	std::array<char, MAX_STRING_CHARS> str;
 
 	window = Con_GetInputDrawInfo( edit );
@@ -2806,20 +2879,33 @@ static void Con_DrawInputText( field_t *edit, float x, float y, float alphaScale
 	std::copy_n( edit->buffer + window.startByte, drawBytes, str.data() );
 	str[ drawBytes ] = '\0';
 
+	// Retail hands the field its own base color and lets the drawn span's own
+	// escapes override it.  A scrolled window can start mid-escape, so carry
+	// the color that was already in effect at the first drawn byte.
 	currentColorIndex = ColorIndex( COLOR_WHITE );
+	colorCarried = false;
 	for ( i = 0; i < window.startByte; i++ ) {
 		if ( Q_IsColorString( edit->buffer + i ) ) {
 			currentColorIndex = ColorIndexFromChar( edit->buffer[ i + 1 ] );
+			colorCarried = true;
 			i++;
 		}
 	}
 
-	Con_SetScaledColor( g_color_table[ currentColorIndex ], alphaScale );
+	if ( colorCarried ) {
+		Con_SetScaledColor( g_color_table[ currentColorIndex ], alphaScale );
+	} else {
+		Con_SetScaledColor( baseColor, alphaScale );
+	}
 
 	if ( drawSelection ) {
 		Con_DrawInputSelection( edit, x, y, window, alphaScale );
+		if ( colorCarried ) {
+			Con_SetScaledColor( g_color_table[ currentColorIndex ], alphaScale );
+		} else {
+			Con_SetScaledColor( baseColor, alphaScale );
+		}
 	}
-	Con_SetScaledColor( g_color_table[ currentColorIndex ], alphaScale );
 	hostTextDrawn = Con_DrawHostText( x, y, str.data(), qfalse, con_drawColor );
 
 	for ( i = 0; !hostTextDrawn && i < drawBytes; i++ ) {
@@ -2835,7 +2921,8 @@ static void Con_DrawInputText( field_t *edit, float x, float y, float alphaScale
 		Con_DrawSmallCharFloat( x + i * console_char_width, y, str[ i ] );
 	}
 
-	Con_SetScaledColor( g_color_table[ ColorIndex( COLOR_WHITE ) ], alphaScale );
+	// Retail draws the caret with whatever color the field itself was given.
+	Con_SetScaledColor( baseColor, alphaScale );
 
 	if ( cls.realtime & 256 ) {
 		re.SetColor( nullptr );
@@ -3612,6 +3699,23 @@ void Con_CharEvent( int key ) {
 
 	con.focus = ConFocus::Input;
 	Con_InsertInputChar( key );
+}
+
+
+void Con_CharEventUtf8( const unsigned char *bytes, int byteCount ) {
+	if ( !bytes || byteCount < 1 || byteCount > 4 ) {
+		return;
+	}
+
+	const fnql::input::Utf8DecodeResult decoded =
+		fnql::input::DecodeUtf8( bytes, static_cast<std::size_t>( byteCount ) );
+	if ( !decoded.valid || decoded.size != static_cast<std::size_t>( byteCount ) ||
+		decoded.codepoint < ' ' || decoded.codepoint == 0x7fu ) {
+		return;
+	}
+
+	con.focus = ConFocus::Input;
+	Con_InsertInputUtf8Scalar( bytes, static_cast<std::size_t>( byteCount ) );
 }
 
 
@@ -4845,10 +4949,58 @@ static void Con_DrawInput( float alphaScale, const vec4_t lineColor ) {
 		Con_DrawSmallCharFloat( con.xadjust + console_char_width, y, ']' );
 	}
 	Con_DrawInputText( &g_consoleField, con.xadjust + 2 * console_char_width, y,
-		alphaScale, true );
+		alphaScale, true, g_color_table[ ColorIndex( COLOR_WHITE ) ] );
 	Con_DrawInputDropCursor( &g_consoleField, con.xadjust + 2 * console_char_width, y, alphaScale );
 	Con_DrawCompletionPopup( con.xadjust + 2 * console_char_width, y, alphaScale, lineColor );
 }
+
+
+/*
+================
+Con_ScopedChatCell
+
+Retail sizes the drop-down console through con_scale but always draws the live
+chat line on the unscaled 12x24 cell, so that one overlay runs the shared text
+helpers under its own cell metrics.
+================
+*/
+class Con_ScopedChatCell {
+public:
+	Con_ScopedChatCell() :
+		savedCharWidth( console_char_width ),
+		savedCharHeight( console_char_height ),
+		savedTtfCellWidth( con_ttfCellWidth ) {
+		float factor = cls.con_factor;
+
+		if ( factor <= 0.0f ) {
+			factor = 1.0f;
+		}
+
+		console_char_width = RoundToInt( RETAIL_CONSOLE_CHAR_WIDTH * factor );
+		console_char_height = RoundToInt( RETAIL_CONSOLE_CHAR_HEIGHT * factor );
+		if ( console_char_width < 1 ) {
+			console_char_width = 1;
+		}
+		if ( console_char_height < 1 ) {
+			console_char_height = 1;
+		}
+		con_ttfCellWidth = RETAIL_CONSOLE_CHAR_WIDTH * factor;
+	}
+
+	~Con_ScopedChatCell() {
+		console_char_width = savedCharWidth;
+		console_char_height = savedCharHeight;
+		con_ttfCellWidth = savedTtfCellWidth;
+	}
+
+	Con_ScopedChatCell( const Con_ScopedChatCell& ) = delete;
+	Con_ScopedChatCell& operator=( const Con_ScopedChatCell& ) = delete;
+
+private:
+	int		savedCharWidth;
+	int		savedCharHeight;
+	float	savedTtfCellWidth;
+};
 
 
 /*
@@ -4862,15 +5014,18 @@ con.times bookkeeping in the print path because that remains retail behavior.
 */
 static void Con_DrawNotify( void )
 {
-	Con_UpdateTtfFontAvailability();
-
-	if ( Key_GetCatcher() & (KEYCATCH_UI | KEYCATCH_CGAME | KEYCATCH_BROWSER) ) {
+	// Retail suppresses the chat overlay only for a full-screen menu.  A cgame
+	// key catcher must not hide it, because message mode outranks cgame in the
+	// key dispatch and stays typable underneath.  KEYCATCH_BROWSER is FnQL's
+	// own carrier for the retail WebUI surface, so it joins KEYCATCH_UI here.
+	if ( Key_GetCatcher() & (KEYCATCH_UI | KEYCATCH_BROWSER) ) {
 		return;
 	}
 
 	// draw the chat line
 	if ( Key_GetCatcher( ) & KEYCATCH_MESSAGE )
 	{
+		const Con_ScopedChatCell chatCell;
 		const char *prompt = chat_team ? "say team:" : "say:";
 		const int promptCells = chat_team ? 11 : 6;
 		const int chatFieldY = Con_GetChatFieldY();
@@ -4880,10 +5035,16 @@ static void Con_DrawNotify( void )
 		float promptY = static_cast<float>( chatFieldY );
 		int promptIndex;
 
+		Con_UpdateTtfFontAvailability();
+
+		// Retail re-reads the cgame's character budget every frame, so a HUD
+		// layout change while the field is open resizes the visible window.
+		chatField.widthInChars = Con_GetChatFieldWidthInChars( chat_team );
+
 		// Retail QL gives chat a translucent strip in virtual coordinates, then
 		// draws its prompt and field with console font 2 in screen coordinates.
 		SCR_FillRect( 6.0f, chatFieldY - 3.0f,
-			chatFieldPixelWidth + 12.0f, 22.0f, con_chatBackgroundColor );
+			chatFieldPixelWidth - 12.0f, 22.0f, con_chatBackgroundColor );
 		SCR_AdjustFrom640( &promptX, &promptY, nullptr, nullptr );
 
 		Con_SetScaledColor( con_chatPromptColor, 1.0f );
@@ -4894,9 +5055,10 @@ static void Con_DrawNotify( void )
 			}
 		}
 
-		Con_SetScaledColor( g_color_table[ ColorIndex( COLOR_WHITE ) ], 1.0f );
-		Con_DrawInputText( &chatField, promptX + promptCells * console_char_width,
-			promptY, 1.0f, false );
+		// The prompt is placed from the virtual origin, but retail lays the
+		// field out from the console's own left edge in raw cells.
+		Con_DrawInputText( &chatField, con.xadjust + promptCells * console_char_width,
+			promptY, 1.0f, false, con_chatPromptColor );
 	}
 }
 

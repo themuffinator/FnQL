@@ -102,11 +102,20 @@ class WindowedMouseSourceTests(unittest.TestCase):
         renderer resolution is not the window size."""
         policy = read_text("code/client/input_compat.hpp")
         project = function_body(policy, "ProjectPointerToDrawable")
+        coordinate = function_body(policy, "ProjectPointerCoordinate")
 
-        self.assertIn("projection.hostWidth > 0 && projection.drawableWidth > 0", project)
-        self.assertIn("projection.hostHeight > 0 && projection.drawableHeight > 0", project)
-        # Unknown geometry passes the coordinate through instead of zeroing it.
-        self.assertIn("PointerPosition projected{ x, y };", project)
+        self.assertIn(
+            "x, projection.hostWidth, projection.drawableWidth", project
+        )
+        self.assertIn(
+            "y, projection.hostHeight, projection.drawableHeight", project
+        )
+        # Unknown geometry passes the coordinate through instead of zeroing it,
+        # while large products use a defined, saturating integer path.
+        self.assertIn("hostExtent <= 0 || drawableExtent <= 0", coordinate)
+        self.assertIn("return value;", coordinate)
+        self.assertIn("static_cast<std::int64_t>( value )", coordinate)
+        self.assertIn("SaturatingIntFromInt64( scaled )", coordinate)
 
         for path, host in (
             ("code/sdl/sdl_input.cpp", "glw_state.window_width"),
@@ -163,19 +172,52 @@ class WindowedMouseSourceTests(unittest.TestCase):
             button_block.index("IN_QueueAbsolutePointerPosition( owner,"),
             button_block.index("SE_KEY"),
         )
+        self.assertIn("e.button.y, in_eventTime, qtrue", button_block)
         # Drag capture covers every absolute owner, matching Win32 and X11, so a
-        # menu drag that leaves the window still delivers its release.
-        self.assertIn("SDL_CaptureMouse( true );", button_block)
-        self.assertIn("SDL_CaptureMouse( false );", button_block)
+        # menu drag that leaves the window still delivers its release. Requested
+        # and applied capture remain separate so failed transitions are retried.
         self.assertIn("s_absCaptureButtons |= buttonMask", button_block)
         self.assertIn("s_absCaptureButtons &= ~buttonMask", button_block)
+        self.assertEqual(
+            button_block.count("IN_UpdateTemporaryMouseCapture();"), 2
+        )
+
+        update_capture = function_body(
+            source, "IN_UpdateTemporaryMouseCapture"
+        )
+        self.assertIn(
+            "const qboolean requested = s_absCaptureButtons ? qtrue : qfalse;",
+            update_capture,
+        )
+        self.assertIn("requested == s_absCaptureActive", update_capture)
+        self.assertIn(
+            "SDL_CaptureMouse( requested != qfalse )", update_capture
+        )
+        self.assertLess(
+            update_capture.index("return;", update_capture.index("SDL_CaptureMouse")),
+            update_capture.index("s_absCaptureActive = requested;"),
+        )
+
+        release_capture = function_body(source, "IN_EndTemporaryMouseCapture")
+        self.assertLess(
+            release_capture.index("s_absCaptureButtons = 0;"),
+            release_capture.index("IN_UpdateTemporaryMouseCapture();"),
+        )
 
     def test_sdl_latches_the_applied_mode_and_only_recentres_on_entry(self) -> None:
         source = read_text("code/sdl/sdl_input.cpp")
         apply_mode = function_body(source, "IN_ApplyPointerMode")
         release = function_body(source, "IN_ReleasePointer")
 
-        # A steady state must issue no SDL calls at all.
+        # Pointer-mode calls remain transition-latched. Temporary drag capture
+        # is reconciled before that early return so a failed capture/release can
+        # be retried on the next frame.
+        self.assertLess(
+            apply_mode.index("IN_UpdateTemporaryMouseCapture();"),
+            apply_mode.index(
+                "mode == s_pointerMode && !in_nograb->modified"
+            ),
+        )
         self.assertIn("mode == s_pointerMode && !in_nograb->modified", apply_mode)
         self.assertIn("mode.relativeMotion != s_pointerMode.relativeMotion", apply_mode)
         self.assertIn("SDL_SetWindowMouseGrab( SDL_window, mode.confineToWindow )", apply_mode)
@@ -197,8 +239,16 @@ class WindowedMouseSourceTests(unittest.TestCase):
         focus_lost = window_event.index("case SDL_EVENT_WINDOW_FOCUS_LOST:")
         focus_gained = window_event.index("case SDL_EVENT_WINDOW_FOCUS_GAINED:")
         self.assertIn(
-            "IN_EndTemporaryMouseCapture();",
+            "IN_QueueInputReset( qfalse );",
             window_event[focus_lost:focus_gained],
+        )
+        self.assertIn(
+            "IN_ResetInputState();",
+            function_body(source, "IN_QueueInputReset"),
+        )
+        self.assertIn(
+            "IN_EndTemporaryMouseCapture();",
+            function_body(source, "IN_ResetInputState"),
         )
 
     def test_win32_shares_one_resolver_between_the_pump_and_the_frame(self) -> None:
@@ -214,14 +264,22 @@ class WindowedMouseSourceTests(unittest.TestCase):
             wndproc,
         )
         self.assertIn("pointerOwner != fnql::input::PointerOwner::Gameplay", wndproc)
-        self.assertIn("pointerOwner == fnql::input::PointerOwner::Menu", wndproc)
+        self.assertIn(
+            "fnql::input::PointerOwnerReportsAbsolute( pointerOwner )", wndproc
+        )
         self.assertNotIn("WIN_ConsoleUsesAbsolutePointer", wndproc)
         # Extended buttons and drag capture stay intact.
         self.assertIn("case WM_XBUTTONDOWN:", wndproc)
         self.assertIn("case WM_XBUTTONUP:", wndproc)
         self.assertIn("K_MOUSE4 : K_MOUSE5", wndproc)
         self.assertIn("SetCapture( hWnd );", wndproc)
-        self.assertIn("ReleaseCapture();", wndproc)
+        self.assertIn("WIN_ReleaseTemporaryMouseCapture();", wndproc)
+        release = function_body(wndproc, "WIN_ReleaseTemporaryMouseCapture")
+        self.assertIn("if ( !ReleaseCapture() )", release)
+        self.assertLess(
+            release.index("return;"),
+            release.index("temporaryMouseCapture = qfalse;"),
+        )
 
     def test_win32_stops_driving_overlays_while_unfocused_and_confines_fullscreen(self) -> None:
         win_input = read_text("code/win32/win_input.cpp")
@@ -240,13 +298,44 @@ class WindowedMouseSourceTests(unittest.TestCase):
         )
         self.assertIn("IN_SetPointerConfinement( mode.confineToWindow ? qtrue : qfalse );",
                       absolute_block)
-        self.assertIn("ClipCursor( &window_rect );", confinement)
+        self.assertIn("if ( ClipCursor( &window_rect ) )", confinement)
+        self.assertIn("s_pointerConfined = qtrue;", confinement)
         self.assertIn("EqualRect( &window_rect, &s_pointerConfineRect )", confinement)
-        self.assertIn("ClipCursor( NULL );", confinement)
+        self.assertIn("if ( ClipCursor( NULL ) )", confinement)
+        self.assertIn("s_pointerConfined = qfalse;", confinement)
         # Windows drops the clip region on deactivation; the latch must follow.
         self.assertIn("IN_SetPointerConfinement( qfalse );", activate)
         self.assertIn("IN_SetPointerConfinement( qfalse );",
                       function_body(win_input, "IN_Shutdown"))
+
+    def test_win32_cursor_transitions_are_latched_and_nograb_is_gameplay_only(
+        self,
+    ) -> None:
+        win_input = read_text("code/win32/win_input.cpp")
+        cursor = function_body(win_input, "IN_SetSystemCursorVisible")
+        frame = function_body(win_input, "IN_Frame")
+        mouse_active = function_body(win_input, "IN_MouseActive")
+
+        assert_latch = (
+            "s_cursorVisibilityRequestValid &&\n"
+            "\t\ts_cursorVisibilityRequested == visible"
+        )
+        self.assertIn(assert_latch, cursor)
+        self.assertLess(cursor.index(assert_latch), cursor.index("ShowCursor("))
+        self.assertIn("s_cursorVisibilityRequestValid = qtrue;", cursor)
+        self.assertIn("s_cursorVisibilityRequested = visible;", cursor)
+
+        absolute_start = frame.index("PointerOwnerReportsAbsolute( owner )")
+        gameplay_start = frame.rindex("WIN_ReleaseTemporaryMouseCapture();")
+        absolute = frame[absolute_start:gameplay_start]
+        gameplay = frame[gameplay_start:]
+        self.assertIn("IN_SetSystemCursorVisible( qtrue );", absolute)
+        self.assertNotIn("in_nograb->integer", absolute)
+        self.assertIn("!mode.driveInput || in_nograb->integer", gameplay)
+
+        self.assertIn("in_nograb->integer == 0", mouse_active)
+        self.assertIn("gw_active && WIN_WindowFocused()", mouse_active)
+        self.assertIn("!gw_minimized", mouse_active)
 
     def test_win32_legacy_mouse_messages_only_drive_the_legacy_source(self) -> None:
         """A legacy WM_MOUSEMOVE that arrives while raw input or DirectInput owns
@@ -262,14 +351,27 @@ class WindowedMouseSourceTests(unittest.TestCase):
 
         gate = function_body(win_input, "IN_LegacyMouseDrivesInput")
         self.assertIn("IN_MouseActive()", gate)
-        self.assertIn("raw_activated || g_pMouse", gate)
+        self.assertIn("s_legacyMouseDriving", gate)
         self.assertIn("qboolean IN_LegacyMouseDrivesInput( void );", win_local)
         # The pump consults the gate before synthesizing gameplay deltas, and
         # still swallows the stale message rather than handing it to Windows.
         self.assertIn("if ( IN_LegacyMouseDrivesInput() ) {", wndproc)
+        legacy_gate = wndproc.index("if ( IN_LegacyMouseDrivesInput() ) {")
+        legacy_call = wndproc.index("IN_Win32MouseEvent(", legacy_gate)
         self.assertLess(
-            wndproc.index("if ( IN_LegacyMouseDrivesInput() ) {"),
-            wndproc.index("IN_Win32MouseEvent( LOWORD(lParam), HIWORD(lParam), mstate );"),
+            legacy_gate,
+            legacy_call,
+        )
+        legacy_block = wndproc[legacy_call : wndproc.index(
+            "return WIN_MouseMessageResult( uMsg );", legacy_call
+        )]
+        self.assertIn(
+            "static_cast<int>( static_cast<short>( LOWORD( lParam ) ) )",
+            legacy_block,
+        )
+        self.assertIn(
+            "static_cast<int>( static_cast<short>( HIWORD( lParam ) ) )",
+            legacy_block,
         )
 
     def test_x11_shares_one_grab_and_latches_the_cursor(self) -> None:

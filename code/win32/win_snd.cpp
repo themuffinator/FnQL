@@ -24,6 +24,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "win_local.h"
 #include "win_raii.h"
 
+#include <atomic>
+#include <limits>
+
 static qboolean	dsound_init;
 static qboolean SNDDMA_InitDS( void );
 
@@ -69,10 +72,10 @@ static qboolean IsWindows7OrGreater( void ) {
 
 
 UINT32				bufferFrameCount;
-UINT32				bufferPosition; // in fullsamples
+std::atomic<UINT32>	bufferPosition{ 0 }; // in fullsamples
 UINT32				bufferSampleSize;
 
-static int			inPlay;
+static std::atomic_bool inPlay{ false };
 static fnql::win::ScopedHandle hEvent;
 static fnql::win::ScopedHandle hThread;
 
@@ -92,7 +95,7 @@ const GUID PcmSubformatGuid = { 0x00000001, 0x0000, 0x0010, { 0x80, 0x00, 0x00, 
 const GUID FloatSubformatGuid = { 0x00000003, 0x0000, 0x0010, { 0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71 } };
 
 static fnql::win::ScopedCoTaskMem<WCHAR> DeviceID;
-static qboolean doSndRestart = qfalse;
+static std::atomic_bool doSndRestart{ false };
 
 static fnql::win::ScopedComPtr<IAudioRenderClient> iAudioRenderClient;
 static fnql::win::ScopedComPtr<IAudioClient> iAudioClient;
@@ -159,8 +162,9 @@ static DWORD WINAPI ThreadProc( LPVOID initEvent )
 			th = pAvSetMmThreadCharacteristicsW( L"Pro Audio", &taskIndex );
 			if ( th == NULL )
 			{
-				Com_Printf( S_COLOR_YELLOW "WASAPI: thread priority setup failed\n" );
-				goto err_exit;
+				// MMCSS improves glitch resistance but is not required for
+				// correct playback. Restricted accounts and Wine may deny it.
+				Com_Printf( S_COLOR_YELLOW "WASAPI: thread priority setup failed; continuing at normal priority\n" );
 			}
 		}
 		else
@@ -174,13 +178,17 @@ static DWORD WINAPI ThreadProc( LPVOID initEvent )
 		REFERENCE_TIME streamLatency;
 		if ( iAudioClient->lpVtbl->GetStreamLatency( iAudioClient.get(), &streamLatency ) != S_OK )
 		{
-			Com_Printf( S_COLOR_YELLOW "WASAPI: GetStreamLatency() failed\n" );
-			goto err_exit;
+			// This is diagnostic-only and must never make developer mode
+			// change whether audio can start.
+			Com_Printf( S_COLOR_YELLOW "WASAPI: GetStreamLatency() failed; continuing without latency diagnostics\n" );
 		}
-		Com_Printf( S_COLOR_CYAN "WASAPI stream latency: %ims\n", (int)( streamLatency / 10000 ) );
+		else
+		{
+			Com_Printf( S_COLOR_CYAN "WASAPI stream latency: %ims\n", (int)( streamLatency / 10000 ) );
+		}
 	}
 
-	inPlay = 1;
+	inPlay.store( true, std::memory_order_release );
 	bufferPosition = 0;
 	numFramesAvailable = bufferFrameCount;
 
@@ -211,7 +219,7 @@ static DWORD WINAPI ThreadProc( LPVOID initEvent )
 	for ( ;; )
 	{
 		dwRes = WaitForSingleObject( hEvent.get(), INFINITE );
-		if ( !inPlay || dwRes != WAIT_OBJECT_0 )
+		if ( !inPlay.load( std::memory_order_acquire ) || dwRes != WAIT_OBJECT_0 )
 			break;
 
 		if ( iAudioClient->lpVtbl->GetCurrentPadding( iAudioClient.get(), &numFramesAvailable ) != S_OK )
@@ -232,15 +240,18 @@ static DWORD WINAPI ThreadProc( LPVOID initEvent )
 			// fill pData with numFramesAvailable
 			do
 			{
-				if ( bufferPosition + samples > dma.fullsamples )
-					n = dma.fullsamples - bufferPosition;
+				const UINT32 position = bufferPosition.load( std::memory_order_relaxed );
+				if ( position + samples > static_cast<UINT32>( dma.fullsamples ) )
+					n = static_cast<UINT32>( dma.fullsamples ) - position;
 				else
 					n = samples;
 
-				Com_Memcpy( pData + dwOffset, dma.buffer + bufferPosition * bufferSampleSize, n * bufferSampleSize );
+				Com_Memcpy( pData + dwOffset, dma.buffer + position * bufferSampleSize, n * bufferSampleSize );
 
 				dwOffset += n * bufferSampleSize;
-				bufferPosition = ( bufferPosition + n ) & ( dma.fullsamples - 1 );
+				bufferPosition.store(
+					( position + n ) & static_cast<UINT32>( dma.fullsamples - 1 ),
+					std::memory_order_release );
 				samples -= n;
 			}
 			while ( samples );
@@ -260,7 +271,7 @@ err_exit:
 			pAvRevertMmThreadCharacteristics( th );
 	}
 
-	inPlay = 0;
+	inPlay.store( false, std::memory_order_release );
 	bufferPosition = 0;
 
 	if ( hInited )
@@ -329,7 +340,7 @@ static HRESULT STDMETHODCALLTYPE OnDefaultDeviceChanged( IMMNotificationClient *
 	(void)pwstrDeviceId;
 	if ( flow == eRender && role == eMultimedia )
 	{
-		doSndRestart = qtrue;
+		doSndRestart.store( true, std::memory_order_release );
 	}
 	return S_OK;
 }
@@ -355,11 +366,14 @@ static HRESULT STDMETHODCALLTYPE OnDeviceStateChanged( IMMNotificationClient *se
 	{
 		if ( dwNewState == DEVICE_STATE_ACTIVE )
 		{
-			doSndRestart = qtrue;
+			doSndRestart.store( true, std::memory_order_release );
 		}
 		else // DEVICE_STATE_DISABLED, DEVICE_STATE_NOTPRESENT, DEVICE_STATE_UNPLUGGED
 		{
-			inPlay = 0; // do not waste CPU cycles, terminate mixer thread
+			inPlay.store( false, std::memory_order_release );
+			if ( hEvent ) {
+				SetEvent( hEvent.get() );
+			}
 		}
 	}
 	return S_OK;
@@ -403,23 +417,26 @@ static qboolean SNDDMA_InitWASAPI( void )
 
 	hr = CoCreateInstance( CLSID_MMDeviceEnumerator, 0, CLSCTX_ALL, IID_IMMDeviceEnumerator,
 		reinterpret_cast<void **>( pEnumerator.receive() ) );
-	if ( hr != S_OK )
+	if ( FAILED( hr ) )
 	{
-		Com_Printf( S_COLOR_YELLOW "WASAPI: CoCreateInstance() failed\n" );
+		Com_Printf( S_COLOR_YELLOW "WASAPI: CoCreateInstance() failed (HRESULT 0x%08lx)\n",
+			static_cast<unsigned long>( static_cast<DWORD>( hr ) ) );
 		goto error1;
 	}
 
 	hr = pEnumerator->lpVtbl->RegisterEndpointNotificationCallback( pEnumerator.get(), (IMMNotificationClient*) &notification_client );
-	if ( hr != S_OK )
+	if ( FAILED( hr ) )
 	{
-		Com_Printf( S_COLOR_YELLOW "WASAPI: RegisterEndpointNotificationCallback() failed\n" );
+		Com_Printf( S_COLOR_YELLOW "WASAPI: RegisterEndpointNotificationCallback() failed (HRESULT 0x%08lx)\n",
+			static_cast<unsigned long>( static_cast<DWORD>( hr ) ) );
 		goto error2;
 	}
 
 	hr = pEnumerator->lpVtbl->GetDefaultAudioEndpoint( pEnumerator.get(), eRender, eMultimedia, iMMDevice.receive() );
-	if ( hr != S_OK )
+	if ( FAILED( hr ) )
 	{
-		Com_Printf( S_COLOR_YELLOW "WASAPI: GetDefaultAudioEndpoint() failed\n" );
+		Com_Printf( S_COLOR_YELLOW "WASAPI: GetDefaultAudioEndpoint() failed (HRESULT 0x%08lx)\n",
+			static_cast<unsigned long>( static_cast<DWORD>( hr ) ) );
 		goto error2;
 	}
 
@@ -428,9 +445,10 @@ static qboolean SNDDMA_InitWASAPI( void )
 
 	hr = iMMDevice->lpVtbl->Activate( iMMDevice.get(), IID_IAudioClient, CLSCTX_ALL, 0,
 		reinterpret_cast<void **>( iAudioClient.receive() ) );
-	if ( hr != S_OK )
+	if ( FAILED( hr ) )
 	{
-		Com_Printf( S_COLOR_YELLOW "WASAPI: audio client activation failed\n" );
+		Com_Printf( S_COLOR_YELLOW "WASAPI: audio client activation failed (HRESULT 0x%08lx)\n",
+			static_cast<unsigned long>( static_cast<DWORD>( hr ) ) );
 		goto error3;
 	}
 
@@ -505,6 +523,18 @@ static qboolean SNDDMA_InitWASAPI( void )
 			Com_Printf( S_COLOR_YELLOW "WASAPI: unsupported sample count %i\n", desiredFormat.Format.wBitsPerSample );
 			goto error3;
 	}
+	if ( desiredFormat.Format.nSamplesPerSec == 0 ||
+		desiredFormat.Format.nSamplesPerSec > 384000 ||
+		desiredFormat.Format.nBlockAlign !=
+			desiredFormat.Format.nChannels * ( desiredFormat.Format.wBitsPerSample / 8 ) ) {
+		Com_Printf( S_COLOR_YELLOW
+			"WASAPI: device returned an inconsistent format (%lu Hz, %u channels, %u bits, block align %u)\n",
+			static_cast<unsigned long>( desiredFormat.Format.nSamplesPerSec ),
+			static_cast<unsigned>( desiredFormat.Format.nChannels ),
+			static_cast<unsigned>( desiredFormat.Format.wBitsPerSample ),
+			static_cast<unsigned>( desiredFormat.Format.nBlockAlign ) );
+		goto error3;
+	}
 
 	if ( desiredFormat.Format.nSamplesPerSec != (DWORD) dma.speed )
 	{
@@ -534,9 +564,10 @@ static qboolean SNDDMA_InitWASAPI( void )
 
 	// initialize sound device with desired format in shared mode
 	hr = iAudioClient->lpVtbl->Initialize( iAudioClient.get(), AUDCLNT_SHAREMODE_SHARED, dwStreamFlags, 0, 0, (WAVEFORMATEX *) &desiredFormat, 0 );
-	if ( hr != S_OK )
+	if ( FAILED( hr ) )
 	{
-		Com_Printf( S_COLOR_YELLOW "WASAPI: Initialize() failed\n" );
+		Com_Printf( S_COLOR_YELLOW "WASAPI: Initialize() failed (HRESULT 0x%08lx)\n",
+			static_cast<unsigned long>( static_cast<DWORD>( hr ) ) );
 		goto error4;
 	}
 
@@ -548,9 +579,17 @@ static qboolean SNDDMA_InitWASAPI( void )
 	}
 
 	// get the actual size of the audio buffer
-	if ( iAudioClient->lpVtbl->GetBufferSize( iAudioClient.get(), &bufferFrameCount ) != S_OK )
+	hr = iAudioClient->lpVtbl->GetBufferSize( iAudioClient.get(), &bufferFrameCount );
+	if ( FAILED( hr ) )
 	{
-		Com_Printf( S_COLOR_YELLOW "WASAPI: GetBufferSize() failed\n" );
+		Com_Printf( S_COLOR_YELLOW "WASAPI: GetBufferSize() failed (HRESULT 0x%08lx)\n",
+			static_cast<unsigned long>( static_cast<DWORD>( hr ) ) );
+		goto error5;
+	}
+	if ( bufferFrameCount == 0 ||
+		bufferFrameCount > static_cast<UINT32>( ( std::numeric_limits<int>::max )() / 8 ) ) {
+		Com_Printf( S_COLOR_YELLOW "WASAPI: invalid device buffer frame count %lu\n",
+			static_cast<unsigned long>( bufferFrameCount ) );
 		goto error5;
 	}
 
@@ -607,7 +646,7 @@ static qboolean SNDDMA_InitWASAPI( void )
 	WaitForSingleObject( hInited.get(), INFINITE );
 	hInited.reset();
 
-	if ( inPlay )
+	if ( inPlay.load( std::memory_order_acquire ) )
 		return qtrue;
 
 	Com_Printf( S_COLOR_YELLOW "WASAPI: mixer thread startup failed\n" );
@@ -649,7 +688,7 @@ error1:
 
 static void Done_WASAPI( void )
 {
-	inPlay = 0; // break mixer loop
+	inPlay.store( false, std::memory_order_release ); // break mixer loop
 
 	if ( hEvent )
 		SetEvent( hEvent.get() );
@@ -751,6 +790,7 @@ void SNDDMA_Shutdown( void ) {
 	dsound_init = qfalse;
 #if USE_WASAPI
 	wasapi_init = qfalse;
+	doSndRestart.store( false, std::memory_order_release );
 #endif
 	memset( &dma, 0, sizeof( dma ) );
 
@@ -789,15 +829,25 @@ qboolean SNDDMA_Init( void ) {
 	dsound_init = qfalse;
 #if USE_WASAPI
 	wasapi_init = qfalse;
+	doSndRestart.store( false, std::memory_order_release );
 #endif
-	if ( s_soundCom.initialize() != S_OK ) {
+	const HRESULT comResult = s_soundCom.initialize();
+	if ( !s_soundCom ) {
+		Com_Printf( S_COLOR_YELLOW "Windows audio: COM initialization is unavailable (HRESULT 0x%08lx)\n",
+			static_cast<unsigned long>( static_cast<DWORD>( comResult ) ) );
 		return qfalse;
+	}
+	if ( comResult == RPC_E_CHANGED_MODE ) {
+		Com_DPrintf( "Windows audio: reusing COM initialized with another apartment model\n" );
 	}
 #if USE_WASAPI
 	if ( Q_stricmp( s_driver->string, "wasapi" ) == 0 && SNDDMA_InitWASAPI() ) {
 		dma.driver = "WASAPI";
 		wasapi_init = qtrue;
 		return qtrue;
+	}
+	if ( Q_stricmp( s_driver->string, "wasapi" ) == 0 ) {
+		Com_Printf( S_COLOR_YELLOW "WASAPI initialization failed; trying DirectSound fallback\n" );
 	}
 #endif
 	if ( SNDDMA_InitDS() ) {
@@ -848,13 +898,20 @@ static qboolean SNDDMA_InitDS( void )
 		use8 = 0;
 		if( FAILED( hresult = CoCreateInstance(CLSID_DirectSound, NULL, CLSCTX_INPROC_SERVER, IID_IDirectSound,
 			reinterpret_cast<void **>( pDS.receive() ) ) ) ) {
-			Com_Printf ("failed\n");
+			Com_Printf( "DirectSound creation failed (HRESULT 0x%08lx)\n",
+				static_cast<unsigned long>( static_cast<DWORD>( hresult ) ) );
 			SNDDMA_Shutdown();
 			return qfalse;
 		}
 	}
 
 	hresult = pDS->lpVtbl->Initialize( pDS.get(), NULL);
+	if ( FAILED( hresult ) ) {
+		Com_Printf( "DirectSound device initialization failed (HRESULT 0x%08lx)\n",
+			static_cast<unsigned long>( static_cast<DWORD>( hresult ) ) );
+		SNDDMA_Shutdown();
+		return qfalse;
+	}
 
 	Com_DPrintf( "ok\n" );
 
@@ -971,20 +1028,42 @@ int SNDDMA_GetDMAPos( void ) {
 #if USE_WASAPI
 	if ( wasapi_init ) {
 		// restart sound system if needed
-		if ( doSndRestart ) {
+		if ( doSndRestart.exchange( false, std::memory_order_acq_rel ) ) {
 			Done_WASAPI();
 			Com_DPrintf( "WASAPI: restart due to device configuration changes\n" );
 			wasapi_init = SNDDMA_InitWASAPI();
-			doSndRestart = qfalse;
+			if ( wasapi_init ) {
+				dma.driver = "WASAPI";
+			} else {
+				Com_Printf( S_COLOR_YELLOW "WASAPI: device reopen failed; trying DirectSound fallback\n" );
+				if ( SNDDMA_InitDS() ) {
+					dsound_init = qtrue;
+					dma.driver = "DirectSound";
+				} else {
+					dma.channels = 1;
+					Com_Printf( S_COLOR_YELLOW "Windows audio device recovery failed; scheduling a full sound restart\n" );
+					Cbuf_AddText( "snd_restart\n" );
+					return 0;
+				}
+			}
 		}
-		return ( bufferPosition * dma.channels ) & ( dma.samples - 1 );
+		if ( !wasapi_init ) {
+			DWORD dwWriteCursor;
+			if ( pDSBuf && SUCCEEDED( pDSBuf->lpVtbl->GetCurrentPosition( pDSBuf.get(), NULL, &dwWriteCursor ) ) ) {
+				return ( dwWriteCursor >> sample16 ) & ( dma.samples - 1 );
+			}
+			return 0;
+		}
+		return ( bufferPosition.load( std::memory_order_acquire ) * dma.channels ) & ( dma.samples - 1 );
 	}
 #endif
 	if ( dsound_init ) {
 		DWORD	dwWriteCursor;
 
 		// write position is the only safe position to start update
-		pDSBuf->lpVtbl->GetCurrentPosition( pDSBuf.get(), NULL, &dwWriteCursor );
+		if ( !pDSBuf || FAILED( pDSBuf->lpVtbl->GetCurrentPosition( pDSBuf.get(), NULL, &dwWriteCursor ) ) ) {
+			return 0;
+		}
 
 		return ( dwWriteCursor >> sample16 ) & ( dma.samples - 1 );
 	}
@@ -1084,8 +1163,8 @@ When we change windows we need to do this
 void SNDDMA_Activate( void ) {
 #if USE_WASAPI
 	if ( wasapi_init ) {
-		if ( inPlay == 0 ) {
-			doSndRestart = qtrue;
+		if ( !inPlay.load( std::memory_order_acquire ) ) {
+			doSndRestart.store( true, std::memory_order_release );
 		}
 		return;
 	}

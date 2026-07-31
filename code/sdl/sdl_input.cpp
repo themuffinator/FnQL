@@ -27,6 +27,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include <SDL3/SDL.h>
 
 #include <array>
+#include <cmath>
+#include <cstring>
 
 #include "../client/client.h"
 #include "../client/input_compat.hpp"
@@ -93,34 +95,210 @@ static qboolean mouse_focus;
 static PointerOwner s_pointerOwner = PointerOwner::Gameplay;
 static PointerMode  s_pointerMode;
 static qboolean     s_pointerModeValid;
+static constexpr int kTextInputCatcherMask =
+	KEYCATCH_CONSOLE | KEYCATCH_UI | KEYCATCH_MESSAGE |
+	KEYCATCH_BROWSER;
+static qboolean     s_textInputActive;
+static qboolean     s_textInputFailureReported;
 
 // One dedup cache for every absolute owner. The owner is recorded with it so a
 // cached sample can never suppress the first sample the next owner receives
 // after a catcher change.
 static PointerOwner s_absLastOwner = PointerOwner::Gameplay;
+static int          s_absLastConsumer;
 static qboolean     s_absHaveLast; // s_absLast{X,Y} hold a valid previous sample
 static int          s_absLastX;    // last reported position, to suppress duplicates
 static int          s_absLastY;
 static Uint32       s_absCaptureButtons;
+static qboolean     s_absCaptureActive;
+static qboolean     s_absCaptureFailureReported;
+static qboolean     s_absPointerOutside;
+static float        s_relativeRemainderX;
+static float        s_relativeRemainderY;
+
+struct sdlWheelAccumulator_t {
+	SDL_MouseID device = 0;
+	int consumer = 0;
+	float remainder = 0.0f;
+	std::uint64_t lastUse = 0;
+	bool valid = false;
+};
+
+static std::array<sdlWheelAccumulator_t, 8> s_wheelAccumulators;
+static std::uint64_t s_wheelAccumulatorUse;
+static unsigned int s_mouseAuxButtonState;
+static qboolean     s_pointerApplyFailureReported;
+static SDL_Keymod   s_physicalModifiers;
+static int          s_lastKeyDown;
+static qboolean     s_lastKeyDownWasRepeat;
+static qboolean     s_fullscreenOcclusionReset;
 
 #define CTRL(a) ((a)-'a'+1)
 
-static void IN_ShowCursor( qboolean show )
+static qboolean IN_ShowCursor( qboolean show )
 {
 	if ( show ) {
-		SDL_ShowCursor();
+		return SDL_ShowCursor() ? qtrue : qfalse;
+	}
+	return SDL_HideCursor() ? qtrue : qfalse;
+}
+
+
+static qboolean IN_TextInputOwnerActive( void )
+{
+	if ( !gw_active || gw_minimized ) {
+		return qfalse;
+	}
+
+	return ( cls.state == CA_DISCONNECTED ||
+		( Key_GetCatcher() & kTextInputCatcherMask ) ) ? qtrue : qfalse;
+}
+
+
+static void IN_SetTextInputActive( qboolean active )
+{
+	if ( !SDL_window ) {
+		s_textInputActive = qfalse;
+		s_textInputFailureReported = qfalse;
+		return;
+	}
+	if ( s_textInputActive == active ) {
+		s_textInputFailureReported = qfalse;
+		return;
+	}
+
+	if ( active ) {
+		if ( !SDL_StartTextInput( SDL_window ) ) {
+			if ( !s_textInputFailureReported ) {
+				Com_Printf( S_COLOR_YELLOW
+					"Unable to enable SDL text input: %s\n",
+					SDL_GetError() );
+				s_textInputFailureReported = qtrue;
+			}
+			return;
+		}
 	} else {
-		SDL_HideCursor();
+		// Abandon an unfinished IME/dead-key sequence before returning the
+		// keyboard to gameplay bindings. Stopping must still be attempted if
+		// the platform has no active composition to clear.
+		if ( !SDL_ClearComposition( SDL_window ) ) {
+			Com_DPrintf( "SDL_ClearComposition failed: %s\n", SDL_GetError() );
+		}
+		if ( !SDL_StopTextInput( SDL_window ) ) {
+			if ( !s_textInputFailureReported ) {
+				Com_Printf( S_COLOR_YELLOW
+					"Unable to disable SDL text input: %s\n",
+					SDL_GetError() );
+				s_textInputFailureReported = qtrue;
+			}
+			return;
+		}
+	}
+
+	s_textInputActive = active;
+	s_textInputFailureReported = qfalse;
+}
+
+
+static void IN_ReconcileTextInput( void )
+{
+	IN_SetTextInputActive( IN_TextInputOwnerActive() );
+}
+
+
+static void IN_UpdateTemporaryMouseCapture( void )
+{
+	const qboolean requested = s_absCaptureButtons ? qtrue : qfalse;
+
+	if ( requested == s_absCaptureActive ) {
+		s_absCaptureFailureReported = qfalse;
+		return;
+	}
+	if ( !SDL_CaptureMouse( requested != qfalse ) ) {
+		if ( !s_absCaptureFailureReported ) {
+			Com_Printf( S_COLOR_YELLOW
+				"SDL temporary mouse capture transition failed: %s\n",
+				SDL_GetError() );
+			s_absCaptureFailureReported = qtrue;
+		}
+		return;
+	}
+
+	s_absCaptureActive = requested;
+	s_absCaptureFailureReported = qfalse;
+}
+
+
+static void IN_FinishOutsideCaptureRelease( void )
+{
+	if ( s_absPointerOutside && !s_absCaptureButtons &&
+		!s_absCaptureActive ) {
+		// Capture kept the final release routable outside the window. Once SDL
+		// confirms capture is gone, stop polling that outside desktop position
+		// until this game window receives MOUSE_ENTER again.
+		s_absPointerOutside = qfalse;
+		mouse_focus = qfalse;
+		s_absHaveLast = qfalse;
 	}
 }
 
 
 static void IN_EndTemporaryMouseCapture( void )
 {
-	if ( s_absCaptureButtons ) {
-		SDL_CaptureMouse( false );
-		s_absCaptureButtons = 0;
+	s_absCaptureButtons = 0;
+	IN_UpdateTemporaryMouseCapture();
+	IN_FinishOutsideCaptureRelease();
+}
+
+
+static void IN_ResetWheelAccumulator( void )
+{
+	s_wheelAccumulators.fill( sdlWheelAccumulator_t{} );
+	s_wheelAccumulatorUse = 0;
+}
+
+
+static float& IN_WheelRemainder( SDL_MouseID device, int consumer )
+{
+	sdlWheelAccumulator_t *replacement = &s_wheelAccumulators[0];
+
+	++s_wheelAccumulatorUse;
+	if ( s_wheelAccumulatorUse == 0 ) {
+		// Preserve deterministic replacement even after the theoretical
+		// counter wrap; no wheel remainder depends on the age value itself.
+		for ( sdlWheelAccumulator_t& slot : s_wheelAccumulators ) {
+			slot.lastUse = 0;
+		}
+		s_wheelAccumulatorUse = 1;
 	}
+
+	for ( sdlWheelAccumulator_t& slot : s_wheelAccumulators ) {
+		if ( slot.valid && slot.device == device &&
+			slot.consumer == consumer ) {
+			slot.lastUse = s_wheelAccumulatorUse;
+			return slot.remainder;
+		}
+		if ( !slot.valid ) {
+			replacement = &slot;
+			break;
+		}
+		if ( slot.lastUse < replacement->lastUse ) {
+			replacement = &slot;
+		}
+	}
+
+	*replacement = sdlWheelAccumulator_t{
+		device, consumer, 0.0f, s_wheelAccumulatorUse, true
+	};
+	return replacement->remainder;
+}
+
+
+static void IN_QueueMouseReset( void )
+{
+	Com_QueueEvent( in_eventTime, SE_MOUSE_RESET,
+		static_cast<int>( s_mouseAuxButtonState ), 0, 0, NULL );
+	s_mouseAuxButtonState = 0;
 }
 
 
@@ -155,9 +333,24 @@ static PointerMode IN_ResolvePointerMode( PointerOwner owner )
 	inputs.focused = ( gw_active && mouse_focus ) ? true : false;
 	inputs.minimized = gw_minimized ? true : false;
 	inputs.fullscreen = glw_state.isFullscreen ? true : false;
-	inputs.relativeAvailable = in_mouse->integer > 0;
+	// -1 is the native-Windows selector, but archived/cloud configurations can
+	// reach an SDL build. SDL has one relative implementation, so every
+	// nonzero value degrades to it instead of disabling motion at the edge.
+	inputs.relativeAvailable = in_mouse->integer != 0;
 
 	return fnql::input::ResolvePointerMode( inputs );
+}
+
+
+static int IN_PointerConsumerIdentity( void )
+{
+	const int catcher = Key_GetCatcher();
+
+	if ( catcher & KEYCATCH_CONSOLE ) return KEYCATCH_CONSOLE;
+	if ( catcher & KEYCATCH_BROWSER ) return KEYCATCH_BROWSER;
+	if ( catcher & KEYCATCH_UI ) return KEYCATCH_UI;
+	if ( catcher & KEYCATCH_CGAME ) return KEYCATCH_CGAME;
+	return 0;
 }
 
 /*
@@ -186,6 +379,7 @@ static void IN_PrintKey( const sdlKeyInfo_t *keyinfo, int key, qboolean down )
 	if( keyinfo->mod & SDL_KMOD_RGUI )     Com_Printf( " SDL_KMOD_RGUI" );
 	if( keyinfo->mod & SDL_KMOD_NUM )      Com_Printf( " SDL_KMOD_NUM" );
 	if( keyinfo->mod & SDL_KMOD_CAPS )     Com_Printf( " SDL_KMOD_CAPS" );
+	if( keyinfo->mod & SDL_KMOD_LEVEL5 )   Com_Printf( " SDL_KMOD_LEVEL5" );
 	if( keyinfo->mod & SDL_KMOD_MODE )     Com_Printf( " SDL_KMOD_MODE" );
 
 	Com_Printf( " Q:0x%02x(%s)\n", key, Key_KeynumToString( key ) );
@@ -286,6 +480,57 @@ static qboolean IN_IsConsoleKey( int key, int character )
 	}
 
 	return qfalse;
+}
+
+
+static qboolean IN_IsLayoutConsoleKey( const sdlKeyInfo_t *keyinfo )
+{
+	const SDL_Keymod modifiers = keyinfo->mod;
+	if ( modifiers & ( SDL_KMOD_GUI | SDL_KMOD_LALT ) ) {
+		return qfalse;
+	}
+
+	const qboolean rightAlt =
+		( modifiers & SDL_KMOD_RALT ) ? qtrue : qfalse;
+	const qboolean mode =
+		( modifiers & SDL_KMOD_MODE ) ? qtrue : qfalse;
+	if ( ( modifiers & SDL_KMOD_CTRL ) && !rightAlt && !mode ) {
+		return qfalse;
+	}
+
+	SDL_Keycode candidate = SDL_GetKeyFromScancode(
+		keyinfo->scancode, modifiers, false );
+
+	if ( rightAlt ) {
+		// Windows commonly reports AltGr as synthetic Ctrl+RightAlt. Verify it
+		// against SDL's explicit layout-mode translation. SDL deliberately
+		// normalizes raw RightAlt as an Alt command modifier, so use the verified
+		// MODE result rather than requiring that fallback to equal it.
+		const SDL_Keymod normalModifiers = static_cast<SDL_Keymod>(
+			modifiers & ~( SDL_KMOD_CTRL | SDL_KMOD_RALT | SDL_KMOD_MODE ) );
+		const SDL_Keycode normalCandidate = SDL_GetKeyFromScancode(
+			keyinfo->scancode, normalModifiers, false );
+		const SDL_Keycode altGrCandidate = SDL_GetKeyFromScancode(
+			keyinfo->scancode,
+			static_cast<SDL_Keymod>( normalModifiers | SDL_KMOD_MODE ), false );
+		if ( altGrCandidate == normalCandidate ) {
+			return qfalse;
+		}
+		candidate = altGrCandidate;
+	}
+
+	// SDL reserves high bits for scancode and extended keycode namespaces.
+	// Only a real Unicode scalar can represent a character entry from
+	// cl_consoleKeys.
+	if ( candidate & ( SDLK_SCANCODE_MASK | SDLK_EXTENDED_MASK ) ) {
+		return qfalse;
+	}
+	if ( candidate == 0 || candidate > 0x10ffffu ||
+		( candidate >= 0xd800u && candidate <= 0xdfffu ) ) {
+		return qfalse;
+	}
+
+	return IN_IsConsoleKey( 0, static_cast<int>( candidate ) );
 }
 
 
@@ -411,8 +656,11 @@ static int IN_TranslateSDLToQ3Key( const sdlKeyInfo_t *keyinfo, qboolean down )
 			case SDLK_KP_PLUS:      key = K_KP_PLUS;       break;
 			case SDLK_KP_MINUS:     key = K_KP_MINUS;      break;
 			case SDLK_KP_DIVIDE:    key = K_KP_SLASH;      break;
+			case SDLK_KP_EQUALS:    key = K_KP_EQUALS;     break;
 
 			case SDLK_MODE:         key = K_MODE;          break;
+			case SDLK_LEVEL5_SHIFT: key = K_MODE;          break;
+			case SDLK_MULTI_KEY_COMPOSE: key = K_COMPOSE;  break;
 			case SDLK_HELP:         key = K_HELP;          break;
 			case SDLK_PRINTSCREEN:  key = K_PRINT;         break;
 			case SDLK_SYSREQ:       key = K_SYSREQ;        break;
@@ -455,7 +703,8 @@ static int IN_TranslateSDLToQ3Key( const sdlKeyInfo_t *keyinfo, qboolean down )
 			key = K_CONSOLE;
 		}
 	}
-	else if ( IN_IsConsoleKey( key, 0 ) )
+	else if ( IN_IsConsoleKey( key, 0 ) ||
+		( down && IN_IsLayoutConsoleKey( keyinfo ) ) )
 	{
 		// Console keys can't be bound or generate characters
 		key = K_CONSOLE;
@@ -470,16 +719,17 @@ static int IN_TranslateSDLToQ3Key( const sdlKeyInfo_t *keyinfo, qboolean down )
 IN_GobbleMotionEvents
 ===============
 */
-static void IN_GobbleMouseEvents( void )
+static void IN_GobbleMotionEvents( void )
 {
 	SDL_Event dummy[ 1 ];
 	int val = 0;
 
-	// Gobble any mouse events
+	// Relative-mode transitions can synthesize motion, but button releases and
+	// wheel events are stateful and must retain their queue ordering.
 	SDL_PumpEvents();
 
 	while( ( val = SDL_PeepEvents( dummy, ARRAY_LEN( dummy ), SDL_GETEVENT,
-		SDL_EVENT_MOUSE_MOTION, SDL_EVENT_MOUSE_WHEEL ) ) > 0 ) { }
+		SDL_EVENT_MOUSE_MOTION, SDL_EVENT_MOUSE_MOTION ) ) > 0 ) { }
 
 	if ( val < 0 )
 		Com_Printf( "%s failed: %s\n", __func__, SDL_GetError() );
@@ -521,22 +771,26 @@ which re-pumps input whenever the queue drains.
 ===============
 */
 static void IN_QueueAbsolutePointerPosition( PointerOwner owner,
-	float windowX, float windowY, int eventTime )
+	float windowX, float windowY, int eventTime, qboolean force = qfalse )
 {
+	const int consumer = IN_PointerConsumerIdentity();
 	const fnql::input::PointerPosition position =
 		fnql::input::ProjectPointerToDrawable(
-			static_cast<int>( windowX ), static_cast<int>( windowY ),
-			IN_PointerProjection() );
+			windowX, windowY, IN_PointerProjection() );
 
-	if ( s_absHaveLast && owner == s_absLastOwner
+	if ( !force && s_absHaveLast && owner == s_absLastOwner
+		&& consumer == s_absLastConsumer
 		&& position.x == s_absLastX && position.y == s_absLastY ) {
 		return;
 	}
 
-	s_absLastOwner = owner;
-	s_absLastX = position.x;
-	s_absLastY = position.y;
-	s_absHaveLast = qtrue;
+	if ( !force ) {
+		s_absLastOwner = owner;
+		s_absLastConsumer = consumer;
+		s_absLastX = position.x;
+		s_absLastY = position.y;
+		s_absHaveLast = qtrue;
+	}
 
 	Com_QueueEvent( eventTime, SE_MOUSE_ABSOLUTE, position.x, position.y, 0, NULL );
 }
@@ -567,30 +821,25 @@ static void IN_PollAbsolutePointerPosition( PointerOwner owner )
 ===============
 IN_RestoreDesktopPointer
 
-Run when the pointer stops being driven. Some SDL video drivers leave the
-pointer at the window edge after an ungrab, so relative gameplay ownership is
-released back to a predictable position. An absolute owner is left alone: its
-cursor is the one the user is still looking at.
+Run when an active mode transition stops driving the relative pointer. Some SDL
+video drivers leave it at the window edge after an ungrab, so normalize it
+inside the active window. Absolute ownership and focus loss leave the user's
+visible cursor untouched.
 ===============
 */
 static void IN_RestoreDesktopPointer( PointerOwner previousOwner )
 {
-	const char *drv;
-
-	if ( fnql::input::PointerOwnerReportsAbsolute( previousOwner ) ) {
+	if ( fnql::input::PointerOwnerReportsAbsolute( previousOwner ) ||
+		!gw_active || gw_minimized || !SDL_window ) {
 		return;
 	}
 
-	if ( gw_active ) {
-		SDL_WarpMouseInWindow( SDL_window,
-			glw_state.window_width / 2, glw_state.window_height / 2 );
-		return;
-	}
-
-	drv = SDL_GetCurrentVideoDriver();
-	if ( drv && strcmp( drv, "x11" ) == 0 ) {
-		SDL_WarpMouseGlobal( glw_state.desktop_width / 2, glw_state.desktop_height / 2 );
-	}
+	// Releasing capture during an active mode transition may leave the hidden
+	// relative pointer at a window edge. Focus loss is different: the desktop
+	// cursor already belongs to the user and must never be teleported, notably
+	// to the centre of an unrelated monitor on X11.
+	SDL_WarpMouseInWindow( SDL_window,
+		glw_state.window_width / 2, glw_state.window_height / 2 );
 }
 
 
@@ -609,13 +858,37 @@ static void IN_ApplyPointerMode( void )
 	PointerOwner owner;
 	PointerMode mode;
 
-	if ( !mouseAvailable ) {
+	if ( !mouseAvailable || !SDL_window ) {
 		return;
 	}
 
 	previousOwner = s_pointerOwner;
 	owner = IN_ResolvePointerOwner();
 	mode = IN_ResolvePointerMode( owner );
+
+	// Reconcile against physical state every frame. This both recovers a
+	// release lost outside the event queue and retries a failed SDL capture or
+	// release transition without flooding the log.
+	if ( s_absCaptureButtons ) {
+		const Uint32 reconciledButtons =
+			s_absCaptureButtons & SDL_GetMouseState( nullptr, nullptr );
+		if ( reconciledButtons != s_absCaptureButtons ) {
+			// A release disappeared outside SDL's queue. Balance every logical
+			// mouse key at an ordered barrier, then release capture completely.
+			// The reset releases every logical button, so retaining the
+			// still-physical subset would create capture without matching downs.
+			IN_QueueMouseReset();
+			IN_EndTemporaryMouseCapture();
+		} else {
+			IN_UpdateTemporaryMouseCapture();
+		}
+	}
+	if ( s_absCaptureActive && !s_absCaptureButtons ) {
+		// Retry a failed final release without forgetting that SDL still owns
+		// capture, then stop outside polling as soon as it succeeds.
+		IN_UpdateTemporaryMouseCapture();
+		IN_FinishOutsideCaptureRelease();
+	}
 
 	// in_nograb releases the gameplay pointer for streaming and debugging.
 	// Overlay owners already run with a free pointer, so the request only has to
@@ -628,9 +901,32 @@ static void IN_ApplyPointerMode( void )
 		// The coordinate lane changed. Drop drag capture and any pending
 		// relative motion so the new owner starts from a clean sample.
 		IN_EndTemporaryMouseCapture();
-		IN_GobbleMouseEvents();
+		IN_GobbleMotionEvents();
+		s_relativeRemainderX = 0.0f;
+		s_relativeRemainderY = 0.0f;
 		s_absHaveLast = qfalse;
 		s_pointerOwner = owner;
+
+		// Escape can hand a button-down already queued in the gameplay lane to
+		// an absolute owner. Transfer capture for that physically and logically
+		// held drag so its eventual release cannot be lost outside the window.
+		if ( fnql::input::PointerOwnerReportsAbsolute( owner ) ) {
+			const Uint32 heldButtons = SDL_GetMouseState( nullptr, nullptr );
+			qboolean logicalButtonDown = qfalse;
+			for ( int key = K_MOUSE1; key <= K_MOUSE9; ++key ) {
+				if ( keys[key].down ) {
+					logicalButtonDown = qtrue;
+					break;
+				}
+			}
+			if ( s_mouseAuxButtonState ) {
+				logicalButtonDown = qtrue;
+			}
+			if ( heldButtons && logicalButtonDown ) {
+				s_absCaptureButtons = heldButtons;
+				IN_UpdateTemporaryMouseCapture();
+			}
+		}
 	}
 
 	if ( s_pointerModeValid && mode == s_pointerMode && !in_nograb->modified ) {
@@ -639,7 +935,9 @@ static void IN_ApplyPointerMode( void )
 
 	// Discard the motion spike SDL emits when relative mode is toggled.
 	if ( s_pointerModeValid && mode.relativeMotion != s_pointerMode.relativeMotion ) {
-		IN_GobbleMouseEvents();
+		IN_GobbleMotionEvents();
+		s_relativeRemainderX = 0.0f;
+		s_relativeRemainderY = 0.0f;
 	}
 
 	if ( !mode.driveInput ) {
@@ -647,9 +945,30 @@ static void IN_ApplyPointerMode( void )
 		s_absHaveLast = qfalse;
 	}
 
-	SDL_SetWindowRelativeMouseMode( SDL_window, mode.relativeMotion );
-	SDL_SetWindowMouseGrab( SDL_window, mode.confineToWindow );
-	IN_ShowCursor( mode.showSystemCursor ? qtrue : qfalse );
+	const qboolean relativeApplied =
+		SDL_SetWindowRelativeMouseMode( SDL_window, mode.relativeMotion ) ? qtrue : qfalse;
+	const qboolean confinementApplied =
+		SDL_SetWindowMouseGrab( SDL_window, mode.confineToWindow ) ? qtrue : qfalse;
+	const qboolean cursorApplied =
+		IN_ShowCursor( mode.showSystemCursor ? qtrue : qfalse );
+
+	if ( !relativeApplied || !confinementApplied || !cursorApplied ) {
+		if ( !s_pointerApplyFailureReported ) {
+			Com_Printf( "%s: SDL pointer transition failed: %s\n",
+				__func__, SDL_GetError() );
+			s_pointerApplyFailureReported = qtrue;
+		}
+
+		// Leave the desktop usable while retaining an invalid latch so the
+		// requested mode is retried on the next frame.
+		SDL_SetWindowRelativeMouseMode( SDL_window, false );
+		SDL_SetWindowMouseGrab( SDL_window, false );
+		IN_ShowCursor( qtrue );
+		s_pointerMode = PointerMode{};
+		s_pointerModeValid = qfalse;
+		return;
+	}
+	s_pointerApplyFailureReported = qfalse;
 
 	// Re-centre only when the confined relative pointer is entered. Warping a
 	// visible menu or console cursor would fight the player.
@@ -688,10 +1007,16 @@ static void IN_ReleasePointer( void )
 	const qboolean wasDriving = ( s_pointerModeValid && s_pointerMode.driveInput ) ? qtrue : qfalse;
 
 	IN_EndTemporaryMouseCapture();
-	IN_GobbleMouseEvents();
+	IN_GobbleMotionEvents();
 
-	SDL_SetWindowMouseGrab( SDL_window, false );
-	SDL_SetWindowRelativeMouseMode( SDL_window, false );
+	if ( SDL_window ) {
+		SDL_SetWindowMouseGrab( SDL_window, false );
+		SDL_SetWindowRelativeMouseMode( SDL_window, false );
+	}
+	// Disabling relative/grab state can make a previously failed capture
+	// release succeed. Preserve the latch if it still fails so an input restart
+	// can retry instead of forgetting an active OS capture.
+	IN_EndTemporaryMouseCapture();
 	IN_ShowCursor( qtrue );
 
 	if ( wasDriving ) {
@@ -702,6 +1027,11 @@ static void IN_ReleasePointer( void )
 	s_pointerMode = PointerMode{};
 	s_pointerModeValid = qfalse;
 	s_absHaveLast = qfalse;
+	s_absPointerOutside = qfalse;
+	s_relativeRemainderX = 0.0f;
+	s_relativeRemainderY = 0.0f;
+	IN_ResetWheelAccumulator();
+	s_pointerApplyFailureReported = qfalse;
 }
 
 
@@ -731,11 +1061,26 @@ static const int hat_keys[16] = {
 	K_JOY19, K_JOY20
 };
 
+static constexpr int kRawJoystickButtonCount = 16;
+static constexpr int kSupportedGamepadButtonCount =
+	static_cast<int>( SDL_GAMEPAD_BUTTON_TOUCHPAD ) + 1;
+static constexpr int kRawDigitalAxisCount =
+	static_cast<int>( ARRAY_LEN( joy_keys ) ) / 2;
+static qboolean s_joystickSubsystemAcquired;
+static qboolean s_gamepadSubsystemAcquired;
+
+static_assert( SDL_GAMEPAD_BUTTON_SOUTH == 0 );
+static_assert(
+	SDL_GAMEPAD_BUTTON_TOUCHPAD - SDL_GAMEPAD_BUTTON_MISC1 ==
+	K_PAD0_TOUCHPAD - K_PAD0_MISC1 );
 
 struct joystickState_t {
-	qboolean buttons[SDL_GAMEPAD_BUTTON_COUNT + 1]; // +1 because old max was 16, current SDL_GAMEPAD_BUTTON_COUNT is 15
+	qboolean gamepadButtons[kSupportedGamepadButtonCount];
+	qboolean rawButtons[kRawJoystickButtonCount];
 	unsigned int oldaxes;
 	int oldaaxes[MAX_JOYSTICK_AXIS];
+	int oldTranslatedAxes[MAX_JOYSTICK_AXIS];
+	qboolean gamepadDigitalDirections[SDL_GAMEPAD_AXIS_COUNT * 2];
 	unsigned int oldhats;
 };
 
@@ -760,6 +1105,25 @@ static void IN_CloseJoystickHandles( void )
 }
 
 
+static qboolean IN_AcquireJoystickSubsystem(
+	Uint32 flags, qboolean *acquired, const char *name )
+{
+	if ( *acquired ) {
+		return qtrue;
+	}
+
+	Com_DPrintf( "Calling SDL_InitSubSystem(%s)...\n", name );
+	if ( !SDL_InitSubSystem( flags ) ) {
+		Com_DPrintf( "SDL_InitSubSystem(%s) failed: %s\n",
+			name, SDL_GetError() );
+		return qfalse;
+	}
+	*acquired = qtrue;
+	Com_DPrintf( "SDL_InitSubSystem(%s) passed.\n", name );
+	return qtrue;
+}
+
+
 /*
 ===============
 IN_InitJoystick
@@ -771,35 +1135,21 @@ static void IN_InitJoystick( void )
 	int i = 0;
 	int total = 0;
 	char buf[16384] = "";
-	fnql::sdl::ScopedSubSystem joystickSubsystem;
-	fnql::sdl::ScopedSubSystem gamepadSubsystem;
 
 	IN_CloseJoystickHandles();
 
-	// Initialize joystick and gamepad subsystems explicitly so the raw
-	// joystick path and the SDL3 gamepad path stay available together.
-	if ( !SDL_WasInit( SDL_INIT_JOYSTICK ) )
-	{
-		Com_DPrintf( "Calling SDL_InitSubSystem(SDL_INIT_JOYSTICK)...\n" );
-		if ( !SDL_InitSubSystem( SDL_INIT_JOYSTICK ) )
-		{
-			Com_DPrintf( "SDL_InitSubSystem(SDL_INIT_JOYSTICK) failed: %s\n", SDL_GetError() );
-			return;
-		}
-		joystickSubsystem = fnql::sdl::ScopedSubSystem( SDL_INIT_JOYSTICK, true );
-		Com_DPrintf( "SDL_InitSubSystem(SDL_INIT_JOYSTICK) passed.\n" );
+	// Acquire one explicit reference for each subsystem, even when another SDL
+	// owner already initialized it. The persistent flags prevent hotplug
+	// re-enumeration from acquiring another reference.
+	if ( !IN_AcquireJoystickSubsystem(
+			SDL_INIT_JOYSTICK, &s_joystickSubsystemAcquired,
+			"SDL_INIT_JOYSTICK" ) ) {
+		return;
 	}
-
-	if ( !SDL_WasInit( SDL_INIT_GAMEPAD ) )
-	{
-		Com_DPrintf( "Calling SDL_InitSubSystem(SDL_INIT_GAMEPAD)...\n" );
-		if ( !SDL_InitSubSystem( SDL_INIT_GAMEPAD ) )
-		{
-			Com_DPrintf( "SDL_InitSubSystem(SDL_INIT_GAMEPAD) failed: %s\n", SDL_GetError() );
-			return;
-		}
-		gamepadSubsystem = fnql::sdl::ScopedSubSystem( SDL_INIT_GAMEPAD, true );
-		Com_DPrintf( "SDL_InitSubSystem(SDL_INIT_GAMEPAD) passed.\n" );
+	if ( !IN_AcquireJoystickSubsystem(
+			SDL_INIT_GAMEPAD, &s_gamepadSubsystemAcquired,
+			"SDL_INIT_GAMEPAD" ) ) {
+		return;
 	}
 
 	fnql::sdl::ScopedSdlMemory<SDL_JoystickID> joysticks( SDL_GetJoysticks( &total ) );
@@ -818,6 +1168,9 @@ static void IN_InitJoystick( void )
 	}
 
 	cv = Cvar_Get( "in_availableJoysticks", buf, CVAR_ROM );
+	// The ROM cvar may already exist from an earlier enumeration. Refresh its
+	// engine-owned value so UI code sees hotplug changes immediately.
+	Cvar_Set( "in_availableJoysticks", buf );
 	Cvar_SetDescription( cv, "List of available joysticks." );
 
 	if( !in_joystick->integer ) {
@@ -830,14 +1183,15 @@ static void IN_InitJoystick( void )
 	if( in_joystickNo->integer < 0 || in_joystickNo->integer >= total )
 		Cvar_Set( "in_joystickNo", "0" );
 
-	in_joystickUseAnalog = Cvar_Get( "in_joystickUseAnalog", "0", CVAR_ARCHIVE );
-	Cvar_SetDescription( in_joystickUseAnalog, "Do not translate joystick axis events to keyboard commands." );
+	in_joystickUseAnalog = Cvar_Get(
+		"in_joystickUseAnalog", "0", CVAR_ARCHIVE | CVAR_LATCH );
+	Cvar_SetDescription( in_joystickUseAnalog,
+		"Do not translate joystick axis events to keyboard commands. "
+		"Changes take effect after an input restart." );
 
 	if ( total <= 0 )
 	{
 		Com_DPrintf( "No joysticks found.\n" );
-		joystickSubsystem.release();
-		gamepadSubsystem.release();
 		return;
 	}
 
@@ -846,16 +1200,11 @@ static void IN_InitJoystick( void )
 
 	if (stick == NULL) {
 		Com_DPrintf( "No joystick opened: %s\n", SDL_GetError() );
-		joystickSubsystem.release();
-		gamepadSubsystem.release();
 		return;
 	}
 
 	if (SDL_IsGamepad(stickInstance))
 		gamepad = SDL_OpenGamepad(stickInstance);
-
-	joystickSubsystem.release();
-	gamepadSubsystem.release();
 
 	Com_DPrintf( "Joystick %d opened\n", in_joystickNo->integer );
 	Com_DPrintf( "Name:       %s\n", SDL_GetJoystickNameForID(stickInstance) ? SDL_GetJoystickNameForID(stickInstance) : "Unknown joystick" );
@@ -875,16 +1224,16 @@ IN_ShutdownJoystick
 */
 static void IN_ShutdownJoystick( void )
 {
-	if ( !SDL_WasInit( SDL_INIT_GAMEPAD ) )
-		return;
-
-	if ( !SDL_WasInit( SDL_INIT_JOYSTICK ) )
-		return;
-
 	IN_CloseJoystickHandles();
 
-	SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
-	SDL_QuitSubSystem(SDL_INIT_JOYSTICK);
+	if ( s_gamepadSubsystemAcquired ) {
+		SDL_QuitSubSystem( SDL_INIT_GAMEPAD );
+		s_gamepadSubsystemAcquired = qfalse;
+	}
+	if ( s_joystickSubsystemAcquired ) {
+		SDL_QuitSubSystem( SDL_INIT_JOYSTICK );
+		s_joystickSubsystemAcquired = qfalse;
+	}
 }
 
 
@@ -953,7 +1302,7 @@ static qboolean KeyToAxisAndSign(int keynum, int *outAxis, int *outSign)
 		*outSign = j_up->value > 0.0f ? -1 : 1;
 	}
 
-	return *outSign != 0;
+	return *outSign != 0 ? qtrue : qfalse;
 }
 
 
@@ -966,7 +1315,9 @@ static void IN_GamepadMove( void )
 {
 	int i;
 	std::array<int, MAX_JOYSTICK_AXIS> translatedAxes = {};
-	std::array<qboolean, MAX_JOYSTICK_AXIS> translatedAxesSet = {};
+	std::array<int, SDL_GAMEPAD_AXIS_COUNT> physicalAxes = {};
+	std::array<qboolean, SDL_GAMEPAD_AXIS_COUNT * 2>
+		digitalDirections = {};
 	static const int negMap[SDL_GAMEPAD_AXIS_COUNT] = {
 		K_PAD0_LEFTSTICK_LEFT,
 		K_PAD0_LEFTSTICK_UP,
@@ -986,11 +1337,13 @@ static void IN_GamepadMove( void )
 
 	SDL_UpdateGamepads();
 
-	// check buttons
-	for (i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; i++)
+	// FnQL's ABI has distinct keys only through SDL3's touchpad button.
+	for ( i = 0; i < kSupportedGamepadButtonCount; ++i )
 	{
-		qboolean pressed = SDL_GetGamepadButton(gamepad, (SDL_GamepadButton)(SDL_GAMEPAD_BUTTON_SOUTH + i)) ? qtrue : qfalse;
-		if (pressed != stick_state.buttons[i])
+		const qboolean pressed = SDL_GetGamepadButton(
+			gamepad, static_cast<SDL_GamepadButton>( i ) )
+				? qtrue : qfalse;
+		if ( pressed != stick_state.gamepadButtons[i] )
 		{
 			if ( i >= SDL_GAMEPAD_BUTTON_MISC1 ) {
 				Com_QueueEvent(in_eventTime, SE_KEY, K_PAD0_MISC1 + i - SDL_GAMEPAD_BUTTON_MISC1, pressed, 0, NULL);
@@ -998,98 +1351,87 @@ static void IN_GamepadMove( void )
 			{
 				Com_QueueEvent(in_eventTime, SE_KEY, K_PAD0_SOUTH + i, pressed, 0, NULL);
 			}
-			stick_state.buttons[i] = pressed;
+			stick_state.gamepadButtons[i] = pressed;
 		}
 	}
 
-	// must defer translated axes until all real axes are processed
-	// must be done this way to prevent a later mapped axis from zeroing out a previous one
-	// check axes
-	for (i = 0; i < SDL_GAMEPAD_AXIS_COUNT; i++)
-	{
-		int axis = SDL_GetGamepadAxis(gamepad, (SDL_GamepadAxis)(SDL_GAMEPAD_AXIS_LEFTX + i));
-		int oldAxis = stick_state.oldaaxes[i];
+	for ( i = 0; i < SDL_GAMEPAD_AXIS_COUNT; ++i ) {
+		physicalAxes[i] = fnql::input::ApplyJoystickDeadzone(
+			SDL_GetGamepadAxis( gamepad, static_cast<SDL_GamepadAxis>(
+				SDL_GAMEPAD_AXIS_LEFTX + i ) ),
+			in_joystickThreshold->value );
+	}
 
-		// Smoothly ramp from dead zone to maximum value
-		float f = ((float)abs(axis) / 32767.0f - in_joystickThreshold->value) / (1.0f - in_joystickThreshold->value);
+	/*
+	Recompute every translated output from the complete physical snapshot.
+	Bindings may change while an axis is held, and multiple physical axes may
+	target the same output; greatest magnitude gives deterministic aggregation.
+	*/
+	for ( i = 0; i < SDL_GAMEPAD_AXIS_COUNT; ++i ) {
+		const int axis = physicalAxes[i];
+		const int negKey = negMap[i];
+		const int posKey = posMap[i];
+		qboolean posAnalog = qfalse;
+		qboolean negAnalog = qfalse;
 
-		if (f < 0.0f)
-			f = 0.0f;
+		if ( in_joystickUseAnalog->integer ) {
+			int posAxis = 0;
+			int posSign = 0;
+			int negAxis = 0;
+			int negSign = 0;
 
-		axis = (int)(32767 * ((axis < 0) ? -f : f));
-
-		if (axis != oldAxis)
-		{
-			qboolean posAnalog = qfalse, negAnalog = qfalse;
-			int negKey = negMap[i];
-			int posKey = posMap[i];
-
-			if (in_joystickUseAnalog->integer)
-			{
-				int posAxis = 0, posSign = 0, negAxis = 0, negSign = 0;
-
-				// get axes and axes signs for keys if available
-				posAnalog = KeyToAxisAndSign(posKey, &posAxis, &posSign);
-				negAnalog = KeyToAxisAndSign(negKey, &negAxis, &negSign);
-
-				// positive to negative/neutral -> keyup if axis hasn't yet been set
-				if (posAnalog && !translatedAxesSet[posAxis] && oldAxis > 0 && axis <= 0)
-				{
-					translatedAxes[posAxis] = 0;
-					translatedAxesSet[posAxis] = qtrue;
-				}
-
-				// negative to positive/neutral -> keyup if axis hasn't yet been set
-				if (negAnalog && !translatedAxesSet[negAxis] && oldAxis < 0 && axis >= 0)
-				{
-					translatedAxes[negAxis] = 0;
-					translatedAxesSet[negAxis] = qtrue;
-				}
-
-				// negative/neutral to positive -> keydown
-				if (posAnalog && axis > 0)
-				{
-					translatedAxes[posAxis] = axis * posSign;
-					translatedAxesSet[posAxis] = qtrue;
-				}
-
-				// positive/neutral to negative -> keydown
-				if (negAnalog && axis < 0)
-				{
-					translatedAxes[negAxis] = -axis * negSign;
-					translatedAxesSet[negAxis] = qtrue;
-				}
+			posAnalog = KeyToAxisAndSign( posKey, &posAxis, &posSign );
+			negAnalog = KeyToAxisAndSign( negKey, &negAxis, &negSign );
+			if ( posAnalog && axis > 0 ) {
+				translatedAxes[posAxis] = fnql::input::StrongerJoystickAxis(
+					translatedAxes[posAxis], axis * posSign );
 			}
-
-			// keyups first so they get overridden by keydowns later
-
-			// positive to negative/neutral -> keyup
-			if (!posAnalog && posKey && oldAxis > 0 && axis <= 0)
-				Com_QueueEvent(in_eventTime, SE_KEY, posKey, qfalse, 0, NULL);
-
-			// negative to positive/neutral -> keyup
-			if (!negAnalog && negKey && oldAxis < 0 && axis >= 0)
-				Com_QueueEvent(in_eventTime, SE_KEY, negKey, qfalse, 0, NULL);
-
-			// negative/neutral to positive -> keydown
-			if (!posAnalog && posKey && oldAxis <= 0 && axis > 0)
-				Com_QueueEvent(in_eventTime, SE_KEY, posKey, qtrue, 0, NULL);
-
-			// positive/neutral to negative -> keydown
-			if (!negAnalog && negKey && oldAxis >= 0 && axis < 0)
-				Com_QueueEvent(in_eventTime, SE_KEY, negKey, qtrue, 0, NULL);
-
-			stick_state.oldaaxes[i] = axis;
+			if ( negAnalog && axis < 0 ) {
+				translatedAxes[negAxis] = fnql::input::StrongerJoystickAxis(
+					translatedAxes[negAxis], -axis * negSign );
+			}
 		}
+
+		// Store desired digital state rather than inferring it from oldAxis.
+		// A live binding edit can reclassify a held direction between an analog
+		// output and a key even though the physical value did not change.
+		digitalDirections[i * 2] =
+			!negAnalog && negKey && axis < 0 ? qtrue : qfalse;
+		digitalDirections[i * 2 + 1] =
+			!posAnalog && posKey && axis > 0 ? qtrue : qfalse;
+
+		stick_state.oldaaxes[i] = axis;
 	}
 
-	// set translated axes
-	if (in_joystickUseAnalog->integer)
-	{
-		for (i = 0; i < MAX_JOYSTICK_AXIS; i++)
-		{
-			if (translatedAxesSet[i])
-				Com_QueueEvent(in_eventTime, SE_JOYSTICK_AXIS, i, translatedAxes[i], 0, NULL);
+	// Balance every obsolete direction before pressing any replacement. This
+	// gives sign crossings and live binding changes deterministic ordering.
+	for ( i = 0; i < SDL_GAMEPAD_AXIS_COUNT * 2; ++i ) {
+		const int axis = i / 2;
+		const int key = ( i & 1 ) ? posMap[axis] : negMap[axis];
+		if ( stick_state.gamepadDigitalDirections[i] &&
+			!digitalDirections[i] && key ) {
+			Com_QueueEvent(
+				in_eventTime, SE_KEY, key, qfalse, 0, NULL );
+		}
+	}
+	for ( i = 0; i < SDL_GAMEPAD_AXIS_COUNT * 2; ++i ) {
+		const int axis = i / 2;
+		const int key = ( i & 1 ) ? posMap[axis] : negMap[axis];
+		if ( !stick_state.gamepadDigitalDirections[i] &&
+			digitalDirections[i] && key ) {
+			Com_QueueEvent(
+				in_eventTime, SE_KEY, key, qtrue, 0, NULL );
+		}
+		stick_state.gamepadDigitalDirections[i] = digitalDirections[i];
+	}
+
+	if ( in_joystickUseAnalog->integer ) {
+		for ( i = 0; i < MAX_JOYSTICK_AXIS; ++i ) {
+			if ( translatedAxes[i] != stick_state.oldTranslatedAxes[i] ) {
+				Com_QueueEvent( in_eventTime, SE_JOYSTICK_AXIS,
+					i, translatedAxes[i], 0, NULL );
+				stick_state.oldTranslatedAxes[i] = translatedAxes[i];
+			}
 		}
 	}
 }
@@ -1177,17 +1519,21 @@ static void IN_JoyMove( void )
 			int dx = 0;
 			int dy = 0;
 			SDL_GetJoystickBall(stick, i, &dx, &dy);
-			balldx += dx;
-			balldy += dy;
+			balldx = fnql::input::SaturatingAddInt( balldx, dx );
+			balldy = fnql::input::SaturatingAddInt( balldy, dy );
 		}
 		if (balldx || balldy)
 		{
 			// !!! FIXME: is this good for stick balls, or just mice?
 			// Scale like the mouse input...
-			if (abs(balldx) > 1)
-				balldx *= 2;
-			if (abs(balldy) > 1)
-				balldy *= 2;
+			if ( balldx < -1 || balldx > 1 ) {
+				balldx = fnql::input::SaturatingIntFromInt64(
+					static_cast<std::int64_t>( balldx ) * 2 );
+			}
+			if ( balldy < -1 || balldy > 1 ) {
+				balldy = fnql::input::SaturatingIntFromInt64(
+					static_cast<std::int64_t>( balldy ) * 2 );
+			}
 			Com_QueueEvent( in_eventTime, SE_MOUSE, balldx, balldy, 0, NULL );
 		}
 	}
@@ -1196,15 +1542,15 @@ static void IN_JoyMove( void )
 	total = SDL_GetNumJoystickButtons(stick);
 	if (total > 0)
 	{
-		if (total > ARRAY_LEN(stick_state.buttons))
-			total = ARRAY_LEN(stick_state.buttons);
+		if ( total > kRawJoystickButtonCount )
+			total = kRawJoystickButtonCount;
 		for (i = 0; i < total; i++)
 		{
 			qboolean pressed = (SDL_GetJoystickButton(stick, i) != 0) ? qtrue : qfalse;
-			if (pressed != stick_state.buttons[i])
+			if (pressed != stick_state.rawButtons[i])
 			{
 				Com_QueueEvent( in_eventTime, SE_KEY, K_JOY1 + i, pressed, 0, NULL );
-				stick_state.buttons[i] = pressed;
+				stick_state.rawButtons[i] = pressed;
 			}
 		}
 	}
@@ -1244,12 +1590,19 @@ static void IN_JoyMove( void )
 		if (in_joystickUseAnalog->integer)
 		{
 			if (total > MAX_JOYSTICK_AXIS) total = MAX_JOYSTICK_AXIS;
+			const float deadzone = fnql::input::FiniteJoystickDeadzone(
+				in_joystickThreshold->value );
 			for (i = 0; i < total; i++)
 			{
 				Sint16 axis = SDL_GetJoystickAxis(stick, i);
-				float f = ( (float) abs(axis) ) / 32767.0f;
+				const float f =
+					static_cast<float>( axis < 0 ? -static_cast<int>( axis ) : axis ) /
+					32767.0f;
 				
-				if( f < in_joystickThreshold->value ) axis = 0;
+				// At one the configured deadzone intentionally covers the
+				// complete signed SDL range, including the asymmetric -32768
+				// endpoint. Preserve legacy raw scaling at ordinary thresholds.
+				if ( deadzone >= 1.0f || f < deadzone ) axis = 0;
 
 				if ( axis != stick_state.oldaaxes[i] )
 				{
@@ -1260,15 +1613,21 @@ static void IN_JoyMove( void )
 		}
 		else
 		{
-			if (total > 16) total = 16;
+			if ( total > kRawDigitalAxisCount )
+				total = kRawDigitalAxisCount;
+			const float deadzone = fnql::input::FiniteJoystickDeadzone(
+				in_joystickThreshold->value );
 			for (i = 0; i < total; i++)
 			{
+				if ( deadzone >= 1.0f ) {
+					continue;
+				}
 				Sint16 axis = SDL_GetJoystickAxis(stick, i);
 				float f = ( (float) axis ) / 32767.0f;
-				if( f < -in_joystickThreshold->value ) {
-					axes |= ( 1 << ( i * 2 ) );
-				} else if( f > in_joystickThreshold->value ) {
-					axes |= ( 1 << ( ( i * 2 ) + 1 ) );
+				if( f < -deadzone ) {
+					axes |= ( 1u << ( i * 2 ) );
+				} else if( f > deadzone ) {
+					axes |= ( 1u << ( ( i * 2 ) + 1 ) );
 				}
 			}
 		}
@@ -1277,12 +1636,12 @@ static void IN_JoyMove( void )
 	/* Time to update axes state based on old vs. new. */
 	if (axes != stick_state.oldaxes)
 	{
-		for( i = 0; i < 16; i++ ) {
-			if( ( axes & ( 1 << i ) ) && !( stick_state.oldaxes & ( 1 << i ) ) ) {
+		for( i = 0; i < ARRAY_LEN( joy_keys ); i++ ) {
+			if( ( axes & ( 1u << i ) ) && !( stick_state.oldaxes & ( 1u << i ) ) ) {
 				Com_QueueEvent( in_eventTime, SE_KEY, joy_keys[i], qtrue, 0, NULL );
 			}
 
-			if( !( axes & ( 1 << i ) ) && ( stick_state.oldaxes & ( 1 << i ) ) ) {
+			if( !( axes & ( 1u << i ) ) && ( stick_state.oldaxes & ( 1u << i ) ) ) {
 				Com_QueueEvent( in_eventTime, SE_KEY, joy_keys[i], qfalse, 0, NULL );
 			}
 		}
@@ -1324,7 +1683,156 @@ static const char *eventName( Uint32 event )
 }
 #endif
 
-static void IN_SyncModifiers( void );
+static constexpr SDL_Keymod kModeModifierFamily =
+	static_cast<SDL_Keymod>( SDL_KMOD_MODE | SDL_KMOD_LEVEL5 );
+
+
+static SDL_Keymod IN_ModifierBit(
+	SDL_Scancode scancode, SDL_Keycode keycode )
+{
+	// Level-5 Shift is an SDL extended keycode and deliberately has no
+	// SDL_SCANCODE_LEVEL5_SHIFT identity. Preserve it as a distinct physical
+	// bit while presenting the same logical K_MODE family to the engine.
+	if ( keycode == SDLK_LEVEL5_SHIFT ) {
+		return SDL_KMOD_LEVEL5;
+	}
+
+	switch ( scancode ) {
+		case SDL_SCANCODE_LCTRL:  return SDL_KMOD_LCTRL;
+		case SDL_SCANCODE_RCTRL:  return SDL_KMOD_RCTRL;
+		case SDL_SCANCODE_LSHIFT: return SDL_KMOD_LSHIFT;
+		case SDL_SCANCODE_RSHIFT: return SDL_KMOD_RSHIFT;
+		case SDL_SCANCODE_LALT:   return SDL_KMOD_LALT;
+		case SDL_SCANCODE_RALT:   return SDL_KMOD_RALT;
+		case SDL_SCANCODE_LGUI:   return SDL_KMOD_LGUI;
+		case SDL_SCANCODE_RGUI:   return SDL_KMOD_RGUI;
+		case SDL_SCANCODE_MODE:   return SDL_KMOD_MODE;
+		default:                  return SDL_KMOD_NONE;
+	}
+}
+
+
+static SDL_Keymod IN_ModifierFamily( SDL_Keymod bit )
+{
+	if ( bit & SDL_KMOD_CTRL ) {
+		return SDL_KMOD_CTRL;
+	}
+	if ( bit & SDL_KMOD_SHIFT ) {
+		return SDL_KMOD_SHIFT;
+	}
+	if ( bit & SDL_KMOD_ALT ) {
+		return SDL_KMOD_ALT;
+	}
+	if ( bit & SDL_KMOD_GUI ) {
+		return SDL_KMOD_GUI;
+	}
+	if ( bit & kModeModifierFamily ) {
+		return kModeModifierFamily;
+	}
+	return SDL_KMOD_NONE;
+}
+
+
+static qboolean IN_ShouldQueueModifierTransition(
+	SDL_Scancode scancode, SDL_Keycode keycode, qboolean down )
+{
+	const SDL_Keymod bit = IN_ModifierBit( scancode, keycode );
+	if ( bit == SDL_KMOD_NONE ) {
+		return qtrue;
+	}
+
+	const SDL_Keymod family = IN_ModifierFamily( bit );
+	const qboolean sideWasDown =
+		( s_physicalModifiers & bit ) ? qtrue : qfalse;
+	const qboolean familyWasDown =
+		( s_physicalModifiers & family ) ? qtrue : qfalse;
+	if ( down ) {
+		s_physicalModifiers =
+			static_cast<SDL_Keymod>( s_physicalModifiers | bit );
+		// Preserve key-repeat behavior for the same physical side, while the
+		// second side of a modifier family must not create another logical down.
+		return ( !familyWasDown || sideWasDown ) ? qtrue : qfalse;
+	} else {
+		s_physicalModifiers =
+			static_cast<SDL_Keymod>( s_physicalModifiers & ~bit );
+	}
+	const qboolean familyIsDown =
+		( s_physicalModifiers & family ) ? qtrue : qfalse;
+	// An unmatched release is useful recovery unless the other physical side
+	// is known to remain held. CL_KeyEvent safely ignores duplicate releases.
+	return familyIsDown ? qfalse : qtrue;
+}
+
+
+static void IN_QueueHeldModifiers( int eventTime )
+{
+	s_physicalModifiers = SDL_GetModState();
+	if ( s_physicalModifiers & SDL_KMOD_CTRL ) {
+		Com_QueueEvent( eventTime, SE_KEY, K_CTRL, qtrue, 0, NULL );
+	}
+	if ( s_physicalModifiers & SDL_KMOD_SHIFT ) {
+		Com_QueueEvent( eventTime, SE_KEY, K_SHIFT, qtrue, 0, NULL );
+	}
+	if ( s_physicalModifiers & SDL_KMOD_ALT ) {
+		Com_QueueEvent( eventTime, SE_KEY, K_ALT, qtrue, 0, NULL );
+	}
+	if ( s_physicalModifiers & kModeModifierFamily ) {
+		Com_QueueEvent( eventTime, SE_KEY, K_MODE, qtrue, 0, NULL );
+	}
+#ifdef MACOS_X
+	if ( s_physicalModifiers & SDL_KMOD_GUI ) {
+		Com_QueueEvent( eventTime, SE_KEY, K_COMMAND, qtrue, 0, NULL );
+	}
+#else
+	if ( s_physicalModifiers & SDL_KMOD_GUI ) {
+		Com_QueueEvent( eventTime, SE_KEY, K_SUPER, qtrue, 0, NULL );
+	}
+#endif
+}
+
+
+void IN_QueueInputReset( qboolean rebuildModifiers )
+{
+	const int eventTime = Sys_Milliseconds();
+
+	// Reset producer caches before placing the ordered client barrier. SDL may
+	// continue draining native events afterward; those newer transitions then
+	// rebuild the caches and must not be erased when the barrier is consumed.
+	IN_ResetInputState();
+	Com_QueueEvent( eventTime, SE_INPUT_RESET, 0, 0, 0, NULL );
+	s_mouseAuxButtonState = 0;
+	if ( rebuildModifiers ) {
+		IN_QueueHeldModifiers( eventTime );
+	} else {
+		s_physicalModifiers = SDL_KMOD_NONE;
+	}
+}
+
+
+static int IN_EventTime( Uint64 timestamp )
+{
+	const int now = Sys_Milliseconds();
+	const Uint64 nowNanoseconds = SDL_GetTicksNS();
+
+	if ( timestamp && timestamp <= nowNanoseconds ) {
+		const Uint64 elapsedMilliseconds =
+			( nowNanoseconds - timestamp ) / SDL_NS_PER_MS;
+		const std::uint32_t elapsed = static_cast<std::uint32_t>(
+			( std::min )( elapsedMilliseconds,
+				static_cast<Uint64>(
+					( std::numeric_limits<std::uint32_t>::max )() ) ) );
+		const std::uint32_t candidate =
+			static_cast<std::uint32_t>( now ) - elapsed;
+		if ( candidate <= static_cast<std::uint32_t>(
+				( std::numeric_limits<int>::max )() ) ) {
+			return static_cast<int>( candidate );
+		}
+		return static_cast<int>(
+			static_cast<std::int64_t>( candidate ) -
+			( static_cast<std::int64_t>( 1 ) << 32 ) );
+	}
+	return now;
+}
 
 static sdlKeyInfo_t IN_MakeKeyInfo( const SDL_KeyboardEvent *event )
 {
@@ -1435,21 +1943,42 @@ static void IN_HandleWindowEvent( Uint32 type, const SDL_WindowEvent *window, in
 
 		case SDL_EVENT_WINDOW_HIDDEN:
 		case SDL_EVENT_WINDOW_MINIMIZED:
+			*lastKeyDown = 0;
+			IN_QueueInputReset( qfalse );
 			gw_active = qfalse;
 			gw_minimized = qtrue;
 			CL_WebHost_NotifyAppActivation( qfalse );
 			mouse_focus = qfalse;
+			s_absPointerOutside = qfalse;
+			s_fullscreenOcclusionReset = qfalse;
 			GLW_RestoreGamma();
 			break;
 
 		case SDL_EVENT_WINDOW_OCCLUDED:
 			if ( glw_state.isFullscreen ) {
+				*lastKeyDown = 0;
+				IN_QueueInputReset( qfalse );
 				gw_minimized = qtrue;
 				mouse_focus = qfalse;
+				s_absPointerOutside = qfalse;
+				s_fullscreenOcclusionReset = qtrue;
 			}
 			break;
 
 		case SDL_EVENT_WINDOW_EXPOSED:
+			if ( glw_state.isFullscreen && s_fullscreenOcclusionReset &&
+				gw_active ) {
+				// OCCLUDED is sometimes a synthetic minimize without a focus
+				// transition. Rebuild physical modifiers behind its reset and
+				// restore fullscreen mouse focus without duplicating FOCUS_GAINED.
+				gw_minimized = qfalse;
+				mouse_focus =
+					( SDL_GetMouseFocus() == SDL_window ||
+						glw_state.isFullscreen ) ? qtrue : qfalse;
+				IN_QueueHeldModifiers( in_eventTime );
+				s_fullscreenOcclusionReset = qfalse;
+			}
+			[[fallthrough]];
 		case SDL_EVENT_WINDOW_SHOWN:
 		case SDL_EVENT_WINDOW_RESTORED:
 		case SDL_EVENT_WINDOW_MAXIMIZED:
@@ -1461,15 +1990,15 @@ static void IN_HandleWindowEvent( Uint32 type, const SDL_WindowEvent *window, in
 
 		case SDL_EVENT_WINDOW_FOCUS_LOST:
 			*lastKeyDown = 0;
-			Key_ClearStates();
-			IN_SyncModifiers();
-			IN_EndTemporaryMouseCapture();
+			IN_QueueInputReset( qfalse );
 			gw_active = qfalse;
 			if ( glw_state.isFullscreen ) {
 				gw_minimized = qtrue;
 			}
 			CL_WebHost_NotifyAppActivation( qfalse );
 			mouse_focus = qfalse;
+			s_absPointerOutside = qfalse;
+			s_fullscreenOcclusionReset = qfalse;
 			// a device gamma ramp is desktop-global: give the user their own
 			// calibration back for as long as we are in the background
 			GLW_RestoreGamma();
@@ -1477,12 +2006,14 @@ static void IN_HandleWindowEvent( Uint32 type, const SDL_WindowEvent *window, in
 
 		case SDL_EVENT_WINDOW_FOCUS_GAINED:
 			*lastKeyDown = 0;
-			Key_ClearStates();
-			IN_SyncModifiers();
+			IN_QueueInputReset( qtrue );
 			gw_active = qtrue;
 			gw_minimized = qfalse;
 			CL_WebHost_NotifyAppActivation( qtrue );
-			mouse_focus = qtrue;
+			mouse_focus =
+				( SDL_GetMouseFocus() == SDL_window ||
+					glw_state.isFullscreen ) ? qtrue : qfalse;
+			s_fullscreenOcclusionReset = qfalse;
 			IN_UpdateWindowGeometry( qfalse, qtrue );
 			if ( re.SetColorMappings ) {
 				re.SetColorMappings();
@@ -1490,13 +2021,46 @@ static void IN_HandleWindowEvent( Uint32 type, const SDL_WindowEvent *window, in
 			break;
 
 		case SDL_EVENT_WINDOW_MOUSE_ENTER:
+			s_absPointerOutside = qfalse;
 			mouse_focus = qtrue;
 			break;
 
 		case SDL_EVENT_WINDOW_MOUSE_LEAVE:
-			if ( glw_state.isFullscreen ) {
-				mouse_focus = qfalse;
+			if ( s_absCaptureActive && s_absCaptureButtons ) {
+				// A verified SDL capture deliberately keeps an absolute drag
+				// alive outside the window until its matching button-up.
+				s_absPointerOutside = qtrue;
+				break;
 			}
+			s_absPointerOutside = qfalse;
+			if ( s_absCaptureButtons || s_absCaptureActive ) {
+				// A requested capture that never became active cannot promise
+				// an outside release. Balance its logical buttons now rather
+				// than polling a different SDL window after this drain.
+				IN_QueueMouseReset();
+				IN_EndTemporaryMouseCapture();
+				mouse_focus = qfalse;
+				break;
+			}
+			if ( glw_state.isFullscreen ||
+				( s_pointerModeValid &&
+					( s_pointerMode.relativeMotion ||
+						s_pointerMode.confineToWindow ) ) ) {
+				// A failed/externally-broken grab can still let the pointer
+				// leave a driven pointer mode without a keyboard focus change.
+				// Release only mouse state before gating the eventual button-up;
+				// free windowed overlays deliberately do not take this path.
+				IN_QueueMouseReset();
+				s_relativeRemainderX = 0.0f;
+				s_relativeRemainderY = 0.0f;
+				IN_ResetWheelAccumulator();
+				IN_EndTemporaryMouseCapture();
+				mouse_focus = qfalse;
+				s_pointerModeValid = qfalse;
+			}
+			// Free windowed overlays receive a normal leave without a grab.
+			// Stop absolute polling until this window gets MOUSE_ENTER again.
+			mouse_focus = qfalse;
 			break;
 
 		default:
@@ -1505,85 +2069,69 @@ static void IN_HandleWindowEvent( Uint32 type, const SDL_WindowEvent *window, in
 }
 
 
-/*
-===============
-IN_SyncModifiers
-===============
-*/
-static void IN_SyncModifiers( void ) {
-    SDL_Keymod mod = SDL_GetModState();
-
-    keys[K_CTRL].down  = (mod & SDL_KMOD_CTRL)  ? qtrue : qfalse;
-    keys[K_SHIFT].down = (mod & SDL_KMOD_SHIFT) ? qtrue : qfalse;
-    keys[K_ALT].down   = (mod & SDL_KMOD_ALT)   ? qtrue : qfalse;
-#ifdef MACOS_X
-    keys[K_COMMAND].down = (mod & SDL_KMOD_GUI) ? qtrue : qfalse;
-#endif
-}
-
-
-static int IN_ReadUtf8Codepoint( const char **cursor )
+static void IN_QueueTextInput(
+	const char *text, qboolean suppressRepeatedConsoleKey )
 {
-	const unsigned char *c = reinterpret_cast<const unsigned char *>( *cursor );
-	int utf32 = 0;
+	const unsigned char *bytes =
+		reinterpret_cast<const unsigned char *>( text );
+	std::size_t remaining = std::strlen( text );
 
-	if ( ( c[0] & 0x80 ) == 0 )
+	while ( remaining > 0 )
 	{
-		utf32 = c[0];
-		c++;
-	}
-	else if ( ( c[0] & 0xE0 ) == 0xC0 && c[1] ) // 110x xxxx
-	{
-		utf32 |= ( c[0] & 0x1F ) << 6;
-		utf32 |= ( c[1] & 0x3F );
-		c += 2;
-	}
-	else if ( ( c[0] & 0xF0 ) == 0xE0 && c[1] && c[2] ) // 1110 xxxx
-	{
-		utf32 |= ( c[0] & 0x0F ) << 12;
-		utf32 |= ( c[1] & 0x3F ) << 6;
-		utf32 |= ( c[2] & 0x3F );
-		c += 3;
-	}
-	else if ( ( c[0] & 0xF8 ) == 0xF0 && c[1] && c[2] && c[3] ) // 1111 0xxx
-	{
-		utf32 |= ( c[0] & 0x07 ) << 18;
-		utf32 |= ( c[1] & 0x3F ) << 12;
-		utf32 |= ( c[2] & 0x3F ) << 6;
-		utf32 |= ( c[3] & 0x3F );
-		c += 4;
-	}
-	else
-	{
-		Com_DPrintf( "Unrecognised UTF-8 lead byte: 0x%x\n", (unsigned int)c[0] );
-		c++;
-	}
+		const fnql::input::Utf8DecodeResult decoded =
+			fnql::input::DecodeUtf8( bytes, remaining );
+		bytes += decoded.size;
+		remaining -= decoded.size;
 
-	*cursor = reinterpret_cast<const char *>( c );
-	return utf32;
-}
+		if ( !decoded.valid || decoded.codepoint == 0 ) {
+			Com_DPrintf( "Ignoring malformed SDL UTF-8 text input\n" );
+			continue;
+		}
 
-
-static void IN_QueueTextInput( const char *text )
-{
-	const char *c = text;
-
-	while ( *c )
-	{
-		const int utf32 = IN_ReadUtf8Codepoint( &c );
-
-		if( utf32 != 0 )
-		{
-			if ( IN_IsConsoleKey( 0, utf32 ) )
+		const int utf32 = static_cast<int>( decoded.codepoint );
+		if ( IN_IsConsoleKey( 0, utf32 ) )
 			{
-				Com_QueueEvent( in_eventTime, SE_KEY, K_CONSOLE, qtrue, 0, NULL );
-				Com_QueueEvent( in_eventTime, SE_KEY, K_CONSOLE, qfalse, 0, NULL );
+				if ( !suppressRepeatedConsoleKey ) {
+					Com_QueueEvent(
+						in_eventTime, SE_KEY, K_CONSOLE, qtrue, 0, NULL );
+					Com_QueueEvent(
+						in_eventTime, SE_KEY, K_CONSOLE, qfalse, 0, NULL );
+				}
 			}
 			else
 			{
 				Com_QueueEvent( in_eventTime, SE_CHAR, utf32, 0, 0, NULL );
 			}
-		}
+	}
+}
+
+
+static SDL_WindowID IN_EventWindowID( const SDL_Event& event )
+{
+	if ( event.type >= SDL_EVENT_WINDOW_FIRST &&
+		event.type <= SDL_EVENT_WINDOW_LAST ) {
+		return event.window.windowID;
+	}
+
+	switch ( event.type ) {
+		case SDL_EVENT_KEY_DOWN:
+		case SDL_EVENT_KEY_UP:
+			return event.key.windowID;
+		case SDL_EVENT_TEXT_EDITING:
+			return event.edit.windowID;
+		case SDL_EVENT_TEXT_EDITING_CANDIDATES:
+			return event.edit_candidates.windowID;
+		case SDL_EVENT_TEXT_INPUT:
+			return event.text.windowID;
+		case SDL_EVENT_MOUSE_MOTION:
+			return event.motion.windowID;
+		case SDL_EVENT_MOUSE_BUTTON_DOWN:
+		case SDL_EVENT_MOUSE_BUTTON_UP:
+			return event.button.windowID;
+		case SDL_EVENT_MOUSE_WHEEL:
+			return event.wheel.windowID;
+		default:
+			return 0;
 	}
 }
 
@@ -1598,82 +2146,165 @@ void HandleEvents( void )
 {
 	SDL_Event e;
 	int key = 0;
-	static int lastKeyDown = 0;
+#ifdef USE_JOYSTICK
+	struct sdlTopologyTransition_t {
+		SDL_JoystickID device;
+		int kind;
+	};
+	std::array<sdlTopologyTransition_t, 32> topologyTransitions{};
+	std::size_t topologyTransitionCount = 0;
+#endif
 
 	if ( !SDL_WasInit( SDL_INIT_VIDEO ) )
-			return;
+		return;
 
+	// Com_EventLoop can consume a catcher-changing key and re-enter this native
+	// drain before IN_Frame. Reconcile here as well so gameplay never inherits
+	// an IME-enabled window, and a newly opened text owner is ready immediately.
+	IN_ReconcileTextInput();
+
+	const SDL_WindowID currentWindowID =
+		SDL_window ? SDL_GetWindowID( SDL_window ) : 0;
 	in_eventTime = Sys_Milliseconds();
-
-	IN_SyncModifiers();
 
 	while ( SDL_PollEvent( &e ) )
 	{
+		in_eventTime = IN_EventTime( e.common.timestamp );
 #ifndef _WIN32
 		if ( Sys_ConsoleHandleEvent( &e ) ) {
 			continue;
 		}
 #endif
+		const SDL_WindowID eventWindowID = IN_EventWindowID( e );
+		if ( eventWindowID && eventWindowID != currentWindowID ) {
+			// Video/input restarts deliberately drain SDL's retained queue. Do
+			// not let focus, text, or mouse transitions from a destroyed window
+			// mutate the replacement window; device/display/quit events have no
+			// window target and remain global. The optional SDL system-console
+			// window gets first refusal above because its distinct ID is live.
+			continue;
+		}
+
+		if ( e.type != SDL_EVENT_KEY_DOWN &&
+			e.type != SDL_EVENT_KEY_UP &&
+			e.type != SDL_EVENT_TEXT_EDITING &&
+			e.type != SDL_EVENT_TEXT_EDITING_CANDIDATES &&
+			e.type != SDL_EVENT_TEXT_INPUT ) {
+			s_lastKeyDown = 0;
+			s_lastKeyDownWasRepeat = qfalse;
+		}
 
 		switch( e.type )
 		{
 			case SDL_EVENT_KEY_DOWN:
 			{
-				sdlKeyInfo_t keyinfo = IN_MakeKeyInfo( &e.key );
-
-				if ( e.key.repeat && Key_GetCatcher() == 0 )
-					break;
-				key = IN_TranslateSDLToQ3Key( &keyinfo, qtrue );
-
-				if ( key == K_ENTER && keys[K_ALT].down ) {
-					Cvar_SetIntegerValue( "r_fullscreen", glw_state.isFullscreen ? 0 : 1 );
-					// fast restart keeps the window alive so the
-					// fullscreen state can be toggled in place
-					Cbuf_AddText( "vid_restart fast\n" );
+				if ( !gw_active || gw_minimized ) {
 					break;
 				}
 
-				if ( key ) {
+				sdlKeyInfo_t keyinfo = IN_MakeKeyInfo( &e.key );
+				key = IN_TranslateSDLToQ3Key( &keyinfo, qtrue );
+				s_lastKeyDownWasRepeat =
+					e.key.repeat ? qtrue : qfalse;
+
+				if ( e.key.repeat ) {
+					// Console/Escape are one-shot state transitions. Editable
+					// console and menu keys may still repeat under a real catcher.
+					if ( key == K_CONSOLE ) {
+						// Con_ToggleConsole_f clears logical keys; retain the
+						// physical producer marker so paired text cannot toggle.
+						s_lastKeyDown = K_CONSOLE;
+						break;
+					}
+					if ( key == K_ESCAPE ||
+						( !fnql::input::CatcherBlocksGameplayInput(
+							Key_GetCatcher(), KEYCATCH_RETAIL_MOUSEPASS ) &&
+							cls.state != CA_DISCONNECTED ) ) {
+						break;
+					}
+				}
+
+				if ( key == K_ENTER && ( keyinfo.mod & SDL_KMOD_ALT ) ) {
+					if ( !e.key.repeat ) {
+						Cvar_SetIntegerValue( "r_fullscreen",
+							glw_state.isFullscreen ? 0 : 1 );
+						// fast restart keeps the window alive so the
+						// fullscreen state can be toggled in place
+						Cbuf_AddText( "vid_restart fast\n" );
+					}
+					break;
+				}
+
+				if ( key && IN_ShouldQueueModifierTransition(
+					keyinfo.scancode, keyinfo.sym, qtrue ) ) {
 					Com_QueueEvent( in_eventTime, SE_KEY, key, qtrue, 0, NULL );
 
 					if ( key == K_BACKSPACE )
 						Com_QueueEvent( in_eventTime, SE_CHAR, CTRL('h'), 0, 0, NULL );
 					else if ( key == K_ESCAPE )
 						Com_QueueEvent( in_eventTime, SE_CHAR, key, 0, 0, NULL );
-					else if( keys[K_CTRL].down && key >= 'a' && key <= 'z' )
+					else if( ( keyinfo.mod & SDL_KMOD_CTRL ) &&
+						!( keyinfo.mod & ( SDL_KMOD_ALT |
+							kModeModifierFamily ) ) &&
+						key >= 'a' && key <= 'z' )
 						Com_QueueEvent( in_eventTime, SE_CHAR, CTRL(key), 0, 0, NULL );
 #ifdef MACOS_X
-					else if( keys[K_COMMAND].down && key == 'v' )
+					else if( ( keyinfo.mod & SDL_KMOD_GUI ) && key == 'v' )
 						Com_QueueEvent( in_eventTime, SE_CHAR, CTRL(key), 0, 0, NULL );
 #endif
 				}
 
-				lastKeyDown = key;
+				s_lastKeyDown = key;
 				break;
 			}
 
 			case SDL_EVENT_KEY_UP:
 			{
+				if ( !gw_active || gw_minimized ) {
+					break;
+				}
+
 				sdlKeyInfo_t keyinfo = IN_MakeKeyInfo( &e.key );
 
-				if( ( key = IN_TranslateSDLToQ3Key( &keyinfo, qfalse ) ) )
+				if( ( key = IN_TranslateSDLToQ3Key( &keyinfo, qfalse ) ) &&
+					IN_ShouldQueueModifierTransition(
+						keyinfo.scancode, keyinfo.sym, qfalse ) )
 					Com_QueueEvent( in_eventTime, SE_KEY, key, qfalse, 0, NULL );
 
-				lastKeyDown = 0;
+				s_lastKeyDown = 0;
+				s_lastKeyDownWasRepeat = qfalse;
 				break;
 			}
 
+			case SDL_EVENT_TEXT_EDITING:
+			case SDL_EVENT_TEXT_EDITING_CANDIDATES:
+				// SDL owns the platform composition UI. Preserve the physical
+				// producer marker until the committed TEXT_INPUT transaction.
+				break;
+
 			case SDL_EVENT_TEXT_INPUT:
-				if( lastKeyDown != K_CONSOLE )
-				{
-					IN_QueueTextInput( e.text.text );
+				if ( gw_active && !gw_minimized && s_textInputActive ) {
+					if ( s_lastKeyDown != K_CONSOLE ) {
+						IN_QueueTextInput(
+							e.text.text, s_lastKeyDownWasRepeat );
+					}
 				}
+				// Only the immediately paired text event inherits either marker.
+				// IME or programmatic text arriving later remains ordinary input,
+				// even if focus changed while this event was retained.
+				s_lastKeyDown = 0;
+				s_lastKeyDownWasRepeat = qfalse;
 				break;
 
 			case SDL_EVENT_MOUSE_MOTION:
 			{
-				// Resolve the owner per event so a catcher change made earlier in
-				// this same drain takes effect immediately.
+				if ( !gw_active || gw_minimized || !mouse_focus ) {
+					break;
+				}
+
+				// Resolve the producer-visible owner per event. Catcher changes
+				// queued earlier in this SDL drain are enforced again when the
+				// common event is consumed.
 				const PointerOwner owner = IN_ResolvePointerOwner();
 
 				if ( fnql::input::PointerOwnerReportsAbsolute( owner ) ) {
@@ -1681,9 +2312,29 @@ void HandleEvents( void )
 					// position from the immediately preceding motion event.
 					IN_QueueAbsolutePointerPosition( owner,
 						e.motion.x, e.motion.y, in_eventTime );
-				} else if ( s_pointerMode.driveInput && ( e.motion.xrel || e.motion.yrel ) ) {
-					Com_QueueEvent( in_eventTime, SE_MOUSE,
-						(int)e.motion.xrel, (int)e.motion.yrel, 0, NULL );
+				} else if ( s_pointerModeValid &&
+					s_pointerMode.driveInput &&
+					s_pointerMode.relativeMotion &&
+					( e.motion.xrel || e.motion.yrel ) ) {
+					const float combinedX = fnql::input::FiniteOr(
+						fnql::input::FiniteOr( e.motion.xrel, 0.0f ) +
+						s_relativeRemainderX, 0.0f );
+					const float combinedY = fnql::input::FiniteOr(
+						fnql::input::FiniteOr( e.motion.yrel, 0.0f ) +
+						s_relativeRemainderY, 0.0f );
+					const int dx = fnql::input::TruncateFiniteFloatToInt( combinedX );
+					const int dy = fnql::input::TruncateFiniteFloatToInt( combinedY );
+					s_relativeRemainderX =
+						dx == ( std::numeric_limits<int>::max )() ||
+						dx == ( std::numeric_limits<int>::min )()
+							? 0.0f : combinedX - static_cast<float>( dx );
+					s_relativeRemainderY =
+						dy == ( std::numeric_limits<int>::max )() ||
+						dy == ( std::numeric_limits<int>::min )()
+							? 0.0f : combinedY - static_cast<float>( dy );
+					if ( dx || dy ) {
+						Com_QueueEvent( in_eventTime, SE_MOUSE, dx, dy, 0, NULL );
+					}
 				}
 				break;
 			}
@@ -1691,48 +2342,78 @@ void HandleEvents( void )
 			case SDL_EVENT_MOUSE_BUTTON_DOWN:
 			case SDL_EVENT_MOUSE_BUTTON_UP:
 				{
-					int b;
+					if ( !gw_active || gw_minimized || !mouse_focus ) {
+						break;
+					}
+
+					int b = 0;
+					switch( e.button.button )
+					{
+						case SDL_BUTTON_LEFT:   b = K_MOUSE1; break;
+						case SDL_BUTTON_MIDDLE: b = K_MOUSE3; break;
+						case SDL_BUTTON_RIGHT:  b = K_MOUSE2; break;
+						case SDL_BUTTON_X1:     b = K_MOUSE4; break;
+						case SDL_BUTTON_X2:     b = K_MOUSE5; break;
+						default:
+							if ( e.button.button >= SDL_BUTTON_X2 + 1 &&
+								e.button.button <= SDL_BUTTON_X2 + 4 ) {
+								b = K_MOUSE6 +
+									( e.button.button - ( SDL_BUTTON_X2 + 1 ) );
+							} else if ( e.button.button >= SDL_BUTTON_X2 + 5 &&
+								e.button.button <= SDL_BUTTON_X2 + 20 ) {
+								b = K_AUX1 +
+									( e.button.button - ( SDL_BUTTON_X2 + 5 ) );
+							}
+							break;
+					}
+
+					// The key namespace can represent buttons 1 through 25
+					// uniquely. Ignore invalid or higher SDL IDs instead of
+					// aliasing two physical buttons onto one logical key.
+					if ( !b ) {
+						if ( e.type == SDL_EVENT_MOUSE_BUTTON_DOWN ) {
+							Com_DPrintf( "Ignoring unsupported SDL mouse button %u\n",
+								static_cast<unsigned int>( e.button.button ) );
+						}
+						break;
+					}
+
 					const PointerOwner owner = IN_ResolvePointerOwner();
+					if ( owner == PointerOwner::Gameplay &&
+						in_mouse->integer == 0 ) {
+						break;
+					}
+
+					// Queue the click location even if gameplay still appears to
+					// own the pointer. An earlier Escape in this same SDL drain
+					// may open an absolute UI before this button is dispatched.
+					IN_QueueAbsolutePointerPosition( owner,
+						e.button.x, e.button.y, in_eventTime, qtrue );
 
 					if ( fnql::input::PointerOwnerReportsAbsolute( owner ) ) {
 						const Uint32 buttonMask = ( e.button.button > 0 && e.button.button <= 32 ) ?
 							( (Uint32)1u << ( e.button.button - 1 ) ) : 0;
 
-						// Button events carry a position too. Queue it before the key
-						// event in case no separate motion event preceded this click.
-						IN_QueueAbsolutePointerPosition( owner,
-							e.button.x, e.button.y, in_eventTime );
-
 						// Every absolute owner holds the pointer for the duration of
 						// a press, matching the native Win32 and X11 backends, so a
 						// drag that leaves the window still delivers its release.
 						if ( e.type == SDL_EVENT_MOUSE_BUTTON_DOWN && buttonMask ) {
-							if ( !s_absCaptureButtons ) {
-								SDL_CaptureMouse( true );
-							}
 							s_absCaptureButtons |= buttonMask;
+							IN_UpdateTemporaryMouseCapture();
 						} else if ( buttonMask ) {
 							s_absCaptureButtons &= ~buttonMask;
-							if ( !s_absCaptureButtons ) {
-								SDL_CaptureMouse( false );
-							}
+							IN_UpdateTemporaryMouseCapture();
+							IN_FinishOutsideCaptureRelease();
 						}
 					}
-					switch( e.button.button )
-					{
-						case SDL_BUTTON_LEFT:   b = K_MOUSE1;     break;
-						case SDL_BUTTON_MIDDLE: b = K_MOUSE3;     break;
-						case SDL_BUTTON_RIGHT:  b = K_MOUSE2;     break;
-						case SDL_BUTTON_X1:     b = K_MOUSE4;     break;
-						case SDL_BUTTON_X2:     b = K_MOUSE5;     break;
-						default:
-							if ( e.button.button >= SDL_BUTTON_X2 + 1 && e.button.button <= SDL_BUTTON_X2 + 4 ) {
-								b = K_MOUSE6 + ( e.button.button - ( SDL_BUTTON_X2 + 1 ) );
-							} else {
-								const int auxOffset = e.button.button > SDL_BUTTON_X2 + 4 ? e.button.button - ( SDL_BUTTON_X2 + 5 ) : 0;
-								b = K_AUX1 + ( auxOffset % 16 );
-							}
-							break;
+					if ( b >= K_AUX1 && b < K_AUX1 + 16 ) {
+						const unsigned int mask =
+							1u << static_cast<unsigned int>( b - K_AUX1 );
+						if ( e.type == SDL_EVENT_MOUSE_BUTTON_DOWN ) {
+							s_mouseAuxButtonState |= mask;
+						} else {
+							s_mouseAuxButtonState &= ~mask;
+						}
 					}
 					Com_QueueEvent( in_eventTime, SE_KEY, b,
 						( e.type == SDL_EVENT_MOUSE_BUTTON_DOWN ? qtrue : qfalse ), 0, NULL );
@@ -1740,15 +2421,45 @@ void HandleEvents( void )
 				break;
 
 			case SDL_EVENT_MOUSE_WHEEL:
-				if( e.wheel.y > 0.0f )
 				{
-					Com_QueueEvent( in_eventTime, SE_KEY, K_MWHEELUP, qtrue, 0, NULL );
-					Com_QueueEvent( in_eventTime, SE_KEY, K_MWHEELUP, qfalse, 0, NULL );
-				}
-				else if( e.wheel.y < 0.0f )
-				{
-					Com_QueueEvent( in_eventTime, SE_KEY, K_MWHEELDOWN, qtrue, 0, NULL );
-					Com_QueueEvent( in_eventTime, SE_KEY, K_MWHEELDOWN, qfalse, 0, NULL );
+					if ( !gw_active || gw_minimized || !mouse_focus ) {
+						break;
+					}
+
+					const PointerOwner owner = IN_ResolvePointerOwner();
+					if ( owner == PointerOwner::Gameplay &&
+						in_mouse->integer == 0 ) {
+						break;
+					}
+					const int consumer = IN_PointerConsumerIdentity();
+					float& wheelRemainder =
+						IN_WheelRemainder( e.wheel.which, consumer );
+
+					float wheelY = fnql::input::FiniteOr( e.wheel.y, 0.0f );
+					if ( e.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ) {
+						wheelY = -wheelY;
+					}
+					const float combinedY = fnql::input::FiniteOr(
+						wheelY + wheelRemainder, 0.0f );
+					int steps =
+						fnql::input::TruncateFiniteFloatToInt( combinedY );
+					wheelRemainder =
+						steps == ( std::numeric_limits<int>::max )() ||
+						steps == ( std::numeric_limits<int>::min )()
+							? 0.0f : combinedY - static_cast<float>( steps );
+					steps = std::clamp( steps, -32, 32 );
+
+					// Ownership may change when an earlier Escape from this same
+					// drain is dispatched, so preserve wheel hit-test position
+					// without polluting the producer's dedup cache.
+					IN_QueueAbsolutePointerPosition( owner,
+						e.wheel.mouse_x, e.wheel.mouse_y,
+						in_eventTime, qtrue );
+					const int wheelKey = steps > 0 ? K_MWHEELUP : K_MWHEELDOWN;
+					for ( int i = 0; i < std::abs( steps ); ++i ) {
+						Com_QueueEvent( in_eventTime, SE_KEY, wheelKey, qtrue, 0, NULL );
+						Com_QueueEvent( in_eventTime, SE_KEY, wheelKey, qfalse, 0, NULL );
+					}
 				}
 				break;
 
@@ -1757,10 +2468,74 @@ void HandleEvents( void )
 			case SDL_EVENT_JOYSTICK_REMOVED:
 			case SDL_EVENT_GAMEPAD_ADDED:
 			case SDL_EVENT_GAMEPAD_REMOVED:
-				if ( in_joystick && in_joystick->integer )
+			case SDL_EVENT_GAMEPAD_REMAPPED:
+			{
+				const qboolean joystickEvent =
+					( e.type == SDL_EVENT_JOYSTICK_ADDED ||
+						e.type == SDL_EVENT_JOYSTICK_REMOVED )
+						? qtrue : qfalse;
+				const SDL_JoystickID device = joystickEvent
+					? e.jdevice.which : e.gdevice.which;
+				const int kind =
+					( e.type == SDL_EVENT_JOYSTICK_ADDED ||
+						e.type == SDL_EVENT_GAMEPAD_ADDED ) ? 1
+					: ( e.type == SDL_EVENT_GAMEPAD_REMAPPED ? 2 : 0 );
+				qboolean duplicate = qfalse;
+
+				// SDL deliberately emits both joystick and gamepad topology
+				// events for a recognized gamepad. Re-enumerate once for the
+				// same device and logical transition, while still preserving an
+				// add followed by a real remove in this drain.
+				for ( std::size_t i = 0; i < topologyTransitionCount; ++i ) {
+					if ( topologyTransitions[i].device == device &&
+						topologyTransitions[i].kind == kind ) {
+						duplicate = qtrue;
+						break;
+					}
+				}
+				if ( duplicate ) {
+					break;
+				}
+				if ( topologyTransitionCount < topologyTransitions.size() ) {
+					topologyTransitions[topologyTransitionCount++] =
+						{ device, kind };
+				}
+
+				if ( in_joystick ) {
+					if ( in_joystick->integer ) {
+						// Balance held buttons, hats, digital directions, and
+						// analog axes before IN_InitJoystick clears its producer
+						// snapshot.
+						IN_QueueInputReset(
+							gw_active && !gw_minimized ? qtrue : qfalse );
+					}
+					// Keep the UI-facing device list current even while runtime
+					// joystick input is disabled.
 					IN_InitJoystick();
+				}
 				break;
+			}
 #endif
+
+			case SDL_EVENT_KEYBOARD_REMOVED:
+				// SDL's aggregate state has already dropped the device. Put an
+				// ordered release behind its retained transitions, then rebuild
+				// modifier families still held on another keyboard.
+				IN_QueueInputReset(
+					gw_active && !gw_minimized ? qtrue : qfalse );
+				break;
+
+			case SDL_EVENT_MOUSE_REMOVED:
+				// A removed device cannot deliver its final button-up or motion
+				// sample. Recover only mouse state so held keyboard/joystick
+				// input from other devices remains intact.
+				IN_QueueMouseReset();
+				s_relativeRemainderX = 0.0f;
+				s_relativeRemainderY = 0.0f;
+				IN_ResetWheelAccumulator();
+				s_absHaveLast = qfalse;
+				IN_EndTemporaryMouseCapture();
+				break;
 
 			case SDL_EVENT_QUIT:
 			case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
@@ -1781,6 +2556,8 @@ void HandleEvents( void )
 			case SDL_EVENT_WINDOW_MOVED:
 			case SDL_EVENT_WINDOW_HIDDEN:
 			case SDL_EVENT_WINDOW_MINIMIZED:
+			case SDL_EVENT_WINDOW_OCCLUDED:
+			case SDL_EVENT_WINDOW_EXPOSED:
 			case SDL_EVENT_WINDOW_SHOWN:
 			case SDL_EVENT_WINDOW_RESTORED:
 			case SDL_EVENT_WINDOW_MAXIMIZED:
@@ -1794,7 +2571,8 @@ void HandleEvents( void )
 			case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
 			case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
 			case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
-				IN_HandleWindowEvent( e.type, &e.window, &lastKeyDown );
+				IN_HandleWindowEvent( e.type, &e.window, &s_lastKeyDown );
+				IN_ReconcileTextInput();
 				break;
 
 			default:
@@ -1806,7 +2584,8 @@ void HandleEvents( void )
 	// pointer. Sys_SendKeyEvents runs whenever the event queue empties, so an
 	// overlay opened under a stationary pointer gets its first position without
 	// waiting for the next IN_Frame.
-	if ( s_pointerMode.driveInput ) {
+	if ( gw_active && !gw_minimized && mouse_focus &&
+		s_pointerMode.driveInput ) {
 		const PointerOwner owner = IN_ResolvePointerOwner();
 
 		if ( fnql::input::PointerOwnerReportsAbsolute( owner ) ) {
@@ -1840,8 +2619,12 @@ IN_Frame
 */
 void IN_Frame( void )
 {
+	IN_ReconcileTextInput();
+
 #ifdef USE_JOYSTICK
-	IN_JoyMove();
+	if ( gw_active && !gw_minimized ) {
+		IN_JoyMove();
+	}
 #endif
 
 	IN_ApplyPointerMode();
@@ -1865,11 +2648,15 @@ IN_Restart
 */
 static void IN_Restart( void )
 {
-#ifdef USE_JOYSTICK
-	IN_ShutdownJoystick();
-#endif
 	IN_Shutdown();
 	IN_Init();
+
+	// Consume transitions retained by SDL while the backend was being rebuilt,
+	// then put the recovery barrier and current physical modifiers behind them.
+	// This is the same ordering used for a video restart.
+	HandleEvents();
+	IN_QueueInputReset(
+		gw_active && !gw_minimized ? qtrue : qfalse );
 }
 
 
@@ -1878,6 +2665,26 @@ static void IN_Restart( void )
 IN_Init
 ===============
 */
+void IN_ResetInputState( void )
+{
+	IN_EndTemporaryMouseCapture();
+	s_absPointerOutside = qfalse;
+	s_absHaveLast = qfalse;
+	s_relativeRemainderX = 0.0f;
+	s_relativeRemainderY = 0.0f;
+	IN_ResetWheelAccumulator();
+	s_physicalModifiers = SDL_GetModState();
+	s_lastKeyDown = 0;
+	s_lastKeyDownWasRepeat = qfalse;
+#ifdef USE_JOYSTICK
+	// The ordered client barrier clears logical joystick state. Clear the
+	// producer snapshot with it so a control still held after focus restoration
+	// is emitted again on the first fresh poll.
+	stick_state = {};
+#endif
+}
+
+
 void IN_Init( void )
 {
 	if ( !SDL_WasInit( SDL_INIT_VIDEO ) )
@@ -1907,6 +2714,7 @@ void IN_Init( void )
 	in_joystick = Cvar_Get( "in_joystick", "0", CVAR_ARCHIVE|CVAR_LATCH );
 	Cvar_SetDescription( in_joystick, "Whether or not joystick support is on." );
 	in_joystickThreshold = Cvar_Get( "joy_threshold", "0.15", CVAR_ARCHIVE );
+	Cvar_CheckRange( in_joystickThreshold, "0", "1", CV_FLOAT );
 	Cvar_SetDescription( in_joystickThreshold, "Threshold of joystick moving distance." );
 
 	j_pitch =        Cvar_Get( "j_pitch",        "0.022", CVAR_ARCHIVE_ND );
@@ -1941,7 +2749,9 @@ void IN_Init( void )
 	cl_consoleKeys = Cvar_Get( "cl_consoleKeys", "~ ` 0x7e 0x60", CVAR_ARCHIVE );
 	Cvar_SetDescription( cl_consoleKeys, "Space delimited list of key names or characters that toggle the console." );
 
-	mouseAvailable = ( in_mouse->value != 0 ) ? qtrue : qfalse;
+	// Retail keeps absolute menu input and pointer presentation alive when
+	// in_mouse 0 disables the relative gameplay source.
+	mouseAvailable = qtrue;
 	mouse_focus = ( SDL_GetMouseFocus() == SDL_window ) ? qtrue : ( glw_state.isFullscreen ? qtrue : qfalse );
 
 	// The window may have been recreated, so nothing about the previous SDL
@@ -1951,11 +2761,22 @@ void IN_Init( void )
 	s_pointerMode = PointerMode{};
 	s_pointerModeValid = qfalse;
 	s_absHaveLast = qfalse;
-	s_absCaptureButtons = 0;
+	s_absPointerOutside = qfalse;
+	IN_EndTemporaryMouseCapture();
+	s_relativeRemainderX = 0.0f;
+	s_relativeRemainderY = 0.0f;
+	IN_ResetWheelAccumulator();
+	s_pointerApplyFailureReported = qfalse;
+	s_physicalModifiers = SDL_KMOD_NONE;
+	s_mouseAuxButtonState = 0;
+	s_lastKeyDown = 0;
+	s_lastKeyDownWasRepeat = qfalse;
+	s_fullscreenOcclusionReset = qfalse;
 
-	if ( SDL_window && !SDL_StartTextInput( SDL_window ) ) {
-		Com_DPrintf( "SDL_StartTextInput failed: %s\n", SDL_GetError() );
-	}
+	s_textInputActive =
+		( SDL_window && SDL_TextInputActive( SDL_window ) ) ? qtrue : qfalse;
+	s_textInputFailureReported = qfalse;
+	IN_ReconcileTextInput();
 
 #ifdef USE_JOYSTICK
 	IN_InitJoystick();
@@ -1975,9 +2796,7 @@ IN_Shutdown
 */
 void IN_Shutdown( void )
 {
-	if ( SDL_window ) {
-		SDL_StopTextInput( SDL_window );
-	}
+	IN_SetTextInputActive( qfalse );
 
 	IN_ReleasePointer();
 

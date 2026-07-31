@@ -27,6 +27,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "glw_win.h"
 #include "win_raii.h"
 
+#include <vector>
+
 #ifndef WM_MOUSEWHEEL
 #define WM_MOUSEWHEEL (WM_MOUSELAST+1)  // message that will be supported by the OS 
 #endif
@@ -41,6 +43,176 @@ cvar_t		*in_forceCharset;
 
 static HHOOK WinHook;
 static qboolean temporaryMouseCapture;
+static qboolean temporaryCaptureFailureReported;
+static unsigned int physicalModifierState;
+static int windowWheelRemainder;
+static fnql::input::PointerOwner windowWheelOwner =
+	fnql::input::PointerOwner::Gameplay;
+static int windowWheelConsumer;
+static qboolean windowWheelOwnerValid;
+static qboolean windowWheelFlip = qtrue;
+static int windowWheelPendingKey;
+static qboolean suppressedAltEnter;
+static qboolean windowInputSuspended;
+static qboolean windowHidden;
+static qboolean windowFocused;
+
+enum {
+	WIN_MOD_LSHIFT = 1u << 0,
+	WIN_MOD_RSHIFT = 1u << 1,
+	WIN_MOD_LCTRL  = 1u << 2,
+	WIN_MOD_RCTRL  = 1u << 3,
+	WIN_MOD_LALT   = 1u << 4,
+	WIN_MOD_RALT   = 1u << 5
+};
+
+
+static unsigned int WIN_ModifierSideBit( WPARAM key, LPARAM lParam )
+{
+	switch ( key ) {
+		case VK_LSHIFT: return WIN_MOD_LSHIFT;
+		case VK_RSHIFT: return WIN_MOD_RSHIFT;
+		case VK_SHIFT:
+			return ( ( lParam >> 16 ) & 0xff ) == 0x36
+				? WIN_MOD_RSHIFT : WIN_MOD_LSHIFT;
+		case VK_LCONTROL: return WIN_MOD_LCTRL;
+		case VK_RCONTROL: return WIN_MOD_RCTRL;
+		case VK_CONTROL:
+			return ( lParam & ( 1 << 24 ) ) ? WIN_MOD_RCTRL : WIN_MOD_LCTRL;
+		case VK_LMENU: return WIN_MOD_LALT;
+		case VK_RMENU: return WIN_MOD_RALT;
+		case VK_MENU:
+			return ( lParam & ( 1 << 24 ) ) ? WIN_MOD_RALT : WIN_MOD_LALT;
+		default:
+			return 0;
+	}
+}
+
+
+static unsigned int WIN_ModifierFamilyMask( unsigned int side )
+{
+	if ( side & ( WIN_MOD_LSHIFT | WIN_MOD_RSHIFT ) ) {
+		return WIN_MOD_LSHIFT | WIN_MOD_RSHIFT;
+	}
+	if ( side & ( WIN_MOD_LCTRL | WIN_MOD_RCTRL ) ) {
+		return WIN_MOD_LCTRL | WIN_MOD_RCTRL;
+	}
+	if ( side & ( WIN_MOD_LALT | WIN_MOD_RALT ) ) {
+		return WIN_MOD_LALT | WIN_MOD_RALT;
+	}
+	return 0;
+}
+
+
+static qboolean WIN_SkipAltGrLeftControl( WPARAM key, LPARAM lParam )
+{
+	if ( key != VK_CONTROL || ( lParam & ( 1L << 24 ) ) ) {
+		return qfalse;
+	}
+
+	// Windows synthesizes a non-extended LeftCtrl immediately before an
+	// extended RightAlt for AltGr. Suppress only that adjacent, same-timestamp
+	// pair; an independently pressed Ctrl remains a normal bindable modifier.
+	MSG nextMessage;
+	const DWORD messageTime =
+		static_cast<DWORD>( GetMessageTime() );
+	if ( PeekMessageW( &nextMessage, NULL, 0, 0, PM_NOREMOVE ) &&
+		( nextMessage.message == WM_KEYDOWN ||
+			nextMessage.message == WM_SYSKEYDOWN ) &&
+		nextMessage.wParam == VK_MENU &&
+		( nextMessage.lParam & ( 1L << 24 ) ) &&
+		nextMessage.time == messageTime ) {
+		return qtrue;
+	}
+
+	return qfalse;
+}
+
+
+static qboolean WIN_ShouldQueueModifierTransition(
+	WPARAM key, LPARAM lParam, qboolean down )
+{
+	const unsigned int side = WIN_ModifierSideBit( key, lParam );
+	if ( !side ) {
+		return qtrue;
+	}
+
+	const unsigned int family = WIN_ModifierFamilyMask( side );
+	const qboolean sideWasDown =
+		( physicalModifierState & side ) ? qtrue : qfalse;
+	const qboolean familyWasDown =
+		( physicalModifierState & family ) ? qtrue : qfalse;
+	if ( down ) {
+		physicalModifierState |= side;
+		return ( !familyWasDown || sideWasDown ) ? qtrue : qfalse;
+	} else {
+		physicalModifierState &= ~side;
+	}
+	return ( physicalModifierState & family ) ? qfalse : qtrue;
+}
+
+
+static unsigned int WIN_ReadPhysicalModifiers( void )
+{
+	unsigned int state = 0;
+	if ( GetAsyncKeyState( VK_LSHIFT ) & 0x8000 ) state |= WIN_MOD_LSHIFT;
+	if ( GetAsyncKeyState( VK_RSHIFT ) & 0x8000 ) state |= WIN_MOD_RSHIFT;
+	if ( GetAsyncKeyState( VK_LCONTROL ) & 0x8000 ) state |= WIN_MOD_LCTRL;
+	if ( GetAsyncKeyState( VK_RCONTROL ) & 0x8000 ) state |= WIN_MOD_RCTRL;
+	if ( GetAsyncKeyState( VK_LMENU ) & 0x8000 ) state |= WIN_MOD_LALT;
+	if ( GetAsyncKeyState( VK_RMENU ) & 0x8000 ) state |= WIN_MOD_RALT;
+	return state;
+}
+
+
+void WIN_ResetMessageInputState( void )
+{
+	physicalModifierState = WIN_ReadPhysicalModifiers();
+	windowWheelRemainder = 0;
+	windowWheelConsumer = 0;
+	windowWheelOwnerValid = qfalse;
+	windowWheelFlip = qtrue;
+	windowWheelPendingKey = 0;
+	suppressedAltEnter = qfalse;
+}
+
+
+static void WIN_QueueHeldModifiers( int eventTime )
+{
+	physicalModifierState = WIN_ReadPhysicalModifiers();
+
+	if ( physicalModifierState & ( WIN_MOD_LSHIFT | WIN_MOD_RSHIFT ) ) {
+		Sys_QueEvent( eventTime, SE_KEY, K_SHIFT, qtrue, 0, NULL );
+	}
+	if ( physicalModifierState & ( WIN_MOD_LCTRL | WIN_MOD_RCTRL ) ) {
+		Sys_QueEvent( eventTime, SE_KEY, K_CTRL, qtrue, 0, NULL );
+	}
+	if ( physicalModifierState & ( WIN_MOD_LALT | WIN_MOD_RALT ) ) {
+		Sys_QueEvent( eventTime, SE_KEY, K_ALT, qtrue, 0, NULL );
+	}
+}
+
+
+void WIN_QueueInputReset( qboolean rebuildModifiers )
+{
+	const int eventTime = Sys_Milliseconds();
+
+	// Reset producer caches before placing the ordered client barrier. The
+	// message drain may continue afterward, and its newer transitions must
+	// survive until their events are consumed.
+	IN_ResetInputState();
+	Sys_QueEvent( eventTime, SE_INPUT_RESET, 0, 0, 0, NULL );
+	windowWheelRemainder = 0;
+	windowWheelOwnerValid = qfalse;
+	windowWheelFlip = qtrue;
+	windowWheelPendingKey = 0;
+	if ( rebuildModifiers && gw_active && !gw_minimized &&
+		!windowInputSuspended && windowFocused ) {
+		WIN_QueueHeldModifiers( eventTime );
+	} else {
+		physicalModifierState = 0;
+	}
+}
 
 
 static qboolean WIN_ConsoleOwnsPointer( void )
@@ -49,12 +221,88 @@ static qboolean WIN_ConsoleOwnsPointer( void )
 }
 
 
+static int WIN_PointerConsumerIdentity( void )
+{
+	const int catcher = Key_GetCatcher();
+
+	if ( catcher & KEYCATCH_CONSOLE ) return KEYCATCH_CONSOLE;
+	if ( catcher & KEYCATCH_BROWSER ) return KEYCATCH_BROWSER;
+	if ( catcher & KEYCATCH_UI ) return KEYCATCH_UI;
+	if ( catcher & KEYCATCH_CGAME ) return KEYCATCH_CGAME;
+	return 0;
+}
+
+
+static qboolean WIN_WindowAcceptsInput( void )
+{
+	return ( gw_active && !gw_minimized && !windowInputSuspended &&
+		windowFocused )
+		? qtrue : qfalse;
+}
+
+
+static void WIN_QueueMouseReset( void )
+{
+	// Capture messages can arrive in the same native drain as a button-down
+	// whose queued key event has not reached consumed client state yet. An unconditional
+	// mouse-only barrier is ordered, cheap, and cannot strand that transition.
+	Sys_QueEvent( Sys_Milliseconds(),
+		SE_MOUSE_RESET, 0, 0, 0, NULL );
+}
+
+
 void WIN_ReleaseTemporaryMouseCapture( void )
 {
 	if ( temporaryMouseCapture && GetCapture() == g_wv.hWnd ) {
-		ReleaseCapture();
+		if ( !ReleaseCapture() ) {
+			Com_DPrintf( "%s: ReleaseCapture failed (Win32 error %lu)\n",
+				__func__, GetLastError() );
+			return;
+		}
 	}
 	temporaryMouseCapture = qfalse;
+	temporaryCaptureFailureReported = qfalse;
+}
+
+
+void WIN_RebuildTemporaryMouseCapture( void )
+{
+	const qboolean physicalButtonDown =
+		( ( GetAsyncKeyState( VK_LBUTTON ) & 0x8000 ) ||
+		( GetAsyncKeyState( VK_RBUTTON ) & 0x8000 ) ||
+		( GetAsyncKeyState( VK_MBUTTON ) & 0x8000 ) ||
+		( GetAsyncKeyState( VK_XBUTTON1 ) & 0x8000 ) ||
+		( GetAsyncKeyState( VK_XBUTTON2 ) & 0x8000 ) ) ? qtrue : qfalse;
+	qboolean logicalButtonDown = qfalse;
+
+	for ( int key = K_MOUSE1; key <= K_MOUSE9; ++key ) {
+		if ( keys[key].down ) {
+			logicalButtonDown = qtrue;
+			break;
+		}
+	}
+	if ( !physicalButtonDown || !logicalButtonDown ) {
+		if ( !physicalButtonDown && logicalButtonDown ) {
+			// Capture can be cancelled without a corresponding button-up.
+			// Balance the consumer state before allowing another overlay drag.
+			Sys_QueEvent( Sys_Milliseconds(),
+				SE_MOUSE_RESET, 0, 0, 0, NULL );
+		}
+		WIN_ReleaseTemporaryMouseCapture();
+		return;
+	}
+	if ( GetCapture() != g_wv.hWnd ) {
+		SetCapture( g_wv.hWnd );
+	}
+	temporaryMouseCapture =
+		GetCapture() == g_wv.hWnd ? qtrue : qfalse;
+	if ( temporaryMouseCapture ) {
+		temporaryCaptureFailureReported = qfalse;
+	} else if ( !temporaryCaptureFailureReported ) {
+		Com_DPrintf( "%s: SetCapture failed (Win32 error %lu)\n",
+			__func__, GetLastError() );
+		temporaryCaptureFailureReported = qtrue;
+	}
 }
 
 
@@ -86,7 +334,15 @@ static void WIN_UpdateTemporaryMouseCapture( HWND hWnd, UINT message, WPARAM wPa
 		case WM_MBUTTONDOWN:
 		case WM_XBUTTONDOWN:
 			SetCapture( hWnd );
-			temporaryMouseCapture = qtrue;
+			temporaryMouseCapture =
+				GetCapture() == hWnd ? qtrue : qfalse;
+			if ( !temporaryMouseCapture ) {
+				Com_DPrintf( "%s: SetCapture failed (Win32 error %lu)\n",
+					__func__, GetLastError() );
+				temporaryCaptureFailureReported = qtrue;
+			} else {
+				temporaryCaptureFailureReported = qfalse;
+			}
 			break;
 		case WM_LBUTTONUP:
 		case WM_RBUTTONUP:
@@ -326,7 +582,10 @@ VID_AppActivate
 */
 static void VID_AppActivate( qboolean active )
 {
-	Key_ClearStates();
+	// Keep the reset ordered with key/button transitions already queued by the
+	// same Win32 message drain. Clearing synchronously here can resurrect an
+	// earlier queued key-down after focus has already been lost.
+	WIN_QueueInputReset( active );
 
 	CL_WebHost_NotifyAppActivation( active );
 	IN_Activate( active );
@@ -337,6 +596,81 @@ static void VID_AppActivate( qboolean active )
 	} else {
 		WIN_DisableHook();
 		SetWindowPos( g_wv.hWnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE );
+	}
+}
+
+
+qboolean WIN_InputSuspended( void )
+{
+	return windowInputSuspended;
+}
+
+
+qboolean WIN_WindowFocused( void )
+{
+	return windowFocused;
+}
+
+
+static void WIN_UpdateInputSuspension( void )
+{
+	const qboolean shouldSuspend =
+		( windowHidden || gw_minimized ) ? qtrue : qfalse;
+	if ( shouldSuspend ) {
+		if ( windowInputSuspended ) {
+			return;
+		}
+
+		// Keep retained native transitions before the barrier, then release
+		// every pointer-ownership path even when WM_ACTIVATE/FocusOut never
+		// follows a minimize or hide notification.
+		windowInputSuspended = qtrue;
+		WIN_QueueInputReset( qfalse );
+		IN_Activate( qfalse );
+		WIN_ReleaseTemporaryMouseCapture();
+		return;
+	}
+
+	if ( !windowInputSuspended || !gw_active || !windowFocused ) {
+		return;
+	}
+
+	// WM_SIZE, WM_SHOWWINDOW, focus, and activation can report restoration in
+	// either order. Resume once all conditions agree and rebuild modifiers
+	// behind a fresh ordered barrier.
+	windowInputSuspended = qfalse;
+	WIN_QueueInputReset( qtrue );
+	IN_Activate( qtrue );
+}
+
+
+static void WIN_UpdateWindowFocus( qboolean focused )
+{
+	if ( windowFocused == focused ) {
+		return;
+	}
+
+	windowFocused = focused;
+	if ( !windowFocused ) {
+		// WM_KILLFOCUS is not guaranteed to be paired with WM_ACTIVATE. If the
+		// app remains active, independently balance held input and release every
+		// pointer-ownership path.
+		if ( gw_active && !windowInputSuspended ) {
+			WIN_QueueInputReset( qfalse );
+			IN_Activate( qfalse );
+		}
+		WIN_ReleaseTemporaryMouseCapture();
+		return;
+	}
+
+	const qboolean wasSuspended = windowInputSuspended;
+	WIN_UpdateInputSuspension();
+	if ( !wasSuspended && gw_active && !gw_minimized && !windowHidden &&
+		!windowInputSuspended ) {
+		// Focus can return without an activation transition. Rebuild modifier
+		// families behind a fresh barrier before polling resumes.
+		WIN_QueueInputReset( qtrue );
+		IN_Activate( qtrue );
 	}
 }
 
@@ -506,6 +840,12 @@ static int MapChar( WPARAM wParam, byte scancode )
  	 0,     ' ',     0,      0,      0,      0,      0,      0,     // 7
 	}; 
 
+	// A Unicode window delivers composed UTF-16 through WM_CHAR. Physical-key
+	// charset forcing is an ASCII compatibility policy and must not replace a
+	// real Unicode character (including a surrogate unit) with a US scancode.
+	if ( wParam > 127 )
+		return static_cast<int>( wParam );
+
 	if ( scancode == 0x53 )
 		return '.';
 
@@ -544,6 +884,43 @@ main window procedure
 */
 extern cvar_t *in_mouse;
 extern cvar_t *in_logitechbug;
+
+
+static void WIN_QueueWheelStep( int key, int eventTime )
+{
+	if ( !in_logitechbug->integer ) {
+		// If the compatibility mode was disabled between duplicate messages,
+		// first balance its outstanding transition.
+		if ( windowWheelPendingKey ) {
+			Sys_QueEvent( eventTime, SE_KEY,
+				windowWheelPendingKey, qfalse, 0, NULL );
+			windowWheelPendingKey = 0;
+		}
+		windowWheelFlip = qtrue;
+		Sys_QueEvent( eventTime, SE_KEY, key, qtrue, 0, NULL );
+		Sys_QueEvent( eventTime, SE_KEY, key, qfalse, 0, NULL );
+		return;
+	}
+
+	// The legacy Logitech workaround interprets duplicate messages as the down
+	// and up halves of one detent. If the direction changes between those
+	// halves, balance the old pseudo-key before starting the new direction.
+	if ( windowWheelPendingKey && windowWheelPendingKey != key ) {
+		Sys_QueEvent( eventTime, SE_KEY,
+			windowWheelPendingKey, qfalse, 0, NULL );
+		windowWheelPendingKey = 0;
+		windowWheelFlip = qtrue;
+	}
+
+	Sys_QueEvent( eventTime, SE_KEY, key, windowWheelFlip, 0, NULL );
+	if ( windowWheelFlip ) {
+		windowWheelPendingKey = key;
+	} else {
+		windowWheelPendingKey = 0;
+	}
+	windowWheelFlip = windowWheelFlip == qtrue ? qfalse : qtrue;
+}
+
 
 int			HotKey = 0;
 int			hkinstalled = 0;
@@ -704,10 +1081,9 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 {
 	#define TIMER_ID 10
 	//static UINT uTimerID;
-	static qboolean flip = qtrue;
-	static qboolean focused = qfalse;
 	qboolean active;
 	qboolean minimized;
+	qboolean activationChanged;
 	int zDelta, i;
 
 	// http://msdn.microsoft.com/library/default.asp?url=/library/en-us/winui/winui/windowsuserinterface/userinput/mouseinput/aboutmouseinput.asp
@@ -729,7 +1105,7 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 				Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, K_MWHEELDOWN, qtrue, 0, NULL );
 				Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, K_MWHEELDOWN, qfalse, 0, NULL );
 			}
-			return DefWindowProc( hWnd, uMsg, wParam, lParam );
+			return DefWindowProcW( hWnd, uMsg, wParam, lParam );
 		}
 	} */
 
@@ -737,6 +1113,9 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 	{
 	case WM_SETCURSOR:
 		if ( LOWORD( lParam ) == HTCLIENT ) {
+			if ( !WIN_WindowAcceptsInput() ) {
+				break;
+			}
 			if ( WIN_ConsoleOwnsPointer() ) {
 				// The console draws its own cursor. In a window the pointer remains
 				// free for the desktop; in fullscreen this also prevents an
@@ -761,62 +1140,71 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 	case WM_MOUSEWHEEL:
 		// http://msdn.microsoft.com/library/default.asp?url=/library/en-us/winui/winui/windowsuserinterface/userinput/mouseinput/aboutmouseinput.asp
 		// Windows 98/Me, Windows NT 4.0 and later - uses WM_MOUSEWHEEL
-		if ( !WIN_ConsoleOwnsPointer() && ( Key_GetCatcher() & KEYCATCH_BROWSER ) ) {
-			int wheelSteps = (short)HIWORD( wParam ) / WHEEL_DELTA;
-
-			while ( wheelSteps > 0 ) {
-				CL_WebView_OnMouseWheelEvent( 1 );
-				--wheelSteps;
-			}
-			while ( wheelSteps < 0 ) {
-				CL_WebView_OnMouseWheelEvent( -1 );
-				++wheelSteps;
-			}
-			return 0;
-		}
-
-		// only relevant for non-DI input and when console is toggled in window mode
-		//   if console is toggled in window mode (KEYCATCH_CONSOLE) then mouse is released and DI doesn't see any mouse wheel
-		if ( in_mouse->integer == -1 || ((!glw_state.cdsFullscreen || glw_state.monitorCount > 1) && (Key_GetCatcher() & KEYCATCH_CONSOLE)) )
 		{
-			// 120 increments, might be 240 and multiples if wheel goes too fast
-			// NOTE Logitech: logitech drivers are screwed and send the message twice?
-			//   could add a cvar to interpret the message as successive press/release events
-			zDelta = ( short ) HIWORD( wParam ) / WHEEL_DELTA;
-			if ( zDelta > 0 )
+			const fnql::input::PointerOwner pointerOwner = WIN_ResolvePointerOwner();
+			const int pointerConsumer = WIN_PointerConsumerIdentity();
+
+			// Raw/DirectInput is suspended for every absolute overlay. In that
+			// state WM_MOUSEWHEEL is the sole producer, including native UI and
+			// cgame catchers. Gameplay accepts it only from the legacy backend,
+			// avoiding a duplicate of raw/DirectInput wheel data.
+			if ( WIN_WindowAcceptsInput() &&
+				( IN_LegacyMouseDrivesInput() ||
+					fnql::input::PointerOwnerReportsAbsolute( pointerOwner ) ) )
 			{
-				for(i=0; i<zDelta; i++)
-				{
-					if (!in_logitechbug->integer)
-					{
-						Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, K_MWHEELUP, qtrue, 0, NULL );
-						Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, K_MWHEELUP, qfalse, 0, NULL );
+				POINT position;
+				const int wheelDelta = static_cast<short>( HIWORD( wParam ) );
+
+				if ( !windowWheelOwnerValid ||
+					windowWheelOwner != pointerOwner ||
+					windowWheelConsumer != pointerConsumer ) {
+					if ( windowWheelPendingKey ) {
+						Sys_QueEvent( g_wv.sysMsgTime, SE_KEY,
+							windowWheelPendingKey, qfalse, 0, NULL );
+						windowWheelPendingKey = 0;
 					}
-					else
-					{
-						Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, K_MWHEELUP, flip, 0, NULL );
-						flip = flip == qtrue ? qfalse : qtrue;
-					}
+					windowWheelRemainder = 0;
+					windowWheelOwner = pointerOwner;
+					windowWheelConsumer = pointerConsumer;
+					windowWheelOwnerValid = qtrue;
+					windowWheelFlip = qtrue;
 				}
-			}
-			else
-			{
-				for(i=0; i<-zDelta; i++)
-				{
-					if (!in_logitechbug->integer)
-					{
-						Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, K_MWHEELDOWN, qtrue, 0, NULL );
-						Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, K_MWHEELDOWN, qfalse, 0, NULL );
-					}
-					else
-					{
-						Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, K_MWHEELDOWN, flip, 0, NULL );
-						flip = flip == qtrue ? qfalse : qtrue;
-					}
+				windowWheelRemainder = fnql::input::SaturatingAddInt(
+					windowWheelRemainder, wheelDelta );
+				zDelta = windowWheelRemainder / WHEEL_DELTA;
+				windowWheelRemainder %= WHEEL_DELTA;
+				zDelta = std::clamp( zDelta, -32, 32 );
+
+				// Queue the hit-test position even if gameplay still appears to
+				// own the pointer: an earlier Escape in this message drain can
+				// open an absolute UI before the wheel event is consumed.
+				position.x = static_cast<short>( LOWORD( lParam ) );
+				position.y = static_cast<short>( HIWORD( lParam ) );
+				if ( ScreenToClient( hWnd, &position ) ) {
+					int x = position.x;
+					int y = position.y;
+					WIN_ProjectClientPointerToDrawable( &x, &y );
+					Sys_QueEvent( g_wv.sysMsgTime,
+						SE_MOUSE_ABSOLUTE, x, y, 0, NULL );
 				}
+
+				const int wheelKey =
+					zDelta > 0 ? K_MWHEELUP : K_MWHEELDOWN;
+				for ( i = 0; i < std::abs( zDelta ); ++i ) {
+					WIN_QueueWheelStep( wheelKey, g_wv.sysMsgTime );
+				}
+
+				// An application that processes WM_MOUSEWHEEL must return zero.
+				return 0;
 			}
-			// when an application processes the WM_MOUSEWHEEL message, it must return zero
-			return 0;
+			if ( windowWheelPendingKey ) {
+				Sys_QueEvent( g_wv.sysMsgTime, SE_KEY,
+					windowWheelPendingKey, qfalse, 0, NULL );
+				windowWheelPendingKey = 0;
+			}
+			windowWheelRemainder = 0;
+			windowWheelOwnerValid = qfalse;
+			windowWheelFlip = qtrue;
 		}
 		break;
 
@@ -832,6 +1220,9 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 		GetWindowRect( hWnd, &g_wv.winRect );
 		g_wv.winRectValid = qtrue;
 		gw_minimized = qfalse;
+		windowFocused = qfalse;
+		windowHidden = qfalse;
+		windowInputSuspended = qfalse;
 		uTimerM = 0;
 		uTimerT = 0;
 		uTimerG = 0;
@@ -894,8 +1285,11 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 		hWinEventHook = NULL;
 		g_wv.hWnd = NULL;
 		g_wv.winRectValid = qfalse;
-		//gw_minimized = qfalse;
+		gw_minimized = qfalse;
 		gw_active = qfalse;
+		windowFocused = qfalse;
+		windowHidden = qfalse;
+		windowInputSuspended = qfalse;
 		//WIN_EnableAltTab();
 		return 0;
 
@@ -960,18 +1354,23 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 		// We can receive Active & Minimized when restoring from minimized state
 		if ( active && minimized ) {
 			gw_minimized = qtrue;
+			WIN_UpdateInputSuspension();
 			break;
 		}
 
+		activationChanged = gw_active != active ? qtrue : qfalse;
 		gw_active = active;
 		gw_minimized = minimized;
 
-		VID_AppActivate( gw_active );
-		if ( !gw_active ) {
-			// Release bounded UI/console drag capture on focus loss. Relative
-			// gameplay capture has already been deactivated by VID_AppActivate.
-			WIN_ReleaseTemporaryMouseCapture();
+		if ( activationChanged ) {
+			VID_AppActivate( gw_active );
+			if ( !gw_active ) {
+				// Release bounded UI/console drag capture on focus loss. Relative
+				// gameplay capture has already been deactivated by VID_AppActivate.
+				WIN_ReleaseTemporaryMouseCapture();
+			}
 		}
+		WIN_UpdateInputSuspension();
 		Win_AddHotkey();
 
 		if ( glw_state.cdsFullscreen ) {
@@ -1020,16 +1419,29 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 		break;
 
 	case WM_SETFOCUS:
-		focused = qtrue;
+		WIN_UpdateWindowFocus( qtrue );
 		break;
 
 	case WM_KILLFOCUS:
-		//gw_active = qfalse;
-		focused = qfalse;
+		WIN_UpdateWindowFocus( qfalse );
+		break;
+
+	case WM_CAPTURECHANGED:
+		// Capture can be stolen without a matching button-up. Invalidate the
+		// overlay latch immediately and balance either absolute or gameplay
+		// buttons before a different capture path can silently reacquire.
+		WIN_QueueMouseReset();
+		temporaryMouseCapture = qfalse;
+		break;
+
+	case WM_CANCELMODE:
+		WIN_QueueMouseReset();
+		WIN_ReleaseTemporaryMouseCapture();
 		break;
 
 	case WM_MOVE:
-		if ( !gw_active || gw_minimized || !focused || IsZoomed( hWnd ) )
+		if ( !gw_active || gw_minimized || !windowFocused ||
+			IsZoomed( hWnd ) )
 			break;
 
 		GetWindowRect( hWnd, &g_wv.winRect );
@@ -1068,6 +1480,7 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 
 	case WM_SIZE:
 		gw_minimized = ( wParam == SIZE_MINIMIZED ) ? qtrue : qfalse;
+		WIN_UpdateInputSuspension();
 		if ( !gw_minimized && !glw_state.cdsFullscreen ) {
 			RECT clientRect;
 			if ( GetClientRect( hWnd, &clientRect ) ) {
@@ -1082,7 +1495,7 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 				}
 			}
 		}
-		if ( gw_active && focused && !gw_minimized ) {
+		if ( gw_active && windowFocused && !gw_minimized ) {
 			GetWindowRect( hWnd, &g_wv.winRect );
 			g_wv.winRectValid = qtrue;
 			UpdateMonitorInfo( &g_wv.winRect );
@@ -1179,28 +1592,36 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 		// One resolver with win_input.cpp, so the message pump always routes to
 		// the owner that IN_Frame is presenting a pointer for.
 		const fnql::input::PointerOwner pointerOwner = WIN_ResolvePointerOwner();
+		int messageX = (int)(short)LOWORD( lParam );
+		int messageY = (int)(short)HIWORD( lParam );
+		qboolean positionQueued = qfalse;
+
+		if ( uMsg != WM_MOUSEMOVE && WIN_WindowAcceptsInput() ) {
+			// An earlier Escape in this message drain can open an absolute UI
+			// before this button is dispatched even though the producer still
+			// observes gameplay ownership.
+			WIN_ProjectClientPointerToDrawable( &messageX, &messageY );
+			Sys_QueEvent( g_wv.sysMsgTime,
+				SE_MOUSE_ABSOLUTE, messageX, messageY, 0, NULL );
+			positionQueued = qtrue;
+		}
 
 		if ( pointerOwner != fnql::input::PointerOwner::Gameplay ) {
+			if ( !WIN_WindowAcceptsInput() ) {
+				return WIN_MouseMessageResult( uMsg );
+			}
 			// Every absolute consumer works in renderer drawable pixels, which
 			// are the client pixels Windows reports only while the renderer
 			// resolution matches the client area.
-			int x = (int)(short)LOWORD( lParam );
-			int y = (int)(short)HIWORD( lParam );
+			int x = messageX;
+			int y = messageY;
 			qboolean down = qfalse;
 			int key;
 
-			WIN_ProjectClientPointerToDrawable( &x, &y );
-			key = WIN_MouseMessageKey( uMsg, wParam, &down );
-
-			if ( pointerOwner == fnql::input::PointerOwner::Menu &&
-				( Key_GetCatcher() & KEYCATCH_BROWSER ) ) {
-				CL_WebView_OnMouseMove( x, y );
-				if ( key ) {
-					CL_WebView_OnMouseButtonEvent( key, down );
-					WIN_UpdateTemporaryMouseCapture( hWnd, uMsg, wParam );
-				}
-				return WIN_MouseMessageResult( uMsg );
+			if ( !positionQueued ) {
+				WIN_ProjectClientPointerToDrawable( &x, &y );
 			}
+			key = WIN_MouseMessageKey( uMsg, wParam, &down );
 
 			if ( uMsg == WM_MOUSEMOVE ) {
 				Sys_QueEvent( g_wv.sysMsgTime, SE_MOUSE_ABSOLUTE, x, y, 0, NULL );
@@ -1209,7 +1630,10 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 			if ( key ) {
 				// Keep position-before-click ordering even if Windows did not emit
 				// a distinct WM_MOUSEMOVE for this location.
-				Sys_QueEvent( g_wv.sysMsgTime, SE_MOUSE_ABSOLUTE, x, y, 0, NULL );
+				if ( !positionQueued ) {
+					Sys_QueEvent( g_wv.sysMsgTime,
+						SE_MOUSE_ABSOLUTE, x, y, 0, NULL );
+				}
 				Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, key, down, 0, NULL );
 				WIN_UpdateTemporaryMouseCapture( hWnd, uMsg, wParam );
 			}
@@ -1225,18 +1649,30 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 			// motion. Swallow it instead.
 			if ( IN_LegacyMouseDrivesInput() ) {
 				int mstate = (wParam & (MK_LBUTTON|MK_RBUTTON)) + ((wParam & (MK_MBUTTON|MK_XBUTTON1|MK_XBUTTON2)) >> 2);
-				IN_Win32MouseEvent( LOWORD(lParam), HIWORD(lParam), mstate );
+				IN_Win32MouseEvent(
+					static_cast<int>( static_cast<short>( LOWORD( lParam ) ) ),
+					static_cast<int>( static_cast<short>( HIWORD( lParam ) ) ),
+					mstate );
 			}
 			return WIN_MouseMessageResult( uMsg );
 		}
 		break;
 
 	case WM_INPUT:
-		if ( IN_MouseActive() ) {
+		if ( IN_RawMouseDrivesInput() ) {
 			IN_RawMouseEvent( lParam );
-			return 0;
+			return DefWindowProcW( hWnd, uMsg, wParam, lParam );
 		}
 		break;
+
+	case WM_SHOWWINDOW:
+		windowHidden = wParam ? qfalse : qtrue;
+		WIN_UpdateInputSuspension();
+		break;
+
+	case WM_INPUT_DEVICE_CHANGE:
+		IN_RawInputDeviceChange( wParam, lParam );
+		return 0;
 
 	case WM_SYSCOMMAND:
 		// Prevent Alt+Letter commands from hanging the application temporarily
@@ -1281,36 +1717,105 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 		break;
 
 	case WM_SYSKEYDOWN:
-	case WM_KEYDOWN:
+	case WM_KEYDOWN: {
+		if ( !WIN_WindowAcceptsInput() ) {
+			break;
+		}
+		if ( WIN_SkipAltGrLeftControl( wParam, lParam ) ) {
+			return 0;
+		}
+		const qboolean isRepeat =
+			( lParam & ( 1L << 30 ) ) ? qtrue : qfalse;
 		if ( wParam == VK_RETURN && ( uMsg == WM_SYSKEYDOWN || GetKeyState( VK_RMENU ) & 0x8000 ) ) {
-			Cvar_SetIntegerValue( "r_fullscreen", glw_state.cdsFullscreen ? 0 : 1 );
-			Cbuf_AddText( "vid_restart\n" );
+			suppressedAltEnter = qtrue;
+			if ( !isRepeat ) {
+				Cvar_SetIntegerValue( "r_fullscreen", glw_state.cdsFullscreen ? 0 : 1 );
+				Cbuf_AddText( "vid_restart\n" );
+			}
 			return 0;
 		}
 		if ( wParam == VK_SNAPSHOT || wParam == VK_LWIN || wParam == VK_RWIN ) {
-			return DefWindowProc( hWnd, uMsg, wParam, lParam );
+			return DefWindowProcW( hWnd, uMsg, wParam, lParam );
 		}
 		//Com_Printf( "^2k+^7 wParam:%08x lParam:%08x\n", wParam, lParam );
-		Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, MapKey( wParam, lParam ), qtrue, 0, NULL );
+		const int mappedKey = MapKey( wParam, lParam );
+		if ( isRepeat && ( mappedKey == K_CONSOLE || mappedKey == K_ESCAPE ) ) {
+			return 0;
+		}
+		if ( mappedKey && WIN_ShouldQueueModifierTransition(
+				wParam, lParam, qtrue ) ) {
+			Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, mappedKey, qtrue, 0, NULL );
+		}
 		break;
+	}
 
 	case WM_SYSKEYUP:
 	case WM_KEYUP:
+		if ( !WIN_WindowAcceptsInput() ) {
+			break;
+		}
+		if ( WIN_SkipAltGrLeftControl( wParam, lParam ) ) {
+			return 0;
+		}
+		if ( wParam == VK_RETURN && suppressedAltEnter ) {
+			suppressedAltEnter = qfalse;
+			return 0;
+		}
 		if ( wParam == VK_SNAPSHOT || wParam == VK_LWIN || wParam == VK_RWIN ) {
-			return DefWindowProc( hWnd, uMsg, wParam, lParam );
+			return DefWindowProcW( hWnd, uMsg, wParam, lParam );
 		}
 		//Com_Printf( "^5k-^7 wParam:%08x lParam:%08x\n", wParam, lParam );
-		Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, MapKey( wParam, lParam ), qfalse, 0, NULL );
+		if ( const int mappedKey = MapKey( wParam, lParam );
+			mappedKey && WIN_ShouldQueueModifierTransition(
+				wParam, lParam, qfalse ) ) {
+			Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, mappedKey, qfalse, 0, NULL );
+		}
+		break;
+
+	case WM_SYSCHAR:
+		// WM_SYSKEYDOWN already owns Alt+Enter. Consume the paired character
+		// so DefWindowProc cannot beep or activate a system menu.
+		if ( wParam == VK_RETURN ) {
+			return 0;
+		}
 		break;
 
 	case WM_CHAR:
+		if ( !WIN_WindowAcceptsInput() ) {
+			return 0;
+		}
 		{
 			byte scancode = ((lParam >> 16) & 0xFF);
 			if ( wParam != VK_NUMPAD0 && scancode != 0x29 ) {
-				Sys_QueEvent( g_wv.sysMsgTime, SE_CHAR, MapChar( wParam, scancode ), 0, 0, NULL );
+				const int character = MapChar( wParam, scancode );
+				if ( character ) {
+					Sys_QueEvent( g_wv.sysMsgTime, SE_CHAR, character, 0, 0, NULL );
+				}
 			}
 		}
 		return 0;
+
+	case WM_UNICHAR:
+		if ( wParam == UNICODE_NOCHAR ) {
+			return TRUE;
+		}
+		if ( !WIN_WindowAcceptsInput() ) {
+			return 0;
+		}
+		if ( wParam > 0 && wParam <= 0x10ffff &&
+			!( wParam >= 0xd800 && wParam <= 0xdfff ) ) {
+			Sys_QueEvent( g_wv.sysMsgTime, SE_CHAR,
+				static_cast<int>( wParam ), 0, 0, NULL );
+		}
+		return 0;
+
+#ifdef USE_MIDI
+	case MM_MIM_DATA:
+		IN_MIDIMessage(
+			reinterpret_cast<HMIDIIN>( wParam ),
+			static_cast<DWORD>( lParam ) );
+		return 0;
+#endif
 
 	case WM_NCHITTEST:
 		// in borderless mode - drag using client area when holding ALT
@@ -1323,7 +1828,7 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 		return 1;
 	}
 
-	return DefWindowProc( hWnd, uMsg, wParam, lParam );
+	return DefWindowProcW( hWnd, uMsg, wParam, lParam );
 }
 
 
@@ -1369,23 +1874,86 @@ void GLW_HideFullscreenWindow( void ) {
 Sys_GetClipboardData
 ================
 */
+static char *WIN_WideClipboardTextToUtf8(
+	const wchar_t *text, int characterCount )
+{
+	if ( !text || characterCount < 0 ) {
+		return nullptr;
+	}
+	if ( characterCount == 0 ) {
+		char *empty = static_cast<char *>( Z_Malloc( 1 ) );
+		empty[0] = '\0';
+		return empty;
+	}
+
+	const int utf8Bytes = WideCharToMultiByte(
+		CP_UTF8, 0, text, characterCount,
+		nullptr, 0, nullptr, nullptr );
+	if ( utf8Bytes <= 0 ||
+		utf8Bytes == ( std::numeric_limits<int>::max )() ) {
+		return nullptr;
+	}
+
+	char *data = static_cast<char *>( Z_Malloc( utf8Bytes + 1 ) );
+	if ( WideCharToMultiByte( CP_UTF8, 0,
+			text, characterCount, data, utf8Bytes, nullptr, nullptr ) != utf8Bytes ) {
+		Z_Free( data );
+		return nullptr;
+	}
+	data[utf8Bytes] = '\0';
+	strtok( data, "\n\r\b" );
+	return data;
+}
+
+
 char *Sys_GetClipboardData( void ) {
 	char *data = nullptr;
 
 	fnql::win::ScopedClipboard clipboard( nullptr );
 	if ( clipboard ) {
-		HANDLE hClipboardData;
-		DWORD size;
+		if ( HANDLE unicodeHandle = GetClipboardData( CF_UNICODETEXT ) ) {
+			fnql::win::ScopedGlobalLock<wchar_t> cliptext( unicodeHandle );
+			const SIZE_T capacity = GlobalSize( unicodeHandle ) / sizeof( wchar_t );
+			if ( cliptext && capacity > 0 ) {
+				SIZE_T length = 0;
+				while ( length < capacity && cliptext.get()[length] != L'\0' ) {
+					++length;
+				}
+				if ( length <= static_cast<SIZE_T>(
+						( std::numeric_limits<int>::max )() ) ) {
+					data = WIN_WideClipboardTextToUtf8(
+						cliptext.get(), static_cast<int>( length ) );
+				}
+			}
+		}
 
-		// GetClipboardData performs implicit CF_UNICODETEXT => CF_TEXT conversion
-		if ( ( hClipboardData = GetClipboardData( CF_TEXT ) ) != 0 ) {
-			fnql::win::ScopedGlobalLock<char> cliptext( hClipboardData );
-			if ( cliptext ) {
-				size = GlobalSize( hClipboardData ) + 1;
-				data = static_cast<char *>( Z_Malloc( size ) );
-				Q_strncpyz( data, cliptext.get(), size );
-				
-				strtok( data, "\n\r\b" );
+		// Older applications may expose only CF_TEXT. Convert its active-code-
+		// page bytes to Unicode first; never mislabel them as engine UTF-8.
+		if ( !data ) {
+			if ( HANDLE ansiHandle = GetClipboardData( CF_TEXT ) ) {
+				fnql::win::ScopedGlobalLock<char> cliptext( ansiHandle );
+				const SIZE_T capacity = GlobalSize( ansiHandle );
+				if ( cliptext && capacity > 0 ) {
+					SIZE_T length = 0;
+					while ( length < capacity && cliptext.get()[length] != '\0' ) {
+						++length;
+					}
+					if ( length <= static_cast<SIZE_T>(
+							( std::numeric_limits<int>::max )() ) ) {
+						const int byteCount = static_cast<int>( length );
+						const int wideCount = MultiByteToWideChar(
+							CP_ACP, 0, cliptext.get(), byteCount, nullptr, 0 );
+						if ( wideCount > 0 ) {
+							std::vector<wchar_t> wide( wideCount );
+							if ( MultiByteToWideChar( CP_ACP, 0,
+									cliptext.get(), byteCount,
+									wide.data(), wideCount ) == wideCount ) {
+								data = WIN_WideClipboardTextToUtf8(
+									wide.data(), wideCount );
+							}
+						}
+					}
+				}
 			}
 		}
 	}
@@ -1400,8 +1968,6 @@ Sys_SetClipboardData
 */
 void Sys_SetClipboardData( const char *text )
 {
-	size_t length;
-
 	if ( !g_wv.hWnd )
 		return;
 
@@ -1409,24 +1975,36 @@ void Sys_SetClipboardData( const char *text )
 	if ( !clipboard )
 		return;
 
-	EmptyClipboard();
-
 	if ( !text ) {
 		text = "";
 	}
 
-	length = strlen( text ) + 1;
-	fnql::win::ScopedGlobalMemory hMem( GlobalAlloc( GMEM_MOVEABLE | GMEM_DDESHARE, length ) );
+	int wideCount = MultiByteToWideChar(
+		CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, nullptr, 0 );
+	if ( wideCount <= 0 ) {
+		// Preserve a usable clipboard even if an external caller supplied a
+		// malformed byte sequence; Windows substitutes replacement characters.
+		wideCount = MultiByteToWideChar( CP_UTF8, 0, text, -1, nullptr, 0 );
+	}
+	if ( wideCount <= 0 ||
+		static_cast<SIZE_T>( wideCount ) >
+			( std::numeric_limits<SIZE_T>::max )() / sizeof( wchar_t ) ) {
+		return;
+	}
+
+	fnql::win::ScopedGlobalMemory hMem( GlobalAlloc(
+		GMEM_MOVEABLE, static_cast<SIZE_T>( wideCount ) * sizeof( wchar_t ) ) );
 	if ( hMem ) {
 		bool copied = false;
 		{
-			fnql::win::ScopedGlobalLock<char> ptr( hMem.get() );
+			fnql::win::ScopedGlobalLock<wchar_t> ptr( hMem.get() );
 			if ( ptr ) {
-				memcpy( ptr.get(), text, length );
-				copied = true;
+				copied = MultiByteToWideChar(
+					CP_UTF8, 0, text, -1, ptr.get(), wideCount ) == wideCount;
 			}
 		}
-		if ( copied && SetClipboardData( CF_TEXT, hMem.get() ) ) {
+		if ( copied && EmptyClipboard() &&
+			SetClipboardData( CF_UNICODETEXT, hMem.get() ) ) {
 			hMem.release();
 		}
 	}

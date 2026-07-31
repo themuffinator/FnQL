@@ -383,6 +383,11 @@ IF(FNQL_AUDIO_LOOPBACK_TESTS)
 	target_include_directories(fnql_audio_recovery_tests PRIVATE code/client/audio/shared)
 	add_test(NAME fnql_audio_recovery COMMAND fnql_audio_recovery_tests)
 
+	ADD_EXECUTABLE(fnql_audio_init_policy_tests tests/audio/init_policy_tests.cpp)
+	target_compile_features(fnql_audio_init_policy_tests PRIVATE cxx_std_17)
+	target_include_directories(fnql_audio_init_policy_tests PRIVATE code/client/audio/shared)
+	add_test(NAME fnql_audio_init_policy COMMAND fnql_audio_init_policy_tests)
+
 	ADD_EXECUTABLE(fnql_audio_occlusion_tests tests/audio/occlusion_policy_tests.cpp)
 	target_compile_features(fnql_audio_occlusion_tests PRIVATE cxx_std_17)
 	target_include_directories(fnql_audio_occlusion_tests PRIVATE code/client/audio/shared)
@@ -413,6 +418,8 @@ IF(FNQL_AUDIO_LOOPBACK_TESTS)
 	IF(Python3_Interpreter_FOUND)
 		add_test(NAME fnql_retail_sound_compat_source
 			COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/audio/retail_sound_compat_source_tests.py")
+		add_test(NAME fnql_audio_init_source
+			COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/audio/audio_init_source_tests.py")
 		add_test(NAME fnql_audio_zone_sweep_script
 			COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/audio/audio_zone_sweep_tests.py")
 		add_test(NAME fnql_audio_zone_material_map
@@ -671,6 +678,9 @@ IF(UNIX)
 			code/unix/x11_dga.cpp
 			code/unix/x11_randr.cpp
 			code/unix/x11_vidmode.cpp)
+		IF(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+			list(APPEND Q3_UI_SRCS code/unix/linux_joystick.cpp)
+		ENDIF()
 		IF(USE_VK OR USE_RTX)
 			list(APPEND Q3_UI_SRCS code/unix/linux_qvk.cpp)
 		ENDIF()
@@ -716,6 +726,9 @@ ELSEIF(WIN32)
 ENDIF(UNIX)
 
 ADD_LIBRARY(q3ui OBJECT ${Q3_UI_SRCS})
+IF(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT USE_SDL)
+	TARGET_COMPILE_DEFINITIONS(q3ui PRIVATE USE_JOYSTICK)
+ENDIF()
 
 IF(UNIX AND USE_SDL)
 	find_package(SDL3 3.2.0 CONFIG QUIET COMPONENTS SDL3)

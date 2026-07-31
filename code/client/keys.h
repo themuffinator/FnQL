@@ -46,6 +46,9 @@ void Key_WriteBindings( fileHandle_t f );
 void Key_SetBinding( int keynum, const char *binding );
 const char *Key_GetBinding( int keynum );
 void Key_ParseBinding( int key, qboolean down, unsigned time );
+unsigned Key_GetBindingGeneration( int keynum );
+void Key_AdvanceBindingGeneration( int keynum );
+void Key_AdvanceAllBindingGenerations( void );
 
 int Key_GetKey( const char *binding );
 const char *Key_KeynumToString( int keynum );

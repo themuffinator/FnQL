@@ -52,6 +52,7 @@ jpeg_fallback_defaults = quiet_fallback_defaults + ['tests=disabled']
 
 win32 = host_machine.system() == 'windows'
 darwin = host_machine.system() == 'darwin'
+linux = host_machine.system() == 'linux'
 cpu_family = host_machine.cpu_family()
 
 renderer_prefix = 'fnql'
@@ -712,6 +713,9 @@ else
       'code/unix/x11_randr.cpp',
       'code/unix/x11_vidmode.cpp',
     ]
+    if linux
+      q3_ui_src += 'code/unix/linux_joystick.cpp'
+    endif
     if use_opengl_api
       q3_ui_src += 'code/unix/linux_qgl.cpp'
     endif
@@ -849,6 +853,9 @@ endif
 
 client_c_args = common_c_args
 client_cpp_args = common_cpp_args
+if linux and build_client and not use_sdl
+  client_cpp_args += ['-DUSE_JOYSTICK']
+endif
 if client_asm_src.length() > 0 and cc.get_id() != 'msvc'
   client_c_args += ['-DELF']
 endif
@@ -980,6 +987,13 @@ if get_option('audio-tests')
   )
   test('fnql_audio_recovery', audio_recovery_tests)
 
+  audio_init_policy_tests = executable('fnql_audio_init_policy_tests',
+    'tests/audio/init_policy_tests.cpp',
+    include_directories: include_directories('code/client/audio/shared'),
+    cpp_args: common_cpp_args,
+  )
+  test('fnql_audio_init_policy', audio_init_policy_tests)
+
   audio_occlusion_tests = executable('fnql_audio_occlusion_tests',
     'tests/audio/occlusion_policy_tests.cpp',
     include_directories: include_directories('code/client/audio/shared'),
@@ -1003,6 +1017,10 @@ if get_option('audio-tests')
 
   test('fnql_retail_sound_compat_source', python,
     args: files('tests/audio/retail_sound_compat_source_tests.py'),
+  )
+
+  test('fnql_audio_init_source', python,
+    args: files('tests/audio/audio_init_source_tests.py'),
   )
 
   test('fnql_audio_impact_occlusion_source', python,
@@ -1245,6 +1263,9 @@ test('fnql_join_menu_source', python,
 )
 test('fnql_windowed_mouse_source', python,
   args: files('tests/windowed_mouse_source_tests.py'),
+)
+test('fnql_input_system_source', python,
+  args: files('tests/input_system_source_tests.py'),
 )
 test('fnql_frame_clock_source', python,
   args: files('tests/frame_clock_source_tests.py'),

@@ -42,6 +42,7 @@ typedef struct {
 	int			oldButtonState;
 	int			oldCursorX;
 	int			oldCursorY;
+	int			oldCursorConsumer;
 	qboolean	cursorPositionValid;
 
 	qboolean	mouseActive;
@@ -61,6 +62,34 @@ static constexpr int kPointerMenuMask = KEYCATCH_UI | KEYCATCH_CGAME | KEYCATCH_
 static PointerOwner s_pointerOwner = PointerOwner::Gameplay;
 static qboolean s_pointerConfined;
 static RECT s_pointerConfineRect;
+static qboolean s_pointerConfinementFailureReported;
+static qboolean s_legacyMouseDriving;
+static qboolean s_gameplayClipActive;
+static qboolean s_gameplayClipNeedsRefresh;
+static qboolean s_gameplayCaptureOwned;
+static qboolean s_gameplayCaptureFailureReported;
+static qboolean s_cursorVisibilityRequestValid;
+static qboolean s_cursorVisibilityRequested;
+static qboolean s_legacyWarpFailureReported;
+
+
+static int IN_PointerConsumerIdentity( void )
+{
+	const int catcher = Key_GetCatcher();
+	if ( catcher & KEYCATCH_CONSOLE ) {
+		return KEYCATCH_CONSOLE;
+	}
+	if ( catcher & KEYCATCH_BROWSER ) {
+		return KEYCATCH_BROWSER;
+	}
+	if ( catcher & KEYCATCH_UI ) {
+		return KEYCATCH_UI;
+	}
+	if ( catcher & KEYCATCH_CGAME ) {
+		return KEYCATCH_CGAME;
+	}
+	return 0;
+}
 
 /*
 ================
@@ -123,9 +152,10 @@ typedef struct {
 	int			id;			// joystick number
 	JOYCAPS		jc;
 
-	int			oldbuttonstate;
-	int			oldpovstate;
+	DWORD		oldbuttonstate;
+	DWORD		oldpovstate;
 	int			oldmoveaxisstate[MAX_JOYSTICK_AXIS];
+	int			consecutiveReadFailures;
 
 	JOYINFOEX	ji;
 } joystickInfo_t;
@@ -167,6 +197,7 @@ cvar_t	*joy_threshold;
 #ifdef USE_JOYSTICK
 void IN_StartupJoystick (void);
 void IN_JoyMove(void);
+static void IN_ClearWinMMJoystickState( qboolean disable );
 #endif
 
 #ifdef USE_MIDI
@@ -187,8 +218,11 @@ static PointerMode IN_ResolvePointerMode( PointerOwner owner )
 	fnql::input::PointerModeInputs inputs;
 
 	inputs.owner = owner;
-	inputs.focused = gw_active ? true : false;
-	inputs.minimized = gw_minimized ? true : false;
+	inputs.focused =
+		( gw_active && WIN_WindowFocused() && !WIN_InputSuspended() )
+			? true : false;
+	inputs.minimized =
+		( gw_minimized || WIN_InputSuspended() ) ? true : false;
 	inputs.fullscreen = glw_state.cdsFullscreen ? true : false;
 	inputs.relativeAvailable = in_mouse->integer != 0;
 
@@ -215,16 +249,32 @@ static void IN_SetPointerConfinement( qboolean confine )
 	if ( confine && g_wv.hWnd ) {
 		IN_UpdateWindow( &window_rect, qfalse );
 		if ( !s_pointerConfined || !EqualRect( &window_rect, &s_pointerConfineRect ) ) {
-			ClipCursor( &window_rect );
-			s_pointerConfineRect = window_rect;
-			s_pointerConfined = qtrue;
+			if ( ClipCursor( &window_rect ) ) {
+				s_pointerConfineRect = window_rect;
+				s_pointerConfined = qtrue;
+				s_gameplayClipActive = qfalse;
+				s_gameplayClipNeedsRefresh = qfalse;
+				s_pointerConfinementFailureReported = qfalse;
+			} else if ( !s_pointerConfinementFailureReported ) {
+				Com_Printf( S_COLOR_YELLOW
+					"Unable to confine the mouse pointer (Win32 error %lu)\n",
+					GetLastError() );
+				s_pointerConfinementFailureReported = qtrue;
+			}
 		}
 		return;
 	}
 
 	if ( s_pointerConfined ) {
-		ClipCursor( NULL );
-		s_pointerConfined = qfalse;
+		if ( ClipCursor( NULL ) ) {
+			s_pointerConfined = qfalse;
+			s_pointerConfinementFailureReported = qfalse;
+		} else if ( !s_pointerConfinementFailureReported ) {
+			Com_Printf( S_COLOR_YELLOW
+				"Unable to release mouse-pointer confinement (Win32 error %lu)\n",
+				GetLastError() );
+			s_pointerConfinementFailureReported = qtrue;
+		}
 	}
 }
 
@@ -236,7 +286,10 @@ IN_MouseActive
 */
 qboolean IN_MouseActive( void )
 {
-	return ( s_wmv.mouseActive && in_nograb->integer == 0 ) ? qtrue : qfalse;
+	return ( s_wmv.mouseActive && in_nograb->integer == 0 &&
+		gw_active && WIN_WindowFocused() && !gw_minimized &&
+		!WIN_InputSuspended() )
+		? qtrue : qfalse;
 }
 
 
@@ -282,11 +335,12 @@ under a stationary cursor still delivers an initial position without waiting for
 a WM_MOUSEMOVE transition.
 ================
 */
-static void IN_WindowMouse( void )
+static void IN_WindowMouse( qboolean force = qfalse )
 {
 	POINT position;
 	int x;
 	int y;
+	const int consumer = IN_PointerConsumerIdentity();
 
 	if ( !g_wv.hWnd || !GetCursorPos( &position )
 		|| !ScreenToClient( g_wv.hWnd, &position ) ) {
@@ -297,15 +351,19 @@ static void IN_WindowMouse( void )
 	y = position.y;
 	WIN_ProjectClientPointerToDrawable( &x, &y );
 
-	if ( s_wmv.cursorPositionValid
+	if ( !force && s_wmv.cursorPositionValid
 		&& x == s_wmv.oldCursorX
-		&& y == s_wmv.oldCursorY ) {
+		&& y == s_wmv.oldCursorY
+		&& consumer == s_wmv.oldCursorConsumer ) {
 		return;
 	}
 
-	s_wmv.cursorPositionValid = qtrue;
-	s_wmv.oldCursorX = x;
-	s_wmv.oldCursorY = y;
+	if ( !force ) {
+		s_wmv.cursorPositionValid = qtrue;
+		s_wmv.oldCursorX = x;
+		s_wmv.oldCursorY = y;
+		s_wmv.oldCursorConsumer = consumer;
+	}
 	Sys_QueEvent( Sys_Milliseconds(), SE_MOUSE_ABSOLUTE, x, y, 0, NULL );
 }
 
@@ -364,8 +422,16 @@ void IN_UpdateWindow( RECT *window_rect, qboolean updateClipRegion )
 		ScreenToClient( g_wv.hWnd, &client_center );
 	}
 
-	if ( updateClipRegion && s_wmv.mouseActive && gw_active ) {
-		ClipCursor( window_rect );
+	if ( updateClipRegion && s_wmv.mouseActive && gw_active &&
+		( s_gameplayCaptureOwned || s_gameplayClipActive ) ) {
+		if ( ClipCursor( window_rect ) ) {
+			s_gameplayClipActive = qtrue;
+			s_gameplayClipNeedsRefresh = qfalse;
+		} else {
+			// A failed replacement leaves the previous Win32 clip in place.
+			// Retain release ownership and request a refresh next frame.
+			s_gameplayClipNeedsRefresh = qtrue;
+		}
 	}
 }
 
@@ -375,29 +441,73 @@ void IN_UpdateWindow( RECT *window_rect, qboolean updateClipRegion )
 IN_CaptureMouse
 ================
 */
-static void IN_CaptureMouse( const RECT *clipRect )
+static void IN_SetSystemCursorVisible( qboolean visible )
 {
-	CURSORINFO ci;
+	// ShowCursor adjusts a thread-owned display count rather than setting an
+	// absolute state. Normalize that count only when FnQL's requested state
+	// changes; consulting CURSORINFO every frame is not safe because a NULL
+	// client cursor and touch suppression also report "not showing" without
+	// implying that the display count needs another increment.
+	if ( s_cursorVisibilityRequestValid &&
+		s_cursorVisibilityRequested == visible ) {
+		return;
+	}
 
-	// Relative gameplay owns the clip region from here; drop the absolute
-	// owner's confinement bookkeeping so it re-asserts cleanly on the way back.
-	s_pointerConfined = qfalse;
-
-	ClipCursor( clipRect );
-	SetCursorPos( window_center.x, window_center.y );
-	SetCapture( g_wv.hWnd );
-
-	memset( &ci, 0, sizeof( ci ) );
-	ci.cbSize = sizeof( CURSORINFO );
-	if ( GetCursorInfo( &ci ) ) {
-		if ( ci.flags == CURSOR_SHOWING ) {
-			while ( ShowCursor( FALSE ) >= 0 )
-				;
-		}
+	if ( visible ) {
+		while ( ShowCursor( TRUE ) < 0 )
+			;
 	} else {
 		while ( ShowCursor( FALSE ) >= 0 )
 			;
 	}
+	s_cursorVisibilityRequestValid = qtrue;
+	s_cursorVisibilityRequested = visible;
+}
+
+
+static qboolean IN_CaptureMouse( const RECT *clipRect )
+{
+	const qboolean clipApplied =
+		ClipCursor( clipRect ) ? qtrue : qfalse;
+
+	SetCapture( g_wv.hWnd );
+	if ( clipApplied ) {
+		s_gameplayClipActive = qtrue;
+		s_gameplayClipNeedsRefresh = qfalse;
+	} else {
+		s_gameplayClipNeedsRefresh = qtrue;
+	}
+	s_gameplayCaptureOwned =
+		GetCapture() == g_wv.hWnd ? qtrue : qfalse;
+	if ( !clipApplied || !s_gameplayCaptureOwned ) {
+		if ( s_gameplayCaptureOwned && GetCapture() == g_wv.hWnd &&
+			( ReleaseCapture() || GetCapture() != g_wv.hWnd ) ) {
+			s_gameplayCaptureOwned = qfalse;
+		} else if ( GetCapture() != g_wv.hWnd ) {
+			s_gameplayCaptureOwned = qfalse;
+		}
+		if ( s_gameplayClipActive && ClipCursor( NULL ) ) {
+			s_gameplayClipActive = qfalse;
+			s_gameplayClipNeedsRefresh = qfalse;
+		}
+		if ( !s_gameplayCaptureFailureReported ) {
+			Com_Printf( S_COLOR_YELLOW
+				"Unable to apply complete gameplay mouse capture (Win32 error %lu)\n",
+				GetLastError() );
+			s_gameplayCaptureFailureReported = qtrue;
+		}
+		IN_SetSystemCursorVisible( qtrue );
+		return qfalse;
+	}
+
+	s_gameplayCaptureFailureReported = qfalse;
+	s_gameplayClipNeedsRefresh = qfalse;
+
+	// Relative gameplay now owns the clip region. Drop the absolute owner's
+	// bookkeeping so it re-asserts cleanly on the way back.
+	s_pointerConfined = qfalse;
+	IN_SetSystemCursorVisible( qfalse );
+	return qtrue;
 }
 
 
@@ -406,11 +516,27 @@ static void IN_CaptureMouse( const RECT *clipRect )
 IN_ActivateWin32Mouse
 ================
 */
-static void IN_ActivateWin32Mouse( void )
+static qboolean IN_ActivateWin32Mouse( void )
 {
 	RECT window_rect;
+	s_legacyMouseDriving = qtrue;
 	IN_UpdateWindow( &window_rect, qfalse );
-	IN_CaptureMouse( &window_rect );
+	if ( !SetCursorPos( window_center.x, window_center.y ) ) {
+		if ( !s_legacyWarpFailureReported ) {
+			Com_Printf( S_COLOR_YELLOW
+				"Unable to centre the Win32 gameplay mouse (error %lu)\n",
+				GetLastError() );
+			s_legacyWarpFailureReported = qtrue;
+		}
+		s_legacyMouseDriving = qfalse;
+		return qfalse;
+	}
+	if ( !IN_CaptureMouse( &window_rect ) ) {
+		s_legacyMouseDriving = qfalse;
+		return qfalse;
+	}
+	s_legacyWarpFailureReported = qfalse;
+	return qtrue;
 }
 
 
@@ -419,30 +545,35 @@ static void IN_ActivateWin32Mouse( void )
 IN_DeactivateWin32Mouse
 ================
 */
-static void IN_DeactivateWin32Mouse( void )
+static void IN_DeactivateWin32Mouse( qboolean restorePointer )
 {
-	CURSORINFO ci;
-
-	if ( !gw_minimized && !IN_UseAbsolutePointer() ) {
+	if ( restorePointer && !gw_minimized && !IN_UseAbsolutePointer() ) {
 		IN_UpdateWindow( NULL, qfalse );
 		SetCursorPos( window_center.x, window_center.y );
 	}
 
-	ReleaseCapture();
-	ClipCursor( NULL );
+	if ( !s_gameplayCaptureOwned || GetCapture() != g_wv.hWnd ||
+		ReleaseCapture() ) {
+		s_gameplayCaptureOwned = qfalse;
+	}
+	if ( s_gameplayClipActive && ClipCursor( NULL ) ) {
+		s_gameplayClipActive = qfalse;
+		s_gameplayClipNeedsRefresh = qfalse;
+	} else if ( !s_gameplayClipActive ) {
+		s_gameplayClipNeedsRefresh = qfalse;
+	}
+	if ( !s_gameplayCaptureOwned && !s_gameplayClipActive ) {
+		s_gameplayCaptureFailureReported = qfalse;
+	} else if ( !s_gameplayCaptureFailureReported ) {
+		Com_Printf( S_COLOR_YELLOW
+			"Unable to release complete gameplay mouse capture (Win32 error %lu)\n",
+			GetLastError() );
+		s_gameplayCaptureFailureReported = qtrue;
+	}
 	s_pointerConfined = qfalse;
 
-	memset( &ci, 0, sizeof( ci ) );
-	ci.cbSize = sizeof( CURSORINFO );
-	if ( GetCursorInfo( &ci ) ) {
-		if ( ci.flags == 0 ) {
-			while ( ShowCursor( TRUE ) < 0 )
-				;
-		}
-	} else {
-		while ( ShowCursor( TRUE ) < 0 )
-			;
-	}
+	IN_SetSystemCursorVisible( qtrue );
+	s_legacyMouseDriving = qfalse;
 }
 
 
@@ -453,10 +584,14 @@ IN_Win32Mouse
 */
 static void IN_Win32Mouse( int *mx, int *my ) 
 {
-	POINT		current_pos;
+	POINT current_pos = {};
 
 	// find mouse movement
-	GetCursorPos( &current_pos );
+	*mx = 0;
+	*my = 0;
+	if ( !GetCursorPos( &current_pos ) ) {
+		return;
+	}
 
 	*mx = current_pos.x - window_center.x;
 	*my = current_pos.y - window_center.y;
@@ -483,6 +618,62 @@ static	PGRID	GRID;
 
 static	BOOL	raw_inited = FALSE;
 static	BOOL	raw_activated = FALSE;
+static	qboolean raw_driving;
+static	HWND	raw_targetWindow;
+static	int		raw_wheelRemainder;
+static	LONG	raw_absoluteX;
+static	LONG	raw_absoluteY;
+static	qboolean raw_absoluteValid;
+static	HANDLE	raw_absoluteDevice;
+static	qboolean raw_removalFailureReported;
+static	std::uint32_t raw_removalRetryAfter;
+static	qboolean raw_deviceNotifications;
+static	qboolean raw_deviceNotificationsUnavailable;
+static	qboolean rawReadResetQueued;
+
+
+static void IN_ClearRawMouseDeltas( void )
+{
+	g_wv.raw_mx = 0;
+	g_wv.raw_my = 0;
+	raw_wheelRemainder = 0;
+	raw_absoluteX = 0;
+	raw_absoluteY = 0;
+	raw_absoluteValid = qfalse;
+	raw_absoluteDevice = NULL;
+}
+
+
+static void IN_QueueRawMouseReadReset( void )
+{
+	IN_ClearRawMouseDeltas();
+	if ( rawReadResetQueued ) {
+		return;
+	}
+
+	// A malformed/unreadable WM_INPUT packet may have contained the only
+	// button-up for a held binding. Recover at an ordered mouse-only barrier;
+	// the latch avoids flooding while the raw-input stream remains unhealthy.
+	Sys_QueEvent( g_wv.sysMsgTime, SE_MOUSE_RESET, 0, 0, 0, NULL );
+	rawReadResetQueued = qtrue;
+}
+
+
+/*
+================
+IN_RawMouseDrivesInput
+
+Raw packets are an input source only while registration and the shared mouse
+activation state both agree.  WndProc may still receive packets queued before
+a source or focus transition, so callers must not infer this from raw support
+or general mouse availability alone.
+================
+*/
+qboolean IN_RawMouseDrivesInput( void )
+{
+	return ( in_mouse && in_mouse->integer == 2 &&
+		raw_driving && raw_activated && IN_MouseActive() ) ? qtrue : qfalse;
+}
 
 
 /*
@@ -534,49 +725,108 @@ static BOOL IN_InitRawMouse( void ) {
 IN_ActivateRawMouse
 ================
 */
-static void IN_ActivateRawMouse( void )
+static qboolean IN_ActivateRawMouse( void )
 {
 	RECT		window_rect;
 	RAWINPUTDEVICE Rid;
 	UINT num;
 	int cnt;
+	DWORD desiredFlags;
 
-	if ( raw_activated )
+	IN_ClearRawMouseDeltas();
+	rawReadResetQueued = qfalse;
+
+	if ( raw_activated && raw_targetWindow == g_wv.hWnd )
 	{
-		return; // already activated
+		IN_UpdateWindow( &window_rect, qfalse );
+		if ( !IN_CaptureMouse( &window_rect ) ) {
+			s_legacyMouseDriving = qfalse;
+			raw_driving = qfalse;
+			return qfalse;
+		}
+		s_legacyMouseDriving = qfalse;
+		raw_driving = qtrue;
+		raw_removalFailureReported = qfalse;
+		return qtrue; // registration survived a failed removal
 	}
 
+	memset( &Rid, 0, sizeof( Rid ) );
 	num = 1;
 	cnt = GRRID( &Rid, &num, sizeof( Rid ) );
-	if ( cnt < 0 || !g_wv.hWnd ) 
+	if ( !g_wv.hWnd )
 	{
-		Com_Printf( S_COLOR_YELLOW "Error getting registered raw input devices\n" );
-		return; // error getting registered raw input devices
+		Com_Printf( S_COLOR_YELLOW "Cannot register raw mouse input without a window\n" );
+		return qfalse;
 	}
 
 	IN_UpdateWindow( &window_rect, qfalse );
+	desiredFlags = RIDEV_NOLEGACY;
+	if ( !raw_deviceNotificationsUnavailable ) {
+		desiredFlags |= RIDEV_DEVNOTIFY;
+	}
 
-	if ( cnt >= 1 && Rid.hwndTarget == g_wv.hWnd )
+	if ( cnt == 1 &&
+		Rid.usUsagePage == HID_USAGE_PAGE_GENERIC &&
+		Rid.usUsage == HID_USAGE_GENERIC_MOUSE &&
+		Rid.dwFlags == desiredFlags &&
+		Rid.hwndTarget == g_wv.hWnd )
 	{
-		// device already exists?
+		// The desired process-wide mouse registration already exists.
+		raw_deviceNotifications =
+			( Rid.dwFlags & RIDEV_DEVNOTIFY ) ? qtrue : qfalse;
 	}
 	else
 	{
+		// A failed or truncated registration query does not prove that raw input
+		// is unavailable.  Registering the desired top-level collection is the
+		// definitive operation and replaces any prior mouse registration owned
+		// by this process.
 		Rid.usUsagePage = HID_USAGE_PAGE_GENERIC;
 		Rid.usUsage = HID_USAGE_GENERIC_MOUSE;
-		Rid.dwFlags = RIDEV_NOLEGACY /*| RIDEV_CAPTUREMOUSE*/; // skip all WM_*BUTTON* and WM_MOUSEMOVE stuff
+		Rid.dwFlags = desiredFlags; // skip all WM_*BUTTON* and WM_MOUSEMOVE
 		Rid.hwndTarget = g_wv.hWnd;
 
 		if( !RRID( &Rid, 1, sizeof( Rid ) ) )
 		{
-			Com_Printf( S_COLOR_YELLOW "Error registering raw input device\n" );
-			return;
+			// RIDEV_DEVNOTIFY was introduced after Windows XP and can also be
+			// rejected by compatibility layers. Retain raw input there using
+			// the older registration contract.
+			if ( !( desiredFlags & RIDEV_DEVNOTIFY ) ) {
+				Com_Printf( S_COLOR_YELLOW
+					"Error registering raw input device\n" );
+				raw_driving = qfalse;
+				IN_ClearRawMouseDeltas();
+				return qfalse;
+			}
+
+			Rid.dwFlags = RIDEV_NOLEGACY;
+			if ( !RRID( &Rid, 1, sizeof( Rid ) ) ) {
+				Com_Printf( S_COLOR_YELLOW
+					"Error registering raw input device\n" );
+				raw_driving = qfalse;
+				IN_ClearRawMouseDeltas();
+				return qfalse;
+			}
+			raw_deviceNotificationsUnavailable = qtrue;
+			Com_DPrintf(
+				"Raw mouse device notifications unavailable; using legacy registration\n" );
 		}
+		raw_deviceNotifications =
+			( Rid.dwFlags & RIDEV_DEVNOTIFY ) ? qtrue : qfalse;
 	}
 
-	IN_CaptureMouse( &window_rect );
-
 	raw_activated = TRUE;
+	raw_targetWindow = g_wv.hWnd;
+	if ( !IN_CaptureMouse( &window_rect ) ) {
+		s_legacyMouseDriving = qfalse;
+		raw_driving = qfalse;
+		return qfalse;
+	}
+
+	s_legacyMouseDriving = qfalse;
+	raw_driving = qtrue;
+	raw_removalFailureReported = qfalse;
+	return qtrue;
 }
 
 
@@ -599,9 +849,25 @@ IN_DeactivateRawMouse
 */
 static void IN_DeactivateRawMouse( void )
 {
-	if ( raw_activated )
+	const BOOL wasActivated = raw_activated;
+	const std::uint32_t now =
+		static_cast<std::uint32_t>( Sys_Milliseconds() );
+
+	// Stop accepting queued WM_INPUT packets before asking Windows to remove
+	// the registration.  Even if removal fails, the engine must not continue
+	// reporting raw input as the active source.
+	raw_driving = qfalse;
+	IN_ClearRawMouseDeltas();
+	rawReadResetQueued = qfalse;
+
+	if ( wasActivated )
 	{
 		RAWINPUTDEVICE Rid;
+
+		if ( raw_removalFailureReported &&
+			static_cast<std::int32_t>( now - raw_removalRetryAfter ) < 0 ) {
+			return;
+		}
 
 		Rid.usUsagePage = HID_USAGE_PAGE_GENERIC;
 		Rid.usUsage = HID_USAGE_GENERIC_MOUSE;
@@ -609,12 +875,54 @@ static void IN_DeactivateRawMouse( void )
 		Rid.hwndTarget = NULL;
 		if ( !RRID( &Rid, 1, sizeof( Rid ) ) )
 		{
-			Com_Printf( S_COLOR_YELLOW "Error removing raw input device\n" );
-			return;
+			// A retained RIDEV_NOLEGACY registration would suppress the
+			// WM_*BUTTON and wheel messages used by absolute UI owners. Replace
+			// it with a normal foreground registration before giving up.
+			RAWINPUTDEVICE legacyRid;
+			legacyRid.usUsagePage = HID_USAGE_PAGE_GENERIC;
+			legacyRid.usUsage = HID_USAGE_GENERIC_MOUSE;
+			legacyRid.dwFlags = 0;
+			legacyRid.hwndTarget = NULL;
+			if ( RRID( &legacyRid, 1, sizeof( legacyRid ) ) ) {
+				Com_DPrintf(
+					"Raw mouse removal failed; restored legacy mouse messages\n" );
+				raw_activated = FALSE;
+				raw_targetWindow = NULL;
+				raw_deviceNotifications = qfalse;
+				raw_removalFailureReported = qfalse;
+			} else {
+				if ( !raw_removalFailureReported ) {
+					Com_Printf( S_COLOR_YELLOW
+						"Error removing raw input; retrying while inactive\n" );
+				}
+				raw_activated = TRUE;
+				raw_removalFailureReported = qtrue;
+				raw_removalRetryAfter = now + 1000u;
+			}
+		}
+		else
+		{
+			raw_activated = FALSE;
+			raw_targetWindow = NULL;
+			raw_deviceNotifications = qfalse;
+			raw_removalFailureReported = qfalse;
 		}
 	}
+}
 
-	raw_activated = FALSE;
+
+void IN_RawInputDeviceChange( WPARAM change, LPARAM device )
+{
+	if ( change != GIDC_REMOVAL || !device ||
+		!raw_deviceNotifications || !IN_RawMouseDrivesInput() ) {
+		return;
+	}
+
+	// Raw input aggregates every attached mouse and exposes no retained
+	// per-device button snapshot. If any contributing device disappears, clear
+	// its motion baseline and balance every logical mouse button.
+	IN_ClearRawMouseDeltas();
+	Sys_QueEvent( Sys_Milliseconds(), SE_MOUSE_RESET, 0, 0, 0, NULL );
 }
 
 
@@ -646,6 +954,8 @@ using DirectInputCreateFn = HRESULT (WINAPI *)( HINSTANCE hinst, DWORD dwVersion
 
 static DirectInputCreateFn pDirectInputCreate;
 static fnql::win::ScopedLibrary s_directInputLibrary;
+static int directInputWheelRemainder;
+static qboolean directInputLossResetQueued;
 
 typedef struct MYDATA {
 	LONG  lX;                   // X axis goes here
@@ -736,7 +1046,6 @@ IN_InitDIMouse
 */
 static qboolean IN_InitDIMouse( void ) {
     HRESULT		hr;
-	int			x, y;
 	DIPROPDWORD	dipdw = {
 		{
 			sizeof(DIPROPDWORD),        // diph.dwSize
@@ -802,10 +1111,6 @@ static qboolean IN_InitDIMouse( void ) {
 		return qfalse;
 	}
 
-	// clear any pending samples
-	IN_DIMouse( &x, &y );
-	IN_DIMouse( &x, &y );
-
 	Com_DPrintf( "DirectInput initialized.\n");
 	return qtrue;
 }
@@ -817,6 +1122,9 @@ IN_ShutdownDIMouse
 ==========================
 */
 static void IN_ShutdownDIMouse( void ) {
+	directInputWheelRemainder = 0;
+	directInputLossResetQueued = qfalse;
+
     if (g_pMouse) {
 		IDirectInputDevice_Release( g_pMouse );
 		g_pMouse = NULL;
@@ -837,12 +1145,15 @@ static void IN_ShutdownDIMouse( void ) {
 IN_ActivateDIMouse
 ==========================
 */
-static void IN_ActivateDIMouse( void ) {
+static qboolean IN_ActivateDIMouse( void ) {
 	HRESULT		hr;
 
 	if (!g_pMouse) {
-		return;
+		return qfalse;
 	}
+	s_legacyMouseDriving = qfalse;
+	raw_driving = qfalse;
+	directInputWheelRemainder = 0;
 
 	// we may fail to reacquire if the window has been recreated
 	hr = IDirectInputDevice_Acquire( g_pMouse );
@@ -853,12 +1164,12 @@ static void IN_ActivateDIMouse( void ) {
 			IN_ShutdownDIMouse();
 			Com_Printf ("Falling back to Win32 mouse support...\n");
 			Cvar_Set( "in_mouse", "-1" );
-			IN_ActivateWin32Mouse();
-			return;
+			return IN_ActivateWin32Mouse();
 		}
 	}
-	while (ShowCursor (FALSE) >= 0)
-        ;
+	directInputLossResetQueued = qfalse;
+	IN_SetSystemCursorVisible( qfalse );
+	return qtrue;
 }
 
 
@@ -890,6 +1201,16 @@ static void IN_DIMouse( int *mx, int *my ) {
 		return;
 	}
 
+	const auto queueLossReset = [&]() {
+		*mx = *my = 0;
+		directInputWheelRemainder = 0;
+		if ( !directInputLossResetQueued ) {
+			Sys_QueEvent( Sys_Milliseconds(),
+				SE_MOUSE_RESET, 0, 0, 0, NULL );
+			directInputLossResetQueued = qtrue;
+		}
+	};
+
 	// fetch new events
 	for (;;)
 	{
@@ -897,14 +1218,28 @@ static void IN_DIMouse( int *mx, int *my ) {
 
 		hr = IDirectInputDevice_GetDeviceData( g_pMouse, sizeof( DIDEVICEOBJECTDATA ), &od, &dwElements, 0 );
 		if ((hr == DIERR_INPUTLOST) || (hr == DIERR_NOTACQUIRED)) {
+			// Loss can include the final button-up. Balance logical state before
+			// attempting recovery; a failed Acquire must not strand a binding.
+			queueLossReset();
 			IDirectInputDevice_Acquire( g_pMouse );
+			return;
+		}
+		if ( hr == DI_BUFFEROVERFLOW ) {
+			// At least one buffered transition was lost. An ordered reset is
+			// safer than allowing a missing button release to hold a +binding.
+			directInputWheelRemainder = 0;
+			Sys_QueEvent( Sys_Milliseconds(),
+				SE_MOUSE_RESET, 0, 0, 0, NULL );
+			*mx = *my = 0;
 			return;
 		}
 
 		/* Unable to read data or no data available */
 		if ( FAILED(hr) ) {
-			break;
+			queueLossReset();
+			return;
 		}
+		directInputLossResetQueued = qfalse;
 
 		if ( dwElements == 0 ) {
 			break;
@@ -912,7 +1247,8 @@ static void IN_DIMouse( int *mx, int *my ) {
 
 		const DWORD buttonIndex = od.dwOfs - kDInputMouseFirstButtonOffset;
 		if ( buttonIndex < ARRAY_LEN( kDInputMouseButtonKeys ) ) {
-			Sys_QueEvent( od.dwTimeStamp, SE_KEY,
+			IN_WindowMouse( qtrue );
+			Sys_QueEvent( Sys_Milliseconds(), SE_KEY,
 				kDInputMouseButtonKeys[buttonIndex],
 				( od.dwData & 0x80 ) ? qtrue : qfalse, 0, NULL );
 			continue;
@@ -920,13 +1256,23 @@ static void IN_DIMouse( int *mx, int *my ) {
 
 		// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=50
 		if ( od.dwOfs == kDInputMouseWheelOffset ) {
+			IN_WindowMouse( qtrue );
 			const LONG value = static_cast<LONG>( od.dwData );
-			if ( value < 0 ) {
-				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MWHEELDOWN, qtrue, 0, NULL );
-				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MWHEELDOWN, qfalse, 0, NULL );
-			} else if ( value > 0 ) {
-				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MWHEELUP, qtrue, 0, NULL );
-				Sys_QueEvent( od.dwTimeStamp, SE_KEY, K_MWHEELUP, qfalse, 0, NULL );
+			directInputWheelRemainder = fnql::input::SaturatingAddInt(
+				directInputWheelRemainder, value );
+			int steps = directInputWheelRemainder / WHEEL_DELTA;
+			directInputWheelRemainder %= WHEEL_DELTA;
+			steps = std::clamp( steps, -32, 32 );
+			const int eventTime = Sys_Milliseconds();
+			while ( steps < 0 ) {
+				Sys_QueEvent( eventTime, SE_KEY, K_MWHEELDOWN, qtrue, 0, NULL );
+				Sys_QueEvent( eventTime, SE_KEY, K_MWHEELDOWN, qfalse, 0, NULL );
+				++steps;
+			}
+			while ( steps > 0 ) {
+				Sys_QueEvent( eventTime, SE_KEY, K_MWHEELUP, qtrue, 0, NULL );
+				Sys_QueEvent( eventTime, SE_KEY, K_MWHEELUP, qfalse, 0, NULL );
+				--steps;
 			}
 		}
 	}
@@ -935,9 +1281,13 @@ static void IN_DIMouse( int *mx, int *my ) {
 	// the individual sample time / values
 	hr = IDirectInputDevice_GetDeviceState( g_pMouse, sizeof( state ), &state );
 	if ( FAILED(hr) ) {
-		*mx = *my = 0;
+		queueLossReset();
+		if ( hr == DIERR_INPUTLOST || hr == DIERR_NOTACQUIRED ) {
+			IDirectInputDevice_Acquire( g_pMouse );
+		}
 		return;
 	}
+	directInputLossResetQueued = qfalse;
 	*mx = state.lX;
 	*my = state.lY;
 }
@@ -970,15 +1320,46 @@ static void IN_ActivateMouse( void )
 	if ( s_wmv.mouseActive )
 		return;
 
-	s_wmv.mouseActive = qtrue;
+	IN_ClearRawMouseDeltas();
 
 	if ( in_mouse->integer == -1 ) {
-		IN_ActivateWin32Mouse();
+		raw_driving = qfalse;
+		s_wmv.mouseActive = IN_ActivateWin32Mouse();
 	} else {
-		if ( raw_inited )
-			IN_ActivateRawMouse();
-        else
-			IN_ActivateDIMouse();
+		if ( in_mouse->integer == 2 && raw_inited ) {
+			if ( IN_ActivateRawMouse() ) {
+				s_wmv.mouseActive = qtrue;
+				return;
+			}
+
+			// Registration or capture failure must not leave RIDEV_NOLEGACY
+			// suppressing the eventual fallback's window messages.
+			IN_DeactivateRawMouse();
+			if ( !g_pMouse ) {
+				IN_InitDIMouse();
+			}
+			if ( g_pMouse ) {
+				s_wmv.mouseActive = IN_ActivateDIMouse();
+				if ( s_wmv.mouseActive ) {
+					Com_Printf( S_COLOR_YELLOW
+						"Raw mouse unavailable; using %s for this activation\n",
+						s_legacyMouseDriving ? "Win32 mouse" : "DirectInput" );
+				}
+			} else {
+				s_wmv.mouseActive = IN_ActivateWin32Mouse();
+				if ( s_wmv.mouseActive ) {
+					Com_Printf( S_COLOR_YELLOW
+						"Raw mouse unavailable; using Win32 mouse for this activation\n" );
+				}
+			}
+		} else if ( g_pMouse ) {
+			raw_driving = qfalse;
+			s_wmv.mouseActive = IN_ActivateDIMouse();
+		} else {
+			raw_driving = qfalse;
+			Com_Printf( S_COLOR_YELLOW "Falling back to Win32 mouse support...\n" );
+			s_wmv.mouseActive = IN_ActivateWin32Mouse();
+		}
 	}
 }
 
@@ -992,8 +1373,15 @@ Called when the window loses focus
 */
 static void IN_DeactivateMouse( void )
 {
-	if ( !s_wmv.mouseActive )
+	IN_ClearRawMouseDeltas();
+
+	if ( !s_wmv.mouseActive ) {
+		IN_DeactivateRawMouse();
+		if ( s_gameplayCaptureOwned || s_gameplayClipActive ) {
+			IN_DeactivateWin32Mouse( qfalse );
+		}
 		return;
+	}
 
 	if ( !s_wmv.mouseInitialized )
 		return;
@@ -1003,7 +1391,7 @@ static void IN_DeactivateMouse( void )
 
 	IN_DeactivateDIMouse();
 	IN_DeactivateRawMouse();
-	IN_DeactivateWin32Mouse();
+	IN_DeactivateWin32Mouse( qtrue );
 }
 
 
@@ -1015,9 +1403,15 @@ IN_StartupMouse
 static void IN_StartupMouse( void )
 {
 	s_wmv.mouseInitialized = qfalse;
+	raw_driving = qfalse;
+	s_legacyMouseDriving = qfalse;
+	IN_ClearRawMouseDeltas();
 
 	if ( in_mouse->integer == 0 ) {
 		Com_DPrintf( "Mouse control not active.\n" );
+		// Pointer presentation and absolute UI input remain initialized, as in
+		// retail; only the relative gameplay source is disabled.
+		s_wmv.mouseInitialized = qtrue;
 		return;
 	}
 
@@ -1029,13 +1423,13 @@ static void IN_StartupMouse( void )
 			Com_Error( ERR_FATAL, "No window for mouse init" );
 		}
 
-		if ( IN_InitRawMouse() ) {
+		if ( in_mouse->integer == 2 && IN_InitRawMouse() ) {
 			s_wmv.mouseInitialized = qtrue;
 			Com_DPrintf( "Raw mouse input initialized.\n" );
 			return;
 		}
 
-		if ( IN_InitDIMouse() ) {
+		if ( in_mouse->integer >= 1 && IN_InitDIMouse() ) {
 			s_wmv.mouseInitialized = qtrue;
 			return;
 		}
@@ -1061,13 +1455,7 @@ centre) without any physical mouse motion, so the pump must drop them.
 */
 qboolean IN_LegacyMouseDrivesInput( void )
 {
-	if ( !IN_MouseActive() ) {
-		return qfalse;
-	}
-	if ( raw_activated || g_pMouse ) {
-		return qfalse;
-	}
-	return qtrue;
+	return ( s_legacyMouseDriving && IN_MouseActive() ) ? qtrue : qfalse;
 }
 
 
@@ -1127,23 +1515,84 @@ void IN_RawMouseEvent( LPARAM lParam )
 		RAWINPUT raw;
 	} u;
 
+	if ( !IN_RawMouseDrivesInput() ) {
+		return;
+	}
+
 	dwSize = sizeof( u.raw );
 
 	err = GRID( (HRAWINPUT) lParam, RID_INPUT, &u.raw, &dwSize, sizeof( RAWINPUTHEADER ) );
-	if ( err == static_cast<UINT>( -1 ) )
+	if ( err == static_cast<UINT>( -1 ) || err != dwSize ) {
+		IN_QueueRawMouseReadReset();
+		return;
+	}
+
+	if ( u.raw.header.dwType != RIM_TYPEMOUSE )
 		return;
 
-	if ( u.raw.header.dwType != RIM_TYPEMOUSE || u.raw.data.mouse.usFlags != MOUSE_MOVE_RELATIVE )
-		return;
+	rawReadResetQueued = qfalse;
 
-	if ( u.raw.data.mouse.lLastX || u.raw.data.mouse.lLastY ) {
-		if ( in_lagged->integer ) {
-			g_wv.raw_mx += u.raw.data.mouse.lLastX;
-			g_wv.raw_my += u.raw.data.mouse.lLastY;
-		} else {
-			Sys_QueEvent( g_wv.sysMsgTime, SE_MOUSE, u.raw.data.mouse.lLastX,
-				u.raw.data.mouse.lLastY, 0, NULL );
+	// MOUSE_MOVE_RELATIVE is zero.  Test only the absolute-mode bit so valid
+	// relative packets carrying MOUSE_MOVE_NOCOALESCE or
+	// MOUSE_ATTRIBUTES_CHANGED still contribute motion.  Button and wheel
+	// transitions remain meaningful even on absolute/RDP packets and are
+	// therefore processed independently below.
+	if ( ( u.raw.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE ) == MOUSE_MOVE_RELATIVE ) {
+		raw_absoluteValid = qfalse;
+		raw_absoluteDevice = NULL;
+		if ( u.raw.data.mouse.lLastX || u.raw.data.mouse.lLastY ) {
+			if ( in_lagged->integer ) {
+				g_wv.raw_mx = fnql::input::SaturatingAddInt(
+					g_wv.raw_mx, u.raw.data.mouse.lLastX );
+				g_wv.raw_my = fnql::input::SaturatingAddInt(
+					g_wv.raw_my, u.raw.data.mouse.lLastY );
+			} else {
+				Sys_QueEvent( g_wv.sysMsgTime, SE_MOUSE, u.raw.data.mouse.lLastX,
+					u.raw.data.mouse.lLastY, 0, NULL );
+			}
 		}
+	} else if ( u.raw.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE ) {
+		if ( raw_absoluteDevice != u.raw.header.hDevice ||
+			( u.raw.data.mouse.usFlags & MOUSE_ATTRIBUTES_CHANGED ) ) {
+			raw_absoluteValid = qfalse;
+		}
+		const int originX = ( u.raw.data.mouse.usFlags & MOUSE_VIRTUAL_DESKTOP )
+			? GetSystemMetrics( SM_XVIRTUALSCREEN ) : 0;
+		const int originY = ( u.raw.data.mouse.usFlags & MOUSE_VIRTUAL_DESKTOP )
+			? GetSystemMetrics( SM_YVIRTUALSCREEN ) : 0;
+		const int extentX = ( u.raw.data.mouse.usFlags & MOUSE_VIRTUAL_DESKTOP )
+			? GetSystemMetrics( SM_CXVIRTUALSCREEN ) : GetSystemMetrics( SM_CXSCREEN );
+		const int extentY = ( u.raw.data.mouse.usFlags & MOUSE_VIRTUAL_DESKTOP )
+			? GetSystemMetrics( SM_CYVIRTUALSCREEN ) : GetSystemMetrics( SM_CYSCREEN );
+		const LONG absoluteX = originX + MulDiv(
+			u.raw.data.mouse.lLastX, ( std::max )( extentX - 1, 1 ), 65535 );
+		const LONG absoluteY = originY + MulDiv(
+			u.raw.data.mouse.lLastY, ( std::max )( extentY - 1, 1 ), 65535 );
+
+		if ( raw_absoluteValid ) {
+			const int dx = fnql::input::SaturatingIntFromInt64(
+				static_cast<std::int64_t>( absoluteX ) - raw_absoluteX );
+			const int dy = fnql::input::SaturatingIntFromInt64(
+				static_cast<std::int64_t>( absoluteY ) - raw_absoluteY );
+			if ( dx || dy ) {
+				if ( in_lagged->integer ) {
+					g_wv.raw_mx = fnql::input::SaturatingAddInt( g_wv.raw_mx, dx );
+					g_wv.raw_my = fnql::input::SaturatingAddInt( g_wv.raw_my, dy );
+				} else {
+					Sys_QueEvent( g_wv.sysMsgTime, SE_MOUSE, dx, dy, 0, NULL );
+				}
+			}
+		}
+		raw_absoluteX = absoluteX;
+		raw_absoluteY = absoluteY;
+		raw_absoluteValid = qtrue;
+		raw_absoluteDevice = u.raw.header.hDevice;
+	}
+
+	if ( u.raw.data.mouse.usButtonFlags ) {
+		// Preserve position-before-button ordering across an Escape/menu
+		// transition queued earlier in this same Win32 message drain.
+		IN_WindowMouse( qtrue );
 	}
 
 	if ( !u.raw.data.mouse.usButtonFlags )
@@ -1165,23 +1614,26 @@ void IN_RawMouseEvent( LPARAM lParam )
 
 	if ( u.raw.data.mouse.usButtonFlags & RI_MOUSE_WHEEL ) 
 	{
-		short data = u.raw.data.mouse.usButtonData;
-		if ( data > 0 )
+		const int data = static_cast<short>( u.raw.data.mouse.usButtonData );
+		raw_wheelRemainder = fnql::input::SaturatingAddInt(
+			raw_wheelRemainder, data );
+		int steps = raw_wheelRemainder / WHEEL_DELTA;
+		raw_wheelRemainder %= WHEEL_DELTA;
+		steps = std::clamp( steps, -32, 32 );
+		if ( steps > 0 )
 		{
-			while( data > 0 )
+			while( steps-- > 0 )
 			{
 				Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, K_MWHEELUP, qtrue, 0, NULL );
 				Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, K_MWHEELUP, qfalse, 0, NULL );
-				data -= 120;
 			}
 		}
 		else
 		{
-			while( data < 0 )
+			while( steps++ < 0 )
 			{
 				Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, K_MWHEELDOWN, qtrue, 0, NULL );
 				Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, K_MWHEELDOWN, qfalse, 0, NULL );
-				data += 120;
 			}
 		}
 	}
@@ -1196,22 +1648,37 @@ IN_MouseMove
 static void IN_MouseMove( void ) {
 	int		mx = 0, my = 0;
 
-	if ( g_pMouse ) {
+	if ( raw_driving ) {
+		if ( in_lagged->integer ) {
+			IN_RawMouse( &mx, &my );
+		}
+		g_wv.raw_mx = 0;
+		g_wv.raw_my = 0;
+	} else if ( g_pMouse && !s_legacyMouseDriving ) {
 		IN_DIMouse( &mx, &my );
 	} else {
 		if ( in_lagged->integer ) {
-			if ( raw_activated ) {
-				IN_RawMouse( &mx, &my );
-			} else {
-				IN_Win32Mouse( &mx, &my );
-			}
+			IN_Win32Mouse( &mx, &my );
 		}
 		g_wv.raw_mx = 0;
 		g_wv.raw_my = 0;
 
 		// force the mouse to the center, so there's room to move
-		if ( in_mouse->integer == -1 )
-			SetCursorPos( window_center.x, window_center.y );
+		if ( s_legacyMouseDriving &&
+			!SetCursorPos( window_center.x, window_center.y ) ) {
+			if ( !s_legacyWarpFailureReported ) {
+				Com_Printf( S_COLOR_YELLOW
+					"Lost Win32 gameplay mouse centering (error %lu)\n",
+					GetLastError() );
+				s_legacyWarpFailureReported = qtrue;
+			}
+			mx = 0;
+			my = 0;
+			s_wmv.mouseActive = qfalse;
+			IN_DeactivateWin32Mouse( qfalse );
+		} else if ( s_legacyMouseDriving ) {
+			s_legacyWarpFailureReported = qfalse;
+		}
 
 		// reset delta base
 		g_wv.mouse = client_center;
@@ -1359,6 +1826,26 @@ void IN_Startup( void ) {
 IN_Shutdown
 ===========
 */
+void IN_ResetInputState( void )
+{
+	WIN_ReleaseTemporaryMouseCapture();
+	IN_ClearRawMouseDeltas();
+	rawReadResetQueued = qfalse;
+	directInputWheelRemainder = 0;
+	directInputLossResetQueued = qfalse;
+	s_wmv.oldButtonState = 0;
+	s_wmv.cursorPositionValid = qfalse;
+	g_wv.mouse = client_center;
+	WIN_ResetMessageInputState();
+#ifdef USE_JOYSTICK
+	// SE_INPUT_RESET clears the client's logical controller state. Drop the
+	// WinMM producer snapshot at the same boundary so controls still held after
+	// focus restoration are emitted again on the first fresh poll.
+	IN_ClearWinMMJoystickState( qfalse );
+#endif
+}
+
+
 void IN_Shutdown( void ) {
 	WIN_ReleaseTemporaryMouseCapture();
 	IN_SetPointerConfinement( qfalse );
@@ -1389,6 +1876,7 @@ void IN_Init( void ) {
 	in_midiport = Cvar_Get( "in_midiport", "1", CVAR_ARCHIVE );
 	Cvar_SetDescription( in_midiport, "Toggle the use of a midi port as an input device." );
 	in_midichannel = Cvar_Get( "in_midichannel", "1", CVAR_ARCHIVE );
+	Cvar_CheckRange( in_midichannel, "1", "16", CV_INTEGER );
 	Cvar_SetDescription( in_midichannel, "Toggle the use of a midi channel as an input device." );
 	in_mididevice = Cvar_Get( "in_mididevice", "0", CVAR_ARCHIVE );
 	Cvar_SetDescription( in_mididevice, "Toggle the use of a midi device as an input device." );
@@ -1409,6 +1897,7 @@ void IN_Init( void ) {
 	Cvar_SetDescription( in_joyBallScale, "Legacy trackball scale, or X/Y movement scale in the Quake Live WinMM joystick profile (retail default 1.0)." );
 	in_debugJoystick = Cvar_Get( "in_debugjoystick", "0", CVAR_TEMP );
 	joy_threshold = Cvar_Get( "joy_threshold", "0.15", CVAR_ARCHIVE );
+	Cvar_CheckRange( joy_threshold, "0", "1", CV_FLOAT );
 	Cvar_SetDescription( joy_threshold, "Threshold of joystick moving distance." );
 	in_joyHorizViewSensitivity = Cvar_Get( "in_joyHorizViewSensitivity", "20.0", CVAR_ARCHIVE );
 	in_joyVertViewSensitivity = Cvar_Get( "in_joyVertViewSensitivity", "15.0", CVAR_ARCHIVE );
@@ -1434,7 +1923,7 @@ void IN_Init( void ) {
 	Cvar_SetDescription( in_mouse,
 		"Mouse data input source:\n" \
 		"  0 - disable mouse input\n" \
-		"  1 - di/raw mouse\n" \
+		"  1 - DirectInput mouse\n" \
 		"  2 - Quake Live raw mouse\n" \
 		" -1 - win32 mouse" );
 		
@@ -1494,7 +1983,10 @@ void IN_Frame( void ) {
 
 	// post joystick events
 #ifdef USE_JOYSTICK
-	IN_JoyMove();
+	if ( gw_active && WIN_WindowFocused() && !gw_minimized &&
+		!WIN_InputSuspended() ) {
+		IN_JoyMove();
+	}
 #endif
 
 	// mouseInitialized implies IN_Init registered the input cvars the pointer
@@ -1515,6 +2007,10 @@ void IN_Frame( void ) {
 		}
 		s_pointerOwner = owner;
 		IN_DeactivateMouse();
+		// Win32's ShowCursor count is desktop-wide for this UI thread. Keep it
+		// visible for every free, absolute pointer; WM_SETCURSOR independently
+		// selects NULL over the windowed console's client area.
+		IN_SetSystemCursorVisible( qtrue );
 
 		if ( !mode.driveInput ) {
 			// Unfocused or minimized. Stop driving the overlay cursor from the
@@ -1526,6 +2022,7 @@ void IN_Frame( void ) {
 			return;
 		}
 
+		WIN_RebuildTemporaryMouseCapture();
 		IN_SetPointerConfinement( mode.confineToWindow ? qtrue : qfalse );
 		IN_WindowMouse();
 		return;
@@ -1536,12 +2033,35 @@ void IN_Frame( void ) {
 	s_pointerOwner = owner;
 	s_wmv.cursorPositionValid = qfalse;
 
-	if ( !mode.driveInput || ( in_nograb->integer && !( Key_GetCatcher() & KEYCATCH_CONSOLE ) ) ) {
+	if ( !mode.driveInput || in_nograb->integer ) {
 		IN_DeactivateMouse();
 		return;
 	}
 
 	IN_ActivateMouse();
+	if ( !s_wmv.mouseActive ) {
+		return;
+	}
+
+	if ( s_gameplayCaptureOwned && GetCapture() != g_wv.hWnd ) {
+		s_gameplayCaptureOwned = qfalse;
+	}
+	if ( ( raw_driving || s_legacyMouseDriving ) &&
+		( !s_gameplayClipActive || s_gameplayClipNeedsRefresh ||
+			!s_gameplayCaptureOwned ) ) {
+		RECT windowRect;
+		IN_UpdateWindow( &windowRect, qfalse );
+		if ( !IN_CaptureMouse( &windowRect ) ) {
+			const qboolean wasRaw = raw_driving;
+			s_wmv.mouseActive = qfalse;
+			raw_driving = qfalse;
+			s_legacyMouseDriving = qfalse;
+			if ( wasRaw ) {
+				IN_DeactivateRawMouse();
+			}
+			return;
+		}
+	}
 
 	//WIN_DisableAltTab();
 	WIN_EnableHook();
@@ -1559,6 +2079,7 @@ Restart the input subsystem
 =================
 */
 void IN_Restart_f( void ) {
+	WIN_QueueInputReset( qtrue );
 	IN_Shutdown();
 	IN_Init();
 }
@@ -1578,18 +2099,28 @@ JOYSTICK
 IN_StartupJoystick 
 =============== 
 */  
-void IN_StartupJoystick (void) { 
-	int			numdevs;
-	MMRESULT	mmr;
-
-	// assume no joystick
-	joy.avail = qfalse; 
+static void IN_ClearWinMMJoystickState( qboolean disable )
+{
 	joy.oldbuttonstate = 0;
 	joy.oldpovstate = 0;
 	for ( int& axis : joy.oldmoveaxisstate ) {
 		axis = 0;
 	}
-	Cvar_Set( "ui_joyavail", "0" );
+	Com_Memset( &joy.ji, 0, sizeof( joy.ji ) );
+	joy.consecutiveReadFailures = 0;
+	if ( disable ) {
+		joy.avail = qfalse;
+		Cvar_Set( "ui_joyavail", "0" );
+	}
+}
+
+
+void IN_StartupJoystick (void) {
+	int			numdevs;
+	MMRESULT	mmr;
+
+	// assume no joystick
+	IN_ClearWinMMJoystickState( qtrue );
 
 	if (! in_joystick->integer ) {
 		Com_DPrintf ("Joystick is not active.\n");
@@ -1689,6 +2220,53 @@ int	joyDirectionKeys[16] = {
 	K_JOY26, K_JOY27
 };
 
+
+enum winMMAxis_t {
+	WINMM_AXIS_X,
+	WINMM_AXIS_Y,
+	WINMM_AXIS_Z,
+	WINMM_AXIS_R,
+	WINMM_AXIS_U,
+	WINMM_AXIS_V
+};
+
+
+static qboolean IN_WinMMAxisPosition( winMMAxis_t axis, DWORD *position )
+{
+	if ( !position ) {
+		return qfalse;
+	}
+
+	switch ( axis ) {
+		case WINMM_AXIS_X:
+			if ( joy.jc.wNumAxes < 1 ) return qfalse;
+			*position = joy.ji.dwXpos;
+			return qtrue;
+		case WINMM_AXIS_Y:
+			if ( joy.jc.wNumAxes < 2 ) return qfalse;
+			*position = joy.ji.dwYpos;
+			return qtrue;
+		case WINMM_AXIS_Z:
+			if ( !( joy.jc.wCaps & JOYCAPS_HASZ ) ) return qfalse;
+			*position = joy.ji.dwZpos;
+			return qtrue;
+		case WINMM_AXIS_R:
+			if ( !( joy.jc.wCaps & JOYCAPS_HASR ) ) return qfalse;
+			*position = joy.ji.dwRpos;
+			return qtrue;
+		case WINMM_AXIS_U:
+			if ( !( joy.jc.wCaps & JOYCAPS_HASU ) ) return qfalse;
+			*position = joy.ji.dwUpos;
+			return qtrue;
+		case WINMM_AXIS_V:
+			if ( !( joy.jc.wCaps & JOYCAPS_HASV ) ) return qfalse;
+			*position = joy.ji.dwVpos;
+			return qtrue;
+		default:
+			return qfalse;
+	}
+}
+
 /*
 ===========
 IN_JoyMove
@@ -1700,6 +2278,8 @@ void IN_JoyMove( void ) {
 	DWORD	buttonstate, povstate;
 	int		x, y;
 	const bool retailProfile = in_joystickProfile->integer != 0;
+	static constexpr int kRawButtonCount = K_JOY16 - K_JOY1 + 1;
+	static constexpr int kMaximumReadFailures = 3;
 
 	// verify joystick is available and that the user wants to use it
 	if ( !joy.avail ) {
@@ -1711,14 +2291,20 @@ void IN_JoyMove( void ) {
 	joy.ji.dwSize = sizeof(joy.ji);
 	joy.ji.dwFlags = JOY_RETURNALL;
 
-	if ( joyGetPosEx (joy.id, &joy.ji) != JOYERR_NOERROR ) {
-		// read error occurred
-		// turning off the joystick seems too harsh for 1 read error,
-		// but what should be done?
-		// Com_Printf ("IN_ReadJoystick: no response\n");
-		// joy.avail = false;
+	const MMRESULT readResult = joyGetPosEx( joy.id, &joy.ji );
+	if ( readResult != JOYERR_NOERROR ) {
+		++joy.consecutiveReadFailures;
+		if ( readResult == JOYERR_UNPLUGGED ||
+			joy.consecutiveReadFailures >= kMaximumReadFailures ) {
+			Com_DPrintf(
+				"Joystick read failed (%u); disabling device\n",
+				static_cast<unsigned int>( readResult ) );
+			IN_ClearWinMMJoystickState( qtrue );
+			WIN_QueueInputReset( qtrue );
+		}
 		return;
 	}
+	joy.consecutiveReadFailures = 0;
 
 	if ( in_debugJoystick->integer ) {
 		Com_Printf( "%8x %5i %5.2f %5.2f %5.2f %5.2f %6i %6i\n", 
@@ -1732,17 +2318,18 @@ void IN_JoyMove( void ) {
 	// loop through the joystick buttons
 	// key a joystick event or auxiliary event for higher number buttons for each state change
 	buttonstate = joy.ji.dwButtons;
-	const int buttonCount = std::min<int>( joy.jc.wNumButtons, 32 );
+	const int buttonCount =
+		( std::min<int> )( joy.jc.wNumButtons, kRawButtonCount );
 	for ( i = 0; i < buttonCount; ++i ) {
 		const DWORD mask = DWORD{ 1 } << i;
-		if ( (buttonstate & mask) && !(static_cast<DWORD>( joy.oldbuttonstate ) & mask) ) {
+		if ( (buttonstate & mask) && !(joy.oldbuttonstate & mask) ) {
 			Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, K_JOY1 + i, qtrue, 0, NULL );
 		}
-		if ( !(buttonstate & mask) && (static_cast<DWORD>( joy.oldbuttonstate ) & mask) ) {
+		if ( !(buttonstate & mask) && (joy.oldbuttonstate & mask) ) {
 			Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, K_JOY1 + i, qfalse, 0, NULL );
 		}
 	}
-	joy.oldbuttonstate = static_cast<int>( buttonstate );
+	joy.oldbuttonstate = buttonstate;
 
 	povstate = 0;
 
@@ -1751,14 +2338,17 @@ void IN_JoyMove( void ) {
 	// did, preserving existing non-SDL configurations.
 	int firstDirectionAxis = 0;
 	if ( retailProfile ) {
-		const int side = joy.jc.wNumAxes > 0
+		DWORD axisPosition = 0;
+		const int side = IN_WinMMAxisPosition(
+			WINMM_AXIS_X, &axisPosition )
 			? fnql::input::RetailJoystickMoveAxis(
-				JoyToF( joy.ji.dwXpos ), in_joyHorizMoveDeadzone->value,
+				JoyToF( axisPosition ), in_joyHorizMoveDeadzone->value,
 				in_joyBallScale->value )
 			: 0;
-		const int forward = joy.jc.wNumAxes > 1
+		const int forward = IN_WinMMAxisPosition(
+			WINMM_AXIS_Y, &axisPosition )
 			? fnql::input::RetailJoystickMoveAxis(
-				JoyToF( joy.ji.dwYpos ), in_joyVertMoveDeadzone->value,
+				JoyToF( axisPosition ), in_joyVertMoveDeadzone->value,
 				in_joyBallScale->value )
 			: 0;
 		IN_QueueRetailJoystickAxis( AXIS_SIDE, side );
@@ -1766,14 +2356,21 @@ void IN_JoyMove( void ) {
 		firstDirectionAxis = 2;
 	}
 
-	for ( i = firstDirectionAxis; i < joy.jc.wNumAxes && i < 4; ++i ) {
+	const float deadzone =
+		fnql::input::FiniteJoystickDeadzone( joy_threshold->value );
+	for ( i = firstDirectionAxis; i < 4; ++i ) {
+		DWORD axisPosition;
+		if ( !IN_WinMMAxisPosition(
+				static_cast<winMMAxis_t>( i ), &axisPosition ) ) {
+			continue;
+		}
 		// get the floating point zero-centered, potentially-inverted data for the current axis
-		fAxisValue = JoyToF( (&joy.ji.dwXpos)[i] );
+		fAxisValue = JoyToF( axisPosition );
 
-		if ( fAxisValue < -joy_threshold->value ) {
-			povstate |= (1<<(i*2));
-		} else if ( fAxisValue > joy_threshold->value ) {
-			povstate |= (1<<(i*2+1));
+		if ( fAxisValue < -deadzone ) {
+			povstate |= ( 1u << ( i * 2 ) );
+		} else if ( fAxisValue > deadzone ) {
+			povstate |= ( 1u << ( i * 2 + 1 ) );
 		}
 	}
 
@@ -1781,44 +2378,68 @@ void IN_JoyMove( void ) {
 	if ( joy.jc.wCaps & JOYCAPS_HASPOV ) {
 		if ( joy.ji.dwPOV != JOY_POVCENTERED ) {
 			if (joy.ji.dwPOV == JOY_POVFORWARD)
-				povstate |= 1<<12;
+				povstate |= 1u << 12;
 			if (joy.ji.dwPOV == JOY_POVBACKWARD)
-				povstate |= 1<<13;
+				povstate |= 1u << 13;
 			if (joy.ji.dwPOV == JOY_POVRIGHT)
-				povstate |= 1<<14;
+				povstate |= 1u << 14;
 			if (joy.ji.dwPOV == JOY_POVLEFT)
-				povstate |= 1<<15;
+				povstate |= 1u << 15;
 		}
 	}
 
 	// determine which bits have changed and key an auxiliary event for each change
 	for (i=0 ; i < 16 ; i++) {
-		if ( (povstate & (1<<i)) && !(joy.oldpovstate & (1<<i)) ) {
+		if ( (povstate & ( 1u << i )) &&
+			!(joy.oldpovstate & ( 1u << i )) ) {
 			Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, joyDirectionKeys[i], qtrue, 0, NULL );
 		}
 
-		if ( !(povstate & (1<<i)) && (joy.oldpovstate & (1<<i)) ) {
+		if ( !(povstate & ( 1u << i )) &&
+			(joy.oldpovstate & ( 1u << i )) ) {
 			Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, joyDirectionKeys[i], qfalse, 0, NULL );
 		}
 	}
 	joy.oldpovstate = povstate;
 
-	if ( retailProfile && joy.jc.wNumAxes >= 5 ) {
+	DWORD horizontalLookPosition = 0;
+	DWORD verticalLookPosition = 0;
+	const qboolean hasHorizontalLook =
+		IN_WinMMAxisPosition( WINMM_AXIS_R, &horizontalLookPosition );
+	const qboolean hasVerticalLook =
+		IN_WinMMAxisPosition( WINMM_AXIS_U, &verticalLookPosition );
+	if ( retailProfile && ( hasHorizontalLook || hasVerticalLook ) ) {
 		const float viewAcceleration = Cvar_VariableValue( "cl_viewAccel" );
-		x = fnql::input::RetailJoystickLookDelta(
-			JoyToF( joy.ji.dwRpos ), in_joyHorizViewDeadzone->value,
-			in_joyHorizViewSensitivity->value, viewAcceleration, false );
-		y = fnql::input::RetailJoystickLookDelta(
-			JoyToF( joy.ji.dwUpos ), in_joyVertViewDeadzone->value,
-			in_joyVertViewSensitivity->value, viewAcceleration,
-			in_joystickInverted->integer != 0 );
+		x = hasHorizontalLook
+			? fnql::input::RetailJoystickLookDelta(
+				JoyToF( horizontalLookPosition ),
+				in_joyHorizViewDeadzone->value,
+				in_joyHorizViewSensitivity->value, viewAcceleration, false )
+			: 0;
+		y = hasVerticalLook
+			? fnql::input::RetailJoystickLookDelta(
+				JoyToF( verticalLookPosition ),
+				in_joyVertViewDeadzone->value,
+				in_joyVertViewSensitivity->value, viewAcceleration,
+				in_joystickInverted->integer != 0 )
+			: 0;
 		if ( x || y ) {
 			Sys_QueEvent( g_wv.sysMsgTime, SE_MOUSE, x, y, 0, NULL );
 		}
-	} else if ( !retailProfile && joy.jc.wNumAxes >= 6 ) {
+	} else if ( !retailProfile ) {
 		// Preserve FnQ3's U/V trackball lane when the retail profile is off.
-		x = JoyToI( joy.ji.dwUpos ) * in_joyBallScale->value;
-		y = JoyToI( joy.ji.dwVpos ) * in_joyBallScale->value;
+		DWORD trackballX;
+		DWORD trackballY;
+		if ( !IN_WinMMAxisPosition( WINMM_AXIS_U, &trackballX ) ||
+			!IN_WinMMAxisPosition( WINMM_AXIS_V, &trackballY ) ) {
+			return;
+		}
+		x = fnql::input::TruncateFiniteFloatToInt(
+			static_cast<float>( JoyToI( trackballX ) ) *
+			in_joyBallScale->value );
+		y = fnql::input::TruncateFiniteFloatToInt(
+			static_cast<float>( JoyToI( trackballY ) ) *
+			in_joyBallScale->value );
 		if ( x || y ) {
 			Sys_QueEvent( g_wv.sysMsgTime, SE_MOUSE, x, y, 0, NULL );
 		}
@@ -1835,6 +2456,15 @@ MIDI
 */
 
 #ifdef USE_MIDI
+static qboolean MIDI_WindowAcceptsInput( void )
+{
+	const HWND window = g_wv.hWnd;
+	return window && GetForegroundWindow() == window && !IsIconic( window ) &&
+		WIN_WindowFocused() && !WIN_InputSuspended()
+		? qtrue : qfalse;
+}
+
+
 static void MIDI_NoteOff( int note )
 {
 	int qkey;
@@ -1851,8 +2481,10 @@ static void MIDI_NoteOn( int note, int velocity )
 {
 	int qkey;
 
-	if ( velocity == 0 )
+	if ( velocity == 0 ) {
 		MIDI_NoteOff( note );
+		return;
+	}
 
 	qkey = note - 60 + K_AUX1;
 
@@ -1862,41 +2494,25 @@ static void MIDI_NoteOn( int note, int velocity )
 	Sys_QueEvent( g_wv.sysMsgTime, SE_KEY, qkey, qtrue, 0, NULL );
 }
 
-static void CALLBACK MidiInProc( HMIDIIN hMidiIn, UINT uMsg, DWORD dwInstance, 
-								 DWORD dwParam1, DWORD dwParam2 )
+void IN_MIDIMessage( HMIDIIN device, DWORD packedMessage )
 {
-	int message;
-
-	switch ( uMsg )
-	{
-	case MIM_OPEN:
-		break;
-	case MIM_CLOSE:
-		break;
-	case MIM_DATA:
-		message = dwParam1 & 0xff;
-
-		// note on
-		if ( ( message & 0xf0 ) == 0x90 )
-		{
-			if ( ( ( message & 0x0f ) + 1 ) == in_midichannel->integer )
-				MIDI_NoteOn( ( dwParam1 & 0xff00 ) >> 8, ( dwParam1 & 0xff0000 ) >> 16 );
-		}
-		else if ( ( message & 0xf0 ) == 0x80 )
-		{
-			if ( ( ( message & 0x0f ) + 1 ) == in_midichannel->integer )
-				MIDI_NoteOff( ( dwParam1 & 0xff00 ) >> 8 );
-		}
-		break;
-	case MIM_LONGDATA:
-		break;
-	case MIM_ERROR:
-		break;
-	case MIM_LONGERROR:
-		break;
+	if ( !device || device != s_midiInfo.hMidiIn ||
+		!MIDI_WindowAcceptsInput() ) {
+		return;
 	}
 
-//	Sys_QueEvent( sys_msg_time, SE_KEY, wMsg, qtrue, 0, NULL );
+	const int message = packedMessage & 0xff;
+	const int channel = ( message & 0x0f ) + 1;
+	if ( channel != in_midichannel->integer ) {
+		return;
+	}
+
+	const int note = ( packedMessage & 0xff00 ) >> 8;
+	if ( ( message & 0xf0 ) == 0x90 ) {
+		MIDI_NoteOn( note, ( packedMessage & 0xff0000 ) >> 16 );
+	} else if ( ( message & 0xf0 ) == 0x80 ) {
+		MIDI_NoteOff( note );
+	}
 }
 
 static void MidiInfo_f( void )
@@ -1934,34 +2550,57 @@ static void IN_StartupMIDI( void )
 	//
 	// enumerate MIDI IN devices
 	//
-	s_midiInfo.numDevices = midiInGetNumDevs();
+	const int systemDeviceCount = static_cast<int>( midiInGetNumDevs() );
+	s_midiInfo.numDevices =
+		( std::min )( systemDeviceCount, MAX_MIDIIN_DEVICES );
 
 	for ( i = 0; i < s_midiInfo.numDevices; i++ )
 	{
 		midiInGetDevCaps( i, &s_midiInfo.caps[i], sizeof( s_midiInfo.caps[i] ) );
 	}
 
-	//
-	// open the MIDI IN port
-	//
-	if ( midiInOpen( &s_midiInfo.hMidiIn, 
-		             in_mididevice->integer,
-					 ( unsigned long ) MidiInProc,
-					 ( unsigned long ) NULL,
-					 CALLBACK_FUNCTION ) != MMSYSERR_NOERROR )
-	{
-		Com_DPrintf( "WARNING: could not open MIDI device %d: '%s'\n",
-								in_mididevice->integer , s_midiInfo.caps[( int ) in_mididevice->value].szPname );
+	const int selectedDevice = in_mididevice->integer;
+	if ( selectedDevice < 0 || selectedDevice >= systemDeviceCount ||
+		selectedDevice >= s_midiInfo.numDevices ) {
+		Com_DPrintf( "WARNING: MIDI device %d is outside the supported "
+			"device range (system=%d, cached=%d)\n",
+			selectedDevice, systemDeviceCount, s_midiInfo.numDevices );
 		return;
 	}
 
-	midiInStart( s_midiInfo.hMidiIn );
+	//
+	// open the MIDI IN port
+	//
+	if ( !g_wv.hWnd ) {
+		Com_DPrintf( "WARNING: cannot open MIDI input without a game window\n" );
+		return;
+	}
+	if ( midiInOpen( &s_midiInfo.hMidiIn, 
+		             selectedDevice,
+					 reinterpret_cast<DWORD_PTR>( g_wv.hWnd ),
+					 0,
+					 CALLBACK_WINDOW ) != MMSYSERR_NOERROR )
+	{
+		Com_DPrintf( "WARNING: could not open MIDI device %d: '%s'\n",
+			selectedDevice, s_midiInfo.caps[selectedDevice].szPname );
+		return;
+	}
+
+	const MMRESULT startResult = midiInStart( s_midiInfo.hMidiIn );
+	if ( startResult != MMSYSERR_NOERROR ) {
+		Com_DPrintf( "WARNING: could not start MIDI device %d (%u)\n",
+			selectedDevice, static_cast<unsigned int>( startResult ) );
+		midiInClose( s_midiInfo.hMidiIn );
+		s_midiInfo.hMidiIn = NULL;
+	}
 }
 
 static void IN_ShutdownMIDI( void )
 {
 	if ( s_midiInfo.hMidiIn )
 	{
+		midiInStop( s_midiInfo.hMidiIn );
+		midiInReset( s_midiInfo.hMidiIn );
 		midiInClose( s_midiInfo.hMidiIn );
 	}
 	Com_Memset( &s_midiInfo, 0, sizeof( s_midiInfo ) );

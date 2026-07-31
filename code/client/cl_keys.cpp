@@ -28,6 +28,7 @@ extern "C" {
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 
 using fnql::ScopedZoneMemory;
 
@@ -184,14 +185,72 @@ void Field_BigDraw( field_t *edit, int x, int y, int width, qboolean showCursor,
 }
 
 
+static bool Field_IsUtf8ContinuationByte( unsigned char ch ) {
+	return ( ch & 0xc0 ) == 0x80;
+}
+
+
+/*
+==================
+Field_InsertUtf8Scalar
+
+Inserts one encoded scalar as a transaction. A field that does not have room
+for the complete scalar is left untouched, so it can never end in a truncated
+UTF-8 sequence.
+==================
+*/
+static bool Field_InsertUtf8Scalar( field_t *edit,
+	const unsigned char *bytes, std::size_t byteCount ) {
+	constexpr int fieldCapacity = MAX_EDIT_LINE - 2;
+
+	if ( !edit || !bytes || byteCount == 0 || byteCount > 4 ) {
+		return false;
+	}
+
+	const int len = static_cast<int>( strlen( edit->buffer ) );
+	if ( edit->cursor < 0 || edit->cursor > len ) {
+		return false;
+	}
+
+	const int insertLength = static_cast<int>( byteCount );
+	int overwriteEnd = edit->cursor;
+	if ( key_overstrikeMode && !Field_IsUtf8ContinuationByte( bytes[0] ) &&
+		overwriteEnd < len ) {
+		++overwriteEnd;
+		while ( overwriteEnd < len && Field_IsUtf8ContinuationByte(
+			static_cast<unsigned char>( edit->buffer[overwriteEnd] ) ) ) {
+			++overwriteEnd;
+		}
+	}
+
+	const int newLength = len - ( overwriteEnd - edit->cursor ) + insertLength;
+	if ( newLength > fieldCapacity ) {
+		return false;
+	}
+
+	// Move the suffix, including its terminator, once the full operation has
+	// been proven to fit. memmove covers both insert and overstrike overlap.
+	std::memmove( edit->buffer + edit->cursor + insertLength,
+		edit->buffer + overwriteEnd,
+		static_cast<std::size_t>( len - overwriteEnd + 1 ) );
+	std::memcpy( edit->buffer + edit->cursor, bytes, byteCount );
+
+	for ( int i = 0; i < insertLength; ++i ) {
+		++edit->cursor;
+		if ( edit->cursor >= edit->widthInChars ) {
+			++edit->scroll;
+		}
+	}
+	return true;
+}
+
+
 /*
 ================
 Field_Paste
 ================
 */
 static void Field_Paste( field_t *edit ) {
-	int		pasteLen, i;
-
 	ScopedZoneMemory clipboardText( Sys_GetClipboardData() );
 	char *cbd = clipboardText.as<char>();
 
@@ -199,16 +258,39 @@ static void Field_Paste( field_t *edit ) {
 		return;
 	}
 
-	// send as if typed, so insert / overstrike works properly
-	pasteLen = strlen( cbd );
-	for ( i = 0 ; i < pasteLen ; i++ ) {
-		Field_CharEvent( edit, cbd[i] );
+	// Clipboard bytes are data, never editor commands: a pasted Ctrl-V byte
+	// must not recursively paste, and Ctrl-C/A/E/H must not mutate field state.
+	// Ignore single-line control bytes; insert printable ASCII, valid multi-byte
+	// scalars, and replacement characters for malformed UTF-8 atomically.
+	static constexpr unsigned char replacementCharacter[] = {
+		0xefu, 0xbfu, 0xbdu
+	};
+	const std::size_t pasteLen = strlen( cbd );
+	for ( std::size_t i = 0; i < pasteLen; ) {
+		const auto *bytes = reinterpret_cast<const unsigned char *>( cbd + i );
+		const fnql::input::Utf8DecodeResult decoded =
+			fnql::input::DecodeUtf8( bytes, pasteLen - i );
+		if ( decoded.valid && decoded.size > 1 ) {
+			if ( !Field_InsertUtf8Scalar( edit, bytes, decoded.size ) ) {
+				break;
+			}
+			i += decoded.size;
+		} else if ( !decoded.valid ) {
+			if ( !Field_InsertUtf8Scalar( edit, replacementCharacter,
+					sizeof( replacementCharacter ) ) ) {
+				break;
+			}
+			i += decoded.size;
+		} else {
+			const unsigned char byte =
+				static_cast<unsigned char>( cbd[i] );
+			if ( byte >= ' ' && byte != 0x7fu &&
+				!Field_InsertUtf8Scalar( edit, &byte, 1 ) ) {
+				break;
+			}
+			++i;
+		}
 	}
-}
-
-
-static bool Field_IsUtf8ContinuationByte( unsigned char ch ) {
-	return ( ch & 0xc0 ) == 0x80;
 }
 
 
@@ -410,7 +492,7 @@ static void Field_CharEvent( field_t *edit, int ch ) {
 
 	if ( ch == 'e' - 'a' + 1 ) {	// ctrl-e is end
 		edit->cursor = len;
-		edit->scroll = edit->cursor - edit->widthInChars;
+		edit->scroll = ( std::max )( 0, edit->cursor - edit->widthInChars );
 		return;
 	}
 
@@ -421,44 +503,8 @@ static void Field_CharEvent( field_t *edit, int ch ) {
 		return;
 	}
 
-	if ( key_overstrikeMode && !Field_IsUtf8ContinuationByte(
-		static_cast<unsigned char>( ch ) ) ) {
-		// - 2 to leave room for the leading slash and trailing \0
-		if ( edit->cursor == MAX_EDIT_LINE - 2 )
-			return;
-		if ( edit->cursor < len ) {
-			int overwriteEnd = edit->cursor + 1;
-			while ( overwriteEnd < len && Field_IsUtf8ContinuationByte(
-				static_cast<unsigned char>( edit->buffer[overwriteEnd] ) ) ) {
-				++overwriteEnd;
-			}
-			if ( overwriteEnd > edit->cursor + 1 ) {
-				std::copy( edit->buffer + overwriteEnd, edit->buffer + len + 1,
-					edit->buffer + edit->cursor + 1 );
-				len -= overwriteEnd - ( edit->cursor + 1 );
-			}
-		}
-		edit->buffer[edit->cursor] = ch;
-		edit->cursor++;
-	} else {	// insert mode
-		// - 2 to leave room for the leading slash and trailing \0
-		if ( len == MAX_EDIT_LINE - 2 ) {
-			return; // all full
-		}
-		std::copy_backward( edit->buffer + edit->cursor, edit->buffer + len + 1,
-			edit->buffer + len + 2 );
-		edit->buffer[edit->cursor] = ch;
-		edit->cursor++;
-	}
-
-
-	if ( edit->cursor >= edit->widthInChars ) {
-		edit->scroll++;
-	}
-
-	if ( edit->cursor == len + 1) {
-		edit->buffer[edit->cursor] = '\0';
-	}
+	const unsigned char byte = static_cast<unsigned char>( ch );
+	Field_InsertUtf8Scalar( edit, &byte, 1 );
 }
 
 
@@ -971,13 +1017,22 @@ Called by CL_KeyEvent to handle a keyrelease
 static void CL_KeyUpEvent( int key, unsigned time )
 {
 	const bool bound = keys[key].bound != qfalse;
+	const bool wasDown = keys[key].down != qfalse;
 
 	keys[key].repeats = 0;
 	keys[key].down = qfalse;
 	keys[key].bound = qfalse;
 
-	if ( --anykeydown < 0 ) {
-		anykeydown = 0;
+	if ( wasDown ) {
+		if ( anykeydown > 0 ) {
+			--anykeydown;
+		} else {
+			anykeydown = 0;
+		}
+	} else {
+		// Duplicate or release-only platform messages have no state to unwind.
+		// Ignoring them also prevents redundant UI/cgame/browser key-up calls.
+		return;
 	}
 
 	// don't process key-up events for the console key
@@ -1024,6 +1079,15 @@ Called by the system for both key up and key down events
 */
 void CL_KeyEvent( int key, qboolean down, unsigned time )
 {
+	// Zero is the platform translators' "unmapped key" sentinel.
+	if ( key == 0 ) {
+		return;
+	}
+	if ( key < 0 || key >= MAX_KEYS ) {
+		Com_DPrintf( "CL_KeyEvent: ignoring invalid key %d\n", key );
+		return;
+	}
+
 	if ( down )
 		CL_KeyDownEvent( key, time );
 	else
@@ -1046,7 +1110,7 @@ void CL_CharEvent( int key )
 
 	const std::optional<std::uint32_t> codepoint =
 		textInputDecoder.Consume( static_cast<std::uint32_t>( key ) );
-	if ( !codepoint || *codepoint == 127u ) {
+	if ( !codepoint || *codepoint == 0u || *codepoint == 127u ) {
 		// Delete is handled by Field_KeyDownEvent. A pending UTF-16 high
 		// surrogate also deliberately produces no character yet.
 		return;
@@ -1061,19 +1125,36 @@ void CL_CharEvent( int key )
 	}
 
 	const fnql::input::Utf8Codepoint encoded = fnql::input::EncodeUtf8( *codepoint );
-	for ( std::size_t i = 0; i < encoded.size; ++i ) {
-		const int utf8Byte = encoded.bytes[i];
+	const int catcher = Key_GetCatcher();
 
-		// Retail modules and the legacy edit fields consume UTF-8 one byte at
-		// a time. ASCII/control input therefore remains byte-for-byte unchanged.
-		if ( Key_GetCatcher( ) & KEYCATCH_CONSOLE ) {
-			Con_CharEvent( utf8Byte );
-		} else if ( Key_GetCatcher( ) & KEYCATCH_UI ) {
-			VM_Call( uivm, 3, UI_KEY_EVENT, utf8Byte | K_CHAR_FLAG, qtrue, cls.realtime );
-		} else if ( Key_GetCatcher( ) & KEYCATCH_MESSAGE ) {
-			Field_CharEvent( &chatField, utf8Byte );
-		} else if ( cls.state == CA_DISCONNECTED ) {
-			Field_CharEvent( &g_consoleField, utf8Byte );
+	// Keep the retail module byte-stream contract, but give engine-owned fields
+	// the complete scalar so capacity checks can be atomic.
+	if ( catcher & KEYCATCH_CONSOLE ) {
+		if ( encoded.size == 1 ) {
+			Con_CharEvent( encoded.bytes[0] );
+		} else {
+			Con_CharEventUtf8( encoded.bytes.data(),
+				static_cast<int>( encoded.size ) );
+		}
+	} else if ( catcher & KEYCATCH_UI ) {
+		if ( uivm ) {
+			for ( std::size_t i = 0; i < encoded.size; ++i ) {
+				const int utf8Byte = encoded.bytes[i];
+				VM_Call( uivm, 3, UI_KEY_EVENT, utf8Byte | K_CHAR_FLAG,
+					qtrue, cls.realtime );
+			}
+		}
+	} else if ( catcher & KEYCATCH_MESSAGE ) {
+		if ( encoded.size == 1 ) {
+			Field_CharEvent( &chatField, encoded.bytes[0] );
+		} else {
+			Field_InsertUtf8Scalar( &chatField, encoded.bytes.data(), encoded.size );
+		}
+	} else if ( cls.state == CA_DISCONNECTED ) {
+		if ( encoded.size == 1 ) {
+			Field_CharEvent( &g_consoleField, encoded.bytes[0] );
+		} else {
+			Field_InsertUtf8Scalar( &g_consoleField, encoded.bytes.data(), encoded.size );
 		}
 	}
 }
@@ -1097,8 +1178,15 @@ void Key_ClearStates( void )
 			CL_KeyEvent( i, qfalse, 0 );
 
 		keys[i].down = qfalse;
+		keys[i].bound = qfalse;
 		keys[i].repeats = 0;
 	}
+
+	// Release commands above carry the old per-source generation. Invalidate
+	// them only after every logical key has queued its release, then clear the
+	// engine-owned state synchronously so wait or command-buffer pressure
+	// cannot leave movement, mouselook, buttons, or generated voice held.
+	CL_ClearKeyCommandInputState();
 }
 
 

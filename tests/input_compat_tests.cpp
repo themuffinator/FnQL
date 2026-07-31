@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <string>
 
 // Match the include order used by Windows input sources when an external
 // header has already supplied the legacy min/max macros.
@@ -55,6 +56,59 @@ void TestRetailGameplayCatcher()
 		retailMousePass, ui | retailMousePass, retailMousePass ) );
 	CHECK( fnql::input::GameplayCatcherStateChanged(
 		console, ui, retailMousePass ) );
+}
+
+void TestDeferredInputCommandGenerationHelpers()
+{
+	CHECK( fnql::input::IsCanonicalCommandSegment(
+		"+forward", "+forward" ) );
+	CHECK( fnql::input::IsCanonicalCommandSegment(
+		"+FoRwArD \t", "+forward" ) );
+	CHECK( !fnql::input::IsCanonicalCommandSegment(
+		"+forward extra", "+forward" ) );
+	CHECK( !fnql::input::IsCanonicalCommandSegment(
+		"+scores", "+forward" ) );
+	CHECK( !fnql::input::IsCanonicalCommandSegment(
+		nullptr, "+forward" ) );
+
+	auto parsed =
+		fnql::input::ParseUnsignedInputCommandArgument( "0" );
+	CHECK( parsed && *parsed == 0u );
+	const std::string maximum =
+		std::to_string( ( std::numeric_limits<unsigned>::max )() );
+	parsed =
+		fnql::input::ParseUnsignedInputCommandArgument( maximum.c_str() );
+	CHECK( parsed && *parsed ==
+		( std::numeric_limits<unsigned>::max )() );
+	CHECK( !fnql::input::ParseUnsignedInputCommandArgument(
+		( maximum + "0" ).c_str() ) );
+	CHECK( !fnql::input::ParseUnsignedInputCommandArgument( "" ) );
+	CHECK( !fnql::input::ParseUnsignedInputCommandArgument( nullptr ) );
+	CHECK( !fnql::input::ParseUnsignedInputCommandArgument( "-1" ) );
+	CHECK( !fnql::input::ParseUnsignedInputCommandArgument( "+1" ) );
+	CHECK( !fnql::input::ParseUnsignedInputCommandArgument( "1x" ) );
+
+	auto tag = fnql::input::ParseInputCommandGenerationTag(
+		"fnql-gen:42" );
+	CHECK( tag.tagged && tag.valid && tag.value == 42u );
+	tag = fnql::input::ParseInputCommandGenerationTag( "27" );
+	CHECK( !tag.tagged && !tag.valid );
+	tag = fnql::input::ParseInputCommandGenerationTag( "" );
+	CHECK( !tag.tagged && !tag.valid );
+	tag = fnql::input::ParseInputCommandGenerationTag( "fnql-gen:" );
+	CHECK( tag.tagged && !tag.valid );
+	tag = fnql::input::ParseInputCommandGenerationTag(
+		( std::string( "fnql-gen:" ) + maximum + "0" ).c_str() );
+	CHECK( tag.tagged && !tag.valid );
+
+	std::array<int, 2> sources{ 200, 17 };
+	CHECK( fnql::input::RemoveHeldInputSource( sources, 200 ) );
+	CHECK( sources[0] == 17 && sources[1] == 0 );
+	CHECK( !fnql::input::RemoveHeldInputSource( sources, 200 ) );
+	CHECK( !fnql::input::RemoveHeldInputSource( sources, 0 ) );
+	sources = { -1, 17 };
+	CHECK( fnql::input::RemoveHeldInputSource( sources, 17 ) );
+	CHECK( sources[0] == -1 && sources[1] == 0 );
 }
 
 void TestRetailMouseMotion()
@@ -153,6 +207,8 @@ void TestRetailJoystickMath()
 		1.0f, 0.15f, 20.0f, 1.7f, true ) == -look );
 	CHECK( fnql::input::RetailJoystickLookDelta(
 		0.1f, 0.15f, 20.0f, 1.7f, false ) == 0 );
+	CHECK( fnql::input::RetailJoystickLookDelta(
+		-1.0f, 0.0f, std::numeric_limits<float>::max(), 1.0f, false ) == -32767 );
 }
 
 void TestUnicodeTranslation()
@@ -180,6 +236,34 @@ void TestUnicodeTranslation()
 	CHECK( codepoint && *codepoint == 0x1f680u );
 	CHECK( !decoder.Consume( 0xde80u ) );
 	CHECK( decoder.Consume( 'x' ) == std::optional<std::uint32_t>( 'x' ) );
+
+	const unsigned char euro[] = { 0xe2u, 0x82u, 0xacu };
+	auto decoded = fnql::input::DecodeUtf8( euro, sizeof( euro ) );
+	CHECK( decoded.valid && decoded.size == 3 && decoded.codepoint == 0x20acu );
+
+	const unsigned char rocket[] = { 0xf0u, 0x9fu, 0x9au, 0x80u };
+	decoded = fnql::input::DecodeUtf8( rocket, sizeof( rocket ) );
+	CHECK( decoded.valid && decoded.size == 4 && decoded.codepoint == 0x1f680u );
+
+	const unsigned char truncated[] = { 0xe2u, 0x82u };
+	decoded = fnql::input::DecodeUtf8( truncated, sizeof( truncated ) );
+	CHECK( !decoded.valid && decoded.size == 1 );
+
+	const unsigned char badContinuation[] = { 0xe2u, 'A', 0xacu };
+	decoded = fnql::input::DecodeUtf8( badContinuation, sizeof( badContinuation ) );
+	CHECK( !decoded.valid && decoded.size == 1 );
+
+	const unsigned char overlong[] = { 0xc0u, 0xafu };
+	decoded = fnql::input::DecodeUtf8( overlong, sizeof( overlong ) );
+	CHECK( !decoded.valid && decoded.size == 1 );
+
+	const unsigned char surrogate[] = { 0xedu, 0xa0u, 0x80u };
+	decoded = fnql::input::DecodeUtf8( surrogate, sizeof( surrogate ) );
+	CHECK( !decoded.valid && decoded.size == 1 );
+
+	const unsigned char tooLarge[] = { 0xf4u, 0x90u, 0x80u, 0x80u };
+	decoded = fnql::input::DecodeUtf8( tooLarge, sizeof( tooLarge ) );
+	CHECK( !decoded.valid && decoded.size == 1 );
 }
 
 // Mirrors q_shared.h, which stays the canonical owner of the ABI values.
@@ -257,12 +341,13 @@ void TestPointerPresentation()
 	CHECK( !gameplay.reportAbsolute );
 	CHECK( gameplay.recenterPointer );
 
-	// in_mouse 0 keeps the confined, hidden gameplay pointer but reports no
-	// relative motion.
+	// Retail leaves the desktop pointer alone when gameplay has no enabled
+	// relative source; absolute menus remain independently usable.
 	const auto noDevice = ResolveMode( PointerOwner::Gameplay, false, true, false, false );
-	CHECK( noDevice.driveInput );
+	CHECK( !noDevice.driveInput );
 	CHECK( !noDevice.relativeMotion );
-	CHECK( noDevice.confineToWindow );
+	CHECK( !noDevice.confineToWindow );
+	CHECK( noDevice.showSystemCursor );
 
 	// A windowed menu leaves the pointer free so the desktop stays reachable.
 	const auto windowedMenu = ResolveMode( PointerOwner::Menu, false );
@@ -366,6 +451,104 @@ void TestPointerProjection()
 	projection.drawableHeight = 1200;
 	position = fnql::input::ProjectPointerToDrawable( -10, -20, projection );
 	CHECK( position.x == -20 && position.y == -40 );
+
+	// Host APIs are not trusted to stay in their nominal window range. Extreme
+	// coordinates saturate instead of overflowing or invoking float-cast UB.
+	projection.hostWidth = 1;
+	projection.hostHeight = 1;
+	projection.drawableWidth = std::numeric_limits<int>::max();
+	projection.drawableHeight = std::numeric_limits<int>::max();
+	position = fnql::input::ProjectPointerToDrawable(
+		std::numeric_limits<int>::max(), std::numeric_limits<int>::min(), projection );
+	CHECK( position.x == std::numeric_limits<int>::max() );
+	CHECK( position.y == std::numeric_limits<int>::min() );
+
+	CHECK( fnql::input::SaturatingAddInt(
+		std::numeric_limits<int>::max(), 1 ) == std::numeric_limits<int>::max() );
+	CHECK( fnql::input::SaturatingAddInt(
+		std::numeric_limits<int>::min(), -1 ) == std::numeric_limits<int>::min() );
+	CHECK( fnql::input::SaturatingAddInt( 40, 2 ) == 42 );
+
+	CHECK( fnql::input::TruncateFiniteFloatToInt(
+		std::numeric_limits<float>::infinity() ) == 0 );
+	CHECK( fnql::input::TruncateFiniteFloatToInt( 42.75f ) == 42 );
+
+	// SDL supplies float window coordinates. Preserve their fractional part
+	// through drawable scaling, then truncate exactly once.
+	projection.hostWidth = projection.hostHeight = 100;
+	projection.drawableWidth = projection.drawableHeight = 200;
+	position = fnql::input::ProjectPointerToDrawable(
+		10.5f, -10.5f, projection );
+	CHECK( position.x == 21 && position.y == -21 );
+
+	projection.hostWidth = projection.drawableWidth = 100;
+	projection.hostHeight = projection.drawableHeight = 100;
+	position = fnql::input::ProjectPointerToDrawable(
+		10.75f, -10.75f, projection );
+	CHECK( position.x == 10 && position.y == -10 );
+
+	position = fnql::input::ProjectPointerToDrawable(
+		std::numeric_limits<float>::quiet_NaN(),
+		std::numeric_limits<float>::infinity(), projection );
+	CHECK( position.x == 0 && position.y == 0 );
+
+	projection.hostWidth = projection.hostHeight = 1;
+	projection.drawableWidth = projection.drawableHeight =
+		std::numeric_limits<int>::max();
+	position = fnql::input::ProjectPointerToDrawable(
+		( std::numeric_limits<float>::max )(),
+		-( std::numeric_limits<float>::max )(), projection );
+	CHECK( position.x == std::numeric_limits<int>::max() );
+	CHECK( position.y == std::numeric_limits<int>::min() );
+}
+
+void TestFiniteInputConversions()
+{
+	const float infinity = std::numeric_limits<float>::infinity();
+	const float quietNaN = std::numeric_limits<float>::quiet_NaN();
+	const float maximum = ( std::numeric_limits<float>::max )();
+	const int intMinimum = ( std::numeric_limits<int>::min )();
+	const int intMaximum = ( std::numeric_limits<int>::max )();
+
+	CHECK( fnql::input::FiniteOr( 12.5f, 3.0f ) == 12.5f );
+	CHECK( fnql::input::FiniteOr( infinity, 3.0f ) == 3.0f );
+	CHECK( fnql::input::FiniteOr( quietNaN, 3.0f ) == 3.0f );
+
+	CHECK( fnql::input::TruncateFiniteFloatToInt( quietNaN ) == 0 );
+	CHECK( fnql::input::TruncateFiniteFloatToInt( infinity ) == 0 );
+	CHECK( fnql::input::TruncateFiniteFloatToInt( -infinity ) == 0 );
+	CHECK( fnql::input::TruncateFiniteFloatToInt( maximum ) ==
+		( std::numeric_limits<int>::max )() );
+	CHECK( fnql::input::TruncateFiniteFloatToInt( -maximum ) ==
+		intMinimum );
+	CHECK( fnql::input::TruncateFiniteFloatToInt( -42.75f ) == -42 );
+
+	// Ordinary angles must take the exact legacy path, while pathological
+	// finite values are reduced before ANGLE2SHORT's float-to-int cast.
+	CHECK( fnql::input::FiniteAngleForShort( 720.25f ) == 720.25f );
+	CHECK( fnql::input::FiniteAngleForShort( quietNaN ) == 0.0f );
+	CHECK( fnql::input::FiniteAngleForShort( infinity ) == 0.0f );
+	const float reducedAngle = fnql::input::FiniteAngleForShort( maximum );
+	CHECK( std::isfinite( reducedAngle ) );
+	CHECK( std::fabs( reducedAngle ) < 360.0f );
+
+	CHECK( Near( fnql::input::FiniteJoystickDeadzone( -1.0f ), 0.0f ) );
+	CHECK( Near( fnql::input::FiniteJoystickDeadzone( 2.0f ), 1.0f ) );
+	CHECK( Near( fnql::input::FiniteJoystickDeadzone( quietNaN ), 1.0f ) );
+	CHECK( fnql::input::ApplyJoystickDeadzone( 3000, 0.15f ) == 0 );
+	CHECK( fnql::input::ApplyJoystickDeadzone( 32767, 0.15f ) == 32767 );
+	CHECK( fnql::input::ApplyJoystickDeadzone( -32768, 0.15f ) == -32768 );
+	CHECK( fnql::input::ApplyJoystickDeadzone( 32767, 1.0f ) == 0 );
+	CHECK( fnql::input::ApplyJoystickDeadzone( 32767, quietNaN ) == 0 );
+
+	CHECK( fnql::input::StrongerJoystickAxis( 100, -99 ) == 100 );
+	CHECK( fnql::input::StrongerJoystickAxis( 100, -101 ) == -101 );
+	CHECK( fnql::input::StrongerJoystickAxis( -100, 100 ) == -100 );
+	CHECK( fnql::input::StrongerJoystickAxis( 1, intMinimum ) == intMinimum );
+	CHECK( fnql::input::SaturatingIntFromInt64(
+		static_cast<std::int64_t>( intMaximum ) * 2 ) == intMaximum );
+	CHECK( fnql::input::SaturatingIntFromInt64(
+		static_cast<std::int64_t>( intMinimum ) * 2 ) == intMinimum );
 }
 
 } // namespace
@@ -373,6 +556,7 @@ void TestPointerProjection()
 int main()
 {
 	TestRetailGameplayCatcher();
+	TestDeferredInputCommandGenerationHelpers();
 	TestPointerOwnership();
 	TestPointerPresentation();
 	TestPointerProjection();
@@ -380,5 +564,6 @@ int main()
 	TestRetailViewFilter();
 	TestRetailJoystickMath();
 	TestUnicodeTranslation();
+	TestFiniteInputConversions();
 	return failures == 0 ? 0 : 1;
 }

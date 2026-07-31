@@ -583,7 +583,12 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
         self.assertNotIn("VM_NormalizeQbooleanArg( args[1] ), (int)args[2]", vm)
         self.assertIn("VM_Call( uivm, 3, UI_KEY_EVENT, key, qtrue, time );", cl_keys)
         self.assertIn("VM_Call( uivm, 3, UI_KEY_EVENT, key, qfalse, time );", cl_keys)
-        self.assertIn("VM_Call( uivm, 3, UI_KEY_EVENT, utf8Byte | K_CHAR_FLAG, qtrue, cls.realtime );", cl_keys)
+        self.assertRegex(
+            cl_keys,
+            r"VM_Call\(\s*uivm,\s*3,\s*UI_KEY_EVENT,\s*"
+            r"utf8Byte\s*\|\s*K_CHAR_FLAG,\s*qtrue,\s*"
+            r"cls\.realtime\s*\);",
+        )
         self.assertNotIn("VM_Call( uivm, 2, UI_KEY_EVENT", cl_keys)
 
     def test_ui_native_import_table_has_no_unbound_recovered_slots(self) -> None:

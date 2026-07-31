@@ -1119,6 +1119,8 @@ static std::array<clSteamAvatarCacheEntry_t,
 	CL_STEAM_AVATAR_CACHE_SIZE> cl_steamAvatarCache;
 static qboolean cl_steamVoiceRecording;
 static qboolean cl_steamVoicePacketLogged;
+static std::array<qboolean, MAX_KEYS> cl_steamVoiceInputSources;
+static qboolean cl_steamVoiceManualOwner;
 static uint64_t cl_steamPendingP2PRemote;
 static uint64_t cl_steamAcceptedP2PServer;
 static uint32_t cl_steamAvatarSession = 1;
@@ -1771,7 +1773,20 @@ static void CL_Steam_UserStatsTest_f( void ) {
 	}
 }
 
-static void CL_Steam_VoiceStart_f( void ) {
+static qboolean CL_Steam_HasVoiceInputOwner( void ) {
+	if ( cl_steamVoiceManualOwner ) {
+		return qtrue;
+	}
+	for ( const qboolean owner : cl_steamVoiceInputSources ) {
+		if ( owner ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+
+static void CL_Steam_StartVoiceRecording( void ) {
 	if ( cl_steamVoiceRecording ) return;
 	if ( FNQL_Steam_StartVoiceRecording() != FNQL_STEAM_RESULT_OK ) {
 		Com_DPrintf( "Steam voice recording is unavailable.\n" );
@@ -1785,13 +1800,75 @@ static void CL_Steam_VoiceStart_f( void ) {
 		FNQL_Steam_GetVoiceSampleRate() );
 }
 
-static void CL_Steam_VoiceStop_f( void ) {
+
+static void CL_Steam_StopVoiceRecording( void ) {
 	if ( !cl_steamVoiceRecording ) return;
 	(void)FNQL_Steam_SetLocalVoiceSpeaking( qfalse );
 	FNQL_Steam_StopVoiceRecording();
 	cl_steamVoiceRecording = qfalse;
 	CL_SetLocalSpeakingState( qfalse );
 }
+
+
+static void CL_Steam_VoiceStart_f( void ) {
+	const int source = CL_ValidateInputCommandSource();
+	if ( source == CL_INPUT_COMMAND_STALE ) {
+		return;
+	}
+	if ( source == CL_INPUT_COMMAND_LEGACY ) {
+		cl_steamVoiceManualOwner = qtrue;
+	} else {
+		cl_steamVoiceInputSources[static_cast<std::size_t>( source )] = qtrue;
+	}
+	CL_Steam_StartVoiceRecording();
+}
+
+
+static void CL_Steam_VoiceStop_f( void ) {
+	const int source = CL_ValidateInputCommandSource();
+	if ( source == CL_INPUT_COMMAND_STALE ) {
+		return;
+	}
+	if ( source == CL_INPUT_COMMAND_LEGACY ) {
+		// Preserve the historical untagged stop/unstick behavior.
+		cl_steamVoiceManualOwner = qfalse;
+		cl_steamVoiceInputSources.fill( qfalse );
+		CL_Steam_StopVoiceRecording();
+		return;
+	}
+
+	cl_steamVoiceInputSources[static_cast<std::size_t>( source )] = qfalse;
+	if ( !CL_Steam_HasVoiceInputOwner() ) {
+		CL_Steam_StopVoiceRecording();
+	}
+}
+
+
+void CL_ResetVoiceInputState( void ) {
+	cl_steamVoiceManualOwner = qfalse;
+	cl_steamVoiceInputSources.fill( qfalse );
+	CL_Steam_StopVoiceRecording();
+}
+
+
+void CL_ClearGeneratedVoiceInputState( void ) {
+	cl_steamVoiceInputSources.fill( qfalse );
+	if ( !cl_steamVoiceManualOwner ) {
+		CL_Steam_StopVoiceRecording();
+	}
+}
+
+
+void CL_RemoveVoiceInputSource( int sourceKey ) {
+	if ( sourceKey < 0 || sourceKey >= MAX_KEYS ) {
+		return;
+	}
+	cl_steamVoiceInputSources[static_cast<std::size_t>( sourceKey )] = qfalse;
+	if ( !CL_Steam_HasVoiceInputOwner() ) {
+		CL_Steam_StopVoiceRecording();
+	}
+}
+
 
 void QLWebHost_RegisterCommands( void ) {
 	if ( cl_webui.commandsRegistered ) {
@@ -1846,7 +1923,7 @@ void QLWebHost_UnregisterCommands( void ) {
 	Cmd_RemoveCommand( "-voice" );
 	Cmd_RemoveCommand( "steam_voice_start" );
 	Cmd_RemoveCommand( "steam_voice_stop" );
-	CL_Steam_VoiceStop_f();
+	CL_ResetVoiceInputState();
 	Cmd_RemoveCommand( "clientviewprofile" );
 	Cmd_RemoveCommand( "clientfriendinvite" );
 	cl_webui.commandsRegistered = qfalse;
@@ -2415,11 +2492,24 @@ static void CL_WebHost_BuildStartupBridgeScript( char *buffer, size_t bufferSize
 		"SetFavoriteServer:function(ip,port,add){var addText=String(add).toLowerCase();var addValue=(add===false||addText==='false')?0:parseInt(add,10);return queue('favorite',String(ip||'')+'\\n'+String(port||'')+'\\n'+((isNaN(addValue)?1:addValue)!==0?'1':'0'));},NoOp:noop};"
 		"if(!window.FakeClient){window.FakeClient={};}if(!window.FakeClient.qz_instance){window.FakeClient.qz_instance={};}"
 		"window.__qlr_set_native_cvar=setNativeCvar;window.__qlr_set_file_exists=setFileExists;window.__qlr_set_cursor_position=setCursorPosition;window.__qlr_set_clipboard_text=setClipboardText;window.__qlr_set_demo_list=setDemoList;window.__qlr_set_friend_list=setFriendList;window.__qlr_set_ugc_list=setUGCList;window.__qlr_set_native_maps=setMapList;window.__qlr_set_native_factories=setFactoryList;window.__qlr_begin_native_maps=beginNativeMaps;window.__qlr_add_native_maps=addNativeMaps;window.__qlr_commit_native_maps=commitNativeMaps;window.__qlr_begin_native_factories=beginNativeFactories;window.__qlr_add_native_factories=addNativeFactories;window.__qlr_commit_native_factories=commitNativeFactories;window.__qlr_set_native_state=setNativeState;window.__qlr_set_native_config=setNativeConfig;"
+		/*
+		 * Retail restores browser_filters separately from browser_data. Cached
+		 * rows therefore retain stale `filtered` members on mount. Fresh rows
+		 * have a second ordering bug: their filtered member is calculated
+		 * before bot players are removed from numPlayers. Dispatching a no-op
+		 * double-click through the retail empty-filter input clones the current,
+		 * already-restored filter object twice and makes the component re-evaluate
+		 * every normalized row while ending on the saved setting.
+		 */
+		"var reapplyBrowserFilters=function(force){var t=document.querySelector&&document.querySelector('table.match-browser');var e=document.querySelector&&document.querySelector('.filters input[name=\"empty\"]');"
+		"if(!t||!e||(!force&&t.__fnqlFiltersApplied)){return false;}try{var c=!!e.checked;e.click();e.click();if(!!e.checked!==c){return false;}t.__fnqlFiltersApplied=true;return true;}catch(err){return false;}};"
+		"window.__fnql_reapply_browser_filters=reapplyBrowserFilters;"
 		"var syncQzBridge=function(){var f=window.FakeClient&&window.FakeClient.qz_instance;if(f){for(var k in qz){f[k]=qz[k];}}"
 		"window.qz_instance=qz;if(typeof window.EnginePublish==='function'&&!window.EnginePublish.__qlr_wrapped){var oldPublish=window.EnginePublish;"
-		"var wrapped=function(topic,data){try{if(String(topic).indexOf('cvar.')===0){var d=typeof data==='string'?JSON.parse(data):data;if(d){setNativeCvar(d.name||String(topic).substr(5),d.value||'');}}}catch(e){}return oldPublish.apply(this,arguments);};"
-		"wrapped.__qlr_wrapped=true;window.EnginePublish=wrapped;}};"
-		"window.__fnql_retry_qz_bridge=syncQzBridge;if(typeof window.main_hook_v2!=='function'){window.main_hook_v2=syncQzBridge;}syncQzBridge();if(document.addEventListener){document.addEventListener('DOMContentLoaded',syncQzBridge,false);}window.__qlr_browser_helpers_ready=true;"
+		"var wrapped=function(topic,data){try{if(String(topic).indexOf('cvar.')===0){var d=typeof data==='string'?JSON.parse(data):data;if(d){setNativeCvar(d.name||String(topic).substr(5),d.value||'');}}}catch(e){}"
+		"var r=oldPublish.apply(this,arguments);if(String(topic)==='servers.refresh.end'){setTimeout(function(){reapplyBrowserFilters(true);},0);}return r;};"
+		"wrapped.__qlr_wrapped=true;window.EnginePublish=wrapped;}reapplyBrowserFilters(false);};"
+		"window.__fnql_retry_qz_bridge=syncQzBridge;if(typeof window.main_hook_v2!=='function'){window.main_hook_v2=syncQzBridge;}syncQzBridge();if(document.addEventListener){document.addEventListener('DOMContentLoaded',function(){syncQzBridge();setTimeout(reapplyBrowserFilters,0);},false);}if(window.addEventListener){window.addEventListener('hashchange',function(){setTimeout(reapplyBrowserFilters,0);},false);}window.__qlr_browser_helpers_ready=true;"
 		"try{var e=document.createEvent('Event');e.initEvent('qz_instance.ready',false,false);document.dispatchEvent(e);}catch(err){}"
 		"var qlrBridgeTries=0;var qlrBridgeTimer=setInterval(function(){syncQzBridge();if(++qlrBridgeTries>=40){clearInterval(qlrBridgeTimer);}},250);"
 		"window.__qlr_qz_instance_script_complete=true;"

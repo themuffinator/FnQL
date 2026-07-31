@@ -31,10 +31,15 @@ extern "C" {
 void IN_Init (void);
 void IN_Frame (void);
 void IN_Shutdown (void);
+void X11_QueueInputReset( qboolean rebuildModifiers );
 
 
 void IN_JoyMove( void );
 void IN_StartupJoystick( void );
+void IN_ShutdownJoystick( void );
+#ifdef USE_JOYSTICK
+void IN_ResetJoystickState( void );
+#endif
 
 // OpenGL subsystem
 qboolean QGL_Init( const char *dllname );

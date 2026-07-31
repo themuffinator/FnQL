@@ -375,11 +375,33 @@ class PlatformRobustnessTests(unittest.TestCase):
     def test_x11_window_minimized_validates_the_property_reply(self) -> None:
         source = read("code/unix/linux_glimp.cpp")
         block = body(source, "static qboolean WindowMinimized", "static int X11_CardinalCoordinate")
-        self.assertIn("num_items = 0;", block)
-        self.assertIn("!= Success ||", block)
-        self.assertIn("actual_type != XA_ATOM || actual_format != 32 || atoms == NULL", block)
+        for initialization in (
+            "unsigned long numItems = 0;",
+            "unsigned long bytesAfter = 0;",
+            "Atom actualType = None;",
+            "unsigned char *propertyData = NULL;",
+            "int actualFormat = 0;",
+        ):
+            self.assertIn(initialization, block)
+        self.assertIn(") != Success )", block)
+        self.assertIn(
+            "actualType == None && actualFormat == 0 && numItems == 0",
+            block,
+        )
+        self.assertIn(
+            "actualType != XA_ATOM || actualFormat != 32 ||",
+            block,
+        )
+        self.assertIn("bytesAfter != 0", block)
+        self.assertIn("kMaximumWindowStateAtoms", block)
+        self.assertNotIn("0x7FFFFFFF", block)
+        self.assertIn("( numItems > 0 && !propertyData )", block)
+        self.assertIn("XFree( propertyData );", block)
         # validation must precede the loop that dereferences atoms
-        self.assertLess(block.index("actual_format != 32"), block.index("if ( atoms[i] == nwsh )"))
+        self.assertLess(
+            block.index("actualFormat != 32"),
+            block.index("if ( atoms[i] == netWMStateHidden )"),
+        )
 
 
 if __name__ == "__main__":

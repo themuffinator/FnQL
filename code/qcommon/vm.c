@@ -2754,18 +2754,23 @@ static intptr_t VM_CallNativeExports( vm_t *vm, int callnum, const intptr_t *arg
 			}
 			return VM_NormalizeQbooleanResult(
 				((qboolean (QDECL *)( int, void * ))exportFunc)( (int)args[0], (void *)args[1] ) );
+		// Retail cgamex86.dll returns the chat-field origin and width as x87
+		// floats in ST(0), not as integers in EAX.  Calling them through an int
+		// prototype reads a stale EAX and leaves the result stranded on the FPU
+		// stack, which places the chat overlay at an arbitrary offscreen Y and
+		// eventually overflows x87 after eight frames.
 		case CG_GET_CHAT_FIELD_Y:
 			exportFunc = dllExports[CG_NATIVE_EXPORT_GET_CHAT_FIELD_Y];
 			if ( !exportFunc ) {
 				break;
 			}
-			return ((int (QDECL *)( void ))exportFunc)();
+			return (intptr_t)((float (QDECL *)( void ))exportFunc)();
 		case CG_GET_CHAT_FIELD_PIXEL_WIDTH:
 			exportFunc = dllExports[CG_NATIVE_EXPORT_GET_CHAT_FIELD_PIXEL_WIDTH];
 			if ( !exportFunc ) {
 				break;
 			}
-			return ((int (QDECL *)( void ))exportFunc)();
+			return (intptr_t)((float (QDECL *)( void ))exportFunc)();
 		case CG_GET_CHAT_FIELD_WIDTH_IN_CHARS:
 			exportFunc = dllExports[CG_NATIVE_EXPORT_GET_CHAT_FIELD_WIDTH_IN_CHARS];
 			if ( !exportFunc ) {

@@ -1382,6 +1382,10 @@ else # !USE_SDL
         $(B)/client/x11_dga.o \
         $(B)/client/x11_randr.o \
         $(B)/client/x11_vidmode.o
+ifeq ($(PLATFORM),linux)
+    Q3OBJ += $(B)/client/linux_joystick.o
+    $(B)/client/linux_glimp.o $(B)/client/linux_joystick.o: CXXFLAGS += -DUSE_JOYSTICK
+endif
 ifeq ($(USE_OPENGL_API),1)
     Q3OBJ += \
         $(B)/client/linux_qgl.o

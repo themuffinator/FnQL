@@ -62,11 +62,23 @@ Character input keeps each platform producer intact. The shared client lane
 accepts Unicode scalar values directly and combines valid UTF-16 surrogate
 pairs from Win32 before encoding one-to-four UTF-8 bytes. Invalid scalars and
 unmatched low surrogates are ignored; pending surrogate state is cleared with
-the normal held-key state on focus changes. ASCII and control characters
-remain byte-for-byte compatible with FnQ3.
+the normal held-key state on focus changes. Retail modules keep their UTF-8
+byte-stream ABI. Engine-owned console, chat, and disconnected edit fields
+insert a complete UTF-8 scalar or nothing, so a full field cannot be left with
+a truncated character.
+Clipboard input is decoded strictly, replaces malformed sequences, and treats
+bytes as data rather than editor commands; C0 controls and DEL are discarded,
+which also prevents a pasted Ctrl-V byte from recursively invoking paste.
+SDL text input and X11 XIM focus are enabled only while the console, UI, chat,
+browser, or disconnected console can consume characters. Both are reconciled
+before each native event drain as well as on focus changes, so an immediate
+same-frame catcher transition cannot leave an IME filtering gameplay keys.
+AltGr remains usable for layout-specific console characters without exposing
+its synthetic Ctrl transition as a bindable key on Windows.
 
-The default SDL3 gamepad implementation and its hotplug, named-button, analog,
-and configurable-axis support remain unchanged. The non-SDL Windows backend
+The default SDL3 gamepad mapping, named-button, analog, and configurable-axis
+behavior remains intact. Hotplug and global reset barriers now also clear
+persistent axes and balance retained transitions. The non-SDL Windows backend
 keeps its historical direction-key/U-V-trackball behavior by default. Set
 `in_joystickProfile 1` and restart input to select the QL WinMM mapping; retail
 movement scaling also expects `in_joyBallScale 1`. The profile is latched so a
@@ -130,14 +142,19 @@ Presentation. Confinement, relative motion, and OS cursor visibility are
 independent axes; binding them to one "grabbed" flag is what produced the
 inconsistencies. `PointerMode` reports them separately:
 
-| Owner | Absolute | Relative | Confined | OS cursor | Re-centred |
+| Owner/source | Absolute | Relative | Confined | OS cursor | Re-centred |
 | --- | --- | --- | --- | --- | --- |
-| Gameplay | no | yes | yes | hidden | on entry |
+| Gameplay, relative source enabled | no | yes | yes | hidden | on entry |
+| Gameplay, `in_mouse 0` | no | no | no | visible | no |
 | Menu | yes | no | fullscreen only | visible | no |
-| Console | yes | no | fullscreen only | hidden | no |
+| Console | yes | no | fullscreen only | hidden over the client | no |
 
 An unfocused or minimized window drives no pointer input at all: it holds no
 confinement, hides no cursor, and reports no positions.
+
+`in_mouse 0` disables only relative gameplay motion. Absolute UI, cgame,
+browser, and console pointer input remains available, matching retail-shaped
+behavior and keeping menus recoverable without an input restart.
 
 This is a deliberate FnQL design choice, not a retail observation. Two behaviors
 change relative to the previous FnQL baseline, both narrowed to cases that were
@@ -153,18 +170,31 @@ already broken:
   gated on focus; Win32 did not, so an in-game menu tracked the pointer while
   another application had focus.
 
-`in_nograb` keeps its per-backend meaning and is applied outside the shared
-policy: it only suppresses the relative gameplay pointer, since overlay owners
-already run unconfined.
+`in_nograb` keeps its developer/streaming meaning and is applied outside the
+shared policy: it suppresses relative gameplay capture only. It does not
+disable an absolute owner or override the fullscreen confinement that prevents
+a menu click from escaping to another monitor.
 
 Backend notes:
 
 - SDL keeps one owner-keyed absolute-position cache for the console, retail
-  UI/cgame, and the browser, so a cached sample from one coordinate space
-  cannot suppress the first sample of the next. The applied mode is latched, so
-  a steady state issues no SDL calls. Drag capture now covers every absolute
-  owner, matching Win32 and X11, so a menu drag that leaves the window still
-  delivers its release.
+  UI/cgame, and the browser, so a cached sample from one consumer cannot
+  suppress the first sample of the next. Requested and applied pointer/capture
+  state are tracked separately and failed SDL transitions are retried without
+  log flooding. Drag capture covers every absolute owner, matching Win32 and
+  X11, so a menu drag that leaves the window still delivers its release.
+  Subpixel SDL coordinates are scaled before their one deliberate truncation,
+  preserving high-DPI positions. Window-leave polling is retained only while
+  an active drag capture is verified; a failed or lost capture instead queues
+  narrow mouse recovery and stops reporting outside positions.
+  High-resolution wheel fractions are bounded per device and consumer; button
+  IDs 1-25 map uniquely through `K_MOUSE1..9` and `K_AUX1..16`, while invalid
+  or unrepresentable higher IDs are ignored instead of aliased. Events for a
+  replaced game window are rejected only after the optional SDL console has
+  had a chance to consume its own window events. SDL owns explicit joystick
+  and gamepad subsystem references, refreshes the UI device list even while
+  controller input is disabled, and collapses the paired topology events SDL
+  emits for recognized gamepads.
 - Win32 confines with `ClipCursor` and re-asserts it when the window rect moves,
   because Windows drops the clip region on deactivation. `win_wndproc.cpp`
   routes mouse messages through the same `WIN_ResolvePointerOwner` the frame
@@ -176,13 +206,78 @@ Backend notes:
   converting it into a delta kicks the view by (position − window centre) with
   no physical motion. The SDL backend gobbles queued motion on mode changes and
   X11 re-bases its warp origin under a reset delay; this gate is the Win32
-  equivalent.
+  equivalent. Raw Input and DirectInput activation failures unwind partial
+  ownership before falling back to a usable Win32 source. Raw Input device
+  removal, temporary-capture loss, minimization, and hidden-window transitions
+  recover held state through ordered barriers. Cursor display-count changes are
+  transition-only, temporary capture is checked, and fractional or
+  compatibility-mode wheel events always emit balanced key pairs. WinMM MIDI
+  data is delivered through the window message queue, keeping key-event
+  production on the main thread while still rejecting stale-device callbacks.
+  The game window and clipboard use Unicode Win32 APIs; `WM_UNICHAR` accepts
+  only Unicode scalar values, and the native keyboard path suppresses the
+  synthetic left-Ctrl half of AltGr without suppressing a real Ctrl+RightAlt
+  chord.
 - X11 shares its single client pointer grab between confinement and drag
   capture through a reason mask, and latches the window cursor attribute so the
   per-frame evaluation does not cost an X round trip per frame. A fullscreen
   X11 window on a multi-monitor desktop still leaves the rest of the desktop
   reachable, so the console keeps its absolute cursor there; that established
-  accommodation is preserved as a backend input.
+  accommodation is preserved as a backend input. XIM/XIC supplies UTF-8 text
+  independently of physical Quake key translation, with a legacy
+  `XLookupString` fallback, clean focus/lifecycle handling, and recovery when
+  the input-method server disappears. Linux non-SDL builds now include the
+  native joystick backend in Meson, CMake, and Make; it probes modern and
+  legacy device paths, retries bounded hotplug discovery, and recovers cleanly
+  from disconnects and short or interrupted reads.
+
+## Event, focus, and device-loss recovery
+
+Focus changes, window recreation, input restart, and device loss are ordered
+through the common event queue. A full `SE_INPUT_RESET` barrier releases held
+bindings and clears client mouse deltas, joystick axes, and filter history only
+after every older retained transition has been consumed. When the triggering
+platform transition requires producer-cache invalidation, that happens when
+the barrier is *queued*, not when it is consumed: a native event drain can
+already have processed newer input by consumption time, and clearing then
+would lose a new drag, wheel fraction, modifier identity, or button source
+state.
+
+Exact engine-owned stateful bindings carry a reserved, per-logical-key
+generation tag in their deferred command text. Every logical
+`Key_ClearStates` boundary first queues releases, then advances every generation
+and synchronously clears movement, button, mouselook, and generated
+push-to-talk ownership. An old command delayed by `wait` or retained around
+command-buffer pressure therefore cannot resurrect engine input after a
+console, catcher, disconnect, or full input reset. Only canonical engine
+commands are tagged: arbitrary cgame, UI, server, and manual `+` commands keep
+their retail-shaped text and behavior. An explicitly issued untagged
+`steam_voice_start` survives an ordinary console/menu catcher clear, but a full
+focus reset or disconnect clears that manual owner and stops recording
+immediately rather than relying on a later deferred `-voice`.
+
+Mouse-only loss uses `SE_MOUSE_RESET`. It releases mouse buttons, wheel keys,
+mouse-backed auxiliary keys named by that backend's exact source mask, deltas,
+and filter state. It does not broadly clear keyboard state, joystick axes, or
+auxiliary keys outside that mask. SDL device removal carries the exact
+mouse-owned auxiliary-key mask; DirectInput buffer loss uses the same narrow
+barrier for its representable mouse range. Per-key generations and source
+ownership let this narrow barrier remove only the affected mouse contribution
+from a shared movement/button/mouselook/voice command. An unrelated keyboard
+holder or explicit manual voice owner remains active; recording stops only
+when the last owner is gone.
+
+The system and pushed-event queues insert a full reset before the newest event
+if overload forces an older transition to be discarded. Those overload
+barriers leave backend caches as current producer truth while repairing the
+ordered client state. Relative deltas saturate instead of overflowing signed
+integers, queue sequence counters wrap with defined unsigned arithmetic,
+non-finite platform samples are rejected or neutralized, and the queue capacity
+is 256 events. Duplicate or invalid key releases no longer
+corrupt `anykeydown` or emit redundant module releases. Left/right Shift,
+Ctrl, and Alt are aggregated into their logical family; SDL and X11 likewise
+aggregate Super and level-five/Mode modifiers where the platform exposes them.
+Focus regain reconstructs families that remain physically held.
 
 ## Validation
 
@@ -201,7 +296,10 @@ Backend notes:
 - QL view-angle history initialization, averaging, wraparound, and reset;
 - WinMM axis normalization, movement deadzones, look acceleration, and
   inversion;
-- ASCII, BMP, supplementary-plane, invalid-scalar, and UTF-16 surrogate input.
+- canonical command matching, reserved generation-tag parsing, and selective
+  removal from a two-source engine button;
+- ASCII, BMP, supplementary-plane, invalid-scalar, UTF-16 surrogate, strict
+  UTF-8 decode, and saturating arithmetic.
 
 `tests/windowed_mouse_source_tests.py` gates the structure: that every backend
 resolves ownership through the shared policy rather than a private predicate,
@@ -212,15 +310,23 @@ captures drags for every absolute owner, that Win32 shares one resolver between
 its message pump and its frame update and invalidates the clip latch on
 deactivation, and that X11 shares one grab and latches its cursor.
 
-Both SDL3 and non-SDL Windows client object builds compile the shared mouse and
-character consumers. The non-SDL build additionally compiles the QL WinMM
-profile; the SDL3 build compiles its existing input backend unchanged.
+`tests/input_system_source_tests.py` additionally gates reset ordering and
+scope, deferred per-key command invalidation, source-aware push-to-talk
+shutdown, queue-overflow recovery, atomic UTF-8 field capacity and completion
+safety, modifier-family and AltGr handling, Win32 source fallback and wheel
+balance, SDL text/focus/device/window routing, and X11 XIM, minimize-property,
+native-joystick, and fallback behavior.
+
+Strict-warning x86 builds compile and link both the SDL3 and native Win32
+clients plus the focused compatibility executable. Native X11 validation
+compiles and links an ELF32 i386 client including native joystick input; source
+gates cover XIC lifecycle, bounded minimization-property parsing, joystick
+recovery/build wiring, and the legacy text fallback.
 
 Runtime promotion still requires a windowed retail-asset probe covering raw
 mouse input with CPI off/on, a representative acceleration configuration,
-console/UI/browser text entry, focus loss, and (where hardware is available)
-the opt-in WinMM joystick profile. Never run that probe fullscreen. The
-fullscreen confinement path is the one behavior this slice adds that a windowed
-probe cannot exercise; it needs a separate multi-monitor fullscreen check of
-opening an in-game menu, moving the pointer toward the second display, and
-confirming the game keeps focus.
+console/UI/browser multilingual text entry, focus loss, device hotplug, and
+(where hardware is available) the opt-in WinMM joystick profile. Never run
+that automated probe fullscreen. Fullscreen confinement still needs a separate
+manual multi-monitor check of opening an in-game menu, moving the pointer
+toward the second display, and confirming the game keeps focus.

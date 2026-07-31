@@ -253,6 +253,7 @@ bool AudioSystem::Init( soundInterface_t *si ) {
 	if ( si == nullptr ) {
 		return false;
 	}
+	*si = {};
 
 	s_alReverb = Cvar_Get( "s_alReverb", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	Cvar_CheckRange( s_alReverb, "0", "1", CV_INTEGER );
@@ -297,6 +298,7 @@ bool AudioSystem::Init( soundInterface_t *si ) {
 	Cvar_SetDescription( s_alAutoRecover, "Automatically tries to reopen the OpenAL device after the runtime reports that it disconnected." );
 
 	if ( !device_.Init() ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: OpenAL device initialization did not complete\n" );
 		return false;
 	}
 	if ( s_alSpatializeStereo != nullptr && s_alSpatializeStereo->integer && !device_.Capabilities().sourceSpatialize ) {
@@ -768,6 +770,12 @@ void AudioSystem::SoundInfo() {
 
 	Com_Printf( "----- Sound Info -----\n" );
 	Com_Printf( "Using OpenAL backend\n" );
+	const bool focusMuted = IsSoftMuted() != qfalse;
+	Com_Printf( "Master volume: %.2f\n", s_volume != nullptr ? s_volume->value : 1.0f );
+	Com_Printf( "Mute state: %s%s\n",
+		hardMuted_ ? "registration-muted (normal during startup/registration)" :
+			( focusMuted ? "focus-muted" : "audible" ),
+		( s_volume != nullptr && s_volume->value <= 0.0f ) ? ", master volume is zero" : "" );
 	Com_Printf( "OpenAL library: %s\n", device_.LibraryName().empty() ? "unknown" : device_.LibraryName().c_str() );
 	Com_Printf( "Requested device: %s\n", device_.RequestedDeviceName().empty() ? "default" : device_.RequestedDeviceName().c_str() );
 	Com_Printf( "Active device: %s\n", device_.ActiveDeviceName().empty() ? "unknown" : device_.ActiveDeviceName().c_str() );

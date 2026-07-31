@@ -48,9 +48,16 @@ class VidRestartFastSourceTests(unittest.TestCase):
 
     def test_sdl_alt_enter_uses_fast_restart(self):
         source = read_text("code/sdl/sdl_input.cpp")
-        handler_start = source.index("key == K_ENTER && keys[K_ALT].down")
+        handler_start = source.index(
+            "key == K_ENTER && ( keyinfo.mod & SDL_KMOD_ALT )"
+        )
         handler = source[handler_start:handler_start + 400]
-        self.assertIn('Cvar_SetIntegerValue( "r_fullscreen", glw_state.isFullscreen ? 0 : 1 );', handler)
+        self.assertIn('Cvar_SetIntegerValue( "r_fullscreen",', handler)
+        self.assertIn("glw_state.isFullscreen ? 0 : 1 );", handler)
+        self.assertLess(
+            handler.index("if ( !e.key.repeat )"),
+            handler.index('Cvar_SetIntegerValue( "r_fullscreen",'),
+        )
         self.assertIn('Cbuf_AddText( "vid_restart fast\\n" );', handler)
 
     def test_sdl_set_mode_attempts_window_reuse_before_destroy(self):

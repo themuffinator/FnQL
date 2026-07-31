@@ -63,8 +63,8 @@ bool OpenALLoader::Load() {
 		return true;
 	}
 
-#if defined(_WIN32)
 	std::vector<std::string> candidateLibraries;
+#if defined(_WIN32)
 	const char *binaryPath = Sys_Pwd();
 	if ( binaryPath != nullptr && binaryPath[0] != '\0' ) {
 		const std::string binaryDir = binaryPath;
@@ -85,53 +85,50 @@ bool OpenALLoader::Load() {
 	candidateLibraries.push_back( "soft_oal.dll" );
 	candidateLibraries.push_back( "OpenAL32.dll" );
 #elif defined(__APPLE__)
-	const char *candidateLibraries[] = {
-		"/System/Library/Frameworks/OpenAL.framework/OpenAL",
-		"OpenAL.framework/OpenAL",
-		"libopenal.1.dylib",
-		"libopenal.dylib",
-		nullptr
-	};
+	candidateLibraries.push_back( "/System/Library/Frameworks/OpenAL.framework/OpenAL" );
+	candidateLibraries.push_back( "OpenAL.framework/OpenAL" );
+	candidateLibraries.push_back( "libopenal.1.dylib" );
+	candidateLibraries.push_back( "libopenal.dylib" );
 #else
-	const char *candidateLibraries[] = { "libopenal.so.1", "libopenal.so", nullptr };
+	candidateLibraries.push_back( "libopenal.so.1" );
+	candidateLibraries.push_back( "libopenal.so" );
 #endif
 
-#if defined(_WIN32)
 	for ( const std::string &candidate : candidateLibraries ) {
 		handle_ = Sys_LoadLibrary( candidate.c_str() );
-		if ( handle_ != nullptr ) {
-			libraryName_ = candidate;
-			break;
+		if ( handle_ == nullptr ) {
+			continue;
 		}
-	}
-#else
-	for ( int i = 0; candidateLibraries[i] != nullptr; ++i ) {
-		handle_ = Sys_LoadLibrary( candidateLibraries[i] );
-		if ( handle_ != nullptr ) {
-			libraryName_ = candidateLibraries[i];
-			break;
-		}
-	}
-#endif
 
-	if ( handle_ == nullptr ) {
-		return false;
-	}
-
-	bool ok = true;
+		libraryName_ = candidate;
+		std::vector<const char *> missingSymbols;
 
 #define FNQL_LOAD_SYMBOL(name) \
-	name = reinterpret_cast<decltype(name)>( Sys_LoadFunction( handle_, #name ) ); \
-	ok = ok && ( name != nullptr );
-	FNQL_AL_SYMBOLS(FNQL_LOAD_SYMBOL)
-	FNQL_ALC_SYMBOLS(FNQL_LOAD_SYMBOL)
+		name = reinterpret_cast<decltype(name)>( Sys_LoadFunction( handle_, #name ) ); \
+		if ( name == nullptr ) { missingSymbols.push_back( #name ); }
+		FNQL_AL_SYMBOLS(FNQL_LOAD_SYMBOL)
+		FNQL_ALC_SYMBOLS(FNQL_LOAD_SYMBOL)
 #undef FNQL_LOAD_SYMBOL
 
-	if ( !ok ) {
+		if ( missingSymbols.empty() ) {
+			return true;
+		}
+
+		Com_Printf( S_COLOR_YELLOW
+			"WARNING: OpenAL runtime '%s' is missing %d required OpenAL 1.1 entry point%s:",
+			candidate.c_str(),
+			static_cast<int>( missingSymbols.size() ),
+			missingSymbols.size() == 1 ? "" : "s" );
+		for ( const char *symbol : missingSymbols ) {
+			Com_Printf( " %s", symbol );
+		}
+		Com_Printf( "\n" );
 		Unload();
 	}
 
-	return ok;
+	Com_Printf( S_COLOR_YELLOW
+		"WARNING: no usable OpenAL runtime was found; checked the executable directory and standard system library names\n" );
+	return false;
 }
 
 void OpenALLoader::Unload() {
@@ -1355,7 +1352,10 @@ bool OpenALDevice::CreateSource( ALuint &sourceOut ) {
 
 	loader_.alGetError();
 	loader_.alGenSources( 1, &sourceOut );
-	if ( loader_.alGetError() != AL_NO_ERROR || sourceOut == 0 ) {
+	const ALenum error = loader_.alGetError();
+	if ( error != AL_NO_ERROR || sourceOut == 0 ) {
+		Com_DPrintf( S_COLOR_YELLOW "WARNING: OpenAL source allocation failed (%s)\n",
+			ALErrorName( error ) );
 		sourceOut = 0;
 		return false;
 	}
@@ -2025,17 +2025,26 @@ bool OpenALDevice::Init() {
 	requestedDeviceName_ = ( s_alDevice != nullptr ) ? SafeString( s_alDevice->string ) : std::string();
 	usingDefaultFallback_ = false;
 
+	loader_.alcGetError( nullptr );
 	device_ = loader_.alcOpenDevice( requestedDeviceName_.empty() ? nullptr : requestedDeviceName_.c_str() );
+	ALCenum openError = loader_.alcGetError( nullptr );
 	if ( device_ == nullptr && !requestedDeviceName_.empty() ) {
-		Com_Printf( S_COLOR_YELLOW "WARNING: requested OpenAL device '%s' could not be opened; trying system default device\n",
-			requestedDeviceName_.c_str() );
+		Com_Printf( S_COLOR_YELLOW "WARNING: requested OpenAL device '%s' could not be opened (%s); trying system default device\n",
+			requestedDeviceName_.c_str(), ALCErrorName( openError ) );
+		loader_.alcGetError( nullptr );
 		device_ = loader_.alcOpenDevice( nullptr );
+		openError = loader_.alcGetError( nullptr );
 		usingDefaultFallback_ = ( device_ != nullptr );
 		if ( !usingDefaultFallback_ ) {
-			Com_Printf( S_COLOR_YELLOW "WARNING: system default OpenAL device could not be opened after requested-device failure\n" );
+			Com_Printf( S_COLOR_YELLOW "WARNING: system default OpenAL device could not be opened after requested-device failure (%s)\n",
+				ALCErrorName( openError ) );
 		}
 	}
 	if ( device_ == nullptr ) {
+		if ( requestedDeviceName_.empty() ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: system default OpenAL playback device could not be opened (%s)\n",
+				ALCErrorName( openError ) );
+		}
 		Shutdown();
 		return false;
 	}
@@ -2065,6 +2074,7 @@ bool OpenALDevice::Init() {
 	}
 
 	if ( !CreateSource( musicSource_ ) || !CreateSource( rawSource_ ) ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: OpenAL could not allocate the required music/raw stream sources\n" );
 		Shutdown();
 		return false;
 	}
@@ -2079,12 +2089,14 @@ bool OpenALDevice::Init() {
 	}
 
 	if ( allVoiceSources_.empty() ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: OpenAL could not allocate any gameplay voice sources\n" );
 		Shutdown();
 		return false;
 	}
 
 	bufferPool_ = new StreamBufferPool();
 	if ( !bufferPool_->Init( this, kInitialStreamBuffers ) ) {
+		Com_Printf( S_COLOR_YELLOW "WARNING: OpenAL could not allocate the required streaming buffers\n" );
 		Shutdown();
 		return false;
 	}

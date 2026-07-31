@@ -604,6 +604,61 @@ class CGameNativeBridgeSourceTests(unittest.TestCase):
         self.assertIn("Con_GetChatFieldPixelWidth()", notify)
         self.assertIn("Con_DrawInputText( &chatField", notify)
 
+    def test_console_chat_overlay_matches_retail_geometry_and_color(self) -> None:
+        cl_console = read_repo_file("code/client/cl_console.cpp")
+        notify = source_slice(
+            cl_console,
+            "static void Con_DrawNotify( void )",
+            "static void Con_DrawSolidConsole",
+        )
+
+        # Retail suppresses the chat overlay only behind a full-screen menu; a
+        # cgame key catcher does not hide a field that stays typable under it.
+        self.assertIn("Key_GetCatcher() & (KEYCATCH_UI | KEYCATCH_BROWSER)", notify)
+        self.assertNotIn("KEYCATCH_CGAME", notify)
+
+        # SCR_FillRect( 6, chatFieldY - 3, chatFieldPixelWidth - 12, 22 )
+        self.assertIn("SCR_FillRect( 6.0f, chatFieldY - 3.0f,", notify)
+        self.assertIn("chatFieldPixelWidth - 12.0f, 22.0f, con_chatBackgroundColor );", notify)
+
+        # Retail refreshes the character budget from cgame on every frame.
+        self.assertIn("chatField.widthInChars = Con_GetChatFieldWidthInChars( chat_team );", notify)
+
+        # The field is laid out from the console origin, not the prompt origin,
+        # and shares the prompt color rather than reverting to white.
+        self.assertIn(
+            "Con_DrawInputText( &chatField, con.xadjust + promptCells * console_char_width,",
+            notify,
+        )
+        self.assertIn("promptY, 1.0f, false, con_chatPromptColor );", notify)
+
+        # con_scale owns the drop-down console only; chat keeps the 12x24 cell.
+        self.assertIn("const Con_ScopedChatCell chatCell;", notify)
+        self.assertIn("class Con_ScopedChatCell {", cl_console)
+        self.assertIn(
+            "console_char_width = RoundToInt( RETAIL_CONSOLE_CHAR_WIDTH * factor );",
+            cl_console,
+        )
+        self.assertIn(
+            "console_char_height = RoundToInt( RETAIL_CONSOLE_CHAR_HEIGHT * factor );",
+            cl_console,
+        )
+
+    def test_chat_field_geometry_exports_use_the_retail_float_return(self) -> None:
+        vm = read_repo_file("code/qcommon/vm.c")
+        chat_y = source_slice(vm, "case CG_GET_CHAT_FIELD_Y:", "case CG_GET_CHAT_FIELD_WIDTH_IN_CHARS:")
+        width_in_chars = source_slice(
+            vm, "case CG_GET_CHAT_FIELD_WIDTH_IN_CHARS:", "case CG_SET_CLIENT_SPEAKING_STATE:"
+        )
+
+        # Retail cgamex86.dll returns these two in ST(0). Reading EAX instead
+        # yields an arbitrary Y and strands a value on the x87 stack.
+        self.assertEqual(chat_y.count("(intptr_t)((float (QDECL *)( void ))exportFunc)();"), 2)
+        self.assertNotIn("((int (QDECL *)( void ))exportFunc)();", chat_y)
+
+        # The character budget really is an int return.
+        self.assertIn("return ((int (QDECL *)( void ))exportFunc)();", width_in_chars)
+
     def test_cgame_keycatcher_preserves_retail_message_mode(self) -> None:
         cl_cgame = read_repo_file("code/client/cl_cgame.cpp")
         helper = source_slice(
