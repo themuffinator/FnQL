@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project ToolsVersion="15.0" InitialTargets="FnQLRejectUnsupportedPlatform" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <!-- Historical component projects remain useful as source manifests. Any
        build request must use the canonical dependency/build graph. -->
   <PropertyGroup>
@@ -16,8 +16,9 @@
     <NMakeBuildCommandLine>$(FnQLPython) "$(FnQLMesonDriver)" build --build-dir "$(FnQLMesonBuildDir)" --buildtype $(FnQLMesonBuildType) --platform $(Platform)</NMakeBuildCommandLine>
     <NMakeReBuildCommandLine>$(FnQLPython) "$(FnQLMesonDriver)" rebuild --build-dir "$(FnQLMesonBuildDir)" --buildtype $(FnQLMesonBuildType) --platform $(Platform)</NMakeReBuildCommandLine>
     <NMakeCleanCommandLine>$(FnQLPython) "$(FnQLMesonDriver)" clean --build-dir "$(FnQLMesonBuildDir)" --buildtype $(FnQLMesonBuildType) --platform $(Platform)</NMakeCleanCommandLine>
-    <NMakeOutput Condition="'$(Platform)'=='Win32'">$(FnQLMesonBuildDir)\fnql.exe</NMakeOutput>
-    <NMakeOutput Condition="'$(Platform)'=='x64'">$(FnQLMesonBuildDir)\fnql.x64.exe</NMakeOutput>
-    <NMakeOutput Condition="'$(Platform)'=='ARM64'">$(FnQLMesonBuildDir)\fnql.arm64.exe</NMakeOutput>
+    <NMakeOutput>$(FnQLMesonBuildDir)\fnql.exe</NMakeOutput>
   </PropertyGroup>
+  <Target Name="FnQLRejectUnsupportedPlatform" BeforeTargets="PrepareForBuild;PrepareForNMakeBuild;ClCompile;Link;Lib;NMakeCompileSelectedFiles" Condition="'$(Platform)'!='Win32' Or ('$(PlatformTarget)'!='' And '$(PlatformTarget)'!='x86')">
+    <Error Text="FnQL supports only the Win32 (32-bit x86) platform; select the Win32/x86 target in Configuration Manager." />
+  </Target>
 </Project>

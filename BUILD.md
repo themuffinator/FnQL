@@ -127,8 +127,8 @@ sibling through the `-WithSteam` helper path documented in
 Alternatively, open `code/win32/msvc2017/fnql.sln` and select a Win32
 Debug/Release configuration. Its maintained project delegates to Meson with
 strict warnings enabled and all renderer modules selected. Build directories
-are isolated below `meson/build/vs/`. x64 and ARM64 are outside FnQL's
-supported ABI.
+are isolated below `meson/build/vs/`. Only Win32 configurations are exposed;
+direct project invocations also reject x64 and ARM64 before compilation.
 
 ---
 

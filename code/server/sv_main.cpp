@@ -1041,7 +1041,9 @@ static void SV_ConnectionlessPacket( const netadr_t *from, msg_t *msg ) {
 			}
 			return;
 		}
-		Huff_Decompress( msg, 12 );
+		if ( !Huff_Decompress( msg, 12 ) ) {
+			return;
+		}
 	}
 
 	s = MSG_ReadStringLine( msg );

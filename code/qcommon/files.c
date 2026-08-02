@@ -31,6 +31,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "q_shared.h"
 #include "qcommon.h"
+#include "filesystem_write_bounds.h"
 #include "unzip.h"
 #include "quakelive_pk3_xor.h"
 
@@ -824,9 +825,11 @@ qboolean FS_AllowedExtension( const char *fileName, qboolean allowPk3s, const ch
 	int i, n;
 
 	e = strrchr( fileName, '.' );
+	if ( !e )
+		return qtrue;
 
 	// check for unix '.so.[0-9]' pattern
-	if ( e >= (fileName + 3) && *(e+1) >= '0' && *(e+1) <= '9' && *(e+2) == '\0' ) 
+	if ( e - fileName >= 3 && *(e+1) >= '0' && *(e+1) <= '9' && *(e+2) == '\0' )
 	{
 		if ( *(e-3) == '.' && (*(e-2) == 's' || *(e-2) == 'S') && (*(e-1) == 'o' || *(e-1) == 'O') )
 		{
@@ -837,9 +840,6 @@ qboolean FS_AllowedExtension( const char *fileName, qboolean allowPk3s, const ch
 			return qfalse;
 		}
 	}
-	if ( !e )
-		return qtrue;
-
 	e++; // skip '.'
 
 	if ( allowPk3s )
@@ -886,8 +886,12 @@ FS_Remove
 
 ===========
 */
-void FS_Remove( const char *osPath ) 
+static void FS_Remove( const char *osPath )
 {
+	if ( !osPath || !osPath[0] ) {
+		return;
+	}
+
 	FS_CheckFilenameIsNotAllowed( osPath, __func__, qtrue );
 
 	remove( osPath );
@@ -901,10 +905,26 @@ FS_HomeRemove
 */
 void FS_HomeRemove( const char *osPath ) 
 {
+	if ( !FS_WriteQpathIsValid( osPath ) ) {
+		return;
+	}
+
 	FS_CheckFilenameIsNotAllowed( osPath, __func__, qfalse );
 
 	remove( FS_BuildOSPath( fs_homepath->string,
 			fs_gamedir, osPath ) );
+}
+
+
+/* Remove a validated path relative to fs_homepath rather than fs_gamedir. */
+void FS_SV_HomeRemove( const char *osPath )
+{
+	if ( !FS_WriteQpathIsValid( osPath ) ) {
+		return;
+	}
+
+	FS_CheckFilenameIsNotAllowed( osPath, __func__, qtrue );
+	remove( FS_BuildOSPath( fs_homepath->string, osPath, NULL ) );
 }
 
 
@@ -1275,30 +1295,7 @@ so a future caller cannot accidentally escape the active Steam-user profile.
 ================
 */
 static qboolean FS_ProfileQpathIsValid( const char *qpath ) {
-	const char *component;
-	const char *separator;
-	size_t componentLength;
-
-	if ( !qpath || !qpath[ 0 ] ) {
-		return qfalse;
-	}
-
-	if ( qpath[ 0 ] == '/' || qpath[ 0 ] == '\\' || strchr( qpath, ':' ) ) {
-		return qfalse;
-	}
-
-	for ( component = qpath; *component; component = *separator ? separator + 1 : separator ) {
-		separator = component;
-		while ( *separator && *separator != '/' && *separator != '\\' ) {
-			separator++;
-		}
-		componentLength = (size_t)( separator - component );
-		if ( componentLength == 2 && component[ 0 ] == '.' && component[ 1 ] == '.' ) {
-			return qfalse;
-		}
-	}
-
-	return qtrue;
+	return FS_WriteQpathIsValid( qpath );
 }
 
 
@@ -1393,7 +1390,7 @@ fileHandle_t FS_SV_FOpenFileWrite( const char *filename ) {
 		Com_Error( ERR_FATAL, "Filesystem call made without initialization" );
 	}
 
-	if ( !*filename ) {
+	if ( !FS_WriteQpathIsValid( filename ) ) {
 		return FS_INVALID_HANDLE;
 	}
 
@@ -1525,6 +1522,11 @@ void FS_SV_Rename( const char *from, const char *to ) {
 	if ( !fs_searchpaths ) {
 		Com_Error( ERR_FATAL, "Filesystem call made without initialization" );
 	}
+	if ( !FS_WriteQpathIsValid( from ) || !FS_WriteQpathIsValid( to ) ) {
+		return;
+	}
+	FS_CheckFilenameIsNotAllowed( from, __func__, qtrue );
+	FS_CheckFilenameIsNotAllowed( to, __func__, qtrue );
 
 #ifndef DEDICATED
 	// don't let sound stutter
@@ -1559,6 +1561,11 @@ void FS_Rename( const char *from, const char *to ) {
 	if ( !fs_searchpaths ) {
 		Com_Error( ERR_FATAL, "Filesystem call made without initialization" );
 	}
+	if ( !FS_WriteQpathIsValid( from ) || !FS_WriteQpathIsValid( to ) ) {
+		return;
+	}
+	FS_CheckFilenameIsNotAllowed( from, __func__, qfalse );
+	FS_CheckFilenameIsNotAllowed( to, __func__, qfalse );
 
 #ifndef DEDICATED
 	// don't let sound stutter
@@ -1721,6 +1728,10 @@ FS_ResetReadOnlyAttribute
 */
 qboolean FS_ResetReadOnlyAttribute( const char *filename ) {
 	char *ospath;
+
+	if ( !FS_WriteQpathIsValid( filename ) ) {
+		return qfalse;
+	}
 	
 	ospath = FS_BuildOSPath( fs_homepath->string, fs_gamedir, filename );
 
@@ -1854,7 +1865,7 @@ fileHandle_t FS_FOpenFileWrite( const char *filename ) {
 		Com_Error( ERR_FATAL, "Filesystem call made without initialization" );
 	}
 
-	if ( !filename || !*filename ) {
+	if ( !FS_WriteQpathIsValid( filename ) ) {
 		return FS_INVALID_HANDLE;
 	}
 
@@ -1906,7 +1917,7 @@ fileHandle_t FS_FOpenFileAppend( const char *filename ) {
 		Com_Error( ERR_FATAL, "Filesystem call made without initialization" );
 	}
 
-	if ( !*filename ) {
+	if ( !FS_WriteQpathIsValid( filename ) ) {
 		return FS_INVALID_HANDLE;
 	}
 
@@ -2543,7 +2554,7 @@ Properly handles partial writes
 */
 int FS_Write( const void *buffer, int len, fileHandle_t h ) {
 	int		block, remaining;
-	int		written;
+	size_t	written;
 	byte	*buf;
 	int		tries;
 	FILE	*f;
@@ -2552,11 +2563,17 @@ int FS_Write( const void *buffer, int len, fileHandle_t h ) {
 		Com_Error( ERR_FATAL, "Filesystem call made without initialization" );
 	}
 
-	//if ( h <= 0 || h >= MAX_FILE_HANDLES ) {
-	//	return 0;
-	//}
+	if ( !FS_WriteRequestIsValid( buffer, len, h ) ) {
+		return 0;
+	}
+	if ( len == 0 ) {
+		return 0;
+	}
+	if ( fsh[h].zipFile || !fsh[h].handleFiles.file.o ) {
+		return 0;
+	}
 
-	f = FS_FileForHandle(h);
+	f = fsh[h].handleFiles.file.o;
 	buf = (byte *)buffer;
 
 	remaining = len;
@@ -2573,12 +2590,7 @@ int FS_Write( const void *buffer, int len, fileHandle_t h ) {
 			}
 		}
 
-		if (written == -1) {
-			Com_Printf( "FS_Write: -1 bytes written\n" );
-			return 0;
-		}
-
-		remaining -= written;
+		remaining -= (int)written;
 		buf += written;
 	}
 	if ( fsh[h].handleSync ) {
@@ -7474,7 +7486,7 @@ int FS_VM_ReadFile( void *buffer, int len, fileHandle_t f, handleOwner_t owner )
 
 void FS_VM_WriteFile( void *buffer, int len, fileHandle_t f, handleOwner_t owner ) {
 
-	if ( f <= 0 || f >= MAX_FILE_HANDLES )
+	if ( !FS_WriteRequestIsValid( buffer, len, f ) )
 		return;
 
 	if ( fsh[f].owner != owner || !fsh[f].handleFiles.file.v )
@@ -7564,6 +7576,9 @@ fileHandle_t FS_PipeOpenWrite( const char *cmd, const char *filename ) {
 
 	if ( !fs_searchpaths ) {
 		Com_Error( ERR_FATAL, "Filesystem call made without initialization" );
+	}
+	if ( !cmd || !cmd[0] || !FS_WriteQpathIsValid( filename ) ) {
+		return FS_INVALID_HANDLE;
 	}
 
 	ospath = FS_BuildOSPath( fs_homepath->string, fs_gamedir, filename );

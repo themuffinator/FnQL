@@ -13,7 +13,9 @@ class VisualStudioMesonBridgeTests(unittest.TestCase):
         self.assertNotIn('"libjpeg",', solution)
         self.assertNotIn('"libogg",', solution)
         self.assertNotIn('"libvorbis",', solution)
-        self.assertIn("Debug|Win64.Build.0 = Debug|x64", solution)
+        self.assertIn("Debug|Win32.Build.0 = Debug|Win32", solution)
+        self.assertNotIn("Win64", solution)
+        self.assertNotIn("ARM64", solution)
 
     def test_bridge_uses_canonical_strict_build(self):
         project = (ROOT / "code/win32/msvc2017/fnql-meson.vcxproj").read_text(
@@ -35,8 +37,46 @@ class VisualStudioMesonBridgeTests(unittest.TestCase):
         self.assertIn("SUPPORTED_RENDERERS = DEFAULT_RENDERERS", driver)
         self.assertIn('f"-Drenderers={\',\'.join(renderers)}"', driver)
         self.assertIn('os.environ.get("FNQL_MESON_RENDERERS"', driver)
+        self.assertIn('"Win32": "x86"', driver)
+        self.assertNotIn('"x64":', driver)
+        self.assertNotIn('"ARM64":', driver)
         self.assertNotIn("code/libjpeg", driver)
         self.assertNotIn("code/libogg", driver)
+
+    def test_every_visual_studio_build_surface_is_win32_only(self):
+        modern = ROOT / "code/win32/msvc2017"
+        bridge = (modern / "fnql-meson.vcxproj").read_text(encoding="utf-8-sig")
+        legacy_props = (modern / "fnql-meson-legacy.props").read_text(
+            encoding="utf-8"
+        )
+
+        for project in modern.glob("*.vcxproj"):
+            text = project.read_text(encoding="utf-8-sig")
+            self.assertNotIn('ProjectConfiguration Include="Debug|x64"', text, project)
+            self.assertNotIn('ProjectConfiguration Include="Release|x64"', text, project)
+            self.assertNotIn('ProjectConfiguration Include="Debug|ARM64"', text, project)
+            self.assertNotIn('ProjectConfiguration Include="Release|ARM64"', text, project)
+
+            if project.name != "fnql-meson.vcxproj":
+                self.assertIn('Import Project="fnql-meson-legacy.props"', text, project)
+
+        for enforcement in (bridge, legacy_props):
+            self.assertIn('InitialTargets="FnQLRejectUnsupportedPlatform"', enforcement)
+            self.assertIn('Name="FnQLRejectUnsupportedPlatform"', enforcement)
+            self.assertIn(
+                'BeforeTargets="PrepareForBuild;PrepareForNMakeBuild;ClCompile;Link;Lib;NMakeCompileSelectedFiles"',
+                enforcement,
+            )
+            self.assertIn("'$(Platform)'!='Win32'", enforcement)
+            self.assertIn("'$(PlatformTarget)'!='x86'", enforcement)
+            self.assertIn("FnQL supports only the Win32 (32-bit x86) platform", enforcement)
+
+        legacy = ROOT / "code/win32/msvc2005"
+        self.assertNotIn("Win64", (legacy / "fnql.sln").read_text(encoding="utf-8"))
+        for project in legacy.glob("*.vcproj"):
+            text = project.read_text(encoding="utf-8")
+            self.assertNotIn('Name="x64"', text, project)
+            self.assertNotIn('|x64"', text, project)
 
     def test_component_manifests_delegate_without_stale_vendor_projects(self):
         project_dir = ROOT / "code/win32/msvc2017"

@@ -12,6 +12,35 @@ string(REGEX REPLACE "^#define FNQL_VERSION_STRING \"([^\"]+)\"$" "\\1" FNQL_VER
 
 PROJECT(FnQL VERSION ${FNQL_VERSION_STRING} LANGUAGES C CXX)
 
+# Retail Quake Live's native modules and WebUI are 32-bit x86 ABI boundaries.
+# Probe compiler-defined target macros as well as pointer width so a misleading
+# host processor string cannot allow an unsupported artifact through. Use a
+# direct try_compile rather than CheckCSourceCompiles: CMAKE_REQUIRED_FLAGS are
+# check-only flags and must not be able to select a different architecture from
+# the flags inherited by real FnQL targets. The variable remains untouched for
+# later feature checks, while try_compile still inherits the configured compiler,
+# toolchain file, sysroot, and normal C/C++ flags used by production targets.
+SET(FNQL_X86_TARGET_PROBE_SOURCE
+	"${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/fnql_x86_target_probe.c")
+FILE(WRITE "${FNQL_X86_TARGET_PROBE_SOURCE}" [=[
+#if !defined(_M_IX86) && !defined(__i386__)
+#error FnQL requires an x86 target
+#endif
+typedef char fnql_pointer_width_must_be_32_bits[(sizeof(void *) == 4) ? 1 : -1];
+int main(void) { return 0; }
+]=])
+UNSET(FNQL_TARGET_IS_32BIT_X86 CACHE)
+UNSET(FNQL_TARGET_IS_32BIT_X86)
+TRY_COMPILE(FNQL_TARGET_IS_32BIT_X86
+	"${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/fnql_x86_target_probe"
+	"${FNQL_X86_TARGET_PROBE_SOURCE}"
+	OUTPUT_VARIABLE FNQL_X86_TARGET_PROBE_OUTPUT)
+IF(NOT FNQL_TARGET_IS_32BIT_X86)
+	MESSAGE(FATAL_ERROR
+		"FnQL supports only 32-bit x86 targets. Select Win32 on Windows or "
+		"configure an i686 toolchain (for example, -m32) on other platforms.")
+ENDIF()
+
 SET(FNQL_MACOS_SHORT_VERSION
 	"${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}")
 IF(PROJECT_VERSION_TWEAK GREATER 0)
@@ -109,62 +138,12 @@ list(APPEND QCOMMON_SRCS
 	code/platform/fnql_workshop.cpp)
 # exclude platform-dependent QVM bytecode compilers
 list(FILTER QCOMMON_SRCS EXCLUDE REGEX ".*vm_(aarch64|armv7l|powerpc|x86)\\.c$")
-# add platform-dependent QVM bytecode compilers
-STRING(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" FNQL_SYSTEM_PROCESSOR)
-IF(FNQL_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|x64|x86|i[3-6]86)$")
-	# CMAKE_SYSTEM_PROCESSOR commonly reports x86_64 on Linux and may describe
-	# the host rather than a 32-bit target. The pointer size is authoritative for
-	# binary/module naming once CMake has selected the target toolchain.
-	IF(CMAKE_SIZEOF_VOID_P EQUAL 8)
-		IF(WIN32)
-			SET(BINEXT .x64)
-		ELSE()
-			SET(BINEXT .x86_64)
-		ENDIF()
-		SET(RENDEXT _x86_64)
-	ELSE()
-		#SET(BINEXT .x86)
-		SET(RENDEXT _x86)
-	ENDIF()
-	list(APPEND QCOMMON_SRCS code/qcommon/vm_x86.c)
-ELSEIF(FNQL_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
-	SET(BINEXT .aarch64)
-	SET(RENDEXT _aarch64)
-	list(APPEND QCOMMON_SRCS code/qcommon/vm_aarch64.c)
-ELSEIF(FNQL_SYSTEM_PROCESSOR MATCHES "^arm")
-	SET(BINEXT .arm)
-	SET(RENDEXT _arm)
-	list(APPEND QCOMMON_SRCS code/qcommon/vm_armv7l.c)
-ELSEIF(FNQL_SYSTEM_PROCESSOR MATCHES "^(ppc64le|ppc64)$")
-	IF(FNQL_SYSTEM_PROCESSOR STREQUAL "ppc64le")
-		SET(BINEXT .ppc64le)
-		SET(RENDEXT _ppc64le)
-		list(APPEND QCOMMON_SRCS code/qcommon/vm_powerpc.c)
-	ELSE()
-		SET(BINEXT .ppc64)
-		SET(RENDEXT _ppc64)
-		list(APPEND QCOMMON_SRCS code/qcommon/vm_powerpc.c)
-	ENDIF()
-ELSE()
-	SET(NO_VM_COMPILED ON)
-ENDIF()
-
+# The target probe above makes these ABI-sensitive names and sources fixed.
+SET(BINEXT "")
+SET(RENDEXT _x86)
+list(APPEND QCOMMON_SRCS code/qcommon/vm_x86.c)
 SET(PLATFORM_ASM_SRCS)
-IF(MSVC AND NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
-	enable_language(ASM_MASM)
-	list(APPEND PLATFORM_ASM_SRCS code/asm/common_x64.asm)
-ENDIF()
-
 SET(CLIENT_ASM_SRCS)
-IF(NOT MSVC AND CMAKE_SIZEOF_VOID_P EQUAL 8 AND
-		FNQL_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|x64)$")
-	enable_language(ASM)
-	list(APPEND CLIENT_ASM_SRCS code/asm/snd_mix_x86_64_preprocessed.S)
-	IF(NOT APPLE)
-		set_source_files_properties(code/asm/snd_mix_x86_64_preprocessed.S
-			PROPERTIES COMPILE_DEFINITIONS ELF)
-	ENDIF()
-ENDIF()
 
 # botlib
 AUX_SOURCE_DIRECTORY(code/botlib BOTLIB_SRCS)
@@ -446,6 +425,38 @@ IF(FNQL_GLX_LOGIC_TESTS)
 ENDIF()
 
 enable_testing()
+ADD_EXECUTABLE(fnql_bmp_loader_tests
+	tests/bmp_loader_tests.c
+	code/renderercommon/tr_image_bmp.c)
+target_include_directories(fnql_bmp_loader_tests PRIVATE
+	code/qcommon
+	code/renderercommon)
+add_test(NAME fnql_bmp_loader COMMAND fnql_bmp_loader_tests)
+
+ADD_EXECUTABLE(fnql_huffman_decoder_tests
+	tests/huffman_decoder_tests.c
+	code/qcommon/huffman.c)
+target_include_directories(fnql_huffman_decoder_tests PRIVATE code/qcommon)
+add_test(NAME fnql_huffman_decoder COMMAND fnql_huffman_decoder_tests)
+
+ADD_EXECUTABLE(fnql_qvm_header_tests tests/qvm_header_tests.c)
+target_include_directories(fnql_qvm_header_tests PRIVATE code/qcommon)
+add_test(NAME fnql_qvm_header_bounds COMMAND fnql_qvm_header_tests)
+
+ADD_EXECUTABLE(fnql_filesystem_write_bounds_tests
+	tests/filesystem_write_bounds_tests.c)
+target_include_directories(fnql_filesystem_write_bounds_tests PRIVATE code/qcommon)
+add_test(NAME fnql_filesystem_write_bounds COMMAND fnql_filesystem_write_bounds_tests)
+
+ADD_EXECUTABLE(fnql_png_loader_tests
+	tests/png_loader_tests.c
+	code/renderercommon/tr_image_png.c
+	code/qcommon/puff.c)
+target_include_directories(fnql_png_loader_tests PRIVATE
+	code/qcommon
+	code/renderercommon)
+add_test(NAME fnql_png_loader COMMAND fnql_png_loader_tests)
+
 ADD_EXECUTABLE(fnql_window_placement_tests tests/window_placement_tests.cpp)
 target_compile_features(fnql_window_placement_tests PRIVATE cxx_std_17)
 add_test(NAME fnql_window_placement COMMAND fnql_window_placement_tests)
@@ -803,17 +814,7 @@ IF(WIN32)
 	TARGET_LINK_LIBRARIES(${CNAME}${BINEXT} winmm comctl32 ws2_32)
 	TARGET_LINK_LIBRARIES(${DNAME}${BINEXT} winmm comctl32 ws2_32)
 
-	if(CMAKE_GENERATOR_PLATFORM STREQUAL "Win32")
-		SET(FNQL_OPENAL_DLL "${CMAKE_CURRENT_SOURCE_DIR}/code/openal/windows/x86/OpenAL32.dll")
-	elseif(CMAKE_GENERATOR_PLATFORM STREQUAL "x64")
-		SET(FNQL_OPENAL_DLL "${CMAKE_CURRENT_SOURCE_DIR}/code/openal/windows/x64/OpenAL32.dll")
-	elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|arm64|AARCH64|aarch64")
-		unset(FNQL_OPENAL_DLL)
-	elseif(CMAKE_SIZEOF_VOID_P EQUAL 4)
-		SET(FNQL_OPENAL_DLL "${CMAKE_CURRENT_SOURCE_DIR}/code/openal/windows/x86/OpenAL32.dll")
-	else()
-		SET(FNQL_OPENAL_DLL "${CMAKE_CURRENT_SOURCE_DIR}/code/openal/windows/x64/OpenAL32.dll")
-	endif()
+	SET(FNQL_OPENAL_DLL "${CMAKE_CURRENT_SOURCE_DIR}/code/openal/windows/x86/OpenAL32.dll")
 
 	if(DEFINED FNQL_OPENAL_DLL AND EXISTS "${FNQL_OPENAL_DLL}")
 		add_custom_command(

@@ -745,7 +745,7 @@ void Com_DL_Cleanup( download_t *dl )
 	dl->Ext[0] = '\0';
 	if ( dl->TempName[0] )
 	{
-		FS_Remove( dl->TempName );
+		FS_SV_HomeRemove( dl->TempName );
 	}
 	dl->TempName[0] = '\0';
 	dl->progress[0] = '\0';
@@ -1168,7 +1168,7 @@ qboolean Com_DL_Perform( download_t *dl )
 			Com_sprintf( name.data(), static_cast<int>( name.size() ), "%s%c%s.%08x%s", dl->gameDir, PATH_SEP, dl->Name, n, dl->Ext );
 
 			if ( FS_SV_FileExists( name.data() ) )
-				FS_Remove( name.data() );
+				FS_SV_HomeRemove( name.data() );
 
 			FS_SV_Rename( dl->TempName, name.data() );
 		}
@@ -1199,7 +1199,7 @@ qboolean Com_DL_Perform( download_t *dl )
 			dl->func.easy_strerror( msg->data.result ), code );
 		Q_strncpyz( name.data(), dl->TempName, static_cast<int>( name.size() ) );
 		Com_DL_Cleanup( dl );
-		FS_Remove( name.data() );
+		FS_SV_HomeRemove( name.data() );
 		if ( autoDownload )
 		{
 			if ( cls.state == CA_CONNECTED )

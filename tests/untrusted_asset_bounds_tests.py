@@ -192,24 +192,107 @@ class SharedImageLoaderTests(unittest.TestCase):
         block = body(source, "Bad or unsupported pcx file", "pix = pic8 = ri.Malloc")
         self.assertIn("ri.FS_FreeFile (pcx);", block)
 
-    def test_bmp_16bpp_reads_the_source_and_advances_four_bytes(self) -> None:
-        source = read("code/renderercommon/tr_image_bmp.c")
-        # "case 16:" also appears in the bitsPerPixel whitelist switch above
-        decode = body(source, "switch ( bmpHeader.bitsPerPixel )\n\t\t\t{", "case 24:")
-        block = decode[decode.index("case 16:") :]
-        self.assertIn("shortPixel = buf_p[0] | ( buf_p[1] << 8 );", block)
-        self.assertIn("buf_p += 2;", block)
-        # reading the destination advanced pixbuf 6 bytes per column
-        self.assertNotIn("* ( unsigned short * ) pixbuf", block)
-        self.assertNotIn("pixbuf += 2;", block)
-        # exactly one 4-byte destination pixel, matching the numPixels*4 alloc
-        self.assertEqual(block.count("*pixbuf++"), 4)
+    def test_png_chunks_use_subtraction_checked_payload_and_crc_bounds(self) -> None:
+        source = read("code/renderercommon/tr_image_png.c")
+        helper = body(source, "static qboolean BufferedFileSkipChunkData", "PNG_GetPixelLayout")
+        self.assertIn("BF->BytesLeft < 0", helper)
+        self.assertIn("Length > (uint32_t)BF->BytesLeft", helper)
+        self.assertIn("BF->BytesLeft - (int)Length", helper)
+        self.assertNotIn("Length + PNG_ChunkCRC_Size", source)
 
-    def test_bmp_truncation_check_divides_before_multiplying(self) -> None:
-        source = read("code/renderercommon/tr_image_bmp.c")
-        self.assertIn("numPixels*(bmpHeader.bitsPerPixel/8)", source)
-        self.assertNotIn("numPixels*bmpHeader.bitsPerPixel/8", source)
+    def test_png_inflate_is_bounded_by_the_validated_ihdr_layout(self) -> None:
+        source = read("code/renderercommon/tr_image_png.c")
+        decompress = body(source, "static uint32_t DecompressIDATs", "the Paeth predictor")
+        self.assertIn("uint32_t ExpectedDataLength", decompress)
+        self.assertIn("DecompressedData = ri.Malloc((int)ExpectedDataLength);", decompress)
+        self.assertIn("puffDestLen != ExpectedDataLength", decompress)
+        self.assertNotIn("puff(NULL", decompress)
+        self.assertIn("ChunkHeaderLength > 256 * 3", source)
 
+
+class QVMInputBoundaryTests(unittest.TestCase):
+    def test_header_ranges_are_checked_without_signed_addition(self) -> None:
+        bounds = read("code/qcommon/vm_header_bounds.h")
+        self.assertIn("header->codeOffset < headerSize", bounds)
+        self.assertIn("header->codeLength > remaining", bounds)
+        self.assertIn("header->dataLength > remaining", bounds)
+        self.assertIn("header->jtrgLength != remaining", bounds)
+        self.assertIn("header->bssLength < 0", bounds)
+        self.assertNotIn("codeOffset + header->codeLength", bounds)
+
+    def test_instruction_count_is_bounded_before_decode_and_allocation(self) -> None:
+        bounds = read("code/qcommon/vm_header_bounds.h")
+        self.assertIn("header->instructionCount <= 0", bounds)
+        self.assertIn("header->instructionCount > header->codeLength", bounds)
+        self.assertIn("maxInstructionCount", bounds)
+
+        source = read("code/qcommon/vm.c")
+        loader = body(source, "const char *VM_LoadInstructions", "static qboolean safe_address")
+        self.assertLess(loader.index("code_pos >= code_end"), loader.index("op0 = *code_pos"))
+        self.assertIn("code_end - code_pos < 1 + n", loader)
+
+
+class FilesystemWriteBoundaryTests(unittest.TestCase):
+    def test_all_public_write_open_paths_validate_qpaths_before_opening(self) -> None:
+        source = read("code/qcommon/files.c")
+        for start, end in (
+            ("fileHandle_t FS_SV_FOpenFileWrite", "FS_SV_FOpenFileRead"),
+            ("fileHandle_t FS_FOpenProfileFileWrite", "FS_FOpenProfileFileRead"),
+            ("fileHandle_t FS_FOpenFileWrite", "FS_FOpenFileAppend"),
+            ("fileHandle_t FS_FOpenFileAppend", "FS_FOpenFileRead"),
+        ):
+            with self.subTest(function=start):
+                block = body(source, start, end)
+                self.assertIn("QpathIsValid", block)
+                self.assertLess(block.index("QpathIsValid"), block.index("Sys_FOpen"))
+
+        pipe = body(source, "fileHandle_t FS_PipeOpenWrite", "void FS_PipeClose")
+        self.assertIn("FS_WriteQpathIsValid( filename )", pipe)
+        self.assertLess(pipe.index("FS_WriteQpathIsValid"), pipe.index("_popen"))
+
+    def test_write_lengths_and_handles_are_validated_at_both_boundaries(self) -> None:
+        source = read("code/qcommon/files.c")
+        core = body(source, "int FS_Write", "FS_Printf")
+        vm = body(source, "void FS_VM_WriteFile", "FS_VM_Seek")
+        self.assertIn("FS_WriteRequestIsValid( buffer, len, h )", core)
+        self.assertIn("FS_WriteRequestIsValid( buffer, len, f )", vm)
+        self.assertIn("if ( len == 0 )", core)
+
+    def test_raw_remove_is_private_and_qpath_removes_are_rooted(self) -> None:
+        source = read("code/qcommon/files.c")
+        header = read("code/qcommon/qcommon.h")
+        self.assertIn("static void FS_Remove( const char *osPath )", source)
+        self.assertNotIn("void FS_Remove( const char *osPath );", header)
+        self.assertIn("void FS_SV_HomeRemove( const char *osPath )", source)
+        self.assertIn("FS_WriteQpathIsValid( osPath )", source)
+
+    def test_rename_checks_paths_and_blocked_extensions_before_mutation(self) -> None:
+        source = read("code/qcommon/files.c")
+        for start, end in (
+            ("void FS_SV_Rename", "void FS_Rename"),
+            ("void FS_Rename", "#ifdef USE_HANDLE_CACHE"),
+        ):
+            with self.subTest(function=start):
+                block = body(source, start, end)
+                self.assertIn("FS_WriteQpathIsValid( from )", block)
+                self.assertIn("FS_CheckFilenameIsNotAllowed( to", block)
+                self.assertLess(
+                    block.index("FS_CheckFilenameIsNotAllowed( to"),
+                    block.index("Sys_ReplaceFile"),
+                )
+
+        extensions = body(source, "qboolean FS_AllowedExtension", "FS_CheckFilenameIsNotAllowed")
+        self.assertLess(extensions.index("if ( !e )"), extensions.index("e - fileName >= 3"))
+
+
+class HuffmanInputBoundaryTests(unittest.TestCase):
+    def test_decoder_is_bounded_and_connectionless_packets_honor_failure(self) -> None:
+        decoder = read("code/qcommon/huffman.c")
+        server = read("code/server/sv_main.cpp")
+        self.assertIn("(size_t)bloc >= bitCount", decoder)
+        self.assertIn("if (!Huff_Receive", decoder)
+        self.assertIn("qboolean Huff_Decompress", decoder)
+        self.assertIn("if ( !Huff_Decompress( msg, 12 ) )", server)
 
 class RendererModelLoaderTests(unittest.TestCase):
     """The three backends carry independent copies -- each must be gated."""

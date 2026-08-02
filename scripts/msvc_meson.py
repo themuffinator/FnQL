@@ -16,8 +16,6 @@ from pathlib import Path
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 PLATFORM_CPU_FAMILIES = {
     "Win32": "x86",
-    "x64": "x86_64",
-    "ARM64": "aarch64",
 }
 DEFAULT_RENDERERS = ("glx", "vk", "rtx")
 SUPPORTED_RENDERERS = DEFAULT_RENDERERS

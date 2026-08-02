@@ -11,6 +11,8 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -288,6 +290,59 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertTrue(
             set(release.LINUX_RELEASE_RENDERER_MODULES).issubset(archived_names)
         )
+
+    def test_release_proof_runtime_identities_come_from_exact_archive_members(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stage_root = root / "stage"
+            stage_root.mkdir()
+            populate_linux_release_stage(stage_root)
+            archive_path = root / "fnql-linux-x86.tar.gz"
+            release.write_release_archive(stage_root, archive_path)
+
+            identities = release.release_archive_runtime_identities(
+                archive_path,
+                "linux-x86",
+            )
+
+            self.assertEqual(identities["client"]["member"], "fnql")
+            self.assertEqual(identities["glxModule"]["member"], "fnql_glx_x86.so")
+            self.assertEqual(
+                identities["client"]["sha256"],
+                hashlib.sha256((stage_root / "fnql").read_bytes()).hexdigest(),
+            )
+            self.assertEqual(
+                identities["glxModule"]["sha256"],
+                hashlib.sha256((stage_root / "fnql_glx_x86.so").read_bytes()).hexdigest(),
+            )
+
+            windows_stage = root / "windows-stage"
+            windows_stage.mkdir()
+            windows_client = make_pe(dll=False)
+            windows_glx = make_pe(dll=True)
+            (windows_stage / "fnql.exe").write_bytes(windows_client)
+            (windows_stage / "fnql_glx_x86.dll").write_bytes(windows_glx)
+            windows_archive = root / "fnql-windows-x86.zip"
+            release.write_release_archive(windows_stage, windows_archive)
+
+            for variant in ("windows-mingw-x86", "windows-msvc-x86"):
+                windows_identities = release.release_archive_runtime_identities(
+                    windows_archive,
+                    variant,
+                )
+                self.assertEqual(windows_identities["client"]["member"], "fnql.exe")
+                self.assertEqual(
+                    windows_identities["glxModule"]["member"],
+                    "fnql_glx_x86.dll",
+                )
+                self.assertEqual(
+                    windows_identities["client"]["sha256"],
+                    hashlib.sha256(windows_client).hexdigest(),
+                )
+                self.assertEqual(
+                    windows_identities["glxModule"]["sha256"],
+                    hashlib.sha256(windows_glx).hexdigest(),
+                )
 
     def test_linux_release_tarball_rejects_nested_renderer_modules(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -960,11 +1015,12 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertNotIn("  macos:", workflow)
         self.assertNotIn("  macos-release-sign:", workflow)
         self.assertIn(
-            "needs: [prepare, windows-msys32, windows-msvc, source-validation, ubuntu-x86]",
+            "needs: [prepare, windows-msys32, windows-msvc, source-validation, "
+            "linux-x86-regression, ubuntu-x86]",
             workflow,
         )
         self.assertIn(
-            "needs: [prepare, push-build-validation]",
+            "needs: [prepare, push-build-validation, glx-release-proof]",
             workflow,
         )
         self.assertIn("needs.push-build-validation.result == 'success'", workflow)
@@ -974,6 +1030,111 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertNotIn("allow-unsigned-macos", publish_job)
         self.assertNotIn("arch: [x86, x86_64]", workflow)
         self.assertNotIn("arch: [arm64, x86, x64]", workflow)
+
+    def test_release_workflow_runs_complete_regressions_and_requires_reviewed_proof(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(
+            workflow.count("meson test -C meson/build-x86 --print-errorlogs")
+            + workflow.count("meson test -C meson\\build-x86 --print-errorlogs"),
+            2,
+        )
+        self.assertNotIn("meson test -C meson/build-x86 fnql_factory_rotation", workflow)
+        self.assertNotIn("meson test -C meson\\build-x86 fnql_factory_rotation", workflow)
+        self.assertIn("run: python -m pytest", workflow)
+        self.assertIn("linux-x86-regression:", workflow)
+        self.assertIn(
+            "meson test -C .tmp/meson-linux-release-tests --print-errorlogs",
+            workflow,
+        )
+        self.assertIn(
+            "source-validation, linux-x86-regression, ubuntu-x86",
+            workflow,
+        )
+        self.assertIn("glx-release-proof:", workflow)
+        self.assertIn("proof_variant: windows-mingw-x86", workflow)
+        self.assertIn("proof_variant: windows-msvc-x86", workflow)
+        self.assertIn("proof_variant: linux-x86", workflow)
+        proof_job = workflow.split("  glx-release-proof:", 1)[1].split("  publish:", 1)[0]
+        self.assertIn("    permissions:\n      actions: read\n      contents: read", proof_job)
+        self.assertIn("Prepare clean proof workspace", proof_job)
+        self.assertIn('Path(".tmp") / "glx-runtime-artifact" / variant', proof_job)
+        self.assertIn('/ "glx-release-proof"', proof_job)
+        self.assertIn("shutil.rmtree(stale_root)", proof_job)
+        self.assertIn("Download exact release runtime", workflow)
+        self.assertIn('for gate in ("rc-smoke", "rc-parity", "rc-proof"):', workflow)
+        self.assertIn("needs.glx-release-proof.result == 'success'", workflow)
+        self.assertIn("glx-release-proof-windows-mingw-x86", workflow)
+        self.assertIn("glx-release-proof-windows-msvc-x86", workflow)
+        self.assertIn("glx-release-proof-linux-x86", workflow)
+        self.assertIn("--require-glx-proof --glx-proof-root .tmp/glx-release-proof", workflow)
+        self.assertIn("--glx-proof-build-run-id", workflow)
+        self.assertIn("--glx-proof-build-run-attempt", workflow)
+
+    def test_public_manual_proof_flag_preserves_local_snapshot_exemption(self) -> None:
+        local_args = SimpleNamespace(
+            channel="manual",
+            glx_proof_root=None,
+            require_glx_proof=False,
+        )
+        local_proof = release.resolve_glx_runtime_proof(local_args)
+        self.assertFalse(local_proof["required"])
+        self.assertEqual(local_proof["status"], "not-required")
+
+        public_args = SimpleNamespace(
+            channel="manual",
+            glx_proof_root=None,
+            require_glx_proof=True,
+        )
+        with self.assertRaisesRegex(ValueError, "public and tagged releases"):
+            release.resolve_glx_runtime_proof(public_args)
+
+        tagged_args = SimpleNamespace(
+            channel="release",
+            glx_proof_root=None,
+            require_glx_proof=False,
+        )
+        with self.assertRaisesRegex(ValueError, "public and tagged releases"):
+            release.resolve_glx_runtime_proof(tagged_args)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tagged_args.glx_proof_root = Path(tmp)
+            with self.assertRaisesRegex(ValueError, "numeric --glx-proof-build-run-id"):
+                release.resolve_glx_runtime_proof(tagged_args, "a" * 40, {})
+
+    def test_public_manual_proof_flag_revalidates_supplied_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            proof_root = Path(tmp)
+            args = SimpleNamespace(
+                channel="manual",
+                glx_proof_root=proof_root,
+                require_glx_proof=True,
+                glx_proof_build_run_id="1234",
+                glx_proof_build_run_attempt="1",
+            )
+            runtime_identities = {"linux-x86": {"client": {}, "glxModule": {}}}
+            with mock.patch.object(
+                release,
+                "validate_release_proof_root",
+                return_value={"status": "passed", "failures": []},
+            ) as validate:
+                proof = release.resolve_glx_runtime_proof(
+                    args,
+                    "a" * 40,
+                    runtime_identities,
+                )
+
+        validate.assert_called_once_with(
+            proof_root,
+            expected_source_commit="a" * 40,
+            expected_build_run_id="1234",
+            expected_build_run_attempt="1",
+            expected_runtime_identities=runtime_identities,
+        )
+        self.assertTrue(proof["required"])
+        self.assertEqual(proof["status"], "passed")
 
     def test_release_cli_parser_rejects_negative_build_numbers(self) -> None:
         with self.assertRaisesRegex(Exception, "non-negative"):

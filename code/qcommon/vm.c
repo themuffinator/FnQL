@@ -35,6 +35,7 @@ and one exported function: Perform
 */
 
 #include "vm_local.h"
+#include "vm_header_bounds.h"
 #include "../game/g_public.h"
 #include "../ui/ui_public.h"
 #include "../renderercommon/tr_types.h"
@@ -778,72 +779,76 @@ VM_ValidateHeader
 static char *VM_ValidateHeader( vmHeader_t *header, int fileSize )
 {
 	static char errMsg[128];
+	vmHeaderValidationResult_t validation;
+	int magic;
 	int n;
 
 	// truncated
-	if ( fileSize < ( sizeof( vmHeader_t ) - sizeof( int32_t ) ) ) {
+	if ( !header || fileSize < (int)( sizeof( vmHeader_t ) - sizeof( int32_t ) ) ) {
 		sprintf( errMsg, "truncated image header (%i bytes long)", fileSize );
 		return errMsg;
 	}
+
+	magic = LittleLong( header->vmMagic );
 
 	// bad magic
-	if ( LittleLong( header->vmMagic ) != VM_MAGIC && LittleLong( header->vmMagic ) != VM_MAGIC_VER2 ) {
-		sprintf( errMsg, "bad file magic %08x", LittleLong( header->vmMagic ) );
+	if ( magic != VM_MAGIC && magic != VM_MAGIC_VER2 ) {
+		sprintf( errMsg, "bad file magic %08x", magic );
 		return errMsg;
 	}
 
-	// truncated
-	if ( fileSize < sizeof( vmHeader_t ) && LittleLong( header->vmMagic ) != VM_MAGIC_VER2 ) {
+	if ( magic == VM_MAGIC_VER2 ) {
+		n = (int)sizeof( vmHeader_t );
+	} else {
+		n = (int)( sizeof( vmHeader_t ) - sizeof( int32_t ) );
+	}
+
+	// Version 2 includes jtrgLength; version 1 ends immediately before it.
+	if ( fileSize < n ) {
 		sprintf( errMsg, "truncated image header (%i bytes long)", fileSize );
 		return errMsg;
 	}
-
-	if ( LittleLong( header->vmMagic ) == VM_MAGIC_VER2 )
-		n = sizeof( vmHeader_t );
-	else
-		n = ( sizeof( vmHeader_t ) - sizeof( int32_t ) );
 
 	// byte swap the header
 	VM_SwapLongs( header, n );
 
-	// bad code offset
-	if ( header->codeOffset >= fileSize ) {
+	validation = VM_ValidateHeaderLayout( header, fileSize, n );
+	switch ( validation ) {
+	case VM_HEADER_VALID:
+		return NULL;
+	case VM_HEADER_BAD_CODE_OFFSET:
 		sprintf( errMsg, "bad code segment offset %i", header->codeOffset );
-		return errMsg;
-	}
-
-	// bad code length
-	if ( header->codeLength <= 0 || header->codeOffset + header->codeLength > fileSize ) {
+		break;
+	case VM_HEADER_BAD_CODE_LENGTH:
 		sprintf( errMsg, "bad code segment length %i", header->codeLength );
-		return errMsg;
-	}
-
-	// bad data offset
-	if ( header->dataOffset >= fileSize || header->dataOffset != header->codeOffset + header->codeLength ) {
+		break;
+	case VM_HEADER_BAD_INSTRUCTION_COUNT:
+		sprintf( errMsg, "bad instruction count %i", header->instructionCount );
+		break;
+	case VM_HEADER_BAD_DATA_OFFSET:
 		sprintf( errMsg, "bad data segment offset %i", header->dataOffset );
-		return errMsg;
-	}
-
-	// bad data length
-	if ( header->dataOffset + header->dataLength > fileSize )  {
+		break;
+	case VM_HEADER_BAD_DATA_LENGTH:
 		sprintf( errMsg, "bad data segment length %i", header->dataLength );
-		return errMsg;
-	}
-
-	if ( header->vmMagic == VM_MAGIC_VER2 ) {
-		// bad lit/jtrg length
-		if ( header->dataOffset + header->dataLength + header->litLength + header->jtrgLength != fileSize ) {
-			sprintf( errMsg, "bad lit/jtrg segment length" );
-			return errMsg;
-		}
-	}
-	// bad lit length
-	else if ( header->dataOffset + header->dataLength + header->litLength != fileSize ) {
+		break;
+	case VM_HEADER_BAD_LITERAL_LENGTH:
 		sprintf( errMsg, "bad lit segment length %i", header->litLength );
-		return errMsg;
+		break;
+	case VM_HEADER_BAD_JUMP_TARGET_LENGTH:
+		sprintf( errMsg, "bad lit/jtrg segment length" );
+		break;
+	case VM_HEADER_BAD_BSS_LENGTH:
+		sprintf( errMsg, "bad bss segment length %i", header->bssLength );
+		break;
+	case VM_HEADER_DATA_IMAGE_TOO_LARGE:
+		sprintf( errMsg, "data image is too large" );
+		break;
+	default:
+		sprintf( errMsg, "invalid image header" );
+		break;
 	}
 
-	return NULL;
+	return errMsg;
 }
 
 
@@ -907,7 +912,8 @@ static vmHeader_t *VM_LoadQVM( vm_t *vm, qboolean alloc ) {
 		tryjts = qtrue;
 	}
 
-	vm->exactDataLength = header->dataLength + header->litLength + header->bssLength;
+	vm->exactDataLength = (unsigned int)header->dataLength +
+		(unsigned int)header->litLength + (unsigned int)header->bssLength;
 
 	dataLength = vm->exactDataLength;
 	if ( dataLength < PROGRAM_STACK_SIZE ) {
@@ -1212,6 +1218,12 @@ const char *VM_LoadInstructions( const byte *code_pos, int codeLength, int instr
 	int i, n, op0, op1, opStack;
 	instruction_t *ci;
 
+	if ( !code_pos || !buf || codeLength <= 0 || instructionCount <= 0 ||
+		instructionCount > codeLength ) {
+		sprintf( errBuf, "invalid code image bounds" );
+		return errBuf;
+	}
+
 	code_start = code_pos; // for printing
 	code_end = code_pos + codeLength;
 
@@ -1221,13 +1233,17 @@ const char *VM_LoadInstructions( const byte *code_pos, int codeLength, int instr
 
 	// load instructions and perform some initial calculations/checks
 	for ( i = 0; i < instructionCount; i++, ci++, op1 = op0 ) {
+		if ( code_pos >= code_end ) {
+			sprintf( errBuf, "code_pos >= code_end" );
+			return errBuf;
+		}
 		op0 = *code_pos;
 		if ( op0 < 0 || op0 >= OP_MAX ) {
 			sprintf( errBuf, "bad opcode %02X at offset %d", op0, (int)(code_pos - code_start) );
 			return errBuf;
 		}
 		n = ops[ op0 ].size;
-		if ( code_pos + 1 + n  > code_end ) {
+		if ( code_end - code_pos < 1 + n ) {
 			sprintf( errBuf, "code_pos > code_end" );
 			return errBuf;
 		}

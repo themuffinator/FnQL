@@ -925,8 +925,8 @@ qboolean FS_ComparePaks( char *neededpaks, int len, qboolean dlstring );
 
 void FS_Rename( const char *from, const char *to );
 
-void FS_Remove( const char *osPath );
 void FS_HomeRemove( const char *homePath );
+void FS_SV_HomeRemove( const char *homePath );
 
 void	FS_FilenameCompletion( const char *dir, const char *ext, qboolean stripExt, void(*callback)(const char *s), int flags );
 
@@ -1472,7 +1472,7 @@ void  Sys_UnloadLibrary( void *handle );
 
 // adaptive huffman functions
 void Huff_Compress( msg_t *buf, int offset );
-void Huff_Decompress( msg_t *buf, int offset );
+qboolean Huff_Decompress( msg_t *buf, int offset );
 
 // static huffman functions
 void HuffmanPutBit( byte* fout, int32_t bitIndex, int bit );

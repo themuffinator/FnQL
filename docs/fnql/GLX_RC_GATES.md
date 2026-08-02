@@ -14,8 +14,8 @@ The current feature-closure status is tracked in [GLX_FEATURE_MATRIX.md](GLX_FEA
 
 The first GLx RC requires runtime evidence on:
 
-- Windows 10 or newer, x64, dynamic renderer build, retail `baseq3` assets.
-- Linux x86_64, Mesa or vendor OpenGL driver, dynamic renderer build, retail `baseq3` assets.
+- Windows 10 or newer, 32-bit x86 dynamic renderer build, retail `baseq3` assets.
+- Linux i686, Mesa or vendor OpenGL driver, dynamic renderer build, retail `baseq3` assets.
 
 Every blocking RC run must expose at least the `GL2X` product tier: OpenGL 2.x with GLSL-era program support. `GL12` exists as the final fixed-function compatibility floor, but the current conservative RC profile still exercises the programmable migration surface. `GL3X`, `GL41`, and `GL46` features are optional accelerators for this RC gate. Missing persistent mapping, sync objects, multidraw, indirect draw, direct-state-access, or debug-output support must select a fallback path rather than fail renderer initialization. A `GL2X` run must report the `GL2X programmable executor` contract: stream uploads, the GLSL material compiler, postprocess-lite behavior, common material coverage, dynamic entities, lightmaps, multitexture, fog, sprites, beams, screenshots, and demos are supported, while modern post-chain and scene-linear output are not required.
 
@@ -23,11 +23,20 @@ Every blocking RC run must expose at least the `GL2X` product tier: OpenGL 2.x w
 
 `GL3X` is likewise structured even though it is an accelerator for the conservative RC gate. A GL3X run must report the `GL3X performance executor` contract: FBO postprocess, UBO-style frame/object constants, timer queries, sync-aware uploads, static buffer ownership, dynamic buffer ownership, modern post-chain, scene-linear output, screenshots, and demos are supported, while persistent mapped uploads, indirect submission requirements, and direct state access requirements are not mandatory on that tier.
 
-`GL41` runs must report the `GL41 mac-modern executor` contract. That line proves the macOS ceiling tier is treated as a supported modern product target, with FBO postprocess, UBO-style constants, timer queries, sync-aware uploads, static/dynamic buffer ownership, scene-linear post, high-quality SDR, optional hardware HDR output, screenshots, and demos. The paired GL4+ requirements line must keep debug output, buffer storage, direct state access, multi-draw indirect, and persistent uploads marked as non-required.
+`GL41` runs must report the historically named `GL41 mac-modern executor`
+contract. In the current x86-only project this is an OpenGL 4.1 capability
+tier, not a supported macOS build target. It requires FBO postprocess,
+UBO-style constants, timer queries, sync-aware uploads, static/dynamic buffer
+ownership, scene-linear post, high-quality SDR, optional hardware HDR output,
+screenshots, and demos. The paired GL4+ requirements line must keep debug
+output, buffer storage, direct state access, multi-draw indirect, and persistent
+uploads marked as non-required.
 
 `GL46` runs must report the `GL46 high-end executor` contract. That line proves persistent uploads, buffer-storage upload policy, sync-heavy streaming, DSA, MDI, aggressive static-world submission, detailed GPU counters, hardware HDR output, screenshots, and demos are all part of the high-end tier. The compact `glx: GL46 high-end ...` line records persistent-upload, DSA-product, MDI-product, aggressive-static, backend GPU query, and static-world MDI counters so the tier can be compared against lower paths.
 
-Manual release packaging builds GLx wherever the repository enables `USE_GLX`, including Windows x86, macOS, Linux aarch64, and other packaged targets. Those platforms need at least manual smoke coverage even though they are not blockers for the first conservative RC unless maintainers add stable GPU runners for them.
+Release packaging builds GLx only for the supported 32-bit targets: Windows x86
+and Linux x86. Both platforms are blocking runtime-proof targets for a public
+release.
 
 ## Canonical Gate Presets
 
@@ -80,10 +89,10 @@ From the repository root:
 python scripts/glx_runtime_sweep.py --list-gates
 python scripts/glx_runtime_sweep.py --list-profiles
 python scripts/glx_runtime_sweep.py --list-corpus
-python scripts/glx_runtime_sweep.py --gate rc-smoke --exe path/to/fnql.x64.exe --basepath path/to/game/root
-python scripts/glx_runtime_sweep.py --gate rc-parity --exe path/to/fnql.x64.exe --basepath path/to/game/root
-python scripts/glx_runtime_sweep.py --gate rc-proof --exe path/to/fnql.x64.exe --basepath path/to/game/root --proof-dir .tmp/glx-proof/windows-x86
-python scripts/glx_runtime_sweep.py --gate rc-stress --exe path/to/fnql.x64.exe --basepath path/to/game/root
+python scripts/glx_runtime_sweep.py --gate rc-smoke --exe path/to/fnql.exe --basepath path/to/game/root
+python scripts/glx_runtime_sweep.py --gate rc-parity --exe path/to/fnql.exe --basepath path/to/game/root
+python scripts/glx_runtime_sweep.py --gate rc-proof --exe path/to/fnql.exe --basepath path/to/game/root --proof-dir .tmp/glx-proof/windows-x86
+python scripts/glx_runtime_sweep.py --gate rc-stress --exe path/to/fnql.exe --basepath path/to/game/root
 ```
 
 Use `--dry-run` to generate the configs and manifest without requiring a built executable or retail assets. Dry runs are useful for reviewing the expanded cvars, startup cvars, corpus scene IDs, maps, demos, and commands, but they do not count as gate evidence.
@@ -95,13 +104,13 @@ The sweep can compare captured PNG screenshots against an approved baseline dire
 To deliberately approve a new local baseline set:
 
 ```sh
-python scripts/glx_runtime_sweep.py --gate rc-parity --exe path/to/fnql.x64.exe --basepath path/to/game/root --screenshot-baseline-dir .tmp/glx-baselines/windows-x86 --approve-screenshot-baselines
+python scripts/glx_runtime_sweep.py --gate rc-parity --exe path/to/fnql.exe --basepath path/to/game/root --screenshot-baseline-dir .tmp/glx-baselines/windows-x86 --approve-screenshot-baselines
 ```
 
 To compare a candidate run against that baseline and write difference PNGs:
 
 ```sh
-python scripts/glx_runtime_sweep.py --gate rc-parity --exe path/to/fnql.x64.exe --basepath path/to/game/root --screenshot-baseline-dir .tmp/glx-baselines/windows-x86 --screenshot-diff-dir .tmp/glx-diffs/windows-x86 --screenshot-max-rms 2.0 --screenshot-max-pixel-ratio 0.005
+python scripts/glx_runtime_sweep.py --gate rc-parity --exe path/to/fnql.exe --basepath path/to/game/root --screenshot-baseline-dir .tmp/glx-baselines/windows-x86 --screenshot-diff-dir .tmp/glx-diffs/windows-x86 --screenshot-max-rms 2.0 --screenshot-max-pixel-ratio 0.005
 ```
 
 The initial thresholds are intentionally tight and should be adjusted only with reviewed evidence. Missing baselines or failed comparisons fail a non-dry-run gate when a baseline directory is supplied.
@@ -305,7 +314,21 @@ Because the tagged source tree has GLx as the default, the same release command 
 archives so the rollback package named by the promotion plan is actually present
 in `.install/packages/`.
 
-Manual release packaging records the proof-corpus metadata but does not require a proof root because it is not a GLx promotion event.
+Public manual releases use the same proof validator without turning the release
+into a GLx promotion event. The release workflow first builds all distributable
+artifacts, then runs a self-hosted proof matrix for `windows-mingw-x86`,
+`windows-msvc-x86`, and `linux-x86`. Each row downloads its exact same-run
+artifact and executes `rc-smoke`, `rc-parity`, and `rc-proof` against the client
+and sibling GLx module. The manifests bind all gates to the source commit,
+workflow run and attempt, and `proofVariant`, and record SHA-256, size, PE/ELF
+format, 32-bit width, and x86 machine for both native files. Before publication,
+the packager recomputes those identities from the final archives and rejects a
+missing variant or any client/module mismatch. External runtime executables and
+generic `windows-x86` evidence therefore cannot authorize a public package.
+
+Local `--channel manual` snapshot packaging remains proof-optional because it
+does not publish. Passing `--require-glx-proof` makes that distinction explicit
+and prevents the public workflow from silently using the local exemption.
 
 ## Promotion Boundary
 

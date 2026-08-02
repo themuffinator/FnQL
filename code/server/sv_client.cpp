@@ -866,7 +866,7 @@ void SV_StopDemoRecord( client_t *client, qboolean discard )
 		Com_Printf( "Stopped server demo recording: %s\n", finalName.data() );
 	} else {
 		SV_CloseFileHandle( client->demoRecordFile );
-		FS_Remove( FS_BuildOSPath( FS_GetHomePath(), tempName.data(), nullptr ) );
+		FS_SV_HomeRemove( tempName.data() );
 	}
 
 	client->demoRecordName[ 0 ] = '\0';

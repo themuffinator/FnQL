@@ -1153,7 +1153,15 @@ def proof_corpus_for_gate(gate: str) -> dict[str, object]:
     )
 
 
-def release_proof_manifest(gate: str, platform_id: str) -> dict[str, object]:
+def release_proof_manifest(
+    gate: str,
+    platform_id: str,
+    proof_variant: str | None = None,
+) -> dict[str, object]:
+    if proof_variant is None:
+        proof_variant = (
+            "windows-mingw-x86" if platform_id == "windows-x86" else "linux-x86"
+        )
     maps = glx_runtime_sweep.corpus_targets(
         glx_runtime_sweep.GLX_GATE_CORPUS_SCENES[gate],
         "map",
@@ -1193,9 +1201,40 @@ def release_proof_manifest(gate: str, platform_id: str) -> dict[str, object]:
     manifest = {
         "runId": f"{platform_id}-{gate}",
         "createdUtc": "2026-05-10T12:00:00+00:00",
+        "sourceCommit": "a" * 40,
+        "proofBuildRunId": "1234",
+        "proofBuildRunAttempt": "1",
         "gate": gate,
         "dryRun": False,
         "proofPlatform": platform_id,
+        "proofVariant": proof_variant,
+        "hostPlatform": {
+            "system": "Windows" if platform_id == "windows-x86" else "Linux",
+            "machine": "AMD64" if platform_id == "windows-x86" else "x86_64",
+            "proofPlatform": platform_id,
+        },
+        "executableIdentity": {
+            "sha256": {
+                "windows-mingw-x86": "1",
+                "windows-msvc-x86": "2",
+                "linux-x86": "3",
+            }[proof_variant] * 64,
+            "sizeBytes": 1024,
+            "format": "pe" if platform_id == "windows-x86" else "elf",
+            "bits": 32,
+            "machine": "x86",
+        },
+        "glxModuleIdentity": {
+            "sha256": {
+                "windows-mingw-x86": "4",
+                "windows-msvc-x86": "5",
+                "linux-x86": "6",
+            }[proof_variant] * 64,
+            "sizeBytes": 2048,
+            "format": "pe" if platform_id == "windows-x86" else "elf",
+            "bits": 32,
+            "machine": "x86",
+        },
         "maps": maps,
         "demos": demos,
         "renderers": ["opengl", "glx"],
@@ -6890,27 +6929,181 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
 
         self.assertTrue(any("not approve" in failure for failure in failures))
 
-    def test_release_proof_root_requires_all_blocking_platform_gates(self) -> None:
+    def test_release_proof_root_requires_all_distributed_variant_gates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            for platform_id in glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS:
+            packaged: dict[str, dict[str, object]] = {}
+            for proof_variant, platform_id in glx_runtime_sweep.GLX_RELEASE_PROOF_VARIANTS.items():
                 for gate in glx_runtime_sweep.GLX_RELEASE_REQUIRED_GATES:
-                    manifest_dir = root / platform_id / gate / "run"
+                    manifest = release_proof_manifest(gate, platform_id, proof_variant)
+                    manifest_dir = root / proof_variant / gate / "run"
                     manifest_dir.mkdir(parents=True)
                     (manifest_dir / "manifest.json").write_text(
-                        json.dumps(release_proof_manifest(gate, platform_id), indent=2),
+                        json.dumps(manifest, indent=2),
                         encoding="utf-8",
                     )
+                    packaged[proof_variant] = {
+                        "client": manifest["executableIdentity"],
+                        "glxModule": manifest["glxModuleIdentity"],
+                    }
 
-            summary = glx_runtime_sweep.validate_release_proof_root(root)
+            summary = glx_runtime_sweep.validate_release_proof_root(
+                root,
+                expected_source_commit="a" * 40,
+                expected_build_run_id="1234",
+                expected_build_run_attempt="1",
+                expected_runtime_identities=packaged,
+            )
 
             self.assertEqual(summary["status"], "passed")
             self.assertEqual(summary["failures"], [])
+            self.assertEqual(summary["expectedSourceCommit"], "a" * 40)
             self.assertEqual(
                 len(summary["manifests"]),
-                len(glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS)
+                len(glx_runtime_sweep.GLX_RELEASE_PROOF_VARIANTS)
                 * len(glx_runtime_sweep.GLX_RELEASE_REQUIRED_GATES),
             )
+            valid_packaged = copy.deepcopy(packaged)
+
+            mismatch = glx_runtime_sweep.validate_release_proof_root(
+                root,
+                expected_source_commit="b" * 40,
+                expected_build_run_id="1234",
+                expected_build_run_attempt="1",
+                expected_runtime_identities=packaged,
+            )
+            self.assertEqual(mismatch["status"], "failed")
+            self.assertIn(
+                "does not match release commit",
+                "\n".join(str(failure) for failure in mismatch["failures"]),
+            )
+
+            attempt_mismatch = glx_runtime_sweep.validate_release_proof_root(
+                root,
+                expected_source_commit="a" * 40,
+                expected_build_run_id="1234",
+                expected_build_run_attempt="2",
+                expected_runtime_identities=valid_packaged,
+            )
+            self.assertIn(
+                "does not match release workflow attempt 2",
+                "\n".join(str(failure) for failure in attempt_mismatch["failures"]),
+            )
+
+            client_mismatch_identities = copy.deepcopy(valid_packaged)
+            client_mismatch_identities["windows-msvc-x86"]["client"] = {
+                **client_mismatch_identities["windows-msvc-x86"]["client"],  # type: ignore[arg-type]
+                "sha256": "f" * 64,
+            }
+            binary_mismatch = glx_runtime_sweep.validate_release_proof_root(
+                root,
+                expected_source_commit="a" * 40,
+                expected_build_run_id="1234",
+                expected_build_run_attempt="1",
+                expected_runtime_identities=client_mismatch_identities,
+            )
+            self.assertIn(
+                "windows-msvc-x86 proof client executable sha256 does not match",
+                "\n".join(str(failure) for failure in binary_mismatch["failures"]),
+            )
+
+            module_mismatch_identities = copy.deepcopy(valid_packaged)
+            module_mismatch_identities["linux-x86"]["glxModule"] = {
+                **module_mismatch_identities["linux-x86"]["glxModule"],  # type: ignore[arg-type]
+                "sha256": "e" * 64,
+            }
+            module_mismatch = glx_runtime_sweep.validate_release_proof_root(
+                root,
+                expected_source_commit="a" * 40,
+                expected_build_run_id="1234",
+                expected_build_run_attempt="1",
+                expected_runtime_identities=module_mismatch_identities,
+            )
+            self.assertIn(
+                "linux-x86 proof GLx module sha256 does not match",
+                "\n".join(str(failure) for failure in module_mismatch["failures"]),
+            )
+
+            tampered_path = root / "linux-x86" / "rc-smoke" / "run" / "manifest.json"
+            tampered = json.loads(tampered_path.read_text(encoding="utf-8"))
+            tampered["glxModuleIdentity"]["sizeBytes"] += 1
+            tampered_path.write_text(json.dumps(tampered, indent=2), encoding="utf-8")
+            cross_gate_mismatch = glx_runtime_sweep.validate_release_proof_root(
+                root,
+                expected_source_commit="a" * 40,
+                expected_build_run_id="1234",
+                expected_build_run_attempt="1",
+                expected_runtime_identities=valid_packaged,
+            )
+            self.assertIn(
+                "do not share one GLx module identity",
+                "\n".join(str(failure) for failure in cross_gate_mismatch["failures"]),
+            )
+            self.assertIn(
+                "linux-x86 proof GLx module sizeBytes does not match",
+                "\n".join(str(failure) for failure in cross_gate_mismatch["failures"]),
+            )
+
+    def test_release_proof_root_rejects_platform_or_executable_identity_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for proof_variant, platform_id in glx_runtime_sweep.GLX_RELEASE_PROOF_VARIANTS.items():
+                for gate in glx_runtime_sweep.GLX_RELEASE_REQUIRED_GATES:
+                    manifest = release_proof_manifest(gate, platform_id, proof_variant)
+                    if proof_variant == "windows-mingw-x86" and gate == "rc-smoke":
+                        manifest["hostPlatform"]["system"] = "Linux"  # type: ignore[index]
+                        manifest["executableIdentity"]["format"] = "elf"  # type: ignore[index]
+                    manifest_dir = root / proof_variant / gate / "run"
+                    manifest_dir.mkdir(parents=True)
+                    (manifest_dir / "manifest.json").write_text(
+                        json.dumps(manifest, indent=2),
+                        encoding="utf-8",
+                    )
+
+            summary = glx_runtime_sweep.validate_release_proof_root(
+                root,
+                expected_source_commit="a" * 40,
+            )
+            failures = "\n".join(str(failure) for failure in summary["failures"])
+
+            self.assertEqual(summary["status"], "failed")
+            self.assertIn("host system linux does not match windows-x86", failures)
+            self.assertIn("client executable format elf does not match windows-x86", failures)
+
+    def test_executable_identity_reads_pe_and_elf_x86_headers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pe = bytearray(128)
+            pe[0:2] = b"MZ"
+            pe[60:64] = (64).to_bytes(4, "little")
+            pe[64:68] = b"PE\0\0"
+            pe[68:70] = (0x014C).to_bytes(2, "little")
+            pe[84:86] = (0x00E0).to_bytes(2, "little")
+            pe[88:90] = (0x010B).to_bytes(2, "little")
+            pe_path = root / "fnql.exe"
+            pe_path.write_bytes(pe)
+
+            elf = bytearray(64)
+            elf[0:4] = b"\x7fELF"
+            elf[4] = 1
+            elf[5] = 1
+            elf[18:20] = (3).to_bytes(2, "little")
+            elf_path = root / "fnql"
+            elf_path.write_bytes(elf)
+
+            pe_identity = glx_runtime_sweep.executable_file_identity(pe_path)
+            elf_identity = glx_runtime_sweep.executable_file_identity(elf_path)
+
+            self.assertEqual(
+                (pe_identity["format"], pe_identity["bits"], pe_identity["machine"]),
+                ("pe", 32, "x86"),
+            )
+            self.assertEqual(
+                (elf_identity["format"], elf_identity["bits"], elf_identity["machine"]),
+                ("elf", 32, "x86"),
+            )
+            self.assertRegex(str(pe_identity["sha256"]), r"^[0-9a-f]{64}$")
+            self.assertEqual(pe_identity["sizeBytes"], len(pe))
 
     def test_release_proof_root_rejects_missing_platform_or_dry_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -6930,8 +7123,9 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
             failures = "\n".join(str(failure) for failure in summary["failures"])
 
             self.assertEqual(summary["status"], "failed")
+            self.assertIn("Missing GLx rc-smoke runtime proof for windows-msvc-x86", failures)
             self.assertIn("Missing GLx rc-smoke runtime proof for linux-x86", failures)
-            self.assertIn("No passing GLx rc-proof runtime proof for windows-x86", failures)
+            self.assertIn("No passing GLx rc-proof runtime proof for windows-mingw-x86", failures)
             self.assertIn("dry-run manifests do not count as release proof", failures)
 
 
@@ -6951,6 +7145,28 @@ class GlxWorkflowTests(unittest.TestCase):
         self.assertIn("if performance_baseline or proof_dir:", workflow)
         self.assertIn('"--performance-max-growth-ratio",', workflow)
         self.assertIn('os.environ["FNQL_GLX_PERFORMANCE_MAX_GROWTH_RATIO"]', workflow)
+
+    def test_release_workflow_proves_each_exact_distributed_runtime(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+
+        for variant in glx_runtime_sweep.GLX_RELEASE_PROOF_VARIANTS:
+            self.assertIn(f"proof_variant: {variant}", workflow)
+            self.assertIn(f"name: glx-release-proof-${{{{ matrix.proof_variant }}}}", workflow)
+        self.assertIn('for gate in ("rc-smoke", "rc-parity", "rc-proof"):', workflow)
+        self.assertIn("Download exact release runtime", workflow)
+        self.assertIn("--proof-variant", workflow)
+        self.assertIn("--proof-build-run-id", workflow)
+        self.assertIn("--proof-build-run-attempt", workflow)
+        self.assertIn("--glx-module", workflow)
+        self.assertIn("--source-commit", workflow)
+        self.assertIn("needs.glx-release-proof.result == 'success'", workflow)
+
+        standalone = (ROOT / ".github" / "workflows" / "glx-verification.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("          - release-proof", standalone)
 
     def test_ci_and_release_artifacts_reference_proof_corpus(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "glx-verification.yml").read_text(encoding="utf-8")
@@ -6988,14 +7204,15 @@ class GlxPromotionTests(unittest.TestCase):
         )
 
     def write_complete_proof_root(self, root: Path) -> None:
-        for platform_id in glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS:
+        for proof_variant, platform_id in glx_runtime_sweep.GLX_RELEASE_PROOF_VARIANTS.items():
             for gate in glx_runtime_sweep.GLX_RELEASE_REQUIRED_GATES:
                 self.write_manifest(
                     root,
-                    platform_id,
+                    proof_variant,
                     gate,
-                    release_proof_manifest(gate, platform_id),
+                    release_proof_manifest(gate, platform_id, proof_variant),
                 )
+        for platform_id in glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS:
             self.write_manifest(
                 root,
                 platform_id,

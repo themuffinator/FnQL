@@ -22,7 +22,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fnql_meta import ROOT, channel_metadata, package_archive_name
 from build_webpak import build_webpak
 from glx_runtime_sweep import (
+    GLX_RELEASE_PROOF_VARIANTS,
     GLX_VISUAL_DOSSIER_VERSION,
+    executable_bytes_identity,
+    normalize_source_commit,
     release_corpus_manifest,
     validate_release_proof_root,
 )
@@ -93,6 +96,20 @@ MACOS_PREBUILT_PAYLOAD_NAME = "macos-payload.zip"
 PUBLISHED_RELEASE_ARTIFACTS = frozenset(
     {"linux-x86", "windows-mingw-x86", "windows-msvc-x86"}
 )
+RELEASE_PROOF_RUNTIME_MEMBERS = {
+    "windows-mingw-x86": {
+        "client": "fnql.exe",
+        "glxModule": "fnql_glx_x86.dll",
+    },
+    "windows-msvc-x86": {
+        "client": "fnql.exe",
+        "glxModule": "fnql_glx_x86.dll",
+    },
+    "linux-x86": {
+        "client": "fnql",
+        "glxModule": "fnql_glx_x86.so",
+    },
+}
 RELEASE_ZIP_SUFFIX = ".zip"
 RELEASE_TAR_GZ_SUFFIX = ".tar.gz"
 RELEASE_ARCHIVE_SUFFIXES = (RELEASE_TAR_GZ_SUFFIX, RELEASE_ZIP_SUFFIX)
@@ -250,8 +267,24 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help=(
             "Directory containing non-dry-run GLx runtime proof manifests. "
-            "Required for tagged release packaging."
+            "Required for tagged release packaging and public manual publishing."
         ),
+    )
+    parser.add_argument(
+        "--require-glx-proof",
+        action="store_true",
+        help=(
+            "Require --glx-proof-root even for the manual channel. Public release "
+            "automation uses this while local manual snapshots remain proof-optional."
+        ),
+    )
+    parser.add_argument(
+        "--glx-proof-build-run-id",
+        help="Workflow run id that built the exact release artifacts under GLx proof.",
+    )
+    parser.add_argument(
+        "--glx-proof-build-run-attempt",
+        help="Workflow run attempt that built the exact release artifacts under GLx proof.",
     )
     parser.add_argument(
         "--glx-rollback-metadata",
@@ -720,6 +753,42 @@ def read_release_archive(archive_path: Path) -> list[ReleaseArchiveMember]:
     return read_release_zip(archive_path)
 
 
+def release_archive_runtime_identities(
+    archive_path: Path,
+    artifact_name: str,
+) -> dict[str, object]:
+    required_members = RELEASE_PROOF_RUNTIME_MEMBERS.get(artifact_name)
+    if required_members is None or artifact_name not in GLX_RELEASE_PROOF_VARIANTS:
+        raise ValueError(f"Unsupported GLx proof artifact variant: {artifact_name}")
+    by_name = {member.name: member for member in read_release_archive(archive_path)}
+    identities: dict[str, object] = {
+        "archive": archive_path.name,
+        "variant": artifact_name,
+    }
+    for identity_name, member_name in required_members.items():
+        member = by_name.get(member_name)
+        if member is None:
+            raise ValueError(
+                f"{archive_path.name} is missing proof-bound runtime member {member_name}."
+            )
+        identity = executable_bytes_identity(member.data)
+        expected_format = (
+            "pe" if GLX_RELEASE_PROOF_VARIANTS[artifact_name] == "windows-x86" else "elf"
+        )
+        if (
+            identity.get("format") != expected_format
+            or identity.get("bits") != 32
+            or identity.get("machine") != "x86"
+        ):
+            raise ValueError(
+                f"{archive_path.name} has invalid proof-bound runtime member {member_name}: "
+                f"expected {expected_format} 32-bit x86."
+            )
+        identity["member"] = member_name
+        identities[identity_name] = identity
+    return identities
+
+
 def validate_linux_distribution_files(
     members: list[ReleaseArchiveMember],
     *,
@@ -1060,21 +1129,67 @@ def publish_prebuilt_macos_payload(
     return True
 
 
-def resolve_glx_runtime_proof(args: argparse.Namespace) -> dict[str, object]:
+def resolve_proof_source_commit(value: str | None) -> str:
+    candidate = (value or "").strip()
+    if len(candidate) in {40, 64}:
+        return normalize_source_commit(candidate)
+
+    ref = candidate or "HEAD"
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{ref}^{{commit}}"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "git rev-parse failed"
+        raise ValueError(f"Could not resolve full release source commit {ref!r}: {detail}")
+    return normalize_source_commit(result.stdout.strip())
+
+
+def resolve_glx_runtime_proof(
+    args: argparse.Namespace,
+    expected_source_commit: str | None = None,
+    expected_runtime_identities: dict[str, dict[str, object]] | None = None,
+) -> dict[str, object]:
+    proof_required = args.channel == "release" or bool(
+        getattr(args, "require_glx_proof", False)
+    )
     if args.glx_proof_root is None:
-        if args.channel == "release":
+        if proof_required:
             raise ValueError(
-                "--glx-proof-root is required for --channel release; "
-                "tagged releases need reviewed non-dry-run GLx runtime proof."
+                "--glx-proof-root is required for this release; public and tagged "
+                "releases need reviewed non-dry-run GLx runtime proof."
             )
         return {
             "required": False,
             "status": "not-required",
-            "reason": "manual release packaging records the corpus but does not promote GLx.",
+            "reason": (
+                "local manual snapshot packaging records the corpus but does not "
+                "publish or promote GLx."
+            ),
         }
 
-    proof = validate_release_proof_root(args.glx_proof_root)
-    proof["required"] = args.channel == "release"
+    proof_build_run_id = str(getattr(args, "glx_proof_build_run_id", "") or "").strip()
+    proof_build_run_attempt = str(
+        getattr(args, "glx_proof_build_run_attempt", "") or ""
+    ).strip()
+    if proof_required:
+        if not proof_build_run_id.isdecimal() or not proof_build_run_attempt.isdecimal():
+            raise ValueError(
+                "public release proof requires numeric --glx-proof-build-run-id and "
+                "--glx-proof-build-run-attempt."
+            )
+
+    proof = validate_release_proof_root(
+        args.glx_proof_root,
+        expected_source_commit=expected_source_commit,
+        expected_build_run_id=proof_build_run_id or None,
+        expected_build_run_attempt=proof_build_run_attempt or None,
+        expected_runtime_identities=expected_runtime_identities,
+    )
+    proof["required"] = proof_required
     if proof.get("status") != "passed":
         failures = proof.get("failures", [])
         detail = "; ".join(str(item) for item in failures[:8]) if isinstance(failures, list) else ""
@@ -1184,7 +1299,11 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         commit=args.commit,
         ref_name=args.ref_name,
     )
-    glx_runtime_proof = resolve_glx_runtime_proof(args)
+    proof_source_commit = (
+        resolve_proof_source_commit(args.commit)
+        if args.glx_proof_root is not None
+        else None
+    )
     glx_promotion = promotion_report(args.glx_proof_root, args.glx_rollback_metadata)
     glx_rollback_package = resolve_glx_rollback_package(args, glx_promotion)
     if glx_promotion.get("policyViolation"):
@@ -1204,6 +1323,7 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     archives: list[dict[str, object]] = []
+    packaged_runtime_identities: dict[str, dict[str, object]] = {}
 
     for artifact_dir in artifact_dirs:
         archive_name = package_archive_name(meta, artifact_dir.name)
@@ -1230,6 +1350,11 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
             archive_path,
             artifact_name=artifact_dir.name,
         )
+        if args.glx_proof_root is not None:
+            packaged_runtime_identities[artifact_dir.name] = release_archive_runtime_identities(
+                archive_path,
+                artifact_dir.name,
+            )
         checksum = sha256sum(archive_path)
         archives.append(
             {
@@ -1244,6 +1369,11 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         )
         print(archive_path.relative_to(ROOT).as_posix())
 
+    glx_runtime_proof = resolve_glx_runtime_proof(
+        args,
+        proof_source_commit,
+        packaged_runtime_identities,
+    )
     glx_rollback_package = attach_glx_rollback_archives(glx_rollback_package, archives)
 
     manifest = {
