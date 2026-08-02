@@ -34,8 +34,15 @@ GLX_EXPECTED_PASS_SCHEDULE_COUNT = 10
 GLX_EXPECTED_PASS_SCHEDULE_HASH = "541629f7"
 GLX_PRODUCT_TIERS = {"GL12", "GL2X", "GL3X", "GL41", "GL46"}
 GLX_BLOCKING_RELEASE_PLATFORMS = ("windows-x86", "linux-x86")
+GLX_RELEASE_PROOF_VARIANTS = {
+    "windows-mingw-x86": "windows-x86",
+    "windows-msvc-x86": "windows-x86",
+    "linux-x86": "linux-x86",
+}
 GLX_RELEASE_REQUIRED_GATES = ("rc-smoke", "rc-parity", "rc-proof")
-GLX_RELEASE_PROOF_VERSION = 1
+GLX_RELEASE_PROOF_VERSION = 3
+SOURCE_COMMIT_RE = re.compile(r"^(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GLX_COLOR_CONTRACT_VERSION = "2026-05-10-p0"
 GLX_VISUAL_DOSSIER_VERSION = "2026-05-10-visual-dossier-v1"
 GLX_IMAGE_EVIDENCE_VERSION = "2026-05-12-p2-image-evidence-v1"
@@ -3097,6 +3104,60 @@ def normalize_proof_platform(value: str) -> str:
     return platform_id
 
 
+def normalize_source_commit(value: str) -> str:
+    commit = value.strip().lower()
+    if not SOURCE_COMMIT_RE.fullmatch(commit):
+        raise ValueError("Source commit must be a full 40- or 64-character hexadecimal id.")
+    return commit
+
+
+def executable_bytes_identity(data: bytes) -> dict[str, object]:
+    """Return portable, release-proof-relevant identity for executable bytes."""
+    file_format = "unknown"
+    bits = 0
+    machine = "unknown"
+    header = data[:64]
+    if header.startswith(b"\x7fELF") and len(header) >= 20:
+        file_format = "elf"
+        bits = {1: 32, 2: 64}.get(header[4], 0)
+        byte_order = {1: "little", 2: "big"}.get(header[5])
+        if byte_order:
+            machine_id = int.from_bytes(header[18:20], byte_order)
+            machine = {
+                3: "x86",
+                40: "arm",
+                62: "x86_64",
+                183: "arm64",
+            }.get(machine_id, f"elf-{machine_id}")
+    elif header.startswith(b"MZ") and len(header) >= 64:
+        pe_offset = int.from_bytes(header[60:64], "little")
+        pe_header = data[pe_offset : pe_offset + 26]
+        if pe_header.startswith(b"PE\0\0") and len(pe_header) >= 26:
+            file_format = "pe"
+            machine_id = int.from_bytes(pe_header[4:6], "little")
+            machine = {
+                0x014C: "x86",
+                0x01C0: "arm",
+                0x8664: "x86_64",
+                0xAA64: "arm64",
+            }.get(machine_id, f"pe-{machine_id:04x}")
+            optional_magic = int.from_bytes(pe_header[24:26], "little")
+            bits = {0x010B: 32, 0x020B: 64}.get(optional_magic, 0)
+
+    return {
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "sizeBytes": len(data),
+        "format": file_format,
+        "bits": bits,
+        "machine": machine,
+    }
+
+
+def executable_file_identity(exe: Path) -> dict[str, object]:
+    """Return portable, release-proof-relevant identity for an executable."""
+    return executable_bytes_identity(exe.resolve().read_bytes())
+
+
 def runtime_platform_id(
     system_name: str | None = None,
     machine_name: str | None = None,
@@ -3583,6 +3644,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--exe", type=Path, help="Client executable to launch.")
     parser.add_argument(
+        "--glx-module",
+        type=Path,
+        help="Exact GLx renderer module loaded by the client during release proof.",
+    )
+    parser.add_argument(
         "--basepath",
         type=Path,
         help="Game asset basepath. Defaults to the executable directory.",
@@ -3700,6 +3766,30 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Stable runtime proof platform id to write into the manifest, such as "
             "windows-x86 or linux-x86. Defaults to the current FnQL artifact ABI."
+        ),
+    )
+    parser.add_argument(
+        "--proof-variant",
+        choices=sorted(GLX_RELEASE_PROOF_VARIANTS),
+        help=(
+            "Exact distributed client variant under proof. Public release proofs "
+            "require windows-mingw-x86, windows-msvc-x86, or linux-x86."
+        ),
+    )
+    parser.add_argument(
+        "--proof-build-run-id",
+        help="Workflow run id that produced the exact executable under proof.",
+    )
+    parser.add_argument(
+        "--proof-build-run-attempt",
+        help="Workflow run attempt that produced the exact executable under proof.",
+    )
+    parser.add_argument(
+        "--source-commit",
+        default=os.environ.get("GITHUB_SHA", ""),
+        help=(
+            "Full source commit tested by this sweep. Release-proof validation binds "
+            "this value to the commit being packaged. Defaults to GITHUB_SHA."
         ),
     )
     parser.add_argument(
@@ -15471,12 +15561,135 @@ def proof_platform_for_manifest(
     return infer_proof_platform_from_path(manifest_path)
 
 
+def release_proof_provenance_failures(
+    manifest: dict[str, object],
+    manifest_path: Path,
+    expected_source_commit: str | None = None,
+    expected_build_run_id: str | None = None,
+    expected_build_run_attempt: str | None = None,
+) -> list[str]:
+    failures: list[str] = []
+    source_commit = str(manifest.get("sourceCommit", "")).strip().lower()
+    if not SOURCE_COMMIT_RE.fullmatch(source_commit):
+        failures.append(
+            f"{manifest_path}: sourceCommit must be a full 40- or 64-character hexadecimal id."
+        )
+    elif expected_source_commit and source_commit != expected_source_commit:
+        failures.append(
+            f"{manifest_path}: sourceCommit {source_commit} does not match release commit "
+            f"{expected_source_commit}."
+        )
+
+    explicit_platform = str(manifest.get("proofPlatform", "")).strip()
+    if not explicit_platform:
+        failures.append(f"{manifest_path}: release proof requires an explicit proofPlatform.")
+        return failures
+    try:
+        proof_platform = normalize_proof_platform(explicit_platform)
+    except ValueError as exc:
+        failures.append(f"{manifest_path}: {exc}")
+        return failures
+
+    proof_variant = str(manifest.get("proofVariant", "")).strip().lower()
+    variant_platform = GLX_RELEASE_PROOF_VARIANTS.get(proof_variant)
+    if variant_platform is None:
+        failures.append(
+            f"{manifest_path}: release proof requires one supported proofVariant."
+        )
+    elif variant_platform != proof_platform:
+        failures.append(
+            f"{manifest_path}: proofVariant {proof_variant} requires {variant_platform}, "
+            f"not {proof_platform}."
+        )
+
+    build_run_id = str(manifest.get("proofBuildRunId", "")).strip()
+    build_run_attempt = str(manifest.get("proofBuildRunAttempt", "")).strip()
+    if not build_run_id.isdecimal():
+        failures.append(f"{manifest_path}: proofBuildRunId must be numeric.")
+    elif expected_build_run_id and build_run_id != expected_build_run_id:
+        failures.append(
+            f"{manifest_path}: proofBuildRunId {build_run_id} does not match release "
+            f"workflow run {expected_build_run_id}."
+        )
+    if not build_run_attempt.isdecimal():
+        failures.append(f"{manifest_path}: proofBuildRunAttempt must be numeric.")
+    elif expected_build_run_attempt and build_run_attempt != expected_build_run_attempt:
+        failures.append(
+            f"{manifest_path}: proofBuildRunAttempt {build_run_attempt} does not match "
+            f"release workflow attempt {expected_build_run_attempt}."
+        )
+
+    expected_identity = {
+        "windows-x86": ("windows", "pe"),
+        "linux-x86": ("linux", "elf"),
+    }.get(proof_platform)
+    if expected_identity is None:
+        failures.append(
+            f"{manifest_path}: unsupported blocking proof platform {proof_platform!r}."
+        )
+        return failures
+
+    host_platform = manifest.get("hostPlatform")
+    if not isinstance(host_platform, dict):
+        failures.append(f"{manifest_path}: hostPlatform identity is missing.")
+    else:
+        host_proof_platform = str(host_platform.get("proofPlatform", "")).strip().lower()
+        if host_proof_platform != proof_platform:
+            failures.append(
+                f"{manifest_path}: hostPlatform proofPlatform {host_proof_platform or '-'} "
+                f"does not match {proof_platform}."
+            )
+        expected_system, _expected_format = expected_identity
+        host_system = str(host_platform.get("system", "")).strip().lower()
+        if not host_system.startswith(expected_system):
+            failures.append(
+                f"{manifest_path}: host system {host_system or '-'} does not match "
+                f"{proof_platform}."
+            )
+
+    _expected_system, expected_format = expected_identity
+    for field, label in (
+        ("executableIdentity", "client executable"),
+        ("glxModuleIdentity", "GLx module"),
+    ):
+        identity = manifest.get(field)
+        if not isinstance(identity, dict):
+            failures.append(f"{manifest_path}: {field} is missing.")
+            continue
+        if str(identity.get("format", "")).strip().lower() != expected_format:
+            failures.append(
+                f"{manifest_path}: {label} format {identity.get('format', '-')!s} "
+                f"does not match {proof_platform}."
+            )
+        if identity.get("bits") != 32:
+            failures.append(f"{manifest_path}: release-proof {label} is not 32-bit.")
+        if str(identity.get("machine", "")).strip().lower() != "x86":
+            failures.append(f"{manifest_path}: release-proof {label} machine is not x86.")
+        digest = str(identity.get("sha256", "")).strip().lower()
+        if not SHA256_RE.fullmatch(digest):
+            failures.append(f"{manifest_path}: {label} SHA-256 identity is missing or invalid.")
+        size_bytes = identity.get("sizeBytes")
+        if isinstance(size_bytes, bool) or not isinstance(size_bytes, int) or size_bytes <= 0:
+            failures.append(f"{manifest_path}: {label} size identity must be positive.")
+
+    return failures
+
+
 def release_proof_manifest_failures(
     manifest: dict[str, object],
     manifest_path: Path,
+    expected_source_commit: str | None = None,
+    expected_build_run_id: str | None = None,
+    expected_build_run_attempt: str | None = None,
 ) -> list[str]:
     gate = str(manifest.get("gate", ""))
-    failures: list[str] = []
+    failures = release_proof_provenance_failures(
+        manifest,
+        manifest_path,
+        expected_source_commit,
+        expected_build_run_id,
+        expected_build_run_attempt,
+    )
 
     if manifest.get("dryRun"):
         failures.append(f"{manifest_path}: dry-run manifests do not count as release proof.")
@@ -15529,10 +15742,16 @@ def release_proof_manifest_record(
     )
     record = {
         "platform": proof_platform_for_manifest(manifest, manifest_path),
+        "variant": str(manifest.get("proofVariant", "")),
         "gate": str(manifest.get("gate", "")),
         "path": relative_path,
         "runId": str(manifest.get("runId", "")),
         "createdUtc": str(manifest.get("createdUtc", "")),
+        "sourceCommit": str(manifest.get("sourceCommit", "")),
+        "proofBuildRunId": str(manifest.get("proofBuildRunId", "")),
+        "proofBuildRunAttempt": str(manifest.get("proofBuildRunAttempt", "")),
+        "executableIdentity": manifest.get("executableIdentity", {}),
+        "glxModuleIdentity": manifest.get("glxModuleIdentity", {}),
         "status": run_status(manifest),
         "proofStatus": proof.get("status", "not-configured")
         if isinstance(proof, dict)
@@ -15884,6 +16103,16 @@ def glx_visual_dossier(manifest: dict[str, object], manifest_path: Path) -> str:
     backend_rows = collect_visual_backend_rows(manifest)
     tier_rows = collect_visual_tier_rows(manifest)
     status = run_status(manifest)
+    executable_identity = (
+        manifest.get("executableIdentity", {})
+        if isinstance(manifest.get("executableIdentity"), dict)
+        else {}
+    )
+    glx_module_identity = (
+        manifest.get("glxModuleIdentity", {})
+        if isinstance(manifest.get("glxModuleIdentity"), dict)
+        else {}
+    )
 
     lines = [
         f"# GLx Visual Dossier {manifest.get('runId', '')}",
@@ -15893,6 +16122,11 @@ def glx_visual_dossier(manifest: dict[str, object], manifest_path: Path) -> str:
         f"- Gate: `{manifest.get('gate') or 'custom'}`",
         f"- Profile: `{manifest.get('profile') or '-'}`",
         f"- Proof platform: `{manifest.get('proofPlatform', '-')}`",
+        f"- Proof variant: `{manifest.get('proofVariant') or '-'}`",
+        f"- Proof build: `{manifest.get('proofBuildRunId') or '-'} / {manifest.get('proofBuildRunAttempt') or '-'}`",
+        f"- Source commit: `{manifest.get('sourceCommit') or '-'}`",
+        f"- Executable SHA-256: `{executable_identity.get('sha256') or '-'}`",
+        f"- GLx module SHA-256: `{glx_module_identity.get('sha256') or '-'}`",
         f"- Manifest: {markdown_artifact_link(manifest_path, manifest_path)}",
         "",
         "## Current Pipeline Flow",
@@ -16381,18 +16615,42 @@ def glx_visual_dossier(manifest: dict[str, object], manifest_path: Path) -> str:
 
 def validate_release_proof_root(
     proof_root: Path,
-    required_platforms: Iterable[str] = GLX_BLOCKING_RELEASE_PLATFORMS,
+    required_variants: Iterable[str] = tuple(GLX_RELEASE_PROOF_VARIANTS),
     required_gates: Iterable[str] = GLX_RELEASE_REQUIRED_GATES,
+    expected_source_commit: str | None = None,
+    expected_build_run_id: str | None = None,
+    expected_build_run_attempt: str | None = None,
+    expected_runtime_identities: dict[str, dict[str, object]] | None = None,
 ) -> dict[str, object]:
     root = proof_root.resolve()
-    required_platform_list = [normalize_proof_platform(platform_id) for platform_id in required_platforms]
+    required_variant_list = [str(variant).strip().lower() for variant in required_variants]
+    unsupported_variants = [
+        variant for variant in required_variant_list if variant not in GLX_RELEASE_PROOF_VARIANTS
+    ]
+    if unsupported_variants:
+        raise ValueError(
+            "Unsupported GLx release proof variants: " + ", ".join(unsupported_variants)
+        )
+    required_platform_list = list(
+        dict.fromkeys(GLX_RELEASE_PROOF_VARIANTS[variant] for variant in required_variant_list)
+    )
     required_gate_list = [str(gate) for gate in required_gates]
+    normalized_expected_commit = (
+        normalize_source_commit(expected_source_commit)
+        if expected_source_commit
+        else None
+    )
     summary: dict[str, object] = {
         "version": GLX_RELEASE_PROOF_VERSION,
         "status": "failed",
         "root": str(root),
+        "expectedSourceCommit": normalized_expected_commit or "",
+        "expectedBuildRunId": str(expected_build_run_id or ""),
+        "expectedBuildRunAttempt": str(expected_build_run_attempt or ""),
         "requiredPlatforms": required_platform_list,
+        "requiredVariants": required_variant_list,
         "requiredGates": required_gate_list,
+        "packagedRuntimeIdentities": expected_runtime_identities or {},
         "manifests": [],
         "failures": [],
     }
@@ -16418,24 +16676,27 @@ def validate_release_proof_root(
         gate = str(manifest.get("gate", ""))
         if gate not in required_gate_list:
             continue
-        try:
-            proof_platform = proof_platform_for_manifest(manifest, manifest_path)
-        except ValueError as exc:
-            failures.append(f"{manifest_path}: {exc}")
+        proof_variant = str(manifest.get("proofVariant", "")).strip().lower()
+        manifest_failures = release_proof_manifest_failures(
+            manifest,
+            manifest_path,
+            normalized_expected_commit,
+            str(expected_build_run_id or "") or None,
+            str(expected_build_run_attempt or "") or None,
+        )
+        if proof_variant not in required_variant_list:
+            failures.extend(manifest_failures)
             continue
-        if proof_platform not in required_platform_list:
-            continue
-        manifest_failures = release_proof_manifest_failures(manifest, manifest_path)
-        candidates.setdefault((proof_platform, gate), []).append(
+        candidates.setdefault((proof_variant, gate), []).append(
             (manifest_path, manifest, manifest_failures)
         )
 
     selected_records: list[dict[str, object]] = []
-    for platform_id in required_platform_list:
+    for variant in required_variant_list:
         for gate in required_gate_list:
-            gate_candidates = candidates.get((platform_id, gate), [])
+            gate_candidates = candidates.get((variant, gate), [])
             if not gate_candidates:
-                failures.append(f"Missing GLx {gate} runtime proof for {platform_id}.")
+                failures.append(f"Missing GLx {gate} runtime proof for {variant}.")
                 continue
             passing = [
                 (manifest_path, manifest, manifest_failures)
@@ -16443,7 +16704,7 @@ def validate_release_proof_root(
                 if not manifest_failures
             ]
             if not passing:
-                failures.append(f"No passing GLx {gate} runtime proof for {platform_id}.")
+                failures.append(f"No passing GLx {gate} runtime proof for {variant}.")
                 for manifest_path, _manifest, manifest_failures in gate_candidates[:2]:
                     failures.extend(
                         manifest_failures
@@ -16459,6 +16720,57 @@ def validate_release_proof_root(
                 ),
             )[-1]
             selected_records.append(release_proof_manifest_record(chosen_manifest, chosen_path, root))
+
+    selected_commits = {
+        str(record.get("sourceCommit", "")).strip().lower()
+        for record in selected_records
+        if str(record.get("sourceCommit", "")).strip()
+    }
+    if len(selected_commits) > 1:
+        failures.append("Selected GLx release proofs do not share one sourceCommit.")
+    for variant in required_variant_list:
+        variant_records = [
+            record for record in selected_records if record.get("variant") == variant
+        ]
+        identity_keys = ("sha256", "sizeBytes", "format", "bits", "machine")
+        for identity_field, label in (
+            ("executableIdentity", "client executable"),
+            ("glxModuleIdentity", "GLx module"),
+        ):
+            identities = {
+                tuple(record.get(identity_field, {}).get(key) for key in identity_keys)
+                for record in variant_records
+                if isinstance(record.get(identity_field), dict)
+            }
+            if len(identities) > 1:
+                failures.append(
+                    f"Selected GLx release proofs for {variant} do not share one "
+                    f"{label} identity."
+                )
+
+        if expected_runtime_identities is None:
+            continue
+        packaged = expected_runtime_identities.get(variant)
+        if not isinstance(packaged, dict):
+            failures.append(f"Missing packaged runtime identities for {variant}.")
+            continue
+        if not variant_records:
+            continue
+        for proof_record in variant_records:
+            for proof_field, packaged_field, label in (
+                ("executableIdentity", "client", "client executable"),
+                ("glxModuleIdentity", "glxModule", "GLx module"),
+            ):
+                proof_identity = proof_record.get(proof_field)
+                packaged_identity = packaged.get(packaged_field)
+                if not isinstance(proof_identity, dict) or not isinstance(packaged_identity, dict):
+                    failures.append(f"Missing {label} identity binding for {variant}.")
+                    continue
+                for key in identity_keys:
+                    if proof_identity.get(key) != packaged_identity.get(key):
+                        failures.append(
+                            f"{variant} proof {label} {key} does not match the packaged runtime."
+                        )
 
     summary["manifests"] = selected_records
     summary["failures"] = list(dict.fromkeys(failures))
@@ -16497,6 +16809,16 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
     status = run_status(manifest)
     gate = str(manifest.get("gate") or "custom")
     profile = str(manifest.get("profile") or "")
+    executable_identity = (
+        manifest.get("executableIdentity", {})
+        if isinstance(manifest.get("executableIdentity"), dict)
+        else {}
+    )
+    glx_module_identity = (
+        manifest.get("glxModuleIdentity", {})
+        if isinstance(manifest.get("glxModuleIdentity"), dict)
+        else {}
+    )
 
     lines = [
         f"# GLx Sweep {manifest.get('runId', '')}",
@@ -16506,6 +16828,11 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
         f"- Profile: `{profile}`",
         f"- Dry run: `{str(bool(manifest.get('dryRun'))).lower()}`",
         f"- Proof platform: `{manifest.get('proofPlatform', '-')}`",
+        f"- Proof variant: `{manifest.get('proofVariant') or '-'}`",
+        f"- Proof build: `{manifest.get('proofBuildRunId') or '-'} / {manifest.get('proofBuildRunAttempt') or '-'}`",
+        f"- Source commit: `{manifest.get('sourceCommit') or '-'}`",
+        f"- Executable SHA-256: `{executable_identity.get('sha256') or '-'}`",
+        f"- GLx module SHA-256: `{glx_module_identity.get('sha256') or '-'}`",
         f"- Manifest: `{manifest_path}`",
         f"- Visual dossier: `{manifest.get('visualDossier', {}).get('path', '-') if isinstance(manifest.get('visualDossier'), dict) else '-'}`",
         f"- Renderers: `{', '.join(str(item) for item in manifest.get('renderers', []))}`",
@@ -17444,6 +17771,57 @@ def main() -> int:
         if args.proof_platform
         else runtime_platform_id()
     )
+    proof_variant = args.proof_variant or ""
+    if proof_variant and GLX_RELEASE_PROOF_VARIANTS[proof_variant] != proof_platform:
+        raise ValueError(
+            f"Proof variant {proof_variant} requires proof platform "
+            f"{GLX_RELEASE_PROOF_VARIANTS[proof_variant]}, not {proof_platform}."
+        )
+    proof_build_run_id = str(args.proof_build_run_id or "").strip()
+    if proof_build_run_id and not proof_build_run_id.isdecimal():
+        raise ValueError("Proof build run id must be numeric.")
+    proof_build_run_attempt = str(args.proof_build_run_attempt or "").strip()
+    if proof_build_run_attempt and not proof_build_run_attempt.isdecimal():
+        raise ValueError("Proof build run attempt must be numeric.")
+    source_commit = normalize_source_commit(args.source_commit) if args.source_commit else ""
+    executable_identity = (
+        executable_file_identity(exe)
+        if exe.is_file()
+        else {
+            "sha256": "",
+            "sizeBytes": 0,
+            "format": "not-inspected",
+            "bits": 0,
+            "machine": "unknown",
+        }
+    )
+    expected_glx_module_name = (
+        "fnql_glx_x86.dll" if proof_platform == "windows-x86" else "fnql_glx_x86.so"
+    )
+    glx_module = (
+        args.glx_module.resolve()
+        if args.glx_module
+        else (exe.parent / expected_glx_module_name).resolve()
+    )
+    if proof_variant:
+        expected_glx_module = (exe.parent / expected_glx_module_name).resolve()
+        if glx_module != expected_glx_module:
+            raise ValueError(
+                f"Release proof must use the GLx module beside the client: {expected_glx_module}"
+            )
+        if not glx_module.is_file():
+            raise FileNotFoundError(f"GLx proof module does not exist: {glx_module}")
+    glx_module_identity = (
+        executable_file_identity(glx_module)
+        if glx_module.is_file()
+        else {
+            "sha256": "",
+            "sizeBytes": 0,
+            "format": "not-inspected",
+            "bits": 0,
+            "machine": "unknown",
+        }
+    )
     screenshot_max_rms, screenshot_max_pixel_ratio = validate_screenshot_thresholds(
         args.screenshot_max_rms,
         args.screenshot_max_pixel_ratio,
@@ -17758,13 +18136,20 @@ def main() -> int:
         "gateRequirements": (
             RC_GATE_PRESETS[args.gate]["requirements"] if args.gate else {}
         ),
+        "sourceCommit": source_commit,
         "exe": str(exe),
+        "executableIdentity": executable_identity,
+        "glxModule": str(glx_module),
+        "glxModuleIdentity": glx_module_identity,
         "cwd": str(exe.parent),
         "basepath": str(basepath),
         "homepath": str(homepath),
         "fsGame": args.fs_game,
         "hostPlatform": host_platform_manifest(),
         "proofPlatform": proof_platform,
+        "proofVariant": proof_variant,
+        "proofBuildRunId": proof_build_run_id,
+        "proofBuildRunAttempt": proof_build_run_attempt,
         "profile": args.profile,
         "cvars": cvars,
         "startupCvars": startup_cvars,

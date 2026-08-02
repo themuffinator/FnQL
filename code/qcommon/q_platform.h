@@ -23,6 +23,20 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #ifndef __Q_PLATFORM_H
 #define __Q_PLATFORM_H
 
+/*
+ * Retail Quake Live's native module and WebUI ABIs require a 32-bit x86
+ * engine. Keep this assertion in the central platform header so every engine
+ * translation unit independently rejects a mismatched or flag-dropping
+ * compiler wrapper. QVM bytecode and preprocessed assembly are not host engine
+ * objects and cannot evaluate the C sizeof expression.
+ */
+#if !defined( Q3_VM ) && !defined( __ASSEMBLER__ )
+#if !defined( _M_IX86 ) && !defined( __i386__ )
+#error "FnQL supports only 32-bit x86 engine targets"
+#endif
+typedef char fnql_pointer_width_must_be_32_bits[( sizeof( void * ) == 4 ) ? 1 : -1];
+#endif
+
 #define QDECL
 
 #define id386 0

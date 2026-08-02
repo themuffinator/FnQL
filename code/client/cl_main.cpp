@@ -583,7 +583,7 @@ void CL_StopRecord_f( void ) {
 		Com_sprintf( finalName.data(), static_cast<int>( finalName.size() ), "%s.%s%d", clc.recordName, DEMOEXT, protocol );
 
 		if ( clc.explicitRecordName ) {
-			FS_Remove( finalName.data() );
+			FS_HomeRemove( finalName.data() );
 		} else {
 			// add sequence suffix to avoid overwrite
 			sequence = 0;

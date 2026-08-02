@@ -118,6 +118,40 @@ ARCH=$(COMPILE_ARCH)
 endif
 export ARCH
 
+# MAKECMDGOALS is GNU Make-owned policy input. Reject command-line attempts to
+# disguise an output-producing goal as cleanup.
+ifeq ($(filter undefined default,$(origin MAKECMDGOALS)),)
+  $(error MAKECMDGOALS is managed by GNU Make and must not be overridden)
+endif
+
+# Cleanup does not emit binaries, so it remains usable from any host without
+# forcing callers to repeat a target architecture. Every goal that can build,
+# copy, install, or package output still fails during Makefile evaluation.
+override FNQL_ARCH_NEUTRAL_GOALS := clean clean2 clean-debug clean-release distclean toolsclean
+override FNQL_ARCH_SENSITIVE_GOALS := $(filter-out $(FNQL_ARCH_NEUTRAL_GOALS),$(MAKECMDGOALS))
+override FNQL_ENFORCE_X86 :=
+ifeq ($(strip $(MAKECMDGOALS)),)
+  override FNQL_ENFORCE_X86 := 1
+else ifneq ($(strip $(FNQL_ARCH_SENSITIVE_GOALS)),)
+  override FNQL_ENFORCE_X86 := 1
+endif
+
+ifeq ($(FNQL_ENFORCE_X86),1)
+  ifneq ($(strip $(ARCH)),x86)
+    $(error FnQL supports only 32-bit x86 targets; set ARCH=x86 and select a 32-bit toolchain (got ARCH=$(ARCH)))
+  endif
+endif
+
+# These flags are appended with GNU Make's override directive after platform
+# setup as well as to recursive compile/link variables. Command-line variable
+# assignments therefore cannot silently turn an x86-labelled build into x64.
+override FNQL_REQUIRED_ARCH_CFLAGS := -m32
+override FNQL_REQUIRED_ARCH_LDFLAGS := -m32
+ifeq ($(COMPILE_PLATFORM),darwin)
+  override FNQL_REQUIRED_ARCH_CFLAGS := -arch i386
+  override FNQL_REQUIRED_ARCH_LDFLAGS := -arch i386
+endif
+
 ifneq ($(PLATFORM),$(COMPILE_PLATFORM))
   CROSS_COMPILING=1
 else
@@ -528,7 +562,6 @@ ifdef MINGW
     OPTIMIZE = -O2 -ffast-math
   endif
   ifeq ($(ARCH),x86)
-    BASE_CFLAGS += -m32
     OPTIMIZE = -O2 -march=i586 -mtune=i686 -ffast-math
   endif
 
@@ -711,11 +744,6 @@ else
 
   ifeq ($(PLATFORM),linux)
     LDFLAGS += -ldl -Wl,--hash-style=both
-    ifeq ($(ARCH),x86)
-      # linux32 make ...
-      BASE_CFLAGS += -m32
-      LDFLAGS += -m32
-    endif
   endif
 
   DEBUG_CFLAGS = $(BASE_CFLAGS) -DDEBUG -D_DEBUG -g -O0
@@ -726,6 +754,15 @@ else
 endif # *NIX platforms
 
 endif # !MINGW
+
+# Keep the target-selecting flags present even when callers set the customary
+# build variables on GNU Make's command line. The central q_platform.h guard is
+# the final compiler-level check if a wrapper ignores these arguments.
+override BASE_CFLAGS += $(FNQL_REQUIRED_ARCH_CFLAGS)
+override CFLAGS += $(FNQL_REQUIRED_ARCH_CFLAGS)
+override CXXFLAGS += $(FNQL_REQUIRED_ARCH_CFLAGS)
+override LDFLAGS += $(FNQL_REQUIRED_ARCH_LDFLAGS)
+override SHLIBLDFLAGS += $(FNQL_REQUIRED_ARCH_LDFLAGS)
 
 DEBUG_CXXFLAGS = $(filter-out -Wimplicit -Wstrict-prototypes,$(DEBUG_CFLAGS)) -std=c++17
 RELEASE_CXXFLAGS = $(filter-out -Wimplicit -Wstrict-prototypes,$(RELEASE_CFLAGS)) -std=c++17

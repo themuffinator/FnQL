@@ -47,13 +47,13 @@ class MacOSSupportSourceTests(unittest.TestCase):
         self.assertIn("-framework SDL3", darwin_link)
         self.assertNotIn("libsdl/macosx", darwin_link)
 
-    def test_cmake_has_real_apple_architecture_and_bundle_contracts(self) -> None:
+    def test_cmake_retains_bundle_sources_behind_the_x86_only_gate(self) -> None:
         cmake = read("CMakeLists.txt")
-        self.assertIn('FNQL_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|x64|x86|i[3-6]86)$"', cmake)
-        self.assertIn('FNQL_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$"', cmake)
+        self.assertIn("IF(NOT FNQL_TARGET_IS_32BIT_X86)", cmake)
+        self.assertIn("FnQL supports only 32-bit x86 targets", cmake)
         self.assertIn("ADD_COMPILE_DEFINITIONS(MACOS_X)", cmake)
         self.assertIn("macOS client builds require SDL3", cmake)
-        self.assertIn("code/asm/snd_mix_x86_64_preprocessed.S", cmake)
+        self.assertNotIn("code/asm/snd_mix_x86_64_preprocessed.S", cmake)
         self.assertIn("SET(CLIENT_EXE_TYPE MACOSX_BUNDLE)", cmake)
         self.assertIn("ADD_EXECUTABLE(${DNAME}${BINEXT} ${SERVER_EXE_TYPE}", cmake)
         self.assertIn("misc/macos/Info.plist.in", cmake)
@@ -114,8 +114,15 @@ class MacOSSupportSourceTests(unittest.TestCase):
         self.assertNotIn("macos-build-tools", build_guide)
         self.assertIn("macOS is disabled and unsupported", build_guide)
         self.assertIn("if: always()", workflow)
-        self.assertIn("needs: [prepare, windows-msys32, windows-msvc, source-validation, ubuntu-x86]", workflow)
-        self.assertIn("needs: [prepare, push-build-validation]", workflow)
+        self.assertIn(
+            "needs: [prepare, windows-msys32, windows-msvc, source-validation, "
+            "linux-x86-regression, ubuntu-x86]",
+            workflow,
+        )
+        self.assertIn(
+            "needs: [prepare, push-build-validation, glx-release-proof]",
+            workflow,
+        )
         self.assertIn("needs.push-build-validation.result == 'success'", workflow)
         self.assertNotIn("  macos:", workflow)
         self.assertNotIn("  macos-release-sign:", workflow)

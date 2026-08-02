@@ -56,7 +56,7 @@ on:
         default: '["self-hosted","glx"]'
         type: string
       runtime_gate:
-        description: GLx RC gate to execute on the runtime runner.
+        description: GLx RC gate to execute.
         required: true
         default: rc-smoke
         type: choice
@@ -221,6 +221,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Clear prior runtime sweep outputs
+        shell: python
+        run: |
+          import shutil
+          from pathlib import Path
+
+          output_root = Path(".tmp") / "glx-runtime-sweeps"
+          if output_root.exists():
+              shutil.rmtree(output_root)
+
       - name: Validate runtime inputs
         shell: python
         env:
@@ -311,96 +321,101 @@ jobs:
           FNQL_GLX_PERFORMANCE_BASELINE: ${{ inputs.performance_baseline || vars.FNQL_GLX_PERFORMANCE_BASELINE || vars.FNQ3_GLX_PERFORMANCE_BASELINE }}
           FNQL_GLX_APPROVE_PERFORMANCE_BASELINE: ${{ inputs.approve_performance_baseline || false }}
           FNQL_GLX_PERFORMANCE_MAX_GROWTH_RATIO: ${{ inputs.performance_max_growth_ratio || '0.20' }}
+          FNQL_GLX_SOURCE_COMMIT: ${{ github.sha }}
+          FNQL_GLX_RUNTIME_OUTPUT_ROOT: .tmp/glx-runtime-sweeps/${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           import os
           import subprocess
           import sys
           from pathlib import Path
 
-          gate = os.environ["FNQL_GLX_RUNTIME_GATE"]
-          output_dir = Path(".tmp") / "glx-runtime-sweeps"
-          summary_path = output_dir / f"{gate}.md"
-          command = [
-              sys.executable,
-              "scripts/glx_runtime_sweep.py",
-              "--gate",
-              gate,
-              "--exe",
-              os.environ["FNQL_GLX_RUNTIME_EXE"],
-              "--basepath",
-              os.environ["FNQL_GLX_RUNTIME_BASEPATH"],
-              "--proof-platform",
-              os.environ["FNQL_GLX_PROOF_PLATFORM"],
-              "--output-dir",
-              str(output_dir),
-              "--summary-markdown",
-              str(summary_path),
-          ]
+          requested_gate = os.environ["FNQL_GLX_RUNTIME_GATE"]
+          gates = (requested_gate,)
           proof_dir = os.environ.get("FNQL_GLX_PROOF_DIR", "")
-          if proof_dir:
-              command.extend(["--proof-dir", proof_dir])
-
           baseline_dir = os.environ.get("FNQL_GLX_SCREENSHOT_BASELINE_DIR", "")
-          if baseline_dir:
-              command.extend(
-                  [
-                      "--screenshot-baseline-dir",
-                      baseline_dir,
-                  ]
-              )
-              if not proof_dir:
+          performance_budget = os.environ.get("FNQL_GLX_PERFORMANCE_BUDGET", "")
+          performance_baseline = os.environ.get("FNQL_GLX_PERFORMANCE_BASELINE", "")
+          base_output_dir = Path(os.environ["FNQL_GLX_RUNTIME_OUTPUT_ROOT"])
+
+          for gate in gates:
+              output_dir = base_output_dir / gate
+              summary_path = output_dir / f"{gate}.md"
+              command = [
+                  sys.executable,
+                  "scripts/glx_runtime_sweep.py",
+                  "--gate",
+                  gate,
+                  "--exe",
+                  os.environ["FNQL_GLX_RUNTIME_EXE"],
+                  "--basepath",
+                  os.environ["FNQL_GLX_RUNTIME_BASEPATH"],
+                  "--proof-platform",
+                  os.environ["FNQL_GLX_PROOF_PLATFORM"],
+                  "--source-commit",
+                  os.environ["FNQL_GLX_SOURCE_COMMIT"],
+                  "--output-dir",
+                  str(output_dir),
+                  "--summary-markdown",
+                  str(summary_path),
+              ]
+              if proof_dir:
+                  command.extend(["--proof-dir", proof_dir])
+              if baseline_dir:
                   command.extend(
                       [
-                          "--screenshot-diff-dir",
-                          str(output_dir / "diffs"),
+                          "--screenshot-baseline-dir",
+                          baseline_dir,
                       ]
                   )
-          if baseline_dir or proof_dir:
-              command.extend(
-                  [
-                      "--screenshot-max-rms",
-                      os.environ["FNQL_GLX_SCREENSHOT_MAX_RMS"],
-                      "--screenshot-max-pixel-ratio",
-                      os.environ["FNQL_GLX_SCREENSHOT_MAX_PIXEL_RATIO"],
-                  ]
-              )
-          if os.environ.get("FNQL_GLX_APPROVE_SCREENSHOT_BASELINES") == "true":
-              command.append("--approve-screenshot-baselines")
+                  if not proof_dir:
+                      command.extend(
+                          [
+                              "--screenshot-diff-dir",
+                              str(output_dir / "diffs"),
+                          ]
+                      )
+              if baseline_dir or proof_dir:
+                  command.extend(
+                      [
+                          "--screenshot-max-rms",
+                          os.environ["FNQL_GLX_SCREENSHOT_MAX_RMS"],
+                          "--screenshot-max-pixel-ratio",
+                          os.environ["FNQL_GLX_SCREENSHOT_MAX_PIXEL_RATIO"],
+                      ]
+                  )
+              if os.environ.get("FNQL_GLX_APPROVE_SCREENSHOT_BASELINES") == "true":
+                  command.append("--approve-screenshot-baselines")
+              if performance_budget:
+                  command.extend(["--performance-budget", performance_budget])
+              if performance_baseline:
+                  command.extend(
+                      [
+                          "--performance-baseline",
+                          performance_baseline,
+                      ]
+                  )
+              if performance_baseline or proof_dir:
+                  command.extend(
+                      [
+                          "--performance-max-growth-ratio",
+                          os.environ["FNQL_GLX_PERFORMANCE_MAX_GROWTH_RATIO"],
+                      ]
+                  )
+              if os.environ.get("FNQL_GLX_APPROVE_PERFORMANCE_BASELINE") == "true":
+                  command.append("--approve-performance-baseline")
 
-          performance_budget = os.environ.get("FNQL_GLX_PERFORMANCE_BUDGET", "")
-          if performance_budget:
-              command.extend(["--performance-budget", performance_budget])
+              subprocess.check_call(command)
 
-          performance_baseline = os.environ.get("FNQL_GLX_PERFORMANCE_BASELINE", "")
-          if performance_baseline:
-              command.extend(
-                  [
-                      "--performance-baseline",
-                      performance_baseline,
-                  ]
-              )
-          if performance_baseline or proof_dir:
-              command.extend(
-                  [
-                      "--performance-max-growth-ratio",
-                      os.environ["FNQL_GLX_PERFORMANCE_MAX_GROWTH_RATIO"],
-                  ]
-              )
-          if os.environ.get("FNQL_GLX_APPROVE_PERFORMANCE_BASELINE") == "true":
-              command.append("--approve-performance-baseline")
-
-          subprocess.check_call(command)
-
-          github_summary = os.environ.get("GITHUB_STEP_SUMMARY")
-          if github_summary:
-              with open(github_summary, "a", encoding="utf-8") as handle:
-                  handle.write(summary_path.read_text(encoding="utf-8"))
+              github_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+              if github_summary:
+                  with open(github_summary, "a", encoding="utf-8") as handle:
+                      handle.write(summary_path.read_text(encoding="utf-8"))
 
       - name: Upload runtime gate artifacts
-        if: always()
+        if: success()
         uses: actions/upload-artifact@v7
         with:
           name: glx-runtime-sweep-${{ github.event_name == 'schedule' && 'rc-parity' || inputs.runtime_gate }}
-          path: .tmp/glx-runtime-sweeps
+          path: .tmp/glx-runtime-sweeps/${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: error
           retention-days: 30

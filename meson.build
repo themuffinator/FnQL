@@ -54,6 +54,17 @@ win32 = host_machine.system() == 'windows'
 darwin = host_machine.system() == 'darwin'
 linux = host_machine.system() == 'linux'
 cpu_family = host_machine.cpu_family()
+fnql_x86_target_probe = '''
+#if !defined(_M_IX86) && !defined(__i386__)
+#error FnQL requires an x86 target
+#endif
+typedef char fnql_pointer_width_must_be_32_bits[(sizeof(void *) == 4) ? 1 : -1];
+int main(void) { return 0; }
+'''
+fnql_target_is_32bit_x86 = cc.compiles(fnql_x86_target_probe, name: '32-bit x86 target')
+if cpu_family != 'x86' or not fnql_target_is_32bit_x86
+  error('FnQL supports only 32-bit x86 targets; Meson configured host CPU family "' + cpu_family + '" or the compiler target probe failed. Select Win32 on Windows or use an i686 cross file on other platforms.')
+endif
 
 renderer_prefix = 'fnql'
 build_client = get_option('build-client')
@@ -74,28 +85,8 @@ elif not renderer_dlopen
   enabled_renderers = [renderer_default]
 endif
 
-if cpu_family == 'x86'
-  renderer_arch = 'x86'
-  binary_suffix = ''
-elif cpu_family == 'x86_64'
-  renderer_arch = 'x86_64'
-  binary_suffix = win32 ? '.x64' : '.x86_64'
-elif cpu_family == 'aarch64'
-  renderer_arch = win32 ? 'arm64' : 'aarch64'
-  binary_suffix = win32 ? '.arm64' : '.aarch64'
-elif cpu_family.startswith('arm')
-  renderer_arch = 'arm'
-  binary_suffix = '.arm'
-elif cpu_family == 'ppc64le'
-  renderer_arch = 'ppc64le'
-  binary_suffix = '.ppc64le'
-elif cpu_family == 'ppc64'
-  renderer_arch = 'ppc64'
-  binary_suffix = '.ppc64'
-else
-  renderer_arch = cpu_family
-  binary_suffix = ''
-endif
+renderer_arch = 'x86'
+binary_suffix = ''
 
 client_binary_name = 'fnql' + binary_suffix
 server_binary_name = 'fnql.ded' + binary_suffix
@@ -1103,6 +1094,51 @@ test('fnql_untrusted_asset_bounds_source', python,
   args: files('tests/untrusted_asset_bounds_tests.py'),
 )
 
+bmp_loader_tests = executable('fnql_bmp_loader_tests',
+  [
+    'tests/bmp_loader_tests.c',
+    'code/renderercommon/tr_image_bmp.c',
+  ],
+  include_directories: include_directories('code/qcommon', 'code/renderercommon'),
+  c_args: common_c_args,
+)
+test('fnql_bmp_loader', bmp_loader_tests)
+
+huffman_decoder_tests = executable('fnql_huffman_decoder_tests',
+  [
+    'tests/huffman_decoder_tests.c',
+    'code/qcommon/huffman.c',
+  ],
+  include_directories: include_directories('code/qcommon'),
+  c_args: common_c_args,
+)
+test('fnql_huffman_decoder', huffman_decoder_tests)
+
+qvm_header_tests = executable('fnql_qvm_header_tests',
+  'tests/qvm_header_tests.c',
+  include_directories: include_directories('code/qcommon'),
+  c_args: common_c_args,
+)
+test('fnql_qvm_header_bounds', qvm_header_tests)
+
+filesystem_write_bounds_tests = executable('fnql_filesystem_write_bounds_tests',
+  'tests/filesystem_write_bounds_tests.c',
+  include_directories: include_directories('code/qcommon'),
+  c_args: common_c_args,
+)
+test('fnql_filesystem_write_bounds', filesystem_write_bounds_tests)
+
+png_loader_tests = executable('fnql_png_loader_tests',
+  [
+    'tests/png_loader_tests.c',
+    'code/renderercommon/tr_image_png.c',
+    'code/qcommon/puff.c',
+  ],
+  include_directories: include_directories('code/qcommon', 'code/renderercommon'),
+  c_args: common_c_args,
+)
+test('fnql_png_loader', png_loader_tests)
+
 netchan_safety_tests = executable('fnql_netchan_safety_tests',
   'tests/netchan_safety_tests.cpp',
   include_directories: include_directories('code/qcommon'),
@@ -1384,10 +1420,10 @@ if get_option('glx-tests')
   )
 endif
 
-# Keep the complete source-level regression suite visible to the default Meson
-# test workflow.  Individual tests above remain useful for focused filtering,
-# while discovery catches compatibility tests that are intentionally independent
-# of renderer/audio build options.
+# Keep the recursive unittest-compatible source suite visible to the default
+# Meson test workflow. Individual self-running modules above remain part of the
+# complete Meson gate, while discovery catches compatibility tests that are
+# intentionally independent of renderer/audio build options.
 test('fnql_python_source_regressions', python,
   args: [
     '-m', 'unittest', 'discover',
@@ -1395,7 +1431,7 @@ test('fnql_python_source_regressions', python,
     '-p', '*_tests.py',
   ],
   workdir: meson.current_source_dir(),
-  timeout: 120,
+  timeout: 300,
 )
 
 curl_summary = 'disabled'

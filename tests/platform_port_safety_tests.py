@@ -236,19 +236,18 @@ class PlatformPortSafetyTests(unittest.TestCase):
         )
         self.assertNotIn("D_FILES=$(shell find .", makefile)
 
-    def test_cmake_uses_target_width_for_linux_x86_names(self) -> None:
+    def test_cmake_probes_and_fixes_the_32_bit_x86_target(self) -> None:
         cmake = read("CMakeLists.txt")
 
-        self.assertIn(
-            'STRING(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" FNQL_SYSTEM_PROCESSOR)',
-            cmake,
-        )
-        self.assertIn(
-            'FNQL_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|x64|x86|i[3-6]86)$"',
-            cmake,
-        )
-        self.assertIn("IF(CMAKE_SIZEOF_VOID_P EQUAL 8)", cmake)
-        self.assertNotIn("IF(CMAKE_SYSTEM_PROCESSOR MATCHES AMD64|x86|i*86)", cmake)
+        self.assertIn("TRY_COMPILE(FNQL_TARGET_IS_32BIT_X86", cmake)
+        self.assertNotIn("CHECK_C_SOURCE_COMPILES", cmake)
+        self.assertIn("UNSET(FNQL_TARGET_IS_32BIT_X86 CACHE)", cmake)
+        self.assertIn("!defined(_M_IX86) && !defined(__i386__)", cmake)
+        self.assertIn("sizeof(void *) == 4", cmake)
+        self.assertIn("IF(NOT FNQL_TARGET_IS_32BIT_X86)", cmake)
+        self.assertIn("FnQL supports only 32-bit x86 targets", cmake)
+        self.assertIn("SET(RENDEXT _x86)", cmake)
+        self.assertNotIn("SET(RENDEXT _x86_64)", cmake)
 
     def test_cmake_linux_client_enables_available_curl_and_vorbis(self) -> None:
         cmake = read("CMakeLists.txt")

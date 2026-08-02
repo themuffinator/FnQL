@@ -70,12 +70,15 @@ static void add_bit (char bit, byte *fout) {
 	bloc++;
 }
 
-/* Receive one bit from the input file (buffered) */
-static int get_bit (byte *fin) {
-	int t;
-	t = (fin[(bloc>>3)] >> (bloc&7)) & 0x1;
+/* Receive one bit from a bounded input buffer. */
+static qboolean get_bit(const byte *fin, size_t bitCount, int *bit) {
+	if (!fin || !bit || bloc < 0 || (size_t)bloc >= bitCount) {
+		return qfalse;
+	}
+
+	*bit = (fin[(bloc >> 3)] >> (bloc & 7)) & 0x1;
 	bloc++;
-	return t;
+	return qtrue;
 }
 
 static node_t **get_ppnode(huff_t* huff) {
@@ -266,19 +269,25 @@ static void Huff_addRef(huff_t* huff, byte ch) {
 }
 
 /* Get a symbol */
-static int Huff_Receive(node_t *node, int *ch, byte *fin) {
+static qboolean Huff_Receive(node_t *node, int *ch, const byte *fin, size_t bitCount) {
+	int bit;
+
 	while (node && node->symbol == INTERNAL_NODE) {
-		if (get_bit(fin)) {
+		if (!get_bit(fin, bitCount, &bit)) {
+			return qfalse;
+		}
+		if (bit) {
 			node = node->right;
 		} else {
 			node = node->left;
 		}
 	}
 	if (!node) {
-		return 0;
+		return qfalse;
 //		Com_Error(ERR_DROP, "Illegal tree!");
 	}
-	return (*ch = node->symbol);
+	*ch = node->symbol;
+	return qtrue;
 }
 
 /* Send the prefix code for this node */
@@ -309,18 +318,29 @@ static void Huff_transmit( huff_t *huff, int ch, byte *fout ) {
 	}
 }
 
-void Huff_Decompress(msg_t *mbuf, int offset) {
-	int			ch, cch, i, j, size;
+qboolean Huff_Decompress(msg_t *mbuf, int offset) {
+	int			bit, ch, cch, i, j, size;
+	size_t		bitCount;
 	byte		seq[MAX_INFO_STRING*2];
-	byte*		buffer;
+	const byte*	buffer;
 	huff_t		huff;
+
+	if (!mbuf || !mbuf->data || offset < 0 || mbuf->maxsize < 0 ||
+		mbuf->cursize < 0 || mbuf->cursize > mbuf->maxsize ||
+		offset > mbuf->cursize) {
+		return qfalse;
+	}
 
 	size = mbuf->cursize - offset;
 	buffer = mbuf->data + offset;
 
 	if ( size < 2 ) {
-		return;
+		return qfalse;
 	}
+	if ( (size_t)size > ((size_t)-1) / 8U ) {
+		return qfalse;
+	}
+	bitCount = (size_t)size * 8;
 
 	Com_Memset(&huff, 0, sizeof(huff_t));
 	// Initialize the tree & list with the NYT node 
@@ -335,24 +355,23 @@ void Huff_Decompress(msg_t *mbuf, int offset) {
 	if ( cch > mbuf->maxsize - offset ) {
 		cch = mbuf->maxsize - offset;
 	}
-	if ( cch > sizeof( seq ) ) {
-		cch = sizeof( seq );
+	if ( cch > (int)sizeof( seq ) ) {
+		cch = (int)sizeof( seq );
 	}
 	bloc = 16;
 
 	for ( j = 0; j < cch; j++ ) {
 		ch = 0;
-		// don't overflow reading from the messages
-		// FIXME: would it be better to have an overflow check in get_bit ?
-		if ( (bloc >> 3) > size ) {
-			seq[j] = 0;
-			break;
+		if (!Huff_Receive(huff.tree, &ch, buffer, bitCount)) {
+			return qfalse;
 		}
-		Huff_Receive(huff.tree, &ch, buffer);				/* Get a character */
 		if ( ch == NYT ) {								/* We got a NYT, get the symbol associated with it */
 			ch = 0;
 			for ( i = 0; i < 8; i++ ) {
-				ch = (ch<<1) + get_bit(buffer);
+				if (!get_bit(buffer, bitCount, &bit)) {
+					return qfalse;
+				}
+				ch = (ch<<1) + bit;
 			}
 		}
 
@@ -362,6 +381,7 @@ void Huff_Decompress(msg_t *mbuf, int offset) {
 	}
 	mbuf->cursize = cch + offset;
 	Com_Memcpy(mbuf->data + offset, seq, cch);
+	return qtrue;
 }
 
 

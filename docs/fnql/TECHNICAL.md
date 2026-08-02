@@ -195,6 +195,11 @@ python scripts/release.py --channel manual --artifact-root <downloaded-artifacts
 python scripts/release.py --channel release --artifact-root <downloaded-artifacts-dir> --ref-name v0.1.0 --glx-proof-root <reviewed-glx-proof-root>
 ```
 
+The `--channel manual` command is suitable for a local, unpublished snapshot
+and may omit runtime proof. Public manual publishing is stricter: the release
+workflow adds `--require-glx-proof` and revalidates a reviewed proof root before
+packaging.
+
 The script:
 
 1. refreshes generated docs
@@ -239,6 +244,23 @@ in [`scripts/manual_release.py`](../../scripts/manual_release.py). After a
 release is created from a branch, CI resets
 `docs/fnql/CHANGELOG.md` to an empty categorized `Unreleased` template and
 commits that reset to the release branch.
+
+For a public manual release, provide Windows and Linux self-hosted GPU runner
+labels plus the legitimate retail basepaths and reviewed proof directories when
+dispatching `.github/workflows/release.yml`. After all three release artifacts
+are built, a matrix downloads the exact same-run `windows-mingw-x86`,
+`windows-msvc-x86`, and `linux-x86` artifacts onto the matching proof runner.
+Each row runs `rc-smoke`, `rc-parity`, and `rc-proof` against that artifact's
+client and sibling GLx module. Publishing depends on all three rows.
+
+Every proof manifest records `proofVariant`, the workflow run and attempt, the
+full source commit, and SHA-256/size/PE-or-ELF/bit-width/machine identities for
+both the client and GLx module. The packager reads those same two native files
+back from each completed release archive and rejects any identity mismatch.
+This proves both distributed Windows compiler variants independently instead of
+treating generic `windows-x86` evidence as interchangeable. Dry runs, external
+runtime executables, stale attempts, missing variants, and failed proof rows
+cannot authorize publication.
 
 ## Discord Release Announcement
 
@@ -288,14 +310,20 @@ the webhook URL.
 
 ## CI Notes
 
-`.github/workflows/release.yml` owns main-branch build validation and manual release publishing.
+`.github/workflows/linux-verification.yml` runs the complete configured Meson
+regression suite for every pull request. `.github/workflows/release.yml` owns
+main-branch build validation and manual release publishing; it runs the full
+Python source suite plus the full configured Meson suite in both Windows x86
+release builds and a Linux i686 Meson build.
 `.github/workflows/issue-triage.yml` owns automated new-issue triage, with maintainer tuning documented in [`ISSUE_TRIAGE.md`](./ISSUE_TRIAGE.md).
 
 Expected behavior:
 
-- pull requests build only
+- pull requests build and run the complete x86 regression suite without publishing
 - `main` pushes validate the main branch without publishing a release
-- manual `workflow_dispatch` runs publish a new version/date/commit release for the selected ref
+- manual `workflow_dispatch` runs publish a new version/date/commit release for
+  the selected ref only after the supplied Windows and Linux GLx proof runs
+  revalidate successfully
 - published GitHub releases upload archives whose names match the release tag identity
 - a successful manual publish ends by announcing the release on Discord when
   `DISCORD_RELEASE_WEBHOOK` is configured
@@ -336,10 +364,10 @@ Renderer-focused verification lives beside the release packaging flow:
 - [`docs/fnql/GLX_PROOF_CORPUS.md`](./GLX_PROOF_CORPUS.md) is the official GLx screenshot/timedemo scene corpus referenced by gate manifests, performance baselines, CI gate-plan artifacts, and release manifests.
 - [`docs/fnql/GLX_VISUAL_DOSSIER.md`](./GLX_VISUAL_DOSSIER.md) defines the generated review dossier written beside every GLx sweep manifest, including pipeline flowcharts, backend-state overlays, histograms, false-color sidecars, parity diffs, and driver-tier matrices.
 - [`docs/fnql/GLX_PROMOTION.md`](./GLX_PROMOTION.md) and [`docs/fnql/GLX_ROLLBACK_PACKAGE.md`](./GLX_ROLLBACK_PACKAGE.md) preserve the historical GLx promotion and rollback policy. The transition is complete: current public renderer selectors are exactly `glx`, `vk`, and `rtx`, and release packaging rejects renderer modules with any other selector name.
-- [`.github/workflows/glx-verification.yml`](../../.github/workflows/glx-verification.yml) builds deterministic GLx logic tests, generates dry-run GLx RC gate artifacts, exposes manual self-hosted GLx runtime sweeps, and runs a scheduled mainline `rc-parity` sweep on configured self-hosted GPU runners.
+- [`.github/workflows/glx-verification.yml`](../../.github/workflows/glx-verification.yml) builds deterministic GLx logic tests, generates dry-run GLx RC gate artifacts, exposes focused manual self-hosted GLx runtime sweeps, and runs a scheduled mainline `rc-parity` sweep on configured self-hosted GPU runners. Public three-variant proof is owned by the release workflow so it can consume the exact artifacts that will be packaged.
 - [`.github/workflows/vulkan-verification.yml`](../../.github/workflows/vulkan-verification.yml) builds the Vulkan-family renderer matrix, verifies RTX shader freshness and source/runtime-smoke contracts, exercises modular and static RTX linkage, generates dry-run Vulkan RC gate artifacts from [`scripts/vk_runtime_sweep.py`](../../scripts/vk_runtime_sweep.py), and exposes manual self-hosted Vulkan, RTX raster-fallback, and strict native-RT runtime gates.
 
-Dry-run renderer gate artifacts are planning evidence only. Blocking release evidence requires non-dry-run runtime artifacts on the documented platform matrix with retail `baseq3` assets. Tagged release packaging requires `--glx-proof-root`; the release script revalidates passing `rc-smoke`, `rc-parity`, and `rc-proof` manifests for `windows-x86` and `linux-x86` before it writes the release manifest. Each blocking manifest must carry passing versioned `rendererSwitchEvidence` for the generated `renderer_switch` run, including the keep-window `CL_Vid_Restart` path, every expected map/round/step screenshot transition, GLx diagnostics, and GLx performance samples. The `rc-parity` and `rc-proof` manifests must also carry passing versioned `worldProofEvidence` proving the selected stock/high-geometry/lightmap/fog/visibility world maps, GLx screenshot histograms, static-world draw/index counters, zero static packet misses/fallbacks/errors, and lightmap/fog path evidence. The `rc-proof` manifest must carry passing versioned `materialProofEvidence` proving material-stage/tcgen corpus tags, GLx screenshot histograms, material renderer readiness, compile/program activity, zero material failures or unsupported plans, parameter-block fingerprints, required stream-material feature counters, and forbidden screen-map/video-map guards for the conservative proof surface. The `rc-proof` manifest must also carry passing versioned `dynamicProofEvidence` proving dynamic entity, first-person weapon, dynamic-light stream/ownership, and planar-shadow corpus coverage with required stream-category/feature counters, tier-support evidence, screenshots or timedemos for the selected dynamic scenes, and zero stream/category fallbacks. The `rc-proof` manifest must also carry passing versioned `postProofEvidence` proving greyscale and render-scale corpus coverage with found GLx screenshots, histograms, ready FBO state, positive postprocess frame/screenshot counters, render-scale dimension evidence, no minimized output, direct-final post shader diagnostics, and a valid color contract. The staged `rc-stress` material proof additionally covers animated-image, screen-map, and video-map stage flags, staged `rc-stress` dynamic proof covers particle, transient-poly, mark/decal, and beam counters, and staged `rc-stress` post proof keeps greyscale/render-scale evidence active before those content-sensitive paths can be considered for conservative defaults. Promotion proof roots must also carry passing versioned `ownershipProofEvidence` in the non-dry-run `glx-ownership` manifests for both blocking platforms, including executable GLx-owned post/output counts and post shader direct-final diagnostics rather than planned-only post/output diagnostics. The `rc-proof` manifest must also carry the current proof-corpus version, parity-suite version, and the screenshot, demo-playback, HUD, shadow, bloom, cel-shading, greyscale, and render-scale suite records. Release packaging records the GLx promotion report and refuses a source tree that has promoted renderer defaults before `scripts/glx_promotion.py --require-ready --proof-root <dir> --rollback-metadata <json>` can pass. For promoted releases, pass the same reviewed rollback metadata to `scripts/release.py --glx-rollback-metadata <json>` so `.install/release-manifest.json` records the matched rollback archive and checksum. The GLx runtime sweep applies built-in global and per-tier performance budgets by default; use `--performance-budget` only to add reviewed runner-specific thresholds.
+Dry-run renderer gate artifacts are planning evidence only. Blocking release evidence requires non-dry-run runtime artifacts on the documented platform matrix with retail `baseq3` assets. Both public manual publishing (`--require-glx-proof`) and tagged release packaging require `--glx-proof-root`; the release script revalidates passing `rc-smoke`, `rc-parity`, and `rc-proof` manifests for `windows-x86` and `linux-x86` before it writes the release manifest. Each blocking manifest must carry passing versioned `rendererSwitchEvidence` for the generated `renderer_switch` run, including the keep-window `CL_Vid_Restart` path, every expected map/round/step screenshot transition, GLx diagnostics, and GLx performance samples. The `rc-parity` and `rc-proof` manifests must also carry passing versioned `worldProofEvidence` proving the selected stock/high-geometry/lightmap/fog/visibility world maps, GLx screenshot histograms, static-world draw/index counters, zero static packet misses/fallbacks/errors, and lightmap/fog path evidence. The `rc-proof` manifest must carry passing versioned `materialProofEvidence` proving material-stage/tcgen corpus tags, GLx screenshot histograms, material renderer readiness, compile/program activity, zero material failures or unsupported plans, parameter-block fingerprints, required stream-material feature counters, and forbidden screen-map/video-map guards for the conservative proof surface. The `rc-proof` manifest must also carry passing versioned `dynamicProofEvidence` proving dynamic entity, first-person weapon, dynamic-light stream/ownership, and planar-shadow corpus coverage with required stream-category/feature counters, tier-support evidence, screenshots or timedemos for the selected dynamic scenes, and zero stream/category fallbacks. The `rc-proof` manifest must also carry passing versioned `postProofEvidence` proving greyscale and render-scale corpus coverage with found GLx screenshots, histograms, ready FBO state, positive postprocess frame/screenshot counters, render-scale dimension evidence, no minimized output, direct-final post shader diagnostics, and a valid color contract. The staged `rc-stress` material proof additionally covers animated-image, screen-map, and video-map stage flags, staged `rc-stress` dynamic proof covers particle, transient-poly, mark/decal, and beam counters, and staged `rc-stress` post proof keeps greyscale/render-scale evidence active before those content-sensitive paths can be considered for conservative defaults. Promotion proof roots must also carry passing versioned `ownershipProofEvidence` in the non-dry-run `glx-ownership` manifests for both blocking platforms, including executable GLx-owned post/output counts and post shader direct-final diagnostics rather than planned-only post/output diagnostics. The `rc-proof` manifest must also carry the current proof-corpus version, parity-suite version, and the screenshot, demo-playback, HUD, shadow, bloom, cel-shading, greyscale, and render-scale suite records. Release packaging records the GLx promotion report and refuses a source tree that has promoted renderer defaults before `scripts/glx_promotion.py --require-ready --proof-root <dir> --rollback-metadata <json>` can pass. For promoted releases, pass the same reviewed rollback metadata to `scripts/release.py --glx-rollback-metadata <json>` so `.install/release-manifest.json` records the matched rollback archive and checksum. The GLx runtime sweep applies built-in global and per-tier performance budgets by default; use `--performance-budget` only to add reviewed runner-specific thresholds.
 
 ## Shadowmapping
 
