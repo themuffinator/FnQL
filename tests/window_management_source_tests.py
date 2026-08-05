@@ -12,13 +12,18 @@ def read_text(relative_path: str) -> str:
 class WindowManagementSourceTests(unittest.TestCase):
     def test_sdl_window_is_resizable_and_decoration_aware(self) -> None:
         glimp = read_text("code/sdl/sdl_glimp.cpp")
+        input_source = read_text("code/sdl/sdl_input.cpp")
         header = read_text("code/sdl/sdl_glw.h")
 
         self.assertIn("SDL_SetWindowResizable( SDL_window, true )", glimp)
         self.assertIn("SDL_SetWindowMinimumSize( SDL_window, 320, 240 )", glimp)
         self.assertIn("SDL_GetDisplayUsableBounds", glimp)
         self.assertIn("SDL_GetWindowBordersSize", glimp)
+        self.assertIn("OuterBoundsFromClient", glimp)
+        self.assertIn("FNQL_MacGetWindowBordersSize", glimp)
+        self.assertIn("GLW_CanPositionTopLevelWindows", glimp)
         self.assertIn("GLW_EnsureWindowOnScreen", glimp)
+        self.assertIn("case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:", input_source)
         self.assertIn("SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY", glimp)
         self.assertIn("int pixel_width;", header)
         self.assertIn("int pixel_height;", header)
@@ -185,6 +190,9 @@ class WindowManagementSourceTests(unittest.TestCase):
         self.assertIn('"_NET_FRAME_EXTENTS"', source)
         self.assertIn('"_NET_WORKAREA"', source)
         self.assertIn("X11_EnsureWindowOnScreen", source)
+        self.assertIn("OuterBoundsFromClient", source)
+        self.assertIn("OuterOriginFromClient", source)
+        self.assertIn("requestedWindowOrigin", source)
 
     def test_keep_window_restart_reenters_platform_mode_setup(self) -> None:
         for path in (

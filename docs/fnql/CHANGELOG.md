@@ -19,7 +19,8 @@ release, CI resets `Unreleased` for the next cycle.
 - _None yet._
 
 ### Rendering and Display
-- _None yet._
+- Keep the complete decorated game window reachable across monitor, work-area,
+  and DPI changes on supported desktop window systems.
 
 ### Audio
 - _None yet._
@@ -28,7 +29,8 @@ release, CI resets `Unreleased` for the next cycle.
 - _None yet._
 
 ### Fixes
-- _None yet._
+- Keep the mouse cursor usable in the in-game menu, scoreboard, and other
+  cgame/UI overlays while supersampling is enabled.
 
 ### Documentation and Tooling
 - _None yet._

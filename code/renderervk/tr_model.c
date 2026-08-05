@@ -501,15 +501,15 @@ static qboolean R_LoadMD3( model_t *mod, int lod, void *buffer, int fileSize, co
 		// Bound the counts first: they are used as size terms below, and on the
 		// 32-bit target numVerts * numFrames * sizeof(md3XyzNormal_t) would
 		// otherwise be free to wrap.
-		if ( surf->numVerts < 0 || surf->numVerts >= SHADER_MAX_VERTEXES ) {
+		if ( surf->numVerts < 0 || surf->numVerts > SHADER_MAX_VERTEXES ) {
 			ri.Printf(PRINT_WARNING, "%s: %s has more than %i verts on %s (%i).\n", __func__,
-				mod_name, SHADER_MAX_VERTEXES - 1, surf->name[0] ? surf->name : "a surface",
+				mod_name, SHADER_MAX_VERTEXES, surf->name[0] ? surf->name : "a surface",
 				surf->numVerts );
 			return qfalse;
 		}
-		if ( surf->numTriangles < 0 || surf->numTriangles*3 >= SHADER_MAX_INDEXES ) {
+		if ( surf->numTriangles < 0 || surf->numTriangles*3 > SHADER_MAX_INDEXES ) {
 			ri.Printf(PRINT_WARNING, "%s: %s has more than %i triangles on %s (%i).\n", __func__,
-				mod_name, ( SHADER_MAX_INDEXES / 3 ) - 1, surf->name[0] ? surf->name : "a surface",
+				mod_name, SHADER_MAX_INDEXES / 3, surf->name[0] ? surf->name : "a surface",
 				surf->numTriangles );
 			return qfalse;
 		}
@@ -823,17 +823,17 @@ static qboolean R_LoadMDR( model_t *mod, void *buffer, int filesize, const char 
 			// numBoneReferences and BoneReferences generally seem to be unused
 			
 			// now do the checks that may fail.
-			if ( surf->numVerts >= SHADER_MAX_VERTEXES ) 
+			if ( surf->numVerts > SHADER_MAX_VERTEXES )
 			{
 				ri.Printf(PRINT_WARNING, "R_LoadMDR: %s has more than %i verts on %s (%i).\n",
-					  mod_name, SHADER_MAX_VERTEXES - 1, surf->name[0] ? surf->name : "a surface",
+					  mod_name, SHADER_MAX_VERTEXES, surf->name[0] ? surf->name : "a surface",
 					  surf->numVerts );
 				return qfalse;
 			}
-			if ( surf->numTriangles*3 >= SHADER_MAX_INDEXES ) 
+			if ( surf->numTriangles*3 > SHADER_MAX_INDEXES )
 			{
 				ri.Printf(PRINT_WARNING, "R_LoadMDR: %s has more than %i triangles on %s (%i).\n",
-					  mod_name, ( SHADER_MAX_INDEXES / 3 ) - 1, surf->name[0] ? surf->name : "a surface",
+					  mod_name, SHADER_MAX_INDEXES / 3, surf->name[0] ? surf->name : "a surface",
 					  surf->numTriangles );
 				return qfalse;
 			}

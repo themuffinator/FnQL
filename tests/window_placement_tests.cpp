@@ -62,6 +62,21 @@ void TestInvalidBoundsDoNotMoveWindow() {
 		"failed display queries leave placement unchanged" );
 }
 
+void TestClientGeometryConvertsToOuterFrame() {
+	using namespace fnql::window;
+	constexpr Insets frame{ 8, 31, 9, 7 };
+	constexpr Position outerOrigin =
+		OuterOriginFromClient( { 100, 200 }, frame );
+	constexpr Bounds outer =
+		OuterBoundsFromClient( { 100, 200 }, 1280, 720, frame );
+
+	Check( outerOrigin.x == 92 && outerOrigin.y == 169,
+		"client origin converts to the native outer-frame origin" );
+	Check( outer.x == 92 && outer.y == 169 &&
+		outer.width == 1297 && outer.height == 758,
+		"outer bounds include every window decoration" );
+}
+
 bool Near( float actual, float expected ) {
 	const float difference = actual - expected;
 	return difference > -0.001f && difference < 0.001f;
@@ -173,6 +188,7 @@ void TestLegacyMenuAspectMigratesOnlyOnce() {
 
 int main() {
 	TestDecorationsStayInsideUsableBounds();
+	TestClientGeometryConvertsToOuterFrame();
 	TestNegativeOriginMonitor();
 	TestOversizedWindowKeepsTitleBarReachable();
 	TestInvalidBoundsDoNotMoveWindow();

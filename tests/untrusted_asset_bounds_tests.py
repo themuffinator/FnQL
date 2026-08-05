@@ -336,13 +336,15 @@ class RendererModelLoaderTests(unittest.TestCase):
                 # a surface may not declare fewer frames than the model
                 self.assertIn("surf->numFrames < hdr->numFrames", block)
 
-    def test_md3_counts_are_bounded_before_they_are_used_as_size_terms(self) -> None:
+    def test_md3_counts_over_batch_capacity_are_rejected_before_size_use(self) -> None:
         for renderer in RENDERERS:
             with self.subTest(renderer=renderer):
                 source = read(f"code/{renderer}/tr_model.c")
                 block = body(source, "// swap all the surfaces", "// find the next surface")
-                self.assertIn("surf->numVerts < 0 || surf->numVerts >= SHADER_MAX_VERTEXES", block)
-                self.assertIn("surf->numTriangles < 0 || surf->numTriangles*3 >= SHADER_MAX_INDEXES", block)
+                # Retail-sized surfaces may exactly fill a batch; only larger
+                # declarations are unsafe and must be rejected here.
+                self.assertIn("surf->numVerts < 0 || surf->numVerts > SHADER_MAX_VERTEXES", block)
+                self.assertIn("surf->numTriangles < 0 || surf->numTriangles*3 > SHADER_MAX_INDEXES", block)
                 self.assertLess(
                     block.index("SHADER_MAX_VERTEXES"),
                     block.index("surfBase = (int64_t)"),

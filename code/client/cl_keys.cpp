@@ -722,24 +722,6 @@ static void CL_DispatchBrowserKeyEvent( int key, qboolean down ) {
 
 /*
 =============
-CL_ShouldOpenJoinMenu
-
-The local team is authoritative only after a valid active snapshot.  A
-spectator uses the retail team menu as the join screen; every other state
-continues through the ordinary in-game menu.
-=============
-*/
-static qboolean CL_ShouldOpenJoinMenu( void ) {
-	if ( cls.state != CA_ACTIVE || clc.demoplaying || !cl.snap.valid ) {
-		return qfalse;
-	}
-
-	return ( cl.snap.ps.persistant[PERS_TEAM] == TEAM_SPECTATOR ) ? qtrue : qfalse;
-}
-
-
-/*
-=============
 CL_ActivateNativeMenu
 
 Activates a menu owned by the retail UI module and transfers input to it.
@@ -761,12 +743,6 @@ static void CL_ActivateNativeMenu( uiMenuCommand_t menu ) {
 	// and can draw its own cursor.
 	CL_WebHost_HideForGameTransition();
 
-	/* Retail primes the in-game root before activating its team/join page.
-	 * Sending CGAME_EVENT_TEAMMENU here targets a different owner and leaves
-	 * the warmup/join Escape path with no visible menu. */
-	if ( menu == UIMENU_TEAM ) {
-		VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, UIMENU_INGAME );
-	}
 	VM_Call( uivm, 1, UI_SET_ACTIVE_MENU, menu );
 	Key_SetCatcher( ( Key_GetCatcher() & ~( KEYCATCH_CGAME | KEYCATCH_BROWSER ) )
 		| KEYCATCH_UI );
@@ -782,8 +758,6 @@ Escape key, optionally synthesizing a release event for command-triggered use.
 =============
 */
 static void CL_ToggleMenuInternal( int key, qboolean sendKeyUp, unsigned time ) {
-	const qboolean openJoinMenu = CL_ShouldOpenJoinMenu();
-
 #ifdef USE_CURL
 	if ( Com_DL_InProgress( &download ) && download.mapAutoDownload ) {
 		Com_DL_Cleanup( &download );
@@ -818,25 +792,22 @@ static void CL_ToggleMenuInternal( int key, qboolean sendKeyUp, unsigned time ) 
 		return;
 	}
 
-	// escape always gets out of CGAME stuff
+	// Retail event 5 closes only the active cgame command overlay (including
+	// the spectator join page) before the native in-game menu is activated.
+	// CGAME_EVENT_NONE tears down broader team-menu state and, paired with a
+	// spectator UIMENU_TEAM substitution, stacks the join page over the Escape
+	// root and mixes the two menus' content and positioning.
 	if ( Key_GetCatcher( ) & KEYCATCH_CGAME ) {
-		Key_SetCatcher( Key_GetCatcher( ) & ~KEYCATCH_CGAME );
 		if ( cgvm ) {
-			VM_Call( cgvm, 1, CG_EVENT_HANDLING, CGAME_EVENT_NONE );
+			VM_Call( cgvm, 1, CG_EVENT_HANDLING,
+				CGAME_EVENT_CLOSECOMMANDOVERLAY );
 		}
-
-		if ( !openJoinMenu ) {
-			return;
-		}
+		// A missing or older module must not leave stale cgame ownership behind.
+		Key_SetCatcher( Key_GetCatcher( ) & ~KEYCATCH_CGAME );
 	}
 
-	// A spectator that reaches the join menu and finds Escape inert afterwards
-	// leaves no other trace, so record the ownership state every toggle starts
-	// from. This costs nothing outside `developer 1` and needs no call into the
-	// UI module, whose own menu-stack query is not established for in-game
-	// menus.
-	Com_DPrintf( "CL_ToggleMenuInternal: catcher 0x%04x state %i join %i\n",
-		Key_GetCatcher(), (int)cls.state, (int)openJoinMenu );
+	Com_DPrintf( "CL_ToggleMenuInternal: catcher 0x%04x state %i\n",
+		Key_GetCatcher(), (int)cls.state );
 
 	if ( !( Key_GetCatcher( ) & KEYCATCH_UI ) ) {
 		if ( !uivm ) {
@@ -844,7 +815,7 @@ static void CL_ToggleMenuInternal( int key, qboolean sendKeyUp, unsigned time ) 
 		}
 
 		if ( cls.state == CA_ACTIVE && !clc.demoplaying ) {
-			CL_ActivateNativeMenu( openJoinMenu ? UIMENU_TEAM : UIMENU_INGAME );
+			CL_ActivateNativeMenu( UIMENU_INGAME );
 		}
 		else if ( cls.state != CA_DISCONNECTED ) {
 #if 0

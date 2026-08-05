@@ -113,6 +113,21 @@ Win32 the client rect (shared with `win_wndproc.cpp` through
 cannot diverge), and X11 `window_width/height`. When the two spaces match the
 projection is an identity, so setups that already worked are unchanged.
 
+Drawable pixels are the renderer's *private* target, and `r_ext_supersample`
+doubles it. The engine console and the WebUI browser address that private target
+directly, but `CL_CopyRetailGlconfig` deliberately reports the public capture
+dimensions to native retail modules, because those modules derive UI-scene FOV
+and entity placement from their glconfig. `CL_ProjectDrawableToRetailModule` in
+`cl_input.cpp` therefore applies the same projection a second time — private
+drawable in, public capture space out — immediately before `UI_MOUSE_EVENT` and
+`CG_MOUSE_EVENT`, matching the public-to-private scaling the retail draw traps
+apply in the opposite direction. Without it a supersampled in-game menu tracks
+at double speed and then stops responding entirely once `_UI_MouseEvent`'s
+640x480 test starts rejecting the doubled position. Bytecode modules read the
+private dimensions through `CL_GetGlconfig` and draw through the unscaled
+syscall lane, so `vm->dllExports` gates the conversion and they keep the
+drawable position unchanged.
+
 ## Pointer ownership and grabbing
 
 Menus, the engine console, and gameplay each want different pointer handling.
@@ -290,7 +305,9 @@ Focus regain reconstructs families that remain physically held.
 - absolute-position projection: identity when the spaces match, both scaling
   directions, edge coordinates staying strictly inside the drawable, negative
   coordinates surviving for the owner to clamp, and unknown geometry passing
-  through rather than collapsing to zero;
+  through rather than collapsing to zero (the same helper performs the second,
+  drawable-to-retail-module projection, so supersampled menus are covered by
+  the identical cases);
 - linear, CPI-normalized, positive/negative accelerated, capped, and
   non-finite mouse inputs;
 - QL view-angle history initialization, averaging, wraparound, and reset;
@@ -308,7 +325,9 @@ separate, that each backend applies `confineToWindow` and stops driving input
 when the window is unusable, that SDL uses one owner-keyed dedup cache and
 captures drags for every absolute owner, that Win32 shares one resolver between
 its message pump and its frame update and invalidates the clip latch on
-deactivation, and that X11 shares one grab and latches its cursor.
+deactivation, that X11 shares one grab and latches its cursor, and that the
+retail UI and cgame dispatch converts the drawable position into the public
+capture space while the console and browser keep the private one.
 
 `tests/input_system_source_tests.py` additionally gates reset ordering and
 scope, deferred per-key command invalidation, source-aware push-to-talk

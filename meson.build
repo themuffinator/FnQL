@@ -53,6 +53,9 @@ jpeg_fallback_defaults = quiet_fallback_defaults + ['tests=disabled']
 win32 = host_machine.system() == 'windows'
 darwin = host_machine.system() == 'darwin'
 linux = host_machine.system() == 'linux'
+if darwin
+  add_languages('objc')
+endif
 cpu_family = host_machine.cpu_family()
 fnql_x86_target_probe = '''
 #if !defined(_M_IX86) && !defined(__i386__)
@@ -532,6 +535,10 @@ if use_sdl
   common_cpp_args += ['-DSDL_FUNCTION_POINTER_IS_VOID_POINTER=1', '-DUSE_SDL_SYSCON=1']
 endif
 
+if darwin and build_client
+  client_deps += dependency('appleframeworks', modules: 'AppKit')
+endif
+
 curl_opt = get_option('curl')
 use_curl = false
 # Windows has no system libcurl to resolve at runtime (the engine would look for
@@ -694,6 +701,9 @@ else
       'code/sdl/sdl_input.cpp',
       'code/sdl/sdl_snd.cpp',
     ]
+    if darwin
+      q3_ui_src += 'code/sdl/sdl_macos_window.m'
+    endif
   elif build_client
     x11_dep = dependency('x11', required: true)
     client_deps += x11_dep
@@ -1068,6 +1078,9 @@ test('fnql_map_overbright_cap_source', python,
 test('fnql_window_management_source', python,
   args: files('tests/window_management_source_tests.py'),
 )
+test('fnql_macos_support_source', python,
+  args: files('tests/macos_support_source_tests.py'),
+)
 
 global_fog_tests = executable('fnql_global_fog_tests',
   'tests/global_fog_tests.cpp',
@@ -1092,6 +1105,9 @@ test('fnql_renderer_port_safety_source', python,
 )
 test('fnql_untrusted_asset_bounds_source', python,
   args: files('tests/untrusted_asset_bounds_tests.py'),
+)
+test('fnql_surface_geometry_limits_source', python,
+  args: files('tests/surface_geometry_limits_source_tests.py'),
 )
 
 bmp_loader_tests = executable('fnql_bmp_loader_tests',

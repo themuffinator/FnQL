@@ -27,14 +27,23 @@ class SurfaceGeometryLimitsSourceTests(unittest.TestCase):
 
     def test_batch_covers_every_surface_retail_accepts(self) -> None:
         verts = int(_define(self.qfiles, "SHADER_MAX_VERTEXES"))
-        # FnQL's tessellator flushes when a batch would *reach* the array size,
-        # so it needs one slot past the retail cap to accept the boundary case.
-        self.assertGreaterEqual(verts, RETAIL_SHADER_MAX_VERTEXES + 1)
+        self.assertEqual(verts, RETAIL_SHADER_MAX_VERTEXES)
         self.assertEqual(
             _define(self.qfiles, "SHADER_MAX_INDEXES"), "(6*SHADER_MAX_VERTEXES)"
         )
         # 4000 triangles is the retail per-surface companion cap.
-        self.assertGreater(6 * verts, 3 * 4000)
+        self.assertEqual(6 * verts, 3 * 4000)
+
+    def test_batch_capacity_preserves_simd_member_alignment(self) -> None:
+        verts = int(_define(self.qfiles, "SHADER_MAX_VERTEXES"))
+        indexes = 6 * verts
+        # shaderCommands_t starts with the index array, followed by vec4
+        # vertex arrays. Every variable-sized member must end on a 16-byte
+        # boundary on 32-bit builds; an odd spare vertex breaks this contract.
+        self.assertEqual((indexes * 4) % 16, 0)
+        self.assertEqual((verts * 16) % 16, 0)
+        self.assertEqual((verts * 8) % 16, 0)
+        self.assertEqual((verts * 4) % 16, 0)
 
     def test_batch_stays_within_the_md3_format_caps(self) -> None:
         verts = int(_define(self.qfiles, "SHADER_MAX_VERTEXES"))
@@ -53,7 +62,7 @@ class SurfaceGeometryLimitsSourceTests(unittest.TestCase):
                 # a literal budget here would silently desync from qfiles.h
                 self.assertNotRegex(local, r"\[\s*(?:1000|2000|2001)\s*\]")
 
-    def test_overflow_predicates_keep_the_spare_slot_rationale(self) -> None:
+    def test_overflow_predicates_allow_the_exact_retail_capacity(self) -> None:
         for renderer in RENDERER_DIRS:
             surface = (ROOT / "code" / renderer / "tr_surface.c").read_text(
                 encoding="utf-8"
@@ -63,14 +72,14 @@ class SurfaceGeometryLimitsSourceTests(unittest.TestCase):
             )
             with self.subTest(renderer=renderer):
                 self.assertIn(
-                    "tess.numVertexes + verts < SHADER_MAX_VERTEXES", surface
+                    "tess.numVertexes + verts <= SHADER_MAX_VERTEXES", surface
                 )
                 self.assertIn(
-                    "tess.numIndexes + indexes < SHADER_MAX_INDEXES", surface
+                    "tess.numIndexes + indexes <= SHADER_MAX_INDEXES", surface
                 )
-                self.assertIn("surf->numVerts >= SHADER_MAX_VERTEXES", model)
+                self.assertIn("surf->numVerts > SHADER_MAX_VERTEXES", model)
                 self.assertIn(
-                    "surf->numTriangles*3 >= SHADER_MAX_INDEXES", model
+                    "surf->numTriangles*3 > SHADER_MAX_INDEXES", model
                 )
 
     def test_iqm_influence_scratch_stays_off_the_stack(self) -> None:

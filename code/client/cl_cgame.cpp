@@ -650,14 +650,65 @@ void CL_CopyRetailGlconfig( void *glconfig ) {
 	retailConfig.textureCompression = cls.glconfig.textureCompression;
 	retailConfig.textureEnvAddAvailable = cls.glconfig.textureEnvAddAvailable;
 	retailConfig.multitextureAvailable = ( cls.glconfig.numTextureUnits > 1 ) ? qtrue : qfalse;
-	retailConfig.vidWidth = cls.glconfig.vidWidth;
-	retailConfig.vidHeight = cls.glconfig.vidHeight;
+	/*
+	 * The renderer may enlarge its private FBO dimensions for supersampling,
+	 * but retail modules use glconfig dimensions to derive UI-scene FOV and
+	 * entity placement. Exposing the doubled render target makes Quake Live's
+	 * end-game player preview build an extreme-perspective scene. The capture
+	 * dimensions are the renderer's public/output size and remain identical to
+	 * glconfig for ordinary and custom-resolution rendering.
+	 */
+	retailConfig.vidWidth = cls.captureWidth > 0 ? cls.captureWidth : cls.glconfig.vidWidth;
+	retailConfig.vidHeight = cls.captureHeight > 0 ? cls.captureHeight : cls.glconfig.vidHeight;
 	retailConfig.windowAspect = cls.glconfig.windowAspect;
 	retailConfig.displayFrequency = cls.glconfig.displayFrequency;
 	retailConfig.isFullscreen = cls.glconfig.isFullscreen;
 	retailConfig.stereoEnabled = cls.glconfig.stereoEnabled;
 
 	Com_Memcpy( glconfig, &retailConfig, sizeof( retailConfig ) );
+}
+
+
+/*
+====================
+CL_GetRetailFramebufferScale
+
+Retail modules lay out pixel-space renderer calls using the public glconfig
+dimensions returned above. Convert those calls back to the renderer's private
+target dimensions when supersampling enlarges its FBO.
+====================
+*/
+retailFramebufferScale_t CL_GetRetailFramebufferScale( void ) {
+	retailFramebufferScale_t scale = { 1.0f, 1.0f };
+
+	if ( cls.captureWidth > 0 && cls.glconfig.vidWidth > 0 ) {
+		scale.x = static_cast<float>( cls.glconfig.vidWidth ) / cls.captureWidth;
+	}
+	if ( cls.captureHeight > 0 && cls.glconfig.vidHeight > 0 ) {
+		scale.y = static_cast<float>( cls.glconfig.vidHeight ) / cls.captureHeight;
+	}
+
+	return scale;
+}
+
+
+static int CL_ScaleRetailPixel( int value, float scale ) {
+	const float scaled = value * scale;
+	return static_cast<int>( scaled + ( scaled >= 0.0f ? 0.5f : -0.5f ) );
+}
+
+
+static void CL_ScaleRetailRefdef( refdef_t *refdef ) {
+	const retailFramebufferScale_t scale = CL_GetRetailFramebufferScale();
+
+	if ( !refdef ) {
+		return;
+	}
+
+	refdef->x = CL_ScaleRetailPixel( refdef->x, scale.x );
+	refdef->y = CL_ScaleRetailPixel( refdef->y, scale.y );
+	refdef->width = CL_ScaleRetailPixel( refdef->width, scale.x );
+	refdef->height = CL_ScaleRetailPixel( refdef->height, scale.y );
 }
 
 
@@ -2350,7 +2401,11 @@ static void QDECL QL_CG_trap_R_TransformModelToClip( const vec3_t point, vec4_t 
 
 static void QDECL QL_CG_trap_R_TransformClipToWindow( const vec4_t clip, vec4_t normalized, vec4_t window ) {
 	if ( re.TransformClipToWindow ) {
+		const retailFramebufferScale_t scale = CL_GetRetailFramebufferScale();
+
 		re.TransformClipToWindow( clip, normalized, window );
+		window[0] /= scale.x;
+		window[1] /= scale.y;
 		return;
 	}
 
@@ -2361,8 +2416,23 @@ static void QDECL QL_CG_trap_R_TransformClipToWindow( const vec4_t clip, vec4_t 
 static void QDECL QL_CG_trap_DrawScaledText( int x, int y, const char *text, int fontHandle,
 		float scale, int limit, float *maxX, int forceColor ) {
 	if ( !CL_CaptureHidesHud() ) {
-		RE_DrawScaledText( x, y, text, fontHandle, scale, limit, maxX,
+		const retailFramebufferScale_t framebufferScale = CL_GetRetailFramebufferScale();
+		float scaledMaxX = 0.0f;
+		float *rendererMaxX = nullptr;
+
+		if ( maxX ) {
+			scaledMaxX = *maxX * framebufferScale.x;
+			rendererMaxX = &scaledMaxX;
+		}
+
+		RE_DrawScaledText( CL_ScaleRetailPixel( x, framebufferScale.x ),
+			CL_ScaleRetailPixel( y, framebufferScale.y ), text, fontHandle,
+			scale * framebufferScale.y, limit, rendererMaxX,
 			forceColor != qfalse ? qtrue : qfalse, ql_cgame_currentColor );
+
+		if ( maxX ) {
+			*maxX = scaledMaxX / framebufferScale.x;
+		}
 	}
 }
 
@@ -2371,8 +2441,14 @@ static uint64_t QDECL QL_CG_trap_MeasureText( const char *text, const char *end,
 	float bounds[5] = {};
 	float width;
 	float height;
+	const retailFramebufferScale_t framebufferScale = CL_GetRetailFramebufferScale();
 
-	RE_MeasureScaledText( text, end, fontHandle, scale, limit, bounds );
+	RE_MeasureScaledText( text, end, fontHandle, scale * framebufferScale.y, limit, bounds );
+	bounds[0] /= framebufferScale.x;
+	bounds[1] /= framebufferScale.y;
+	bounds[2] /= framebufferScale.x;
+	bounds[3] /= framebufferScale.y;
+	bounds[4] /= framebufferScale.y;
 	fnql::font::CopyMeasureBounds( outLeft, bounds );
 	width = bounds[2] - bounds[0];
 	height = bounds[4];

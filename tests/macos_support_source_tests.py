@@ -18,6 +18,28 @@ class MacOSSupportSourceTests(unittest.TestCase):
         self.assertIn("macOS client builds require SDL3", meson)
         self.assertIn("common_c_args += ['-DMACOS_X']", meson)
 
+    def test_cocoa_window_chrome_is_queried_and_built(self) -> None:
+        meson = read("meson.build")
+        cmake = read("CMakeLists.txt")
+        makefile = read("Makefile")
+        cocoa = read("code/sdl/sdl_macos_window.m")
+        sdl = read("code/sdl/sdl_glimp.cpp")
+        non_windows_meson = meson.split("\nelse\n  q3_platform_src", 1)[1]
+        non_mingw_make = makefile.rsplit("else # !MINGW", 1)[1]
+        non_mingw_sdl = non_mingw_make.split("else # !USE_SDL", 1)[0]
+
+        self.assertIn("add_languages('objc')", meson)
+        self.assertIn("code/sdl/sdl_macos_window.m", non_windows_meson)
+        self.assertIn("modules: 'AppKit'", meson)
+        self.assertIn("code/sdl/sdl_macos_window.m", cmake)
+        self.assertIn('COMPILE_FLAGS "-x objective-c"', cmake)
+        self.assertIn("APPKIT_FRAMEWORK", cmake)
+        self.assertIn("sdl_macos_window.o", non_mingw_sdl)
+        self.assertIn("-framework AppKit", makefile)
+        self.assertIn("SDL_PROP_WINDOW_COCOA_WINDOW_POINTER", cocoa)
+        self.assertIn("contentRectForFrameRect", cocoa)
+        self.assertIn("FNQL_MacGetWindowBordersSize", sdl)
+
     def test_meson_uses_path_independent_macos_renderer_modules(self) -> None:
         meson = read("meson.build")
         renderer_start = meson.index("renderer_targets = []")

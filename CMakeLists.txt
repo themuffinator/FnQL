@@ -548,6 +548,8 @@ IF(Python3_Interpreter_FOUND)
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/ql_font_source_tests.py")
 	add_test(NAME fnql_window_management_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/window_management_source_tests.py")
+	add_test(NAME fnql_macos_support_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/macos_support_source_tests.py")
 	add_test(NAME fnql_client_cvar_compat_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/client_cvar_compat_source_tests.py")
 	add_test(NAME fnql_server_cvar_compat_source
@@ -572,6 +574,8 @@ IF(Python3_Interpreter_FOUND)
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/map_overbright_cap_source_tests.py")
 	add_test(NAME fnql_renderer_contract_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/renderer_contract_source_tests.py")
+	add_test(NAME fnql_surface_geometry_limits_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/surface_geometry_limits_source_tests.py")
 	add_test(NAME fnql_renderer_cvar_compat_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/renderer_cvar_compat_source_tests.py")
 	add_test(NAME fnql_fnq3_bloom_parity_source
@@ -681,6 +685,14 @@ IF(UNIX)
 			code/sdl/sdl_glimp.cpp
 			code/sdl/sdl_input.cpp
 			code/sdl/sdl_snd.cpp)
+		IF(APPLE)
+			list(APPEND Q3_UI_SRCS code/sdl/sdl_macos_window.m)
+			# Keep compatibility with the project's CMake 3.12 minimum: Objective-C
+			# became a first-class CMake language only in CMake 3.16.
+			set_source_files_properties(code/sdl/sdl_macos_window.m PROPERTIES
+				LANGUAGE C
+				COMPILE_FLAGS "-x objective-c")
+		ENDIF()
 	ELSE()
 		SET(Q3_UI_SRCS
 			code/unix/linux_glimp.cpp
@@ -753,6 +765,10 @@ IF(UNIX AND USE_SDL)
 
 	TARGET_COMPILE_DEFINITIONS(q3ui PRIVATE SDL_FUNCTION_POINTER_IS_VOID_POINTER=1)
 	TARGET_LINK_LIBRARIES(q3ui PRIVATE ${Q3_SDL_TARGET})
+	IF(APPLE)
+		find_library(APPKIT_FRAMEWORK AppKit REQUIRED)
+		TARGET_LINK_LIBRARIES(q3ui PRIVATE ${APPKIT_FRAMEWORK})
+	ENDIF()
 ELSEIF(UNIX AND NOT MSVC)
 	IF(NOT USE_SDL)
 		find_package (X11 REQUIRED)
