@@ -97,6 +97,14 @@ class RtxRasterFeatureParitySourceTests(unittest.TestCase):
             with self.subTest(contract=label, order=markers):
                 self.assertEqual(positions, sorted(positions), label)
 
+    def test_retail_shader_directives_are_not_extended_shader_only(self) -> None:
+        shader = read("code/rendererrtx/tr_shader.c")
+
+        self.assertIn('!Q_stricmp( token, "novlcollapse" )', shader)
+        self.assertNotIn(
+            '!Q_stricmp( token, "novlcollapse" ) && s_extendedShader', shader
+        )
+
     def test_model_cel_shading_and_player_highlights_are_end_to_end(self) -> None:
         init = read("code/rendererrtx/tr_init.c")
         header = read("code/rendererrtx/tr_local.h")

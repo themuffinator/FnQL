@@ -52,24 +52,12 @@ def function_body(source: str, name: str) -> str:
 
 
 class JoinMenuSourceTests(unittest.TestCase):
-    def test_spectator_join_menu_is_gated_by_a_valid_active_snapshot(self) -> None:
-        body = function_body(read_source(), "CL_ShouldOpenJoinMenu")
-
-        self.assertIn("cls.state != CA_ACTIVE", body)
-        self.assertIn("clc.demoplaying", body)
-        self.assertIn("!cl.snap.valid", body)
-        self.assertIn("cl.snap.ps.persistant[PERS_TEAM] == TEAM_SPECTATOR", body)
-
     def test_native_ui_menu_releases_browser_capture(self) -> None:
         body = function_body(read_source(), "CL_ActivateNativeMenu")
 
         self.assertIn("UI_SET_ACTIVE_MENU, menu", body)
-        self.assertIn("if ( menu == UIMENU_TEAM )", body)
-        self.assertIn("UI_SET_ACTIVE_MENU, UIMENU_INGAME", body)
-        self.assertLess(
-            body.index("UI_SET_ACTIVE_MENU, UIMENU_INGAME"),
-            body.index("UI_SET_ACTIVE_MENU, menu"),
-        )
+        self.assertEqual(1, body.count("UI_SET_ACTIVE_MENU"))
+        self.assertNotIn("if ( menu == UIMENU_TEAM )", body)
         self.assertIn("CL_WebHost_HideForGameTransition();", body)
         self.assertIn("KEYCATCH_CGAME | KEYCATCH_BROWSER", body)
         self.assertIn("| KEYCATCH_UI", body)
@@ -88,18 +76,29 @@ class JoinMenuSourceTests(unittest.TestCase):
             body,
         )
 
-    def test_menu_toggle_uses_the_join_menu_for_spectators_only(self) -> None:
+    def test_menu_toggle_closes_cgame_overlay_then_opens_escape_menu(self) -> None:
         body = function_body(read_source(), "CL_ToggleMenuInternal")
 
-        self.assertIn("const qboolean openJoinMenu = CL_ShouldOpenJoinMenu();", body)
         self.assertIn("( cls.state != CA_ACTIVE || clc.demoplaying )", body)
         self.assertIn("CL_WebHost_HideForGameTransition();", body)
         self.assertNotIn("CG_EVENT_HANDLING, CGAME_EVENT_TEAMMENU", body)
-        self.assertIn("if ( !openJoinMenu )", body)
+        self.assertNotIn("CG_EVENT_HANDLING, CGAME_EVENT_NONE", body)
+        self.assertIn("CGAME_EVENT_CLOSECOMMANDOVERLAY", body)
         self.assertIn(
-            "CL_ActivateNativeMenu( openJoinMenu ? UIMENU_TEAM : UIMENU_INGAME );",
+            "CL_ActivateNativeMenu( UIMENU_INGAME );",
             body,
         )
+        self.assertNotIn("CL_ActivateNativeMenu( UIMENU_TEAM", body)
+        self.assertNotIn("? UIMENU_TEAM", body)
+
+        close_overlay = body.index("CGAME_EVENT_CLOSECOMMANDOVERLAY")
+        release_cgame = body.index(
+            "Key_SetCatcher( Key_GetCatcher( ) & ~KEYCATCH_CGAME );",
+            close_overlay,
+        )
+        open_escape = body.index("CL_ActivateNativeMenu( UIMENU_INGAME );")
+        self.assertLess(close_overlay, release_cgame)
+        self.assertLess(release_cgame, open_escape)
 
     def test_menu_toggle_does_not_query_the_ui_menu_stack(self) -> None:
         body = function_body(read_source(), "CL_ToggleMenuInternal")
@@ -121,7 +120,7 @@ class JoinMenuSourceTests(unittest.TestCase):
         body = function_body(read_source(), "CL_ToggleMenuInternal")
 
         self.assertIn("Com_DPrintf( \"CL_ToggleMenuInternal: catcher", body)
-        self.assertIn("Key_GetCatcher(), (int)cls.state, (int)openJoinMenu );", body)
+        self.assertIn("Key_GetCatcher(), (int)cls.state );", body)
 
     def test_join_menu_uses_a_visible_polled_system_cursor(self) -> None:
         sdl_input = read_sdl_input()

@@ -33,6 +33,13 @@ These settings control the actual game window or fullscreen mode. Treat them as 
   - `0`: Do not wait for v-blank.
   - `1`: Sync swaps to the monitor refresh rate.
 
+Windowed placement is checked against the display's usable work area using the
+complete native frame, including resize borders and the title bar. This keeps
+the chrome reachable after a DPI change, dock/taskbar change, monitor removal,
+or renderer restart. On Wayland, the compositor owns top-level placement and
+server-side decorations by protocol, so FnQL leaves that policy to it instead
+of issuing unsupported position requests.
+
 Fullscreen picks one of two forms automatically. A request that matches the current desktop resolution with `r_displayRefresh 0` uses borderless desktop fullscreen: no display mode change, so alt-tab, other monitors, and the desktop layout are left alone. Any other resolution, or an explicit `r_displayRefresh`, switches the display to the closest matching mode at or above the requested size. The console line `...fullscreen <width>x<height>@<rate>Hz (exclusive|desktop)` reports what was actually applied; if no mode is large enough for the request, the engine says so and falls back to desktop fullscreen.
 
 Practical setups:

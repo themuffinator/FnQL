@@ -654,6 +654,7 @@ ifeq ($(COMPILE_PLATFORM),darwin)
     BASE_CFLAGS += -F/Library/Frameworks
     CLIENT_LDFLAGS += -F/Library/Frameworks -framework SDL3
   endif
+  CLIENT_LDFLAGS += -framework AppKit
 
   ifeq ($(USE_SYSTEM_JPEG),1)
     CLIENT_LDFLAGS += $(JPEG_LIBS)
@@ -1412,6 +1413,9 @@ ifeq ($(USE_SDL),1)
         $(B)/client/sdl_gamma.o \
         $(B)/client/sdl_input.o \
         $(B)/client/sdl_snd.o
+ifeq ($(COMPILE_PLATFORM),darwin)
+    Q3OBJ += $(B)/client/sdl_macos_window.o
+endif
 else # !USE_SDL
     Q3OBJ += \
         $(B)/client/linux_glimp.o \
@@ -1638,6 +1642,9 @@ $(B)/client/%.o: $(SDLDIR)/%.c
 
 $(B)/client/%.o: $(SDLDIR)/%.cpp
 	$(DO_CXX)
+
+$(B)/client/%.o: $(SDLDIR)/%.m
+	$(DO_CC)
 
 $(B)/rendx/%.o: $(R1DIR)/%.c
 	$(DO_GLX_REND_CC)

@@ -41,6 +41,9 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../renderercommon/tr_public.h"
 #include "sdl_glw.h"
 #include "sdl_icon.h"
+#ifdef MACOS_X
+#include "sdl_macos_window.h"
+#endif
 #include "sdl_raii.h"
 
 typedef enum {
@@ -363,15 +366,47 @@ static qboolean GLW_EnterFullscreen( SDL_Window *window, const SDL_DisplayMode *
 }
 
 
+static qboolean GLW_CanPositionTopLevelWindows( void )
+{
+	const char *driver = SDL_GetCurrentVideoDriver();
+
+	// Wayland deliberately gives top-level placement and server-side chrome
+	// ownership to the compositor. Its work-area policy is authoritative, and
+	// SDL_SetWindowPosition cannot move a normal application window there.
+	return ( driver && !Q_stricmp( driver, "wayland" ) ) ? qfalse : qtrue;
+}
+
+
 static SDL_DisplayID GLW_ConstrainWindowPosition( SDL_Window *window,
 	int *x, int *y, int w, int h )
 {
-	SDL_Rect requested = { *x, *y, w, h };
+	SDL_Rect requested;
 	SDL_Rect usable;
 	SDL_DisplayID display;
 	fnql::window::Insets decorations{};
+	fnql::window::Bounds outer;
 	fnql::window::Position constrained;
+	const qboolean canPosition = GLW_CanPositionTopLevelWindows();
 
+	if ( canPosition && window &&
+		!SDL_GetWindowBordersSize( window, &decorations.top, &decorations.left,
+			&decorations.bottom, &decorations.right ) ) {
+#ifdef MACOS_X
+		// SDL 3.4 has no Cocoa GetWindowBordersSize backend. Keep the SDL
+		// client-origin contract by deriving the live NSWindow frame insets.
+		if ( FNQL_MacGetWindowBordersSize( window, &decorations.top,
+				&decorations.left, &decorations.bottom, &decorations.right ) ) {
+			SDL_ClearError();
+		}
+#endif
+	}
+
+	// Select the monitor by the complete native frame. Using only the client
+	// rectangle can choose the adjacent display when a title bar or resize
+	// border straddles a monitor boundary.
+	outer = fnql::window::OuterBoundsFromClient(
+		{ *x, *y }, w, h, decorations );
+	requested = { outer.x, outer.y, outer.width, outer.height };
 	display = SDL_GetDisplayForRect( &requested );
 	if ( !display ) {
 		display = SDL_GetPrimaryDisplay();
@@ -379,16 +414,14 @@ static SDL_DisplayID GLW_ConstrainWindowPosition( SDL_Window *window,
 	if ( !display ) {
 		return 0;
 	}
+	if ( !canPosition ) {
+		return display;
+	}
 
 	if ( !SDL_GetDisplayUsableBounds( display, &usable ) &&
 		!SDL_GetDisplayBounds( display, &usable ) ) {
 		Com_DPrintf( "SDL display bounds query failed: %s\n", SDL_GetError() );
 		return display;
-	}
-
-	if ( window ) {
-		SDL_GetWindowBordersSize( window, &decorations.top, &decorations.left,
-			&decorations.bottom, &decorations.right );
 	}
 
 	constrained = fnql::window::ConstrainClientOrigin(
@@ -408,6 +441,9 @@ void GLW_EnsureWindowOnScreen( void )
 	int constrainedX, constrainedY;
 
 	if ( !SDL_window ) {
+		return;
+	}
+	if ( !GLW_CanPositionTopLevelWindows() ) {
 		return;
 	}
 
@@ -694,7 +730,8 @@ static qboolean GLW_ReuseExistingWindow( glconfig_t *config, SDL_DisplayID displ
 			y = vid_ypos->integer;
 			GLW_ConstrainWindowPosition( SDL_window, &x, &y,
 				config->vidWidth, config->vidHeight );
-			if ( !SDL_SetWindowPosition( SDL_window, x, y ) ) {
+			if ( GLW_CanPositionTopLevelWindows() &&
+				!SDL_SetWindowPosition( SDL_window, x, y ) ) {
 				Com_DPrintf( "SDL_SetWindowPosition failed: %s\n", SDL_GetError() );
 			}
 		}
@@ -1006,7 +1043,8 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, q
 			GLW_SyncWindow( "resizable window creation" );
 			GLW_ConstrainWindowPosition( SDL_window, &x, &y,
 				config->vidWidth, config->vidHeight );
-			if ( !SDL_SetWindowPosition( SDL_window, x, y ) ) {
+			if ( GLW_CanPositionTopLevelWindows() &&
+				!SDL_SetWindowPosition( SDL_window, x, y ) ) {
 				Com_DPrintf( "SDL_SetWindowPosition failed: %s\n", SDL_GetError() );
 			}
 			GLW_SyncWindow( "window creation placement" );

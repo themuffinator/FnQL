@@ -49,6 +49,36 @@ constexpr int SaturateToInt( std::int64_t value ) {
 			: static_cast<int>( value );
 }
 
+// SDL and X11 persist the client-area origin, while display selection and
+// native move requests need the complete decorated window. Keep those
+// conversions in one overflow-safe place so every backend uses the same
+// coordinate contract.
+constexpr Position OuterOriginFromClient( Position clientOrigin,
+	Insets decorations = {} ) {
+	return {
+		SaturateToInt( static_cast<std::int64_t>( clientOrigin.x )
+			- NonNegative( decorations.left ) ),
+		SaturateToInt( static_cast<std::int64_t>( clientOrigin.y )
+			- NonNegative( decorations.top ) )
+	};
+}
+
+constexpr Bounds OuterBoundsFromClient( Position clientOrigin,
+	int clientWidth, int clientHeight, Insets decorations = {} ) {
+	const Position outerOrigin =
+		OuterOriginFromClient( clientOrigin, decorations );
+	return {
+		outerOrigin.x,
+		outerOrigin.y,
+		SaturateToInt( NonNegative( clientWidth )
+			+ NonNegative( decorations.left )
+			+ NonNegative( decorations.right ) ),
+		SaturateToInt( NonNegative( clientHeight )
+			+ NonNegative( decorations.top )
+			+ NonNegative( decorations.bottom ) )
+	};
+}
+
 constexpr std::int64_t ConstrainAxis( std::int64_t desired,
 	std::int64_t boundsOrigin, std::int64_t boundsExtent,
 	std::int64_t contentExtent, std::int64_t leadingInset,

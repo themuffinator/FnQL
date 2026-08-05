@@ -1440,7 +1440,20 @@ static void QDECL QL_UI_trap_R_AddLightToScene( const vec3_t org, float intensit
 }
 
 static void QDECL QL_UI_trap_R_RenderScene( const refdef_t *refdef ) {
-	UI_Import_Call( UI_R_RENDERSCENE, { UI_Import_Ptr( refdef ) } );
+	refdef_t scaledRefdef;
+
+	if ( !refdef ) {
+		UI_Import_Call( UI_R_RENDERSCENE, { UI_Import_Ptr( refdef ) } );
+		return;
+	}
+
+	scaledRefdef = *refdef;
+	const retailFramebufferScale_t scale = CL_GetRetailFramebufferScale();
+	scaledRefdef.x = RoundToInt( scaledRefdef.x * scale.x );
+	scaledRefdef.y = RoundToInt( scaledRefdef.y * scale.y );
+	scaledRefdef.width = RoundToInt( scaledRefdef.width * scale.x );
+	scaledRefdef.height = RoundToInt( scaledRefdef.height * scale.y );
+	UI_Import_Call( UI_R_RENDERSCENE, { UI_Import_Ptr( &scaledRefdef ) } );
 }
 
 static void QDECL QL_UI_trap_R_SetColor_QL( const float *rgba ) {
@@ -1459,6 +1472,12 @@ static void QDECL QL_UI_trap_R_SetColor_QL( const float *rgba ) {
 }
 
 static void QDECL QL_UI_trap_R_DrawStretchPic( float x, float y, float w, float h, float s1, float t1, float s2, float t2, qhandle_t shader ) {
+	const retailFramebufferScale_t scale = CL_GetRetailFramebufferScale();
+
+	x *= scale.x;
+	y *= scale.y;
+	w *= scale.x;
+	h *= scale.y;
 	UI_Import_Call( UI_R_DRAWSTRETCHPIC, {
 		QL_UI_PASSFLOAT( x ), QL_UI_PASSFLOAT( y ), QL_UI_PASSFLOAT( w ), QL_UI_PASSFLOAT( h ),
 		QL_UI_PASSFLOAT( s1 ), QL_UI_PASSFLOAT( t1 ), QL_UI_PASSFLOAT( s2 ), QL_UI_PASSFLOAT( t2 ), shader
@@ -1667,6 +1686,12 @@ static void QDECL QL_UI_trap_S_StartBackgroundTrack( const char *intro, const ch
 }
 
 static int QDECL QL_UI_trap_CIN_PlayCinematic( const char *arg0, int xpos, int ypos, int width, int height, int bits ) {
+	const retailFramebufferScale_t scale = CL_GetRetailFramebufferScale();
+
+	xpos = RoundToInt( xpos * scale.x );
+	ypos = RoundToInt( ypos * scale.y );
+	width = RoundToInt( width * scale.x );
+	height = RoundToInt( height * scale.y );
 	return static_cast<int>( UI_Import_Call( UI_CIN_PLAYCINEMATIC, { UI_Import_Ptr( arg0 ), xpos, ypos, width, height, bits } ) );
 }
 
@@ -1683,6 +1708,12 @@ static void QDECL QL_UI_trap_CIN_DrawCinematic( int handle ) {
 }
 
 static void QDECL QL_UI_trap_CIN_SetExtents( int handle, int x, int y, int w, int h ) {
+	const retailFramebufferScale_t scale = CL_GetRetailFramebufferScale();
+
+	x = RoundToInt( x * scale.x );
+	y = RoundToInt( y * scale.y );
+	w = RoundToInt( w * scale.x );
+	h = RoundToInt( h * scale.y );
 	UI_Import_Call( UI_CIN_SETEXTENTS, { handle, x, y, w, h } );
 }
 
@@ -1763,7 +1794,23 @@ static int QDECL QL_UI_trap_IsSubscribedApp( int appId ) {
 }
 
 static void QDECL QL_UI_trap_DrawScaledText( int x, int y, const char *text, int fontHandle, float scale, int limit, float *maxX, int forceColor ) {
-	RE_DrawScaledText( x, y, text, fontHandle, scale, limit, maxX, forceColor != qfalse ? qtrue : qfalse, ql_ui_currentColor );
+	const retailFramebufferScale_t framebufferScale = CL_GetRetailFramebufferScale();
+	float scaledMaxX = 0.0f;
+	float *rendererMaxX = nullptr;
+
+	if ( maxX ) {
+		scaledMaxX = *maxX * framebufferScale.x;
+		rendererMaxX = &scaledMaxX;
+	}
+
+	RE_DrawScaledText( RoundToInt( x * framebufferScale.x ),
+		RoundToInt( y * framebufferScale.y ), text, fontHandle,
+		scale * framebufferScale.y, limit, rendererMaxX,
+		forceColor != qfalse ? qtrue : qfalse, ql_ui_currentColor );
+
+	if ( maxX ) {
+		*maxX = scaledMaxX / framebufferScale.x;
+	}
 }
 
 static unsigned long long QL_UI_PackFloatBits64( float lo, float hi ) {
@@ -1776,8 +1823,14 @@ static unsigned long long QDECL QL_UI_trap_MeasureText( const char *text, const 
 	float bounds[5] = {};
 	float width;
 	float height;
+	const retailFramebufferScale_t framebufferScale = CL_GetRetailFramebufferScale();
 
-	RE_MeasureScaledText( text, end, fontHandle, scale, limit, bounds );
+	RE_MeasureScaledText( text, end, fontHandle, scale * framebufferScale.y, limit, bounds );
+	bounds[0] /= framebufferScale.x;
+	bounds[1] /= framebufferScale.y;
+	bounds[2] /= framebufferScale.x;
+	bounds[3] /= framebufferScale.y;
+	bounds[4] /= framebufferScale.y;
 	fnql::font::CopyMeasureBounds( outLeft, bounds );
 	width = bounds[2] - bounds[0];
 	height = bounds[4];

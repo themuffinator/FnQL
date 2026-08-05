@@ -1828,34 +1828,62 @@ static fnql::window::Insets X11_GetFrameInsets( Window root, int clientX,
 }
 
 
-static qboolean X11_EnsureWindowOnScreen( int width, int height )
+static qboolean X11_ApplyWindowPlacement( int width, int height,
+	const fnql::window::Position *requestedClientOrigin )
 {
 	Window root = RootWindow( dpy, scrnum );
 	Window ignored;
 	int clientX;
 	int clientY;
+	fnql::window::Bounds outer;
+	fnql::window::Insets frame;
+	fnql::window::Position desired;
+	fnql::window::Position outerOrigin;
 	fnql::window::Position constrained;
 
 	if ( glw_state.cdsFullscreen || gw_minimized || !win ||
-		X11_WindowHasState( win, "_NET_WM_STATE_MAXIMIZED_HORZ" ) ||
-		X11_WindowHasState( win, "_NET_WM_STATE_MAXIMIZED_VERT" ) ||
 		!XTranslateCoordinates( dpy, win, root, 0, 0,
 			&clientX, &clientY, &ignored ) ) {
 		return qfalse;
 	}
 
-	RandR_UpdateMonitor( clientX, clientY, width, height );
+	frame = X11_GetFrameInsets( root, clientX, clientY, width, height );
+	desired = requestedClientOrigin
+		? *requestedClientOrigin
+		: fnql::window::Position{ clientX, clientY };
+	outer = fnql::window::OuterBoundsFromClient(
+		desired, width, height, frame );
+	RandR_UpdateMonitor( outer.x, outer.y, outer.width, outer.height );
+
+	win_x = clientX;
+	win_y = clientY;
+	if ( X11_WindowHasState( win, "_NET_WM_STATE_MAXIMIZED_HORZ" ) ||
+		X11_WindowHasState( win, "_NET_WM_STATE_MAXIMIZED_VERT" ) ) {
+		return qfalse;
+	}
+
 	constrained = fnql::window::ConstrainClientOrigin(
-		{ clientX, clientY }, width, height, X11_GetUsableBounds( root ),
-		X11_GetFrameInsets( root, clientX, clientY, width, height ) );
+		desired, width, height, X11_GetUsableBounds( root ),
+		frame );
 	win_x = constrained.x;
 	win_y = constrained.y;
 	if ( constrained.x == clientX && constrained.y == clientY ) {
 		return qfalse;
 	}
 
-	XMoveWindow( dpy, win, constrained.x, constrained.y );
+	// A reparenting window manager interprets XMoveWindow coordinates as the
+	// outer frame origin. Convert the constrained client origin just as SDL's
+	// X11 backend does, otherwise the leading chrome is added a second time and
+	// the opposite edge can remain off-screen.
+	outerOrigin = fnql::window::OuterOriginFromClient( constrained, frame );
+	XMoveWindow( dpy, win, outerOrigin.x, outerOrigin.y );
 	return qtrue;
+}
+
+
+static qboolean X11_EnsureWindowOnScreen( int width, int height )
+{
+	return X11_ApplyWindowPlacement( width, height, NULL );
 }
 
 
@@ -2281,12 +2309,23 @@ void HandleEvents( void )
 		case PropertyNotify: {
 			const Atom netWMState =
 				XInternAtom( dpy, "_NET_WM_STATE", True );
+			const Atom netFrameExtents =
+				XInternAtom( dpy, "_NET_FRAME_EXTENTS", True );
 			qboolean minimizedState;
 			if ( event.xproperty.window == win &&
 				netWMState != None &&
 				event.xproperty.atom == netWMState &&
 				WindowMinimized( dpy, win, &minimizedState ) ) {
 				X11_UpdateMinimizedState( minimizedState, &dowarp );
+			}
+			if ( event.xproperty.window == win &&
+				netFrameExtents != None &&
+				event.xproperty.atom == netFrameExtents &&
+				window_created && window_exposed && !gw_minimized &&
+				window_width > 0 && window_height > 0 ) {
+				// Some WMs publish chrome only after the first expose. Re-run
+				// placement as soon as those authoritative extents arrive.
+				X11_EnsureWindowOnScreen( window_width, window_height );
 			}
 			break;
 		}
@@ -2307,8 +2346,6 @@ void HandleEvents( void )
 				Window ignored;
 				XTranslateCoordinates( dpy, win, RootWindow( dpy, scrnum ), 0, 0,
 					&win_x, &win_y, &ignored );
-				RandR_UpdateMonitor( win_x, win_y,
-					event.xconfigure.width, event.xconfigure.height );
 				X11_EnsureWindowOnScreen( event.xconfigure.width,
 					event.xconfigure.height );
 
@@ -2334,10 +2371,6 @@ void HandleEvents( void )
 				}
 				window_width = event.xconfigure.width;
 				window_height = event.xconfigure.height;
-
-				RandR_UpdateMonitor( win_x, win_y,
-					event.xconfigure.width,
-					event.xconfigure.height );
 			}
 			break;
 		}
@@ -2931,6 +2964,9 @@ static XVisualInfo *VK_SelectVisual( int colorbits, int depthbits, int stencilbi
 rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, qboolean vulkan )
 {
 	glconfig_t *config = glw_state.config;
+	const fnql::window::Position requestedWindowOrigin = {
+		vid_xpos->integer, vid_ypos->integer
+	};
 	Window root;
 	XVisualInfo *visinfo = NULL;
 
@@ -3144,10 +3180,6 @@ rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, qboolean
 	else
 	{
 		XMoveWindow( dpy, win, vid_xpos->integer, vid_ypos->integer );
-		// Give the window manager a chance to publish its real frame extents,
-		// then correct the client origin against monitor and work-area bounds.
-		XSync( dpy, False );
-		X11_EnsureWindowOnScreen( actualWidth, actualHeight );
 	}
 
 //	XSync( dpy, False );
@@ -3189,6 +3221,18 @@ rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, qboolean
 	while ( window_exposed == qfalse )
 	{
 		HandleEvents();
+	}
+
+	if ( !fullscreen ) {
+		// Mapping is the first point at which every reparenting WM can expose
+		// the real title-bar and border extents. Reapply the persisted client
+		// origin in outer-frame coordinates so restarts do not drift by one
+		// decoration width/height each time.
+		X11_ApplyWindowPlacement( actualWidth, actualHeight,
+			&requestedWindowOrigin );
+		XSync( dpy, False );
+		Cvar_SetIntegerValue( "vid_xpos", win_x );
+		Cvar_SetIntegerValue( "vid_ypos", win_y );
 	}
 
 	return RSERR_OK;

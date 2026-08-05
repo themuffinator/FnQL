@@ -513,7 +513,16 @@ QL_CG_trap_R_RenderScene
 ==============
 */
 static void QDECL QL_CG_trap_R_RenderScene( const refdef_t *fd ) {
-	CG_Import_Syscall( CG_R_RENDERSCENE, fd );
+	refdef_t scaledRefdef;
+
+	if ( !fd ) {
+		CG_Import_Syscall( CG_R_RENDERSCENE, fd );
+		return;
+	}
+
+	scaledRefdef = *fd;
+	CL_ScaleRetailRefdef( &scaledRefdef );
+	CG_Import_Syscall( CG_R_RENDERSCENE, &scaledRefdef );
 }
 
 /*
@@ -531,6 +540,12 @@ QL_CG_trap_R_DrawStretchPic
 ==============
 */
 static void QDECL QL_CG_trap_R_DrawStretchPic( float x, float y, float w, float h, float s1, float t1, float s2, float t2, qhandle_t hShader ) {
+	const retailFramebufferScale_t scale = CL_GetRetailFramebufferScale();
+
+	x *= scale.x;
+	y *= scale.y;
+	w *= scale.x;
+	h *= scale.y;
 	CG_Import_Syscall( CG_R_DRAWSTRETCHPIC, QL_CG_PASSFLOAT(x), QL_CG_PASSFLOAT(y), QL_CG_PASSFLOAT(w), QL_CG_PASSFLOAT(h), QL_CG_PASSFLOAT(s1), QL_CG_PASSFLOAT(t1), QL_CG_PASSFLOAT(s2), QL_CG_PASSFLOAT(t2), hShader );
 }
 
@@ -810,6 +825,12 @@ QL_CG_trap_CIN_PlayCinematic
 ==============
 */
 static int QDECL QL_CG_trap_CIN_PlayCinematic( const char *arg0, int xpos, int ypos, int width, int height, int bits ) {
+	const retailFramebufferScale_t scale = CL_GetRetailFramebufferScale();
+
+	xpos = CL_ScaleRetailPixel( xpos, scale.x );
+	ypos = CL_ScaleRetailPixel( ypos, scale.y );
+	width = CL_ScaleRetailPixel( width, scale.x );
+	height = CL_ScaleRetailPixel( height, scale.y );
 	return CG_Import_Syscall( CG_CIN_PLAYCINEMATIC, arg0, xpos, ypos, width, height, bits );
 }
 
@@ -846,6 +867,12 @@ QL_CG_trap_CIN_SetExtents
 ==============
 */
 static void QDECL QL_CG_trap_CIN_SetExtents( int handle, int x, int y, int w, int h ) {
+	const retailFramebufferScale_t scale = CL_GetRetailFramebufferScale();
+
+	x = CL_ScaleRetailPixel( x, scale.x );
+	y = CL_ScaleRetailPixel( y, scale.y );
+	w = CL_ScaleRetailPixel( w, scale.x );
+	h = CL_ScaleRetailPixel( h, scale.y );
 	CG_Import_Syscall( CG_CIN_SETEXTENTS, handle, x, y, w, h );
 }
 

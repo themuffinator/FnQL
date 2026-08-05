@@ -92,19 +92,19 @@ void RB_CheckOverflow( int verts, int indexes ) {
 	shader_t *shader = tess.shader;
 	int fogNum = tess.fogNum;
 
-	if (tess.numVertexes + verts < SHADER_MAX_VERTEXES
-		&& tess.numIndexes + indexes < SHADER_MAX_INDEXES) {
+	if (tess.numVertexes + verts <= SHADER_MAX_VERTEXES
+		&& tess.numIndexes + indexes <= SHADER_MAX_INDEXES) {
 		return;
 	}
 
 	RB_SaveSurfaceRestartState( &state );
 	RB_EndSurface();
 
-	if ( verts >= SHADER_MAX_VERTEXES ) {
+	if ( verts > SHADER_MAX_VERTEXES ) {
 		ri.Error( ERR_DROP, "RB_CheckOverflow: verts > MAX (%d > %d)", verts, SHADER_MAX_VERTEXES );
 	}
 
-	if ( indexes >= SHADER_MAX_INDEXES ) {
+	if ( indexes > SHADER_MAX_INDEXES ) {
 		ri.Error( ERR_DROP, "RB_CheckOverflow: indices > MAX (%d > %d)", indexes, SHADER_MAX_INDEXES );
 	}
 

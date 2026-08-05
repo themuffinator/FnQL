@@ -27,9 +27,9 @@
       "name": "RTX (Steam / Retail QL / Win32)",
       "type": "cppvsdbg",
       "request": "launch",
-      "program": "${workspaceFolder}\\meson\\build\\win32-rtx\\fnql.exe",
+      "program": "${workspaceFolder}\\meson\\build\\win32\\fnql.exe",
       "args": ["+set", "r_fullscreen", "0", "+set", "cl_renderer", "rtx", "+set", "com_steamIntegration", "1", "+set", "cl_webuiEnable", "1"],
-      "cwd": "${workspaceFolder}\\meson\\build\\win32-rtx",
+      "cwd": "${workspaceFolder}\\meson\\build\\win32",
       "stopAtEntry": false,
       "console": "internalConsole"
     },

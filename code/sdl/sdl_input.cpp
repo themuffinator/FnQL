@@ -1919,8 +1919,18 @@ static void IN_HandleWindowEvent( Uint32 type, const SDL_WindowEvent *window, in
 
 		case SDL_EVENT_WINDOW_RESIZED:
 		case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+			IN_UpdateWindowGeometry( qfalse, qtrue );
+			break;
+
 		case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
 			IN_UpdateWindowGeometry( qfalse, qtrue );
+			if ( !glw_state.isFullscreen ) {
+				// Decoration extents can change with display scale even when the
+				// client size does not. Recheck the complete frame against the
+				// destination display's usable area.
+				GLW_EnsureWindowOnScreen();
+				GLW_UpdateWindowState();
+			}
 			break;
 
 		case SDL_EVENT_WINDOW_DISPLAY_CHANGED:

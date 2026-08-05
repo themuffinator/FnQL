@@ -2147,7 +2147,9 @@ static qboolean ParseShader( const char **text )
 			shader.noPicMip = 1;
 			continue;
 		}
-		else if ( !Q_stricmp( token, "novlcollapse" ) && s_extendedShader )
+		/* Retail QL uses this directive in ordinary .shader files, including
+		 * the default Sarge skin. It is not restricted to extended shaders. */
+		else if ( !Q_stricmp( token, "novlcollapse" ) )
 		{
 			shader.noVLcollapse = 1;
 			continue;

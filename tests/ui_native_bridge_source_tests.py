@@ -434,9 +434,11 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
 
         self.assertIn("void\tRE_DrawScaledText(", client_h)
         self.assertIn("void\tRE_MeasureScaledText(", client_h)
-        self.assertIn("RE_DrawScaledText( x, y, text, fontHandle, scale, limit, maxX", cl_ui)
+        self.assertIn("scale * framebufferScale.y, limit, rendererMaxX", cl_ui)
         self.assertIn("ql_ui_currentColor", cl_ui)
-        self.assertIn("RE_MeasureScaledText( text, end, fontHandle, scale, limit, bounds );", cl_ui)
+        self.assertIn("RE_MeasureScaledText( text, end, fontHandle, scale * framebufferScale.y, limit, bounds );", cl_ui)
+        self.assertIn("bounds[2] /= framebufferScale.x;", cl_ui)
+        self.assertIn("bounds[4] /= framebufferScale.y;", cl_ui)
         self.assertIn("fnql::font::CopyMeasureBounds( outLeft, bounds );", cl_ui)
         self.assertIn("width = bounds[2] - bounds[0];", cl_ui)
         self.assertIn("height = bounds[4];", cl_ui)
@@ -450,6 +452,9 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
         self.assertIn("void\tCL_CopyRetailGlconfig( void *glconfig );", client_h)
         self.assertIn("CL_CopyRetailGlconfig( glconfig );", cl_ui)
         self.assertIn("generic UI syscall", cl_ui)
+        self.assertIn("CL_GetRetailFramebufferScale()", cl_ui)
+        self.assertIn("scaledRefdef.width = RoundToInt( scaledRefdef.width * scale.x );", cl_ui)
+        self.assertIn("scaledRefdef.height = RoundToInt( scaledRefdef.height * scale.y );", cl_ui)
 
     def test_ui_item_download_info_import_uses_workshop_progress_then_steam_fallback(self) -> None:
         client_h = read_repo_file("code/client/client.h")

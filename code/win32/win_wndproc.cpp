@@ -1254,10 +1254,18 @@ LRESULT WINAPI MainWndProc( HWND hWnd, UINT uMsg, WPARAM  wParam, LPARAM lParam 
 		if ( !glw_state.cdsFullscreen && lParam ) {
 			RECT suggested = *(RECT *)lParam;
 			WIN_ConstrainWindowRectToWorkArea( &suggested );
-			SetWindowPos( hWnd, NULL, suggested.left, suggested.top,
+			if ( SetWindowPos( hWnd, NULL, suggested.left, suggested.top,
 				suggested.right - suggested.left,
 				suggested.bottom - suggested.top,
-				SWP_NOACTIVATE | SWP_NOZORDER );
+				SWP_NOACTIVATE | SWP_NOZORDER ) ) {
+				// Persist the outer-frame origin selected for the new DPI. WM_MOVE
+				// may be suppressed while inactive, but the chrome-aware suggested
+				// rectangle must still survive the next restart.
+				Cvar_SetIntegerValue( "vid_xpos", suggested.left );
+				Cvar_SetIntegerValue( "vid_ypos", suggested.top );
+				vid_xpos->modified = qfalse;
+				vid_ypos->modified = qfalse;
+			}
 			WIN_RefreshWindowPlacementState( hWnd );
 			return 0;
 		}

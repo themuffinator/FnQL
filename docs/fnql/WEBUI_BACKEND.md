@@ -292,7 +292,12 @@ Native UI ownership transfers only after a live Awesomium bitmap surface and
 renderer presenter both exist.
 
 Once play is active, Escape transfers ownership from the browser/cgame catcher
-to the retail native UI and activates its in-game menu. The native import slab
+to the retail native UI and activates its in-game menu. If cgame owns a command
+overlay, the engine first sends retail event 5 (`CGAME_EVENT_CLOSECOMMANDOVERLAY`)
+and releases that catcher. It does not replace the in-game Escape menu with
+`UIMENU_TEAM` for spectators: that team command activates `joingame_menu`, and
+stacking it over the in-game root leaves both menus' content and positioning
+mixed together. The native import slab
 matches retail `uix86.dll` at this boundary: sound-registration slot 35 accepts
 only the sample path. Treating it as the legacy two-argument QVM call corrupts
 the call boundary and stops `ui/ingame.menu` parsing at `itemFocusSound`, which

@@ -140,6 +140,37 @@ class WindowedMouseSourceTests(unittest.TestCase):
         for path in ("code/sdl/sdl_input.cpp", "code/win32/win_wndproc.cpp"):
             self.assertNotIn("raw host-window coordinates", read_text(path))
 
+    def test_retail_modules_receive_the_public_supersampled_pointer_space(self) -> None:
+        """Supersampling doubles the renderer's private target, but
+        CL_CopyRetailGlconfig hands native retail modules the public capture
+        dimensions. _UI_MouseEvent divides by that glconfig and discards any
+        result outside 640x480, so the drawable position has to be converted
+        back before dispatch or an in-game menu tracks at double speed and then
+        stops responding outside its top-left quadrant."""
+        client_input = read_text("code/client/cl_input.cpp")
+        convert = function_body(client_input, "CL_ProjectDrawableToRetailModule")
+
+        # Private renderer target in, public retail module space out.
+        self.assertIn("projection.hostWidth = cls.glconfig.vidWidth;", convert)
+        self.assertIn("projection.hostHeight = cls.glconfig.vidHeight;", convert)
+        self.assertIn("projection.drawableWidth = cls.captureWidth;", convert)
+        self.assertIn("projection.drawableHeight = cls.captureHeight;", convert)
+        # Reuse the shared truncating projection, so an unset capture size is an
+        # identity and a position strictly inside the drawable stays strictly
+        # inside the module's space.
+        self.assertIn("fnql::input::ProjectPointerToDrawable( *x, *y, projection )", convert)
+        # Bytecode modules read the private dimensions through CL_GetGlconfig and
+        # draw through the unscaled syscall lane, so they keep the drawable space.
+        self.assertIn("if ( !vm || !vm->dllExports ) {", convert)
+
+        dispatch = function_body(client_input, "CL_MouseAbsoluteEvent")
+        self.assertIn("CL_ProjectDrawableToRetailModule( uivm, &x, &y );", dispatch)
+        self.assertIn("CL_ProjectDrawableToRetailModule( cgvm, &x, &y );", dispatch)
+        # The console and the WebUI browser address the private target directly
+        # and must not be converted.
+        self.assertIn("Con_SetMousePos( x, y );", dispatch)
+        self.assertIn("CL_WebView_OnMouseMove( x, y );", dispatch)
+
     def test_sdl_uses_one_owner_keyed_dedup_cache_for_every_absolute_owner(self) -> None:
         source = read_text("code/sdl/sdl_input.cpp")
         queue = function_body(source, "IN_QueueAbsolutePointerPosition")

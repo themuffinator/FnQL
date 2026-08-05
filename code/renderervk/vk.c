@@ -6205,6 +6205,7 @@ static void vk_create_attachments( void )
 
 	create_depth_attachment( glConfig.vidWidth, glConfig.vidHeight, vkSamples, &vk.depth_image, &vk.depth_image_view,
 		( vk.fboActive && ( r_bloom->integer || ( r_motionBlur && r_motionBlur->integer ) ||
+			vk_depth_fade_supported() ||
 			( r_liquid && r_liquid->integer ) ) ) ? qfalse : qtrue );
 
 	if ( vk_depth_fade_supported() ) {
