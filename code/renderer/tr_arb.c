@@ -5798,6 +5798,11 @@ void FBO_MenuBlur( float strength )
 		FBO_MenuBlurDecline( "the framebuffer post-processing path is not active" );
 		return;
 	}
+	/* backEnd.doneSurfaces means a 3D pass has run this frame, and it is load
+	 * bearing: it is the only signal the backends have that the render target
+	 * holds a scene this composite may read back.  Dropping it to soften the
+	 * 2D-only connection and loading screens faulted the device on the first
+	 * such frame.  See docs/fnql/MENU_SOFT_FOCUS.md. */
 	if ( !backEnd.doneSurfaces || backEnd.framePostProcessed || ri.CL_IsMinimized() ) {
 		return;
 	}

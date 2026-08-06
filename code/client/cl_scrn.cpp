@@ -1205,7 +1205,9 @@ static void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 	// Soften everything drawn so far - the 3D scene and the cgame HUD over it -
 	// so the in-game menu that draws next is the only sharp thing on screen. A
 	// fullscreen menu has no scene behind it to soften, and the connect and
-	// loading screens are not in-game menus.
+	// loading screens are not in-game menus.  Both of those, and the console,
+	// are 2D-only frames: the backends require a 3D pass this frame and fault
+	// without one, so they cannot be softened.  See MENU_SOFT_FOCUS.md.
 	menuBlurStrength = SCR_UpdateMenuBlurStrength(
 		uiVisible && !uiFullscreen && cls.state == CA_ACTIVE );
 	if ( menuBlurStrength > 0.0f && re.DrawMenuBlur ) {
@@ -1223,7 +1225,11 @@ static void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 		CL_WebHost_DrawBrowserSurface();
 	}
 
-	// console draws next
+	// The console is deliberately not softened.  It is the one layer that
+	// finishes the frame's post-processing itself, and every ordering tried
+	// around that either left it drawing with the descriptor sets bloom's blend
+	// pass had bound - so it did not appear at all - or dimmed the live HUD
+	// underneath it while the request faded out.  See MENU_SOFT_FOCUS.md.
 	Con_DrawConsole ();
 
 	// debug graph can be drawn on top of anything

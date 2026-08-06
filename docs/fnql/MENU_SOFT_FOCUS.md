@@ -16,6 +16,8 @@ This replaces an earlier `cl_menuDepthOfField` effect that was implemented only 
 
 One cvar gates the whole feature. The fade in and out is a fixed 140 ms and is not configurable: shorter reads as a flicker when a menu is toggled, longer starts to feel like input lag on the menu itself.
 
+It is reachable without the console: the WebUI settings overlay carries it as a slider in the **Game → Interface** group (`SECTION_GROUPS.game` in `code/client/webui/fnql-settings.js`), and `CL_WebHost_BuildConfigCvarJson` publishes it so the overlay can read the current value back. The slider's `min`/`max` mirror the cvar's `Cvar_CheckRange` bounds and its `0.05` step resolves to the two decimals `formatRange` writes; a source gate holds those three in agreement, since a slider that cannot reach the cvar's bounds is the failure that would otherwise go unnoticed.
+
 Because strength scales radius *and* composite weight together, a partial value is a gently softened frame rather than a cross-fade between a sharp and a blurred copy of the same image, which would read as a ghosted double exposure.
 
 ## Trigger
@@ -26,11 +28,23 @@ The client owns the decision, in `SCR_DrawScreenField`. The effect is requested 
 - the menu is not fullscreen — a fullscreen menu has no scene behind it to soften;
 - `cls.state == CA_ACTIVE` — the connect and level-loading screens are not in-game menus.
 
-Note what is *not* included. `KEYCATCH_CGAME` overlays such as the scoreboard are drawn over live gameplay that the player is still reading, so they stay sharp. The WebUI browser draws its own full-surface overlay and is handled separately.
-
 `SCR_UpdateMenuBlurStrength` ramps toward the requested strength on wall-clock time rather than per frame, so the pull into focus takes the same 140 ms at 60 and at 250 fps. A negative `cls.realtime` delta is a timer reset and a delta over a second is a hitch or a restored window; neither counts as elapsed fade time.
 
 The request is issued after the scene *and* the cgame HUD have been drawn and before `UI_REFRESH`, so the HUD is softened along with the world and only the menu itself stays sharp.
+
+### What cannot be softened, and why
+
+`KEYCATCH_CGAME` overlays — the scoreboard and the spectator join page — stay sharp. They are drawn over live gameplay the player is still reading, and more decisively, cgame draws the scene, the HUD, and its overlays in a single `CG_DRAW_ACTIVE_FRAME` call, so a request queued after it would soften the overlay itself rather than the frame behind it. That would need a cgame-side hook that does not exist.
+
+**The connection dialog and the level-loading screen** were tried and withdrawn. Both are 2D-only frames, and every backend gates the composite on `backEnd.doneSurfaces` — "a 3D pass has run this frame". Dropping that gate so those screens could be softened faulted the device inside the ICD on the first such frame, before the loading screen was even reached. The flag is doing more than naming a scene: it is the only signal a backend has that the render target holds something this composite may read back, and nothing else in any of the three renderers post-processes a frame without one. Re-enabling it needs that invariant established with the Vulkan validation layers on, not inferred from reading.
+
+**The console** was tried and withdrawn as well. It is the only layer that finishes the frame's own post-processing, calling `re.FinishBloom` from inside `Con_DrawSolidConsole` so it is not itself bloomed, and that call cannot be moved out of the way:
+
+- With the request issued **before** it, bloom runs between the softening and the console. The descriptor sets its blend pass leaves bound made the console's own draw read the wrong descriptors, and the console did not appear at all.
+- With bloom finished **first**, the Vulkan backends are left in `RENDER_PASS_POST_BLOOM`, which targets an attachment the pyramid does not sample.
+- Either ordering also composites over live gameplay for the 140 ms the request takes to fade out after the console closes, which reads as the HUD — the warmup ready-up prompt most visibly — briefly losing opacity for no reason the player can see.
+
+It cannot simply share the menu's insertion point either: it draws over the menu and the WebUI browser surface, both of which land after that point, so the layers underneath it would stay sharp. Softening only the console's own rectangle would avoid the gameplay-dimming problem, but `re.DrawMenuBlur` composites the whole frame and the Vulkan composite pipelines bake their scissor, so the rect would have to become dynamic state in both of them.
 
 ## Sampling plan
 
@@ -61,6 +75,8 @@ The effect samples the finished frame, so it cannot run from the frontend. Each 
 
 Three attachments, one render pass, three framebuffers, three descriptors, and three pipelines are created. One render pass object serves all three targets because render-pass compatibility depends on attachment format and sample count, not extent; three *pipelines* are still needed because viewport and scissor are baked into a pipeline in this codebase. `VK_NUM_MENU_BLUR_IMAGES` is budgeted into both `MAX_ATTACHMENTS_IN_POOL` and the combined-image-sampler descriptor pool.
 
+`vk_menu_blur` ends by setting `vk.cmd->last_pipeline` to `VK_NULL_HANDLE`, and that is load-bearing rather than a hint. `vk_menu_blur_draw` binds descriptor set 0 through `vk.pipeline_layout_post_process`, and binding through a layout incompatible with `vk.pipeline_layout` disturbs the sets bound for it. Nulling the cache is what forces the next draw to rebind them. Handing the frame's pipeline back instead — which looks like the tidier mirror of what `vk_bloom` does for its own binds — lets that draw proceed with disturbed descriptor sets and faults the device inside the ICD.
+
 The Vulkan attachments are allocated unconditionally whenever the FBO path is active, not gated on `cl_menuBlur`. The attachment pool is fixed-size and populated at renderer init, where the renderer cannot usefully consult a client cvar that the player may change at any moment. The cost is roughly 3 MB at 1080p and 12 MB at 4K.
 
 Both SPIR-V blobs are checked in beside the shader source in `shaders/spirv/shader_data.c`, generated with the same layout `bin2hex` produces.
@@ -75,6 +91,6 @@ The effect requires the framebuffer post-processing path. With `r_fbo 0` there i
 
 `tests/menu_blur_tests.cpp` covers the plan: inert disabled plans for every rejected input including NaN strength and undersized targets; two halvings with truncation that never collapses to zero; total sigma tracking target height and not width; the 1:2:3:4 ramp; strength scaling sigma and alpha together with a constant pass count and clamping above 1; tap-spacing conversion round-tripping through each kernel variance and collapsing to zero on degenerate input; and the property that both kernels reach the same total sigma from the same plan.
 
-`tests/menu_blur_source_tests.py` gates the structure: that all three backends include the shared header and call both plan functions; that each passes its own kernel variance and not the other's; that a single archived cvar gates the effect and the binned depth-of-field path is gone from every file that referenced it; that the trigger excludes fullscreen menus, non-active states, and cgame overlays; that each backend queues a render command and ends its surface first; that the GL path performs exactly two linear blits inside `FBO_MenuBlur`; that both Vulkan backends allocate, budget, and release every object they create; that the shader's weights and tap positions still match the tabulated kernel variance; and that the two Vulkan shader sources are byte-identical.
+`tests/menu_blur_source_tests.py` gates the structure: that all three backends include the shared header and call both plan functions; that each passes its own kernel variance and not the other's; that a single archived cvar gates the effect and the binned depth-of-field path is gone from every file that referenced it; that the in-game menu trigger excludes fullscreen menus and non-active states, that no trigger consults `KEYCATCH_CGAME`, and that each layer has its own ramp; that exactly one layer is requested, with no connect, loading or console layer and no client-side `re.FinishBloom` call crept back in; that all three backends still gate on `backEnd.doneSurfaces` and both Vulkan backends null `last_pipeline` after their post-process binds; that each backend queues a render command and ends its surface first; that the GL path performs exactly two linear blits inside `FBO_MenuBlur`; that both Vulkan backends allocate, budget, and release every object they create; that the shader's weights and tap positions still match the tabulated kernel variance; and that the two Vulkan shader sources are byte-identical.
 
-Runtime promotion still needs a windowed retail-asset check on each renderer: open an in-game menu during live play and confirm the scene and HUD soften while the menu stays sharp, that the fade is smooth in both directions, that `cl_menuBlur 0` leaves the frame untouched, and that intermediate values look softened rather than double-exposed. `r_fbo 0` and a `vid_restart` with the menu open are the two configuration cases worth checking explicitly.
+Runtime promotion still needs a windowed retail-asset check on each renderer: open an in-game menu during live play and confirm the scene and HUD soften while the menu stays sharp, that the fade is smooth in both directions, that `cl_menuBlur 0` leaves the frame untouched, and that intermediate values look softened rather than double-exposed. Confirm too that the layers deliberately left out stay out: connecting to a server and dropping the console during live play must both leave the frame completely untouched, and the warmup ready-up prompt must hold full opacity throughout. `r_fbo 0` and a `vid_restart` with the menu open are the two configuration cases worth checking explicitly.
