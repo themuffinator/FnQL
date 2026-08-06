@@ -37,6 +37,10 @@ release, CI resets `Unreleased` for the next cycle.
 ### Fixes
 - Keep the mouse cursor usable in the in-game menu, scoreboard, and other
   cgame/UI overlays while supersampling is enabled.
+- Light maps that ship external lightmap atlases (`maps/<mapname>/lm_*`) the same
+  way as maps with lightmaps stored inside the BSP. They previously ignored
+  `r_mapOverBrightBits`, `r_mapOverBrightCap`, and `r_mapGreyScale`, took
+  `r_intensity` and gamma a second time, and were blurred by `r_picmip`.
 
 ### Documentation and Tooling
 - _None yet._
