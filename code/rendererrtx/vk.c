@@ -16437,6 +16437,10 @@ void vk_shutdown( refShutdownCode_t code )
 	qvkDestroyShaderModule(vk.device, vk.modules.blur_fs, NULL);
 	qvkDestroyShaderModule(vk.device, vk.modules.blend_fs, NULL);
 	qvkDestroyShaderModule(vk.device, vk.modules.motion_blur_fs, NULL);
+	/* Created unconditionally beside the other post-process modules; it was the
+	 * only one with no matching destroy, so every vid_restart leaked one. */
+	qvkDestroyShaderModule(vk.device, vk.modules.menu_blur_fs, NULL);
+	vk.modules.menu_blur_fs = VK_NULL_HANDLE;
 	qvkDestroyShaderModule(vk.device, vk.modules.world_outline_fs, NULL);
 	qvkDestroyShaderModule(vk.device, vk.modules.global_fog_fs, NULL);
 	vk.modules.global_fog_fs = VK_NULL_HANDLE;
@@ -21352,15 +21356,36 @@ qboolean vk_menu_blur( float strength )
 		vk_menu_blur_decline( "the framebuffer post-processing path is not active" );
 		return qfalse;
 	}
+<<<<<<< Updated upstream
 	/* backEnd.doneSurfaces means a 3D pass has run this frame, and it is load
 	 * bearing: it is the only signal the backends have that the render target
 	 * holds a scene this composite may read back.  Dropping it to soften the
 	 * 2D-only connection and loading screens faulted the device on the first
 	 * such frame.  See docs/fnql/MENU_SOFT_FOCUS.md. */
 	if ( !backEnd.doneSurfaces || ri.CL_IsMinimized() ) {
+=======
+	if ( ri.CL_IsMinimized() ) {
+>>>>>>> Stashed changes
 		return qfalse;
 	}
-	if ( vk.renderPassIndex != RENDER_PASS_MAIN ) {
+	/* Test frame liveness, not vk.renderPassIndex alone.  That index is sticky
+	 * state rather than a recording flag: vk_end_render_pass deliberately leaves
+	 * it set, and vk_end_frame re-arms it to RENDER_PASS_MAIN *after*
+	 * qvkEndCommandBuffer and qvkQueueSubmit.  A mid-client-frame drain - the
+	 * one level of re-entrant SCR_UpdateScreen the client permits, or
+	 * R_IssuePendingRenderCommands from the retained host font atlas - leaves
+	 * the index reading MAIN with the frame already submitted, and ending a
+	 * render pass on that dead command buffer faults the device inside the ICD.
+	 *
+	 * backEnd.doneSurfaces used to mask this by accident rather than by design:
+	 * it is raised in RB_DrawSurfs and cleared only once the frame has been
+	 * presented, so it doubled as "a frame is open".  Testing the real state
+	 * instead is also what lets a frame with no 3D pass - the connection and
+	 * level-loading screens - be softened safely.  This backend keeps no
+	 * vk_current_render_pass tracker, so frame_count carries the liveness half
+	 * on its own; every mid-frame end here is paired with a begin. */
+	if ( vk.frame_count == 0 || vk.renderPassIndex != RENDER_PASS_MAIN ) {
+		vk_menu_blur_decline( "no scene render pass is open on this frame" );
 		return qfalse;
 	}
 	if ( vk.render_pass.menu_blur == VK_NULL_HANDLE ||
@@ -21423,18 +21448,32 @@ qboolean vk_menu_blur( float strength )
 		0.0f, 0.0f, plan.alpha );
 
 	/* Direct post-process binds bypass the normal descriptor/pipeline caches.
+<<<<<<< Updated upstream
 	 * The null pipeline is load-bearing, not just a hint: vk_menu_blur_draw
 	 * binds descriptor set 0 with vk.pipeline_layout_post_process, and binding
 	 * through an incompatible layout disturbs the sets bound for
 	 * vk.pipeline_layout.  Nulling the cache is what forces the next draw to
 	 * rebind them; handing the frame's pipeline back instead lets that draw
 	 * proceed with disturbed descriptor sets and faults the device. */
+=======
+	 * The null pipeline is load bearing: vk_menu_blur_draw binds descriptor set
+	 * 0 through vk.pipeline_layout_post_process, and binding through a layout
+	 * incompatible with vk.pipeline_layout disturbs the sets bound for it.
+	 * Nulling the cache is what forces the next draw to rebind them. */
+>>>>>>> Stashed changes
 	vk.cmd->last_pipeline = VK_NULL_HANDLE;
 	vk.cmd->depth_range = DEPTH_RANGE_COUNT;
 	vk.cmd->descriptor_set.start = 0;
 	vk.cmd->descriptor_set.end =
 		MIN( VK_DESC_COUNT, vk.maxBoundDescriptorSets ) - 1;
 	Com_Memset( &vk.cmd->scissor_rect, 0xff, sizeof( vk.cmd->scissor_rect ) );
+
+	/* The same incompatibility leaves the 64-byte MVP push constant undefined,
+	 * and unlike every other post-process detour in this file this one runs
+	 * while backEnd.projection2D is already set - so the next RB_StretchPic
+	 * skips RB_SetGL2D and nothing re-pushes it.  Every 2D draw after the
+	 * composite would otherwise be transformed by undefined values. */
+	vk_update_mvp( NULL );
 
 	return qtrue;
 }

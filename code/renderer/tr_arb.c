@@ -5807,11 +5807,6 @@ void FBO_MenuBlur( float strength )
 		return;
 	}
 
-	if ( blitMSfbo ) {
-		FBO_BlitMS( qfalse );
-		blitMSfbo = qfalse;
-	}
-
 	sourceIndex = fboReadIndex;
 	if ( sourceIndex < 0 || sourceIndex >= FBO_COUNT ) {
 		FBO_MenuBlurDecline( "no readable scene framebuffer" );
@@ -5824,8 +5819,21 @@ void FBO_MenuBlur( float strength )
 		return;
 	}
 	if ( !FBO_EnsureMenuBlurBuffers( &plan ) ) {
+		/* FBO_Create and FBO_Clean both leave framebuffer 0 bound, so a failed
+		 * allocation would send every later UI draw to the back buffer, where
+		 * FBO_PostProcess then erases it.  Hand the caller's target back. */
+		FBO_Bind( GL_FRAMEBUFFER, source->fbo );
 		FBO_MenuBlurDecline( "the soft-focus pyramid could not be allocated" );
 		return;
+	}
+
+	/* Resolve only once every decline above has been passed.  Consuming
+	 * blitMSfbo before them disarms the frame's only multisample resolve and
+	 * switches the draw target, so a decline would strand the rest of the
+	 * frame in the multisample buffer that is now never blitted. */
+	if ( blitMSfbo ) {
+		FBO_BlitMS( qfalse );
+		blitMSfbo = qfalse;
 	}
 
 	if ( !backEnd.projection2D ) {

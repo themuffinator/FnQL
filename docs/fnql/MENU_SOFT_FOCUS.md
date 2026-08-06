@@ -28,6 +28,31 @@ The client owns the decision, in `SCR_DrawScreenField`. The effect is requested 
 - the menu is not fullscreen — a fullscreen menu has no scene behind it to soften;
 - `cls.state == CA_ACTIVE` — the connect and level-loading screens are not in-game menus.
 
+<<<<<<< Updated upstream
+=======
+The request also carries the same `browserSuppressUiRefresh` term that gates the menu's own draw. Without it the whole pyramid ran every frame while the browser owned the surface, with nothing sharp ever drawn over the softened frame.
+
+Note what is *not* included. `KEYCATCH_CGAME` overlays such as the scoreboard are drawn over live gameplay that the player is still reading, so they stay sharp. cgame draws the scene, the HUD and its overlays in a single `CG_DRAW_ACTIVE_FRAME` call, so a request queued after it would soften the overlay itself rather than the frame behind it. Softening the scene under the *intermission* scoreboard is possible in principle, but only from a composite issued between the 3D pass and the HUD — the slot `FBO_MotionBlur` / `vk_motion_blur` already occupy at the tail of `RB_DrawSurfs`. That needs the strength plumbed through `trRefdef_t` and five guards: worldless views, portal sub-views, cubemap-screenshot views, the Vulkan screenmap command duplicate, and a once-per-frame latch. Not implemented.
+
+### Known limitation: inert on Vulkan at default settings
+
+**On `code/renderervk` and `code/rendererrtx` the composite cannot run in-game under the shipped default `r_bloom 1`.** `r_bloom` defaults to `1` on both Vulkan backends and `0` on the OpenGL lineage. `RB_StretchPic` calls `vk_bloom()` on *every* 2D quad, so the cgame HUD's first quad runs bloom, which finishes by entering `RENDER_PASS_POST_BLOOM`; nothing puts the index back. `RC_MENU_BLUR` is queued after the HUD, so `vk_menu_blur` reaches its `renderPassIndex != RENDER_PASS_MAIN` guard and returns.
+
+Fixing it means letting the composite resume whichever pass it interrupted, which needs a second composite pipeline built against `vk.render_pass.post_bloom` and interacts with that pass declaring its MSAA colour attachment `loadOp = LOAD` / `storeOp = DONT_CARE`. Not done. Until it is, `r_bloom 0` is the only Vulkan configuration in which the effect is visible.
+
+### Why `backEnd.doneSurfaces` is not the right guard
+
+Dropping that test so 2D-only screens could be softened faulted the device inside the ICD on the first connect screen. The flag was not protecting what it appeared to.
+
+`vk.renderPassIndex` is **sticky state, not a recording flag**: `vk_end_render_pass` deliberately leaves it set, and `vk_end_frame` re-arms it to `RENDER_PASS_MAIN` *after* `qvkEndCommandBuffer` and `qvkQueueSubmit`. So it reads `MAIN` in exactly the state where recording anything is undefined. `backEnd.doneSurfaces` is raised in `RB_DrawSurfs` and cleared only once the frame has been presented, so it doubled *by accident* as "a frame is open" — and removing it removed the only thing noticing the frame had already ended.
+
+Two mid-client-frame drains are live in this tree and both produce that state: the one level of re-entrant `SCR_UpdateScreen` the client permits (the UI VM can call it from inside `UI_DRAW_CONNECT_SCREEN`), and `R_IssuePendingRenderCommands` from the retained host font atlas. Either ends and submits the command buffer mid-frame; the composite then ends a render pass on a dead command buffer.
+
+`vk_menu_blur` now tests liveness directly — `vk.frame_count`, plus the recording pass itself on `renderervk` — the precondition `vk_capture_liquid_scene` already uses for the same end-detour-resume trick. Correct by construction, with no assumption about driver behaviour.
+
+The Vulkan composite also re-pushes the MVP before returning. `vk_menu_blur_draw` binds through `vk.pipeline_layout_post_process`, which is not push-constant compatible with `vk.pipeline_layout`, so the 64-byte MVP is undefined afterwards. This is the only post-process detour that runs while `backEnd.projection2D` is already set, so the next `RB_StretchPic` skips `RB_SetGL2D` and nothing else would restore it.
+
+>>>>>>> Stashed changes
 `SCR_UpdateMenuBlurStrength` ramps toward the requested strength on wall-clock time rather than per frame, so the pull into focus takes the same 140 ms at 60 and at 250 fps. A negative `cls.realtime` delta is a timer reset and a delta over a second is a hitch or a restored window; neither counts as elapsed fade time.
 
 The request is issued after the scene *and* the cgame HUD have been drawn and before `UI_REFRESH`, so the HUD is softened along with the world and only the menu itself stays sharp.

@@ -139,9 +139,19 @@ class ClientTriggerTests(unittest.TestCase):
         behind it to soften."""
         scrn = read_text("code/client/cl_scrn.cpp")
 
+<<<<<<< Updated upstream
         self.assertIn(
             "SCR_UpdateMenuBlurStrength(\n"
             "\t\tuiVisible && !uiFullscreen && cls.state == CA_ACTIVE );",
+=======
+        # The request carries the same browserSuppressUiRefresh term the menu's
+        # own draw does. Without it the whole pyramid ran every frame while the
+        # browser owned the surface, with nothing sharp drawn over it.
+        self.assertIn(
+            "SCR_UpdateMenuBlurStrength(\n"
+            "\t\tuiVisible && !uiFullscreen && !browserSuppressUiRefresh\n"
+            "\t\t&& cls.state == CA_ACTIVE );",
+>>>>>>> Stashed changes
             scrn,
         )
         self.assertIn("if ( menuBlurStrength > 0.0f && re.DrawMenuBlur ) {", scrn)
@@ -152,6 +162,88 @@ class ClientTriggerTests(unittest.TestCase):
         self.assertIn("kMenuBlurFadeMsec", scrn)
         self.assertIn("delta = previousTime ? cls.realtime - previousTime : 0;", scrn)
         self.assertIn("if ( delta < 0 || delta > 1000 ) {", scrn)
+        # A discarded delta must HOLD, not snap. Snapping defeated the fade on
+        # the stereo second eye, on zero-millisecond frames, and on exactly the
+        # hitch the clamp above discards - where a snap is most visible.
+        self.assertNotIn("if ( delta <= 0 ) {\n\t\tstrength = target;", scrn)
+        # A non-finite cvar value passes Com_Clamp and latches strength to NaN
+        # for the session; the ramp can never recover from it.
+        self.assertIn("cl_menuBlur->value == cl_menuBlur->value", scrn)
+
+    def test_backends_require_a_live_frame_not_a_sticky_index(self) -> None:
+        """vk.renderPassIndex is sticky state, not a recording flag:
+        vk_end_render_pass leaves it set and vk_end_frame re-arms it to
+        RENDER_PASS_MAIN after the command buffer is ended and submitted. A
+        mid-frame drain therefore leaves it reading MAIN on a dead command
+        buffer, and ending a render pass there faults the device."""
+        for base in VULKAN_BACKENDS:
+            body = function_body(
+                read_text(base + "/vk.c"), "qboolean vk_menu_blur( float strength )"
+            )
+            with self.subTest(base=base):
+                self.assertIn("vk.frame_count == 0 ||", body)
+                self.assertIn(
+                    'vk_menu_blur_decline( "no scene render pass is open on this frame" );',
+                    body,
+                )
+                # The old proxy must not come back: it masked this by accident,
+                # and it is what kept every 2D-only screen from being softened.
+                self.assertNotIn("!backEnd.doneSurfaces", body)
+
+        # renderervk tracks the recording pass directly, so it tests both halves
+        # the way vk_capture_liquid_scene does for the same end/resume trick.
+        vk_body = function_body(
+            read_text("code/renderervk/vk.c"), "qboolean vk_menu_blur( float strength )"
+        )
+        self.assertIn("vk_current_render_pass != vk.render_pass.main &&", vk_body)
+
+    def test_vulkan_backends_restore_the_mvp_push_constant(self) -> None:
+        """vk_menu_blur_draw pushes through vk.pipeline_layout_post_process,
+        which is not push-constant compatible with vk.pipeline_layout, so the
+        64-byte MVP is undefined afterwards. This is the only post-process
+        detour that runs while backEnd.projection2D is already set, so the next
+        RB_StretchPic skips RB_SetGL2D and nothing else re-pushes it."""
+        for base in VULKAN_BACKENDS:
+            body = function_body(
+                read_text(base + "/vk.c"), "qboolean vk_menu_blur( float strength )"
+            )
+            with self.subTest(base=base):
+                self.assertIn("vk_update_mvp( NULL );", body)
+                self.assertIn("vk.cmd->last_pipeline = VK_NULL_HANDLE;", body)
+                self.assertIn(
+                    "MIN( VK_DESC_COUNT, vk.maxBoundDescriptorSets ) - 1;", body
+                )
+
+    def test_gl_resolves_multisample_only_after_every_decline(self) -> None:
+        """Consuming blitMSfbo disarms the frame's only multisample resolve and
+        switches the draw target, so a later decline stranded the rest of the
+        frame in a buffer that is never blitted."""
+        body = function_body(
+            read_text("code/renderer/tr_arb.c"), "void FBO_MenuBlur( float strength )"
+        )
+        resolve = body.index("FBO_BlitMS( qfalse );")
+        for decline in (
+            '"no readable scene framebuffer"',
+            '"the scene framebuffer is not sampleable"',
+            '"the soft-focus pyramid could not be allocated"',
+        ):
+            with self.subTest(decline=decline):
+                self.assertLess(body.index(decline), resolve)
+        # FBO_Create and FBO_Clean both leave framebuffer 0 bound, so the
+        # allocation decline has to hand the caller's target back or every later
+        # UI draw lands in the back buffer and is erased by FBO_PostProcess.
+        self.assertIn("FBO_Bind( GL_FRAMEBUFFER, source->fbo );", body)
+
+    def test_vulkan_backends_destroy_the_shader_module(self) -> None:
+        """Created unconditionally beside the other post-process modules; it was
+        the only one with no matching destroy, so vid_restart leaked one."""
+        for base in VULKAN_BACKENDS:
+            source = read_text(base + "/vk.c")
+            with self.subTest(base=base):
+                self.assertIn(
+                    "qvkDestroyShaderModule(vk.device, vk.modules.menu_blur_fs, NULL);",
+                    source,
+                )
 
     def test_only_one_layer_is_requested(self) -> None:
         """The connection dialog, the level-loading screen and the console are
