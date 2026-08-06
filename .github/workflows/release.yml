@@ -97,7 +97,9 @@ jobs:
 
       - name: Stamp release build version
         shell: msys2 {0}
-        run: python scripts/manual_release.py stamp-version --build-number ${{ needs.prepare.outputs.build_number }}
+        run: |
+          python scripts/manual_release.py stamp-version --build-number ${{ needs.prepare.outputs.build_number }}
+          python scripts/generate_docs.py
 
       - name: Build
         shell: msys2 {0}
@@ -157,7 +159,9 @@ jobs:
           submodules: recursive
 
       - name: Stamp release build version
-        run: python scripts/manual_release.py stamp-version --build-number ${{ needs.prepare.outputs.build_number }}
+        run: |
+          python scripts/manual_release.py stamp-version --build-number ${{ needs.prepare.outputs.build_number }}
+          python scripts/generate_docs.py
 
       - name: Install Meson
         run: python -m pip install meson ninja
@@ -174,7 +178,11 @@ jobs:
           meson install -C meson\build-x86 --no-rebuild --skip-subprojects || exit /b
 
       - name: Run complete regression suite
-        run: meson test -C meson\build-x86 --print-errorlogs
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x86 -host_arch=x64 || exit /b
+          meson test -C meson\build-x86 --print-errorlogs || exit /b
 
       - name: Stage pinned Steam provider
         run: python scripts/fetch_steam_provider.py --output bin/fnql_steam.dll
@@ -225,6 +233,7 @@ jobs:
             gcc-multilib \
             g++-multilib \
             glslang-tools \
+            libasound2-dev:i386 \
             libc6-dev-i386 \
             libgl-dev:i386 \
             libx11-dev:i386 \

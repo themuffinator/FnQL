@@ -17,6 +17,15 @@ demo data, protocol data, or VM/native-module interfaces.
 #define GLOBAL_FOG_SIDECAR_MAX_BYTES 16384
 #define GLOBAL_FOG_TOKEN_MAX_BYTES 64
 
+/* The cast is load-bearing.  0.1 has no exact binary representation, and on
+ * 32-bit x86 the x87 unit evaluates float expressions at excess precision
+ * (FLT_EVAL_METHOD 2).  There a bare 0.1f literal keeps the wider value of the
+ * decimal 0.1, which sits just below the float the parser stores for an
+ * authored "0.1", so the documented maximum density would be rejected.  A cast
+ * discards excess range and precision, putting both sides of the comparison
+ * back on the same float value. */
+#define GLOBAL_FOG_DENSITY_MAX ( (float)0.1f )
+
 typedef enum {
 	GLOBAL_FOG_EXP = 0,
 	GLOBAL_FOG_EXP2,
@@ -292,7 +301,8 @@ static ID_INLINE qboolean R_GlobalFogParse( globalFog_t *fog, const char *text,
 			}
 			if ( R_GlobalFogNextToken( &cursor, end, token, sizeof( token ) ) != 1 ||
 				!R_GlobalFogParseFloat( token, &fog->density ) ||
-				fog->density <= 0.0f || fog->density > 0.1f ) {
+				fog->density <= 0.0f ||
+				fog->density > GLOBAL_FOG_DENSITY_MAX ) {
 				R_GlobalFogSetError( error, errorSize,
 					"density must be greater than zero and no greater than 0.1" );
 				return qfalse;
