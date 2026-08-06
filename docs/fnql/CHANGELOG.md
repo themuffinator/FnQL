@@ -26,7 +26,8 @@ release, CI resets `Unreleased` for the next cycle.
 - _None yet._
 
 ### Builds and Packaging
-- _None yet._
+- Allow the Make cleanup goals to run on a fresh clone, before any Meson
+  subproject has been downloaded or any compiler has been installed.
 
 ### Fixes
 - Keep the mouse cursor usable in the in-game menu, scoreboard, and other
