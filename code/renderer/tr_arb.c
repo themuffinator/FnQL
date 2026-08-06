@@ -1,6 +1,7 @@
 #include "tr_local.h"
 #include "tr_common.h"
 #include "tr_glx_compat.h"
+#include "../renderercommon/tr_menu_blur.h"
 #include "../renderercommon/tr_motion_blur.h"
 
 #ifndef GL_RG
@@ -21,6 +22,10 @@
 
 #define BLOOM_BASE 5
 #define FBO_COUNT (BLOOM_BASE+(MAX_BLUR_PASSES*2))
+
+// BLUR2_FRAGMENT is the 6-tap binomial kernel the menu soft focus iterates with.
+// tr_menu_blur.h tabulates that kernel's variance, so the two must agree.
+#define MENU_BLUR_GL_TAPS 6
 
 #if BLOOM_BASE < 2
 #error no space for main/postprocess buffers
@@ -109,7 +114,9 @@ static unsigned int csmShadowAtlasGeneration;
 static frameBuffer_t frameBufferMS;
 static frameBuffer_t frameBuffers[ FBO_COUNT ];
 static frameBuffer_t liquidScreenBuffer;
-static frameBuffer_t menuDofBuffers[ 2 ];
+// [0] is the intermediate half-resolution step; [1] and [2] ping-pong the
+// separable Gaussian iterations at the pyramid level, ending in [1].
+static frameBuffer_t menuBlurBuffers[ 3 ];
 static frameBuffer_t motionBlurBuffer;
 static motionBlurViewState_t motionBlurViewState;
 static int motionBlurFrame = -1;
@@ -3350,7 +3357,16 @@ static void RenderQuad( int w, int h )
 }
 
 
-static void ARB_BlurParams( int width, int height, int ksize, qboolean horizontal )
+/*
+Upload the separable blur taps.
+
+spacing scales the kernel: the tabulated offsets below are one texel apart, so a
+spacing of s multiplies every offset by s and the kernel's variance by s*s. Bloom
+passes use unit spacing; the menu soft focus derives its spacing per pass from
+the shared plan so it reaches a specific sigma.
+*/
+static void ARB_BlurParams( int width, int height, int ksize, qboolean horizontal,
+	float spacing )
 {
 	static float weight[ MAX_FILTER_SIZE ];
 	static int old_ksize = -1;
@@ -3430,8 +3446,8 @@ static void ARB_BlurParams( int width, int height, int ksize, qboolean horizonta
 
 	// calculate texture offsets for lookup
 	for ( i = 0; i < ksize; i++ ) {
-		offset[i][0] = texel_size_x * off[i];
-		offset[i][1] = texel_size_y * off[i];
+		offset[i][0] = texel_size_x * off[i] * spacing;
+		offset[i][1] = texel_size_y * off[i] * spacing;
 	}
 
 	if ( horizontal ) {
@@ -5627,13 +5643,13 @@ static void FBO_Blur( const frameBuffer_t *fb1, const frameBuffer_t *fb2,  const
 	FBO_Bind( GL_DRAW_FRAMEBUFFER, fb2->fbo );
 	GL_BindTexture( 0, fb1->color );
 	ARB_ProgramEnable( DUMMY_VERTEX, BLUR_FRAGMENT );
-	ARB_BlurParams( fb1->width, fb1->height, fboBloomFilterSize, qtrue );
+	ARB_BlurParams( fb1->width, fb1->height, fboBloomFilterSize, qtrue, 1.0f );
 	RenderQuad( w, h );
 
 	// apply vectical blur - render from FBO2 to FBO3
 	FBO_Bind( GL_DRAW_FRAMEBUFFER, fb3->fbo );
 	GL_BindTexture( 0, fb2->color );
-	ARB_BlurParams( fb1->width, fb1->height, fboBloomFilterSize, qfalse );
+	ARB_BlurParams( fb1->width, fb1->height, fboBloomFilterSize, qfalse, 1.0f );
 	RenderQuad( w, h );
 #ifdef RENDERER_GLX
 	GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_BLOOM_BLUR );
@@ -5641,6 +5657,10 @@ static void FBO_Blur( const frameBuffer_t *fb1, const frameBuffer_t *fb2,  const
 }
 
 
+/*
+Fixed 6-tap separable blur used by the screen-copy path, where the filter size
+is not the bloom cvar's to choose.
+*/
 static void FBO_Blur2( const frameBuffer_t *fb1, const frameBuffer_t *fb2,  const frameBuffer_t *fb3 )
 {
 	const int w = glConfig.vidWidth;
@@ -5655,13 +5675,13 @@ static void FBO_Blur2( const frameBuffer_t *fb1, const frameBuffer_t *fb2,  cons
 	FBO_Bind( GL_DRAW_FRAMEBUFFER, fb2->fbo );
 	GL_BindTexture( 0, fb1->color );
 	ARB_ProgramEnable( DUMMY_VERTEX, BLUR2_FRAGMENT );
-	ARB_BlurParams( fb1->width, fb1->height, 6, qtrue );
+	ARB_BlurParams( fb1->width, fb1->height, MENU_BLUR_GL_TAPS, qtrue, 1.0f );
 	RenderQuad( w, h );
 
 	// apply vectical blur - render from FBO2 to FBO3
 	FBO_Bind( GL_DRAW_FRAMEBUFFER, fb3->fbo );
 	GL_BindTexture( 0, fb2->color );
-	ARB_BlurParams( fb1->width, fb1->height, 6, qfalse );
+	ARB_BlurParams( fb1->width, fb1->height, MENU_BLUR_GL_TAPS, qfalse, 1.0f );
 	RenderQuad( w, h );
 #ifdef RENDERER_GLX
 	GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_BLOOM_BLUR );
@@ -5669,24 +5689,81 @@ static void FBO_Blur2( const frameBuffer_t *fb1, const frameBuffer_t *fb2,  cons
 }
 
 
-static qboolean FBO_EnsureMenuDepthOfFieldBuffers( void )
-{
-	const int width = MAX( 1, glConfig.vidWidth / 2 );
-	const int height = MAX( 1, glConfig.vidHeight / 2 );
+/*
+Report why a requested soft focus was not drawn, once per distinct reason.
 
-	if ( menuDofBuffers[0].fbo && menuDofBuffers[1].fbo &&
-		menuDofBuffers[0].width == width && menuDofBuffers[0].height == height &&
-		menuDofBuffers[1].width == width && menuDofBuffers[1].height == height ) {
+An in-game menu that stays sharp otherwise looks identical to the effect being
+switched off, and the reasons here are all configuration rather than failure, so
+they belong under `developer 1` instead of the console.
+*/
+static void FBO_MenuBlurDecline( const char *reason )
+{
+	static const char *lastReason;
+
+	if ( lastReason == reason ) {
+		return;
+	}
+	lastReason = reason;
+	ri.Printf( PRINT_DEVELOPER, "Menu soft focus unavailable: %s\n", reason );
+}
+
+
+/*
+One separable horizontal+vertical Gaussian iteration at the pyramid level.
+
+Both targets are the same size, so the pair ping-pongs between them and leaves
+the result back in fb1.
+*/
+static void FBO_MenuBlurPass( const frameBuffer_t *fb1, const frameBuffer_t *fb2,
+	float spacing )
+{
+	const int w = glConfig.vidWidth;
+	const int h = glConfig.vidHeight;
+#ifdef RENDERER_GLX
+	GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_BLOOM_BLUR );
+#endif
+
+	qglViewport( 0, 0, fb1->width, fb1->height );
+	qglScissor( 0, 0, fb1->width, fb1->height );
+
+	FBO_Bind( GL_DRAW_FRAMEBUFFER, fb2->fbo );
+	GL_BindTexture( 0, fb1->color );
+	ARB_ProgramEnable( DUMMY_VERTEX, BLUR2_FRAGMENT );
+	ARB_BlurParams( fb1->width, fb1->height, MENU_BLUR_GL_TAPS, qtrue, spacing );
+	RenderQuad( w, h );
+
+	FBO_Bind( GL_DRAW_FRAMEBUFFER, fb1->fbo );
+	GL_BindTexture( 0, fb2->color );
+	ARB_BlurParams( fb1->width, fb1->height, MENU_BLUR_GL_TAPS, qfalse, spacing );
+	RenderQuad( w, h );
+#ifdef RENDERER_GLX
+	GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_BLOOM_BLUR );
+#endif
+}
+
+
+static qboolean FBO_EnsureMenuBlurBuffers( const menuBlurPlan_t *plan )
+{
+	if ( menuBlurBuffers[0].fbo && menuBlurBuffers[1].fbo && menuBlurBuffers[2].fbo &&
+		menuBlurBuffers[0].width == plan->halfWidth &&
+		menuBlurBuffers[0].height == plan->halfHeight &&
+		menuBlurBuffers[1].width == plan->levelWidth &&
+		menuBlurBuffers[1].height == plan->levelHeight &&
+		menuBlurBuffers[2].width == plan->levelWidth &&
+		menuBlurBuffers[2].height == plan->levelHeight ) {
 		return qtrue;
 	}
 
-	FBO_Clean( &menuDofBuffers[0] );
-	FBO_Clean( &menuDofBuffers[1] );
+	FBO_Clean( &menuBlurBuffers[0] );
+	FBO_Clean( &menuBlurBuffers[1] );
+	FBO_Clean( &menuBlurBuffers[2] );
 
-	if ( !FBO_Create( &menuDofBuffers[0], width, height, qfalse, NULL, NULL ) ||
-		!FBO_Create( &menuDofBuffers[1], width, height, qfalse, NULL, NULL ) ) {
-		FBO_Clean( &menuDofBuffers[0] );
-		FBO_Clean( &menuDofBuffers[1] );
+	if ( !FBO_Create( &menuBlurBuffers[0], plan->halfWidth, plan->halfHeight, qfalse, NULL, NULL ) ||
+		!FBO_Create( &menuBlurBuffers[1], plan->levelWidth, plan->levelHeight, qfalse, NULL, NULL ) ||
+		!FBO_Create( &menuBlurBuffers[2], plan->levelWidth, plan->levelHeight, qfalse, NULL, NULL ) ) {
+		FBO_Clean( &menuBlurBuffers[0] );
+		FBO_Clean( &menuBlurBuffers[1] );
+		FBO_Clean( &menuBlurBuffers[2] );
 		return qfalse;
 	}
 
@@ -5694,15 +5771,34 @@ static qboolean FBO_EnsureMenuDepthOfFieldBuffers( void )
 }
 
 
-void FBO_MenuDepthOfField( float amount )
+/*
+====================
+FBO_MenuBlur
+
+Replace the finished frame with a soft-focus copy of itself, so the in-game menu
+drawn after this command is the only sharp thing on screen. See
+renderercommon/tr_menu_blur.h for the sampling plan; this is its GL backend.
+
+Every reason to decline is reported once under `developer 1`. The predecessor of
+this effect failed silently, which made an unsupported configuration
+indistinguishable from a disabled cvar.
+====================
+*/
+void FBO_MenuBlur( float strength )
 {
+	menuBlurPlan_t plan;
 	frameBuffer_t *source;
 	int sourceIndex;
 	int pass;
 
-	amount = Com_Clamp( 0.0f, 1.0f, amount );
-	if ( amount <= 0.0f || !fboEnabled || !programCompiled || !backEnd.doneSurfaces ||
-		backEnd.framePostProcessed || ri.CL_IsMinimized() ) {
+	if ( !R_MenuBlur_Plan( strength, glConfig.vidWidth, glConfig.vidHeight, &plan ) ) {
+		return;
+	}
+	if ( !fboEnabled || !programCompiled ) {
+		FBO_MenuBlurDecline( "the framebuffer post-processing path is not active" );
+		return;
+	}
+	if ( !backEnd.doneSurfaces || backEnd.framePostProcessed || ri.CL_IsMinimized() ) {
 		return;
 	}
 
@@ -5713,14 +5809,17 @@ void FBO_MenuDepthOfField( float amount )
 
 	sourceIndex = fboReadIndex;
 	if ( sourceIndex < 0 || sourceIndex >= FBO_COUNT ) {
+		FBO_MenuBlurDecline( "no readable scene framebuffer" );
 		return;
 	}
 
 	source = &frameBuffers[ sourceIndex ];
 	if ( !source->fbo || source->multiSampled || !source->color ) {
+		FBO_MenuBlurDecline( "the scene framebuffer is not sampleable" );
 		return;
 	}
-	if ( !FBO_EnsureMenuDepthOfFieldBuffers() ) {
+	if ( !FBO_EnsureMenuBlurBuffers( &plan ) ) {
+		FBO_MenuBlurDecline( "the soft-focus pyramid could not be allocated" );
 		return;
 	}
 
@@ -5728,27 +5827,42 @@ void FBO_MenuDepthOfField( float amount )
 		RB_SetGL2D();
 	}
 
+	/* Two exact halvings. A linear blit at a 2:1 reduction lands each
+	 * destination texel centre between four source texels, so it averages all
+	 * of them; one 4:1 step would instead keep one texel in four and make the
+	 * backdrop crawl while the scene animates behind the menu. */
 	FBO_Bind( GL_READ_FRAMEBUFFER, source->fbo );
-	FBO_Bind( GL_DRAW_FRAMEBUFFER, menuDofBuffers[0].fbo );
+	FBO_Bind( GL_DRAW_FRAMEBUFFER, menuBlurBuffers[0].fbo );
 	qglBlitFramebuffer( 0, 0, source->width, source->height,
-		0, 0, menuDofBuffers[0].width, menuDofBuffers[0].height,
+		0, 0, menuBlurBuffers[0].width, menuBlurBuffers[0].height,
+		GL_COLOR_BUFFER_BIT, GL_LINEAR );
+
+	FBO_Bind( GL_READ_FRAMEBUFFER, menuBlurBuffers[0].fbo );
+	FBO_Bind( GL_DRAW_FRAMEBUFFER, menuBlurBuffers[1].fbo );
+	qglBlitFramebuffer( 0, 0, menuBlurBuffers[0].width, menuBlurBuffers[0].height,
+		0, 0, menuBlurBuffers[1].width, menuBlurBuffers[1].height,
 		GL_COLOR_BUFFER_BIT, GL_LINEAR );
 
 	qglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
 	GL_State( GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_ONE | GLS_DSTBLEND_ZERO );
-	for ( pass = 0; pass < 2; ++pass ) {
-		FBO_Blur2( &menuDofBuffers[0], &menuDofBuffers[1], &menuDofBuffers[0] );
+	for ( pass = 0; pass < plan.passCount; ++pass ) {
+		FBO_MenuBlurPass( &menuBlurBuffers[1], &menuBlurBuffers[2],
+			R_MenuBlur_TapSpacing( plan.passSigma[pass],
+				MENU_BLUR_KERNEL_VARIANCE_BINOMIAL6 ) );
 	}
 
+	/* Composite back over the sharp frame. The upsample is the bilinear filter
+	 * of the level texture, which is all the reconstruction a blur this wide
+	 * needs, and the vertex alpha carries the faded strength. */
 	ARB_ProgramDisable();
 	FBO_Bind( GL_FRAMEBUFFER, source->fbo );
-	GL_BindTexture( 0, menuDofBuffers[0].color );
+	GL_BindTexture( 0, menuBlurBuffers[1].color );
 	GL_TexEnv( GL_MODULATE );
 	GL_State( GLS_DEPTHTEST_DISABLE | GLS_SRCBLEND_SRC_ALPHA |
 		GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA );
 	qglViewport( 0, 0, source->width, source->height );
 	qglScissor( 0, 0, source->width, source->height );
-	qglColor4f( 1.0f, 1.0f, 1.0f, amount );
+	qglColor4f( 1.0f, 1.0f, 1.0f, plan.alpha );
 	RenderQuad( source->width, source->height );
 	qglColor4f( 1.0f, 1.0f, 1.0f, 1.0f );
 
@@ -6623,8 +6737,9 @@ void QGL_DoneFBO( void )
 		FBO_Clean(&frameBuffers[3]);
 		FBO_Clean(&frameBuffers[4]);
 		FBO_Clean(&liquidScreenBuffer);
-		FBO_Clean(&menuDofBuffers[0]);
-		FBO_Clean(&menuDofBuffers[1]);
+		FBO_Clean(&menuBlurBuffers[0]);
+		FBO_Clean(&menuBlurBuffers[1]);
+		FBO_Clean(&menuBlurBuffers[2]);
 		FBO_Clean(&motionBlurBuffer);
 		FBO_CleanBloom();
 		FBO_CleanDepth();

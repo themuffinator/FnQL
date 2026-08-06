@@ -4402,6 +4402,27 @@ static const void *RB_FinishBloom( const void *data )
 }
 
 
+/*
+=============
+RB_MenuBlur
+=============
+*/
+static const void *RB_MenuBlur( const void *data )
+{
+	const menuBlurCommand_t *cmd = data;
+
+	// Everything queued before this command has to be on the target before it
+	// can be sampled back as the soft-focus source.
+	RB_EndSurface();
+
+#ifdef USE_VULKAN
+	vk_menu_blur( cmd->strength );
+#endif
+
+	return (const void *)(cmd + 1);
+}
+
+
 static const void *RB_SwapBuffers( const void *data ) {
 
 	const swapBuffersCommand_t	*cmd = (const swapBuffersCommand_t *)data;
@@ -4528,6 +4549,9 @@ void RB_ExecuteRenderCommands( const void *data ) {
 			break;
 		case RC_FINISHBLOOM:
 			data = RB_FinishBloom(data);
+			break;
+		case RC_MENU_BLUR:
+			data = RB_MenuBlur(data);
 			break;
 		case RC_COLORMASK:
 			data = RB_ColorMask(data);

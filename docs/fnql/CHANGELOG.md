@@ -21,6 +21,11 @@ release, CI resets `Unreleased` for the next cycle.
 ### Rendering and Display
 - Keep the complete decorated game window reachable across monitor, work-area,
   and DPI changes on supported desktop window systems.
+- Soften the scene and HUD behind an open in-game menu, so the menu reads as the
+  foreground instead of competing with the live view. Set `cl_menuBlur 0` to
+  keep the frame sharp, or a value between 0 and 1 for a lighter effect.
+  Gameplay and the scoreboard are never softened. Available on all three
+  renderers; requires the framebuffer path (`r_fbo 1`).
 
 ### Audio
 - _None yet._

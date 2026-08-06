@@ -2912,6 +2912,11 @@ typedef struct {
 
 typedef struct {
 	int		commandId;
+	float	strength;
+} menuBlurCommand_t;
+
+typedef struct {
+	int		commandId;
 	shader_t	*shader;
 	float	x, y;
 	float	w, h;
@@ -2954,6 +2959,7 @@ typedef enum {
 	RC_DRAW_BUFFER,
 	RC_SWAP_BUFFERS,
 	RC_FINISHBLOOM,
+	RC_MENU_BLUR,
 	RC_COLORMASK,
 	RC_CLEARDEPTH,
 	RC_CLEARCOLOR
@@ -3006,7 +3012,7 @@ void RE_TakeVideoFrame( int width, int height,
 		byte *captureBuffer, byte *encodeBuffer, qboolean motionJpeg );
 
 void RE_FinishBloom( void );
-void RE_DrawMenuDepthOfField( float amount );
+void RE_DrawMenuBlur( float strength );
 void RE_ThrottleBackend( void );
 qboolean RE_CanMinimize( void );
 const glconfig_t *RE_GetConfig( void );

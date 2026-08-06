@@ -249,21 +249,35 @@ class RtxVulkanSafetySourceTests(unittest.TestCase):
         bloom_passes = re.search(
             r"#define\s+VK_NUM_BLOOM_PASSES\s+(\d+)", self.header
         )
+        menu_blur_images = re.search(
+            r"#define\s+VK_NUM_MENU_BLUR_IMAGES\s+(\d+)", self.header
+        )
         pool_size = re.search(
             r"#define\s+MAX_ATTACHMENTS_IN_POOL\s+"
-            r"\(\s*(\d+)\s*\+\s*VK_NUM_BLOOM_PASSES\s*\*\s*2\s*\)",
+            r"\(\s*(\d+)\s*\+\s*VK_NUM_MENU_BLUR_IMAGES\s*"
+            r"\+\s*VK_NUM_BLOOM_PASSES\s*\*\s*2\s*\)",
             self.header,
         )
 
         self.assertIsNotNone(bloom_passes)
+        self.assertIsNotNone(menu_blur_images)
         self.assertIsNotNone(pool_size)
-        assert bloom_passes is not None and pool_size is not None
+        assert (
+            bloom_passes is not None
+            and menu_blur_images is not None
+            and pool_size is not None
+        )
 
-        # Nine bloom images plus twelve possible non-bloom attachments:
-        # scene, motion, liquid, screen-map color/MSAA/depth, main MSAA or
-        # depth snapshot, capture, main depth, and three shadow atlases.
-        capacity = int(pool_size.group(1)) + int(bloom_passes.group(1)) * 2
-        self.assertGreaterEqual(capacity, 21)
+        # Nine bloom images and the three-image menu soft-focus pyramid, plus
+        # twelve possible non-bloom attachments: scene, motion, liquid,
+        # screen-map color/MSAA/depth, main MSAA or depth snapshot, capture,
+        # main depth, and three shadow atlases.
+        capacity = (
+            int(pool_size.group(1))
+            + int(menu_blur_images.group(1))
+            + int(bloom_passes.group(1)) * 2
+        )
+        self.assertGreaterEqual(capacity, 24)
 
 
 if __name__ == "__main__":

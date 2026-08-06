@@ -2589,7 +2589,7 @@ void FBO_BlitSS( void );
 qboolean FBO_Bloom( const float gamma, const float obScale, qboolean finalPass );
 void FBO_CopyScreen( void );
 qboolean FBO_CopyLiquidScreen( void );
-void FBO_MenuDepthOfField( float amount );
+void FBO_MenuBlur( float strength );
 GLuint FBO_ScreenTexture( void );
 GLuint FBO_LiquidScreenTexture( void );
 qboolean FBO_DepthFadeAvailable( void );
@@ -2890,8 +2890,8 @@ typedef struct
 typedef struct
 {
 	int commandId;
-	float amount;
-} menuDepthOfFieldCommand_t;
+	float strength;
+} menuBlurCommand_t;
 #endif
 
 typedef struct
@@ -2913,7 +2913,7 @@ typedef enum {
 	RC_ADVERTISEMENT_QUERIES,
 #ifdef USE_FBO
 	RC_FINISHBLOOM,
-	RC_MENU_DEPTH_OF_FIELD,
+	RC_MENU_BLUR,
 #endif
 	RC_COLORMASK,
 	RC_CLEARDEPTH,
@@ -2973,7 +2973,7 @@ void RE_TakeVideoFrame( int width, int height,
 		byte *captureBuffer, byte *encodeBuffer, qboolean motionJpeg );
 
 void RE_FinishBloom( void );
-void RE_DrawMenuDepthOfField( float amount );
+void RE_DrawMenuBlur( float strength );
 void RE_ThrottleBackend( void );
 qboolean RE_CanMinimize( void );
 const glconfig_t *RE_GetConfig( void );

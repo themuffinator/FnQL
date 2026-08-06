@@ -961,14 +961,29 @@ void RE_FinishBloom( void )
 }
 
 
-void RE_DrawMenuDepthOfField( float amount )
+/*
+====================
+RE_DrawMenuBlur
+
+Queue the menu soft focus at the point the client reached in the frame: after
+the scene and the cgame HUD, before the in-game menu draws over them.
+====================
+*/
+void RE_DrawMenuBlur( float strength )
 {
-	/*
-	 * Keep the renderer ABI aligned with Vulkan.  The Vulkan implementation
-	 * currently treats this as an optional no-op as well; retaining the hook
-	 * lets the client use the same feature probing path for both renderers.
-	 */
-	(void)amount;
+	menuBlurCommand_t *cmd;
+
+	if ( !tr.registered || strength <= 0.0f ) {
+		return;
+	}
+
+	cmd = R_GetCommandBuffer( sizeof( *cmd ) );
+	if ( !cmd ) {
+		return;
+	}
+
+	cmd->commandId = RC_MENU_BLUR;
+	cmd->strength = Com_Clamp( 0.0f, 1.0f, strength );
 }
 
 
