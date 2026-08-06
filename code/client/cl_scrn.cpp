@@ -1211,16 +1211,10 @@ static void SCR_DrawScreenField( stereoFrame_t stereoFrame ) {
 	// Soften everything drawn so far - the 3D scene and the cgame HUD over it -
 	// so the in-game menu that draws next is the only sharp thing on screen. A
 	// fullscreen menu has no scene behind it to soften, and the connect and
-<<<<<<< Updated upstream
-	// loading screens are not in-game menus.  Both of those, and the console,
-	// are 2D-only frames: the backends require a 3D pass this frame and fault
-	// without one, so they cannot be softened.  See MENU_SOFT_FOCUS.md.
-=======
 	// loading screens are not in-game menus.  The request has to carry the same
 	// browserSuppressUiRefresh term the menu's own draw does: without it the
 	// whole pyramid ran every frame while the browser owned the surface, with
 	// nothing sharp ever drawn over the softened frame.
->>>>>>> Stashed changes
 	menuBlurStrength = SCR_UpdateMenuBlurStrength(
 		uiVisible && !uiFullscreen && !browserSuppressUiRefresh
 		&& cls.state == CA_ACTIVE );
