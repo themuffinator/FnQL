@@ -1301,6 +1301,13 @@ test('fnql_collision_model_parity', collision_model_parity_tests)
 # Links the real trace path against a stub collision model so the capsule
 # geometry and the debug trace-plane invariant are exercised, not just
 # described.
+# q_math.c calls atan2/sincos/logf/powf/acos, which i686 emits as real libm
+# calls instead of inlining, so this target needs the math library explicitly.
+collision_capsule_trace_deps = []
+if libm.found()
+  collision_capsule_trace_deps += libm
+endif
+
 collision_capsule_trace_tests = executable('fnql_collision_capsule_trace_tests',
   [
     'tests/collision_capsule_trace_tests.c',
@@ -1309,6 +1316,7 @@ collision_capsule_trace_tests = executable('fnql_collision_capsule_trace_tests',
   ],
   include_directories: include_directories('code/qcommon'),
   c_args: common_c_args,
+  dependencies: collision_capsule_trace_deps,
 )
 test('fnql_collision_capsule_trace', collision_capsule_trace_tests)
 test('fnql_collision_model_parity_source', python,
