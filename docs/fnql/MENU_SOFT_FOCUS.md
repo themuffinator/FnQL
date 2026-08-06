@@ -28,8 +28,6 @@ The client owns the decision, in `SCR_DrawScreenField`. The effect is requested 
 - the menu is not fullscreen — a fullscreen menu has no scene behind it to soften;
 - `cls.state == CA_ACTIVE` — the connect and level-loading screens are not in-game menus.
 
-<<<<<<< Updated upstream
-=======
 The request also carries the same `browserSuppressUiRefresh` term that gates the menu's own draw. Without it the whole pyramid ran every frame while the browser owned the surface, with nothing sharp ever drawn over the softened frame.
 
 Note what is *not* included. `KEYCATCH_CGAME` overlays such as the scoreboard are drawn over live gameplay that the player is still reading, so they stay sharp. cgame draws the scene, the HUD and its overlays in a single `CG_DRAW_ACTIVE_FRAME` call, so a request queued after it would soften the overlay itself rather than the frame behind it. Softening the scene under the *intermission* scoreboard is possible in principle, but only from a composite issued between the 3D pass and the HUD — the slot `FBO_MotionBlur` / `vk_motion_blur` already occupy at the tail of `RB_DrawSurfs`. That needs the strength plumbed through `trRefdef_t` and five guards: worldless views, portal sub-views, cubemap-screenshot views, the Vulkan screenmap command duplicate, and a once-per-frame latch. Not implemented.
@@ -52,7 +50,6 @@ Two mid-client-frame drains are live in this tree and both produce that state: t
 
 The Vulkan composite also re-pushes the MVP before returning. `vk_menu_blur_draw` binds through `vk.pipeline_layout_post_process`, which is not push-constant compatible with `vk.pipeline_layout`, so the 64-byte MVP is undefined afterwards. This is the only post-process detour that runs while `backEnd.projection2D` is already set, so the next `RB_StretchPic` skips `RB_SetGL2D` and nothing else would restore it.
 
->>>>>>> Stashed changes
 `SCR_UpdateMenuBlurStrength` ramps toward the requested strength on wall-clock time rather than per frame, so the pull into focus takes the same 140 ms at 60 and at 250 fps. A negative `cls.realtime` delta is a timer reset and a delta over a second is a hitch or a restored window; neither counts as elapsed fade time.
 
 The request is issued after the scene *and* the cgame HUD have been drawn and before `UI_REFRESH`, so the HUD is softened along with the world and only the menu itself stays sharp.

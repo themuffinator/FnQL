@@ -139,11 +139,6 @@ class ClientTriggerTests(unittest.TestCase):
         behind it to soften."""
         scrn = read_text("code/client/cl_scrn.cpp")
 
-<<<<<<< Updated upstream
-        self.assertIn(
-            "SCR_UpdateMenuBlurStrength(\n"
-            "\t\tuiVisible && !uiFullscreen && cls.state == CA_ACTIVE );",
-=======
         # The request carries the same browserSuppressUiRefresh term the menu's
         # own draw does. Without it the whole pyramid ran every frame while the
         # browser owned the surface, with nothing sharp drawn over it.
@@ -151,7 +146,6 @@ class ClientTriggerTests(unittest.TestCase):
             "SCR_UpdateMenuBlurStrength(\n"
             "\t\tuiVisible && !uiFullscreen && !browserSuppressUiRefresh\n"
             "\t\t&& cls.state == CA_ACTIVE );",
->>>>>>> Stashed changes
             scrn,
         )
         self.assertIn("if ( menuBlurStrength > 0.0f && re.DrawMenuBlur ) {", scrn)
@@ -268,11 +262,13 @@ class ClientTriggerTests(unittest.TestCase):
             with self.subTest(absent=absent):
                 self.assertNotIn(absent, body)
 
-    def test_backends_require_a_3d_pass(self) -> None:
-        """backEnd.doneSurfaces is the only signal a backend has that the render
-        target holds a scene this composite may read back. Dropping it to soften
-        the 2D-only connect and loading screens faulted the device on the first
-        such frame, so all three keep it."""
+    def test_the_gl_backend_requires_a_3d_pass(self) -> None:
+        """The GL lineage has no equivalent of the Vulkan frame-liveness state,
+        so backEnd.doneSurfaces remains its only signal that the render target
+        holds a scene this composite may read back. The Vulkan backends replaced
+        that proxy with a direct check - see
+        test_backends_require_a_live_frame_not_a_sticky_index, which owns their
+        half of this gate and forbids the proxy coming back."""
         gl = function_body(
             read_text("code/renderer/tr_arb.c"), "void FBO_MenuBlur( float strength )"
         )
@@ -281,15 +277,6 @@ class ClientTriggerTests(unittest.TestCase):
             "|| ri.CL_IsMinimized() ) {",
             gl,
         )
-
-        for base in VULKAN_BACKENDS:
-            body = function_body(
-                read_text(base + "/vk.c"), "qboolean vk_menu_blur( float strength )"
-            )
-            with self.subTest(base=base):
-                self.assertIn(
-                    "if ( !backEnd.doneSurfaces || ri.CL_IsMinimized() ) {", body
-                )
 
     def test_cgame_overlays_stay_sharp(self) -> None:
         """cgame draws the scene, the HUD, and its own overlays in one
