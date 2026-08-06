@@ -109,12 +109,41 @@ class ClientTriggerTests(unittest.TestCase):
                 self.assertNotIn("menuDepthOfField", read_text(path))
                 self.assertNotIn("MenuDepthOfField", read_text(path))
 
+    def test_settings_menu_exposes_the_control(self) -> None:
+        """The cvar has to be reachable without the console: a slider on a live
+        settings route, and published in the snapshot the overlay reads."""
+        script = read_text("code/client/webui/fnql-settings.js")
+        snapshot = read_text("code/client/cl_webui.cpp")
+        main = read_text("code/client/cl_main.cpp")
+
+        self.assertIn(
+            "{ name: 'cl_menuBlur', title: 'In-Game Menu Soft Focus', "
+            "type: 'range', min: 0, max: 1, step: 0.05,",
+            script,
+        )
+        # Without this the overlay renders the row but never learns the value.
+        self.assertIn('"cl_menuBlur",', snapshot)
+
+        # The row lives on a route the retail settings UI actually navigates to,
+        # not in an orphaned group that nothing appends.
+        groups = script[script.index("var SECTION_GROUPS = {"):]
+        self.assertLess(groups.index("game: ["), groups.index("'cl_menuBlur'"))
+        self.assertIn("'game': 'game',", script)
+
+        # A slider that cannot reach the cvar's bounds, or that overshoots them,
+        # is the regression worth catching - the two ranges have to agree.
+        self.assertIn('Cvar_CheckRange( cl_menuBlur, "0", "1", CV_FLOAT );', main)
+
     def test_only_an_in_game_menu_triggers_it(self) -> None:
         """Gameplay must never be softened, and a fullscreen menu has no scene
         behind it to soften."""
         scrn = read_text("code/client/cl_scrn.cpp")
 
-        self.assertIn("SCR_UpdateMenuBlurStrength(\n\t\tuiVisible && !uiFullscreen && cls.state == CA_ACTIVE );", scrn)
+        self.assertIn(
+            "SCR_UpdateMenuBlurStrength(\n"
+            "\t\tuiVisible && !uiFullscreen && cls.state == CA_ACTIVE );",
+            scrn,
+        )
         self.assertIn("if ( menuBlurStrength > 0.0f && re.DrawMenuBlur ) {", scrn)
         self.assertIn("re.DrawMenuBlur( menuBlurStrength );", scrn)
 
@@ -123,6 +152,65 @@ class ClientTriggerTests(unittest.TestCase):
         self.assertIn("kMenuBlurFadeMsec", scrn)
         self.assertIn("delta = previousTime ? cls.realtime - previousTime : 0;", scrn)
         self.assertIn("if ( delta < 0 || delta > 1000 ) {", scrn)
+
+    def test_only_one_layer_is_requested(self) -> None:
+        """The connection dialog, the level-loading screen and the console are
+        all 2D-only frames. Requesting the effect there faulted the device: the
+        backends need a 3D pass this frame to have something to read back. The
+        in-game menu is the only layer with a scene behind it."""
+        body = function_body(
+            read_text("code/client/cl_scrn.cpp"),
+            "static void SCR_DrawScreenField( stereoFrame_t stereoFrame )",
+        )
+
+        self.assertEqual(body.count("re.DrawMenuBlur("), 1)
+        self.assertEqual(body.count("SCR_UpdateMenuBlurStrength("), 1)
+        for absent in (
+            "connectBlurStrength",
+            "consoleBlurStrength",
+            "KEYCATCH_CONSOLE",
+            # Nothing may finish bloom on the client's behalf either: that moves
+            # when the frame resolves, and the console does it for itself.
+            "re.FinishBloom",
+        ):
+            with self.subTest(absent=absent):
+                self.assertNotIn(absent, body)
+
+    def test_backends_require_a_3d_pass(self) -> None:
+        """backEnd.doneSurfaces is the only signal a backend has that the render
+        target holds a scene this composite may read back. Dropping it to soften
+        the 2D-only connect and loading screens faulted the device on the first
+        such frame, so all three keep it."""
+        gl = function_body(
+            read_text("code/renderer/tr_arb.c"), "void FBO_MenuBlur( float strength )"
+        )
+        self.assertIn(
+            "if ( !backEnd.doneSurfaces || backEnd.framePostProcessed "
+            "|| ri.CL_IsMinimized() ) {",
+            gl,
+        )
+
+        for base in VULKAN_BACKENDS:
+            body = function_body(
+                read_text(base + "/vk.c"), "qboolean vk_menu_blur( float strength )"
+            )
+            with self.subTest(base=base):
+                self.assertIn(
+                    "if ( !backEnd.doneSurfaces || ri.CL_IsMinimized() ) {", body
+                )
+
+    def test_cgame_overlays_stay_sharp(self) -> None:
+        """cgame draws the scene, the HUD, and its own overlays in one
+        CG_DRAW_ACTIVE_FRAME call, so any request queued after it would soften
+        the overlay itself rather than the frame behind it."""
+        body = function_body(
+            read_text("code/client/cl_scrn.cpp"),
+            "static void SCR_DrawScreenField( stereoFrame_t stereoFrame )",
+        )
+
+        trigger = body.index("SCR_UpdateMenuBlurStrength(")
+        end = body.index(";", trigger)
+        self.assertNotIn("KEYCATCH_CGAME", body[trigger:end])
 
     def test_refexport_carries_the_strength(self) -> None:
         public = read_text("code/renderercommon/tr_public.h")
@@ -185,6 +273,20 @@ class BackendPipelineTests(unittest.TestCase):
                 self.assertIn("vk_begin_main_render_pass_load();", source)
                 # Descriptor pool budget must cover the pyramid too.
                 self.assertIn("VK_NUM_MENU_BLUR_IMAGES + ( 1 + VK_NUM_BLOOM_PASSES * 2 )", source)
+
+    def test_vulkan_backends_null_the_pipeline_cache(self) -> None:
+        """vk_menu_blur_draw binds descriptor set 0 through
+        vk.pipeline_layout_post_process, and binding via an incompatible layout
+        disturbs the sets bound for vk.pipeline_layout. Nulling the cache is what
+        forces the next draw to rebind them; handing the frame's pipeline back
+        instead lets that draw run with disturbed sets and faults the device."""
+        for base in VULKAN_BACKENDS:
+            body = function_body(
+                read_text(base + "/vk.c"), "qboolean vk_menu_blur( float strength )"
+            )
+            with self.subTest(base=base):
+                self.assertIn("vk.cmd->last_pipeline = VK_NULL_HANDLE;", body)
+                self.assertNotIn("restore_pipeline", body)
 
     def test_vulkan_backends_release_everything_they_create(self) -> None:
         """A leaked render pass or pipeline survives vid_restart and then points

@@ -13111,6 +13111,11 @@ qboolean vk_menu_blur( float strength )
 		vk_menu_blur_decline( "the framebuffer post-processing path is not active" );
 		return qfalse;
 	}
+	/* backEnd.doneSurfaces means a 3D pass has run this frame, and it is load
+	 * bearing: it is the only signal the backends have that the render target
+	 * holds a scene this composite may read back.  Dropping it to soften the
+	 * 2D-only connection and loading screens faulted the device on the first
+	 * such frame.  See docs/fnql/MENU_SOFT_FOCUS.md. */
 	if ( !backEnd.doneSurfaces || ri.CL_IsMinimized() ) {
 		return qfalse;
 	}
@@ -13176,7 +13181,13 @@ qboolean vk_menu_blur( float strength )
 	vk_menu_blur_draw( vk.menu_blur_composite_pipeline, vk.menu_blur_descriptor[1],
 		0.0f, 0.0f, plan.alpha );
 
-	/* Direct post-process binds bypass the normal descriptor/pipeline caches. */
+	/* Direct post-process binds bypass the normal descriptor/pipeline caches.
+	 * The null pipeline is load-bearing, not just a hint: vk_menu_blur_draw
+	 * binds descriptor set 0 with vk.pipeline_layout_post_process, and binding
+	 * through an incompatible layout disturbs the sets bound for
+	 * vk.pipeline_layout.  Nulling the cache is what forces the next draw to
+	 * rebind them; handing the frame's pipeline back instead lets that draw
+	 * proceed with disturbed descriptor sets and faults the device. */
 	vk.cmd->last_pipeline = VK_NULL_HANDLE;
 	vk.cmd->depth_range = DEPTH_RANGE_COUNT;
 	vk.cmd->descriptor_set.start = 0;
