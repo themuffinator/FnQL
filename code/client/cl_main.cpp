@@ -5439,7 +5439,8 @@ void CL_Init( void ) {
 		" 0 - leave the scene sharp\n"
 		" 0..1 - scales both the blur radius and how far the softened copy\n"
 		"        replaces the sharp frame (1 is the default full soft focus)\n"
-		"Gameplay is never affected; the effect exists only while a menu is open." );
+		"Gameplay is never affected; the effect exists only while a menu is open.\n"
+		"The connect screen and the console are not softened." );
 	cl_cinematicAspect = Cvar_Get( "cl_cinematicAspect", "1", CVAR_ARCHIVE );
 	Cvar_CheckRange( cl_cinematicAspect, "0", "1", CV_INTEGER );
 	Cvar_SetDescription( cl_cinematicAspect,
