@@ -3485,8 +3485,7 @@ static void CL_WebHost_BuildConfigCvarJson( char *buffer, size_t bufferSize ) {
 
 		// Interface presentation.
 		"cl_menuAspect",
-		"cl_menuDepthOfField",
-		"cl_menuDepthOfFieldTime",
+		"cl_menuBlur",
 		"cl_cinematicAspect",
 		"com_skipIdLogo",
 		"com_introplayed",

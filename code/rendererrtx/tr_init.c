@@ -3941,7 +3941,7 @@ refexport_t *GetRefAPI ( int apiVersion, refimport_t *rimp ) {
 
 	re.ThrottleBackend = RE_ThrottleBackend;
 	re.FinishBloom = RE_FinishBloom;
-	re.DrawMenuDepthOfField = RE_DrawMenuDepthOfField;
+	re.DrawMenuBlur = RE_DrawMenuBlur;
 	re.CanMinimize = RE_CanMinimize;
 	re.GetConfig = RE_GetConfig;
 	re.VertexLighting = RE_VertexLighting;

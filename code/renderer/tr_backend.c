@@ -4400,14 +4400,16 @@ static const void *RB_FinishBloom( const void *data )
 
 
 #ifdef USE_FBO
-static const void *RB_MenuDepthOfField( const void *data )
+static const void *RB_MenuBlur( const void *data )
 {
-	const menuDepthOfFieldCommand_t *cmd = data;
+	const menuBlurCommand_t *cmd = data;
 
+	// Everything queued before this command has to be on the target before it
+	// can be sampled back as the soft-focus source.
 	RB_EndSurface();
 
 	if ( fboEnabled ) {
-		FBO_MenuDepthOfField( cmd->amount );
+		FBO_MenuBlur( cmd->strength );
 	}
 
 	return (const void *)(cmd + 1);
@@ -4668,8 +4670,8 @@ void RB_ExecuteRenderCommands( const void *data ) {
 		case RC_FINISHBLOOM:
 			data = RB_FinishBloom(data);
 			break;
-		case RC_MENU_DEPTH_OF_FIELD:
-			data = RB_MenuDepthOfField(data);
+		case RC_MENU_BLUR:
+			data = RB_MenuBlur(data);
 			break;
 #endif
 		case RC_COLORMASK:

@@ -124,7 +124,9 @@ typedef struct {
 
 	void	(*ThrottleBackend)( void );
 	void	(*FinishBloom)( void );
-	void	(*DrawMenuDepthOfField)( float amount );
+	// Soften everything drawn so far, so an in-game menu drawn next is the only
+	// sharp thing on screen. strength is the client's faded 0..1 amount.
+	void	(*DrawMenuBlur)( float strength );
 
 	void	(*SetColorMappings)( void );
 

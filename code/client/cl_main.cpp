@@ -185,8 +185,7 @@ cvar_t	*cl_drawRecording;
 static int cl_demoRecordMessageModificationCount;
 static int cl_drawRecordingModificationCount;
 cvar_t	*cl_menuAspect;
-cvar_t	*cl_menuDepthOfField;
-cvar_t	*cl_menuDepthOfFieldTime;
+cvar_t	*cl_menuBlur;
 cvar_t	*cl_cinematicAspect;
 cvar_t	*cl_captureActive;
 cvar_t	*cl_playerHighlight;
@@ -5433,14 +5432,14 @@ void CL_Init( void ) {
 		"Menu aspect correction:\n"
 		" 1 - retain the retail QL centered 4:3 menu layout (default)\n"
 		" 0 - stretch menu widgets, including 3D model viewports, to the framebuffer" );
-	cl_menuDepthOfField = Cvar_Get( "cl_menuDepthOfField", "0", CVAR_ARCHIVE );
-	Cvar_CheckRange( cl_menuDepthOfField, "0", "1", CV_FLOAT );
-	Cvar_SetDescription( cl_menuDepthOfField,
-		"Depth-of-field strength for the live game view behind the in-game menu. 0 disables the effect; requires renderer support." );
-	cl_menuDepthOfFieldTime = Cvar_Get( "cl_menuDepthOfFieldTime", "160", CVAR_ARCHIVE );
-	Cvar_CheckRange( cl_menuDepthOfFieldTime, "0", "1000", CV_INTEGER );
-	Cvar_SetDescription( cl_menuDepthOfFieldTime,
-		"Milliseconds used to fade the in-game menu depth-of-field effect in and out." );
+	cl_menuBlur = Cvar_Get( "cl_menuBlur", "1", CVAR_ARCHIVE );
+	Cvar_CheckRange( cl_menuBlur, "0", "1", CV_FLOAT );
+	Cvar_SetDescription( cl_menuBlur,
+		"Soft-focus strength applied to the frame behind an in-game menu.\n"
+		" 0 - leave the scene sharp\n"
+		" 0..1 - scales both the blur radius and how far the softened copy\n"
+		"        replaces the sharp frame (1 is the default full soft focus)\n"
+		"Gameplay is never affected; the effect exists only while a menu is open." );
 	cl_cinematicAspect = Cvar_Get( "cl_cinematicAspect", "1", CVAR_ARCHIVE );
 	Cvar_CheckRange( cl_cinematicAspect, "0", "1", CV_INTEGER );
 	Cvar_SetDescription( cl_cinematicAspect,

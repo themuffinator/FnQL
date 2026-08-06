@@ -1066,12 +1066,20 @@ void RE_FinishBloom( void )
 }
 
 
-void RE_DrawMenuDepthOfField( float amount )
+/*
+====================
+RE_DrawMenuBlur
+
+Queue the menu soft focus at the point the client reached in the frame: after
+the scene and the cgame HUD, before the in-game menu draws over them.
+====================
+*/
+void RE_DrawMenuBlur( float strength )
 {
 #ifdef USE_FBO
-	menuDepthOfFieldCommand_t *cmd;
+	menuBlurCommand_t *cmd;
 
-	if ( !tr.registered || amount <= 0.0f ) {
+	if ( !tr.registered || strength <= 0.0f ) {
 		return;
 	}
 
@@ -1080,10 +1088,10 @@ void RE_DrawMenuDepthOfField( float amount )
 		return;
 	}
 
-	cmd->commandId = RC_MENU_DEPTH_OF_FIELD;
-	cmd->amount = Com_Clamp( 0.0f, 1.0f, amount );
+	cmd->commandId = RC_MENU_BLUR;
+	cmd->strength = Com_Clamp( 0.0f, 1.0f, strength );
 #else
-	(void)amount;
+	(void)strength;
 #endif // USE_FBO
 }
 

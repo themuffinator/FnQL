@@ -197,10 +197,8 @@
           { name: 'cl_menuAspect', title: 'Retail 4:3 Menu Aspect', type: 'bool',
             help: 'Keeps menus and 3D widgets in centered 4:3 space instead of stretching them.' },
           { name: 'cl_cinematicAspect', title: 'Retail Cinematic Aspect', type: 'bool' },
-          { name: 'cl_menuDepthOfField', title: 'In-Game Menu Depth Of Field', type: 'range', min: 0, max: 1, step: 0.05,
-            help: 'Blurs the frozen scene behind the in-game menu. Requires the framebuffer path on the GLx renderer.' },
-          { name: 'cl_menuDepthOfFieldTime', title: 'Depth Of Field Fade Time', type: 'range', min: 0, max: 1000, step: 10,
-            help: 'Milliseconds.' }
+          { name: 'cl_menuBlur', title: 'In-Game Menu Soft Focus', type: 'range', min: 0, max: 1, step: 0.05,
+            help: 'Softens the scene behind the in-game menu. 0 leaves it sharp. Requires the framebuffer path.' }
         ],
         right: [
           { name: 'web_zoom', title: 'Menu Zoom', type: 'range', min: 25, max: 400, step: 5, help: 'Percent.' },
