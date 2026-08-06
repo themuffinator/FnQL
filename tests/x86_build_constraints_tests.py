@@ -137,6 +137,8 @@ class X86BuildConstraintTests(unittest.TestCase):
             self.skipTest("GNU Make is unavailable")
 
         empty_build = "BUILD_DIR=.tmp/x86-make-regression-nonexistent"
+        # Cleanup goals demand no build inputs, and the goal/architecture guards
+        # run before toolchain detection, so these three probes hold on any host.
         cleanup = subprocess.run(
             [make, "-n", "clean", "ARCH=x86_64", "FNQL_ENFORCE_X86=", empty_build],
             cwd=ROOT,
@@ -146,17 +148,6 @@ class X86BuildConstraintTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(cleanup.returncode, 0, cleanup.stdout)
-
-        default_goal = subprocess.run(
-            [make, "-q", "ARCH=x86", empty_build],
-            cwd=ROOT,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
-        self.assertIn(default_goal.returncode, (0, 1), default_goal.stdout)
-        self.assertNotIn("MAKECMDGOALS is managed by GNU Make", default_goal.stdout)
 
         build = subprocess.run(
             [
@@ -193,6 +184,43 @@ class X86BuildConstraintTests(unittest.TestCase):
         )
         self.assertNotEqual(disguised.returncode, 0, disguised.stdout)
         self.assertIn("MAKECMDGOALS is managed by GNU Make", disguised.stdout)
+
+        # The remaining probes evaluate an accepted x86 configuration all the
+        # way through toolchain detection, so they need a Make-visible 32-bit
+        # x86 compiler and the downloaded Meson subprojects. Hosts without them
+        # cannot exercise the accepted path at all; the rejection probes above
+        # already proved the policy.
+        toolchain = subprocess.run(
+            [
+                make,
+                "-n",
+                "fnql-arch-toolchain-probe",
+                "ARCH=x86",
+                empty_build,
+                "--eval=fnql-arch-toolchain-probe: ; @:",
+            ],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        if toolchain.returncode != 0:
+            self.skipTest(
+                "an x86 Make build cannot be configured on this host: "
+                f"{toolchain.stdout.strip().splitlines()[-1] if toolchain.stdout.strip() else ''}"
+            )
+
+        default_goal = subprocess.run(
+            [make, "-q", "ARCH=x86", empty_build],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        self.assertIn(default_goal.returncode, (0, 1), default_goal.stdout)
+        self.assertNotIn("MAKECMDGOALS is managed by GNU Make", default_goal.stdout)
 
         flag_probe = subprocess.run(
             [
