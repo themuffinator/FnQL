@@ -1970,7 +1970,7 @@ class GlxRuntimeSweepExecutableTests(unittest.TestCase):
 
     def test_run_engine_preserves_qconsole_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             engine_log = root / "home" / "baseq3" / "qconsole.log"
             artifact_log = root / "artifact.log"
             script = (
@@ -2000,7 +2000,7 @@ class GlxRuntimeSweepExecutableTests(unittest.TestCase):
         old_output = glx_runtime_sweep.DEFAULT_OUTPUT
 
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             names = glx_runtime_sweep.candidate_exe_names()
             unified_name = names[0]
             stale_names = (
@@ -2026,7 +2026,7 @@ class GlxRuntimeSweepExecutableTests(unittest.TestCase):
 
     def test_color_sweep_dry_run_plans_all_p0_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             subprocess.run(
                 [
                     sys.executable,
@@ -2902,7 +2902,7 @@ class GlxRendererSourceCoverageTests(unittest.TestCase):
 class GlxRuntimeSweepImageTests(unittest.TestCase):
     def test_png_round_trip_and_exact_compare(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             path = root / "baseline.png"
             pixels = bytes(
                 (
@@ -2926,7 +2926,7 @@ class GlxRuntimeSweepImageTests(unittest.TestCase):
 
     def test_screenshot_results_attach_color_histogram(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             screenshot = root / "baseq3" / "screenshots" / "proof.png"
             glx_runtime_sweep.write_png_rgba(
                 screenshot,
@@ -2966,7 +2966,7 @@ class GlxRuntimeSweepImageTests(unittest.TestCase):
 
     def test_png_compare_reports_threshold_failure_and_writes_diff(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             baseline = root / "baseline.png"
             candidate = root / "candidate.png"
             diff = root / "diff.png"
@@ -2999,7 +2999,7 @@ class GlxRuntimeSweepImageTests(unittest.TestCase):
 
     def test_csm_shimmer_screenshot_diff_summary_compares_path_frames(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             baseline = root / "baseline.png"
             candidate = root / "candidate.png"
             glx_runtime_sweep.write_png_rgba(
@@ -3050,7 +3050,7 @@ class GlxRuntimeSweepImageTests(unittest.TestCase):
 
     def test_shader_reference_ramps_are_deterministic_offline_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             records = glx_runtime_sweep.write_shader_reference_ramps(root)
 
             self.assertEqual(len(records), len(glx_runtime_sweep.GLX_COLOR_SWEEP_MATRIX))
@@ -3078,7 +3078,7 @@ class GlxRuntimeSweepImageTests(unittest.TestCase):
 
     def test_shader_reference_ramp_compare_reports_psnr_and_ssim(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             row_id = str(glx_runtime_sweep.GLX_COLOR_SWEEP_MATRIX[0]["id"])
             reference = glx_runtime_sweep.write_shader_reference_ramp(
                 root / "candidate-source",
@@ -3099,7 +3099,7 @@ class GlxRuntimeSweepImageTests(unittest.TestCase):
 
     def test_screenshot_baseline_approval_then_compare(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             candidate = root / "capture.png"
             baseline_dir = root / "baselines"
             glx_runtime_sweep.write_png_rgba(
@@ -3141,7 +3141,7 @@ class GlxRuntimeSweepImageTests(unittest.TestCase):
 
     def test_projected_dlight_shader_baseline_approval_uses_legacy_capture(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             legacy = root / "legacy.png"
             candidate = root / "candidate.png"
             baseline_dir = root / "baselines"
@@ -3206,7 +3206,7 @@ class GlxRuntimeSweepImageTests(unittest.TestCase):
 
     def test_projected_dlight_shader_same_run_legacy_diff(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             legacy = root / "legacy.png"
             candidate = root / "candidate.png"
             glx_runtime_sweep.write_png_rgba(
@@ -3259,7 +3259,7 @@ class GlxRuntimeSweepImageTests(unittest.TestCase):
     def test_visual_dossier_summarizes_review_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             manifest = release_proof_manifest("rc-parity", "windows-x86")
-            manifest_path = Path(tmp) / "manifest.json"
+            manifest_path = Path(tmp).resolve() / "manifest.json"
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
             dossier = glx_runtime_sweep.glx_visual_dossier(manifest, manifest_path)
@@ -3409,7 +3409,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
         self.assertEqual(glx_runtime_sweep.normalize_tone_map_name("reinhard"), "reinhard-simple")
 
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "switch.log"
+            log = Path(tmp).resolve() / "switch.log"
             log.write_text(
                 "\n".join(
                     [
@@ -3888,7 +3888,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_projected_dlight_shader_profile_accepts_executable_uniforms(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "dlight-shader.log"
+            log = Path(tmp).resolve() / "dlight-shader.log"
             self.write_projected_dlight_shader_profile_log(log)
 
             diagnostics = glx_runtime_sweep.analyze_glx_diagnostics(log, "glx-dlight-shader")
@@ -3904,7 +3904,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_projected_dlight_shader_profile_accepts_promoted_resource_records(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "dlight-shader-resource.log"
+            log = Path(tmp).resolve() / "dlight-shader-resource.log"
             self.write_projected_dlight_shader_profile_log(
                 log,
                 dynamic_inputs=4,
@@ -4066,7 +4066,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_projected_dlight_shader_profile_rejects_suppressed_uniforms(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "dlight-shader-suppressed.log"
+            log = Path(tmp).resolve() / "dlight-shader-suppressed.log"
             self.write_projected_dlight_shader_profile_log(
                 log,
                 executable=0,
@@ -4082,7 +4082,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_projected_dlight_shader_profile_rejects_truncated_uniforms(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "dlight-shader-truncated.log"
+            log = Path(tmp).resolve() / "dlight-shader-truncated.log"
             self.write_projected_dlight_shader_profile_log(
                 log,
                 binds=1,
@@ -4102,7 +4102,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_projected_dlight_shader_profile_rejects_failed_resource_promotion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "dlight-shader-resource-failed.log"
+            log = Path(tmp).resolve() / "dlight-shader-resource-failed.log"
             self.write_projected_dlight_shader_profile_log(
                 log,
                 dynamic_inputs=4,
@@ -4126,7 +4126,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_projected_dlight_shader_profile_rejects_missing_world_execution(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "dlight-shader-world-missing.log"
+            log = Path(tmp).resolve() / "dlight-shader-world-missing.log"
             self.write_projected_dlight_shader_profile_log(
                 log,
                 binds=2,
@@ -4146,7 +4146,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_projected_dlight_shader_profile_rejects_mismatched_projected_input_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "dlight-shader-input-mismatch.log"
+            log = Path(tmp).resolve() / "dlight-shader-input-mismatch.log"
             self.write_projected_dlight_shader_profile_log(
                 log,
                 world_inputs=1,
@@ -4167,7 +4167,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_projected_dlight_shader_profile_rejects_stale_resource_ranges(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "dlight-shader-stale-ranges.log"
+            log = Path(tmp).resolve() / "dlight-shader-stale-ranges.log"
             self.write_projected_dlight_shader_profile_log(
                 log,
                 stream_failures=1,
@@ -4190,7 +4190,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_projected_dlight_mdi_profile_accepts_submitted_batches(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "dlight-mdi.log"
+            log = Path(tmp).resolve() / "dlight-mdi.log"
             self.write_projected_dlight_mdi_profile_log(log)
 
             diagnostics = glx_runtime_sweep.analyze_glx_diagnostics(log, "glx-dlight-mdi")
@@ -4225,7 +4225,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_projected_dlight_mdi_profile_rejects_failed_submissions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "dlight-mdi-fallback.log"
+            log = Path(tmp).resolve() / "dlight-mdi-fallback.log"
             self.write_projected_dlight_mdi_profile_log(
                 log,
                 command_failures=1,
@@ -4280,7 +4280,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_glx_diagnostics_reject_stream_dlights_without_ir_ownership(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "dlight-ir-mismatch.log"
+            log = Path(tmp).resolve() / "dlight-ir-mismatch.log"
             log.write_text(
                 "\n".join(
                     [
@@ -4314,7 +4314,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_glx_color_frame_csv_is_gate_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "color.csv.log"
+            log = Path(tmp).resolve() / "color.csv.log"
             log.write_text(
                 "\n".join(
                     [
@@ -4342,7 +4342,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_glx_diagnostics_reject_sdr_output_with_hdr_headroom(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "sdr-headroom.log"
+            log = Path(tmp).resolve() / "sdr-headroom.log"
             log.write_text(
                 "glx: color pipeline scene-linear precision 16 transfer sdr-srgb "
                 "tone-map aces-fitted exposure 1.00 bloom-threshold 0.75/2 knee 0.50 "
@@ -4359,7 +4359,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_glx_display_state_diagnostics_allow_sdr_fallback_after_hdr_loss(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "display-state.log"
+            log = Path(tmp).resolve() / "display-state.log"
             log.write_text(
                 "\n".join(
                     [
@@ -4385,7 +4385,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_glx_ownership_profile_reports_legacy_delegation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "switch.log"
+            log = Path(tmp).resolve() / "switch.log"
             log.write_text(
                 "glx: ownership legacy delegation 3 calls/96 items, generic 1, vbo-device 1, vbo-soft 0, arrays 1\n",
                 encoding="utf-8",
@@ -4404,7 +4404,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_glx_ownership_profile_accepts_glxinfo_diagnostic(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "switch.log"
+            log = Path(tmp).resolve() / "switch.log"
             log.write_text(
                 "  ownership legacy delegation: 2 calls, 12 items\n",
                 encoding="utf-8",
@@ -4498,7 +4498,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_gl12_diagnostics_report_fixed_function_executor_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "switch.log"
+            log = Path(tmp).resolve() / "switch.log"
             log.write_text(
                 "\n".join(
                     [
@@ -4527,7 +4527,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_gl12_diagnostics_reject_missing_fixed_function_support(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "switch.log"
+            log = Path(tmp).resolve() / "switch.log"
             log.write_text(
                 "\n".join(
                     [
@@ -4550,7 +4550,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_gl2x_diagnostics_report_programmable_executor_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "switch.log"
+            log = Path(tmp).resolve() / "switch.log"
             log.write_text(
                 "\n".join(
                     [
@@ -4581,7 +4581,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_gl2x_diagnostics_reject_modern_requirements(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "switch.log"
+            log = Path(tmp).resolve() / "switch.log"
             log.write_text(
                 "\n".join(
                     [
@@ -4607,7 +4607,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_gl3x_diagnostics_report_performance_executor_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "switch.log"
+            log = Path(tmp).resolve() / "switch.log"
             log.write_text(
                 "\n".join(
                     [
@@ -4640,7 +4640,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_gl3x_diagnostics_reject_gl4_only_requirements_and_missing_modern_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "switch.log"
+            log = Path(tmp).resolve() / "switch.log"
             log.write_text(
                 "\n".join(
                     [
@@ -4670,7 +4670,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_gl41_diagnostics_report_mac_modern_executor_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "switch.log"
+            log = Path(tmp).resolve() / "switch.log"
             log.write_text(
                 "\n".join(
                     [
@@ -4708,7 +4708,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_gl41_diagnostics_reject_accidental_gl43_gl44_gl45_requirements(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "switch.log"
+            log = Path(tmp).resolve() / "switch.log"
             log.write_text(
                 "\n".join(
                     [
@@ -4743,7 +4743,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_gl46_diagnostics_report_high_end_executor_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "switch.log"
+            log = Path(tmp).resolve() / "switch.log"
             log.write_text(
                 "\n".join(
                     [
@@ -4778,7 +4778,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_gl46_diagnostics_reject_missing_high_end_requirements(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "switch.log"
+            log = Path(tmp).resolve() / "switch.log"
             log.write_text(
                 "\n".join(
                     [
@@ -4810,7 +4810,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_glx_diagnostics_report_high_risk_stream_material_draws(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "switch.log"
+            log = Path(tmp).resolve() / "switch.log"
             log.write_text(
                 "\n".join(
                     [
@@ -4832,7 +4832,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_glx_diagnostics_report_material_program_stream_skip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "switch.log"
+            log = Path(tmp).resolve() / "switch.log"
             log.write_text(
                 "\n".join(
                     [
@@ -4853,7 +4853,7 @@ class GlxRuntimeSweepDiagnosticTests(unittest.TestCase):
 
     def test_glx_diagnostics_report_renderer_failures(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "switch.log"
+            log = Path(tmp).resolve() / "switch.log"
             log.write_text(
                 "\n".join(
                     [
@@ -6225,7 +6225,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
 
     def test_dlight_shadow_sidecar_lights_are_staged_under_homepath(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             records = glx_runtime_sweep.write_dlight_shadow_sidecar_lights(
                 root,
                 "",
@@ -6328,7 +6328,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
 
     def test_csm_fallback_skip_logs_are_scene_scoped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "glx.log"
+            log = Path(tmp).resolve() / "glx.log"
             log.write_text(
                 "\n".join(
                     [
@@ -6382,7 +6382,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
 
     def test_dlight_shadow_log_analysis_extracts_active_samples(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "glx.log"
+            log = Path(tmp).resolve() / "glx.log"
             log.write_text(
                 "\n".join(
                     [
@@ -6790,7 +6790,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
 
     def test_proof_dir_defaults_wire_visual_and_performance_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             args = argparse.Namespace(
                 proof_dir=root / "proof",
                 approve_proof=False,
@@ -6811,7 +6811,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
 
     def test_proof_dir_defaults_support_individual_approval_flags(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             args = argparse.Namespace(
                 proof_dir=root / "proof",
                 approve_proof=False,
@@ -6931,7 +6931,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
 
     def test_release_proof_root_requires_all_distributed_variant_gates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             packaged: dict[str, dict[str, object]] = {}
             for proof_variant, platform_id in glx_runtime_sweep.GLX_RELEASE_PROOF_VARIANTS.items():
                 for gate in glx_runtime_sweep.GLX_RELEASE_REQUIRED_GATES:
@@ -7046,7 +7046,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
 
     def test_release_proof_root_rejects_platform_or_executable_identity_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             for proof_variant, platform_id in glx_runtime_sweep.GLX_RELEASE_PROOF_VARIANTS.items():
                 for gate in glx_runtime_sweep.GLX_RELEASE_REQUIRED_GATES:
                     manifest = release_proof_manifest(gate, platform_id, proof_variant)
@@ -7072,7 +7072,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
 
     def test_executable_identity_reads_pe_and_elf_x86_headers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             pe = bytearray(128)
             pe[0:2] = b"MZ"
             pe[60:64] = (64).to_bytes(4, "little")
@@ -7107,7 +7107,7 @@ class GlxRuntimeSweepProfileTests(unittest.TestCase):
 
     def test_release_proof_root_rejects_missing_platform_or_dry_run(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             for gate in glx_runtime_sweep.GLX_RELEASE_REQUIRED_GATES:
                 manifest = release_proof_manifest(gate, "windows-x86")
                 if gate == "rc-proof":
@@ -7250,7 +7250,7 @@ class GlxPromotionTests(unittest.TestCase):
 
     def test_feature_matrix_parser_skips_spaced_separator_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            matrix = Path(tmp) / "matrix.md"
+            matrix = Path(tmp).resolve() / "matrix.md"
             matrix.write_text(
                 "\n".join(
                     [
@@ -7278,7 +7278,7 @@ class GlxPromotionTests(unittest.TestCase):
 
     def test_feature_matrix_parser_rejects_invalid_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            matrix = Path(tmp) / "matrix.md"
+            matrix = Path(tmp).resolve() / "matrix.md"
             matrix.write_text(
                 "\n".join(
                     [
@@ -7295,7 +7295,7 @@ class GlxPromotionTests(unittest.TestCase):
 
     def test_complete_runtime_and_ownership_proof_still_waits_for_green_matrix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             self.write_complete_proof_root(root)
             rollback_metadata = self.write_rollback_metadata(root)
 
@@ -7326,7 +7326,7 @@ class GlxPromotionTests(unittest.TestCase):
 
     def test_legacy_coupling_inventory_blocks_missing_doc_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            doc = Path(tmp) / "GLX_LEGACY_COUPLING.md"
+            doc = Path(tmp).resolve() / "GLX_LEGACY_COUPLING.md"
             doc.write_text(
                 "\n".join(
                     [
@@ -7347,7 +7347,7 @@ class GlxPromotionTests(unittest.TestCase):
 
     def test_rollback_package_metadata_validates_platform_artifacts_and_triggers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            metadata_path = self.write_rollback_metadata(Path(tmp))
+            metadata_path = self.write_rollback_metadata(Path(tmp).resolve())
 
             check = glx_promotion.check_rollback_package_metadata(metadata_path)
 
@@ -7364,7 +7364,7 @@ class GlxPromotionTests(unittest.TestCase):
     def test_rollback_package_metadata_blocks_incomplete_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             metadata_path = self.write_rollback_metadata(
-                Path(tmp),
+                Path(tmp).resolve(),
                 rollback_package_metadata(
                     platforms=["windows-x86"],
                     legacy_renderers=["glx"],
@@ -7394,7 +7394,7 @@ class GlxPromotionTests(unittest.TestCase):
             package = packages[0]
             assert isinstance(package, dict)
             package["archive"] = "legacy/opengl.zip"
-            metadata_path = self.write_rollback_metadata(Path(tmp), metadata)
+            metadata_path = self.write_rollback_metadata(Path(tmp).resolve(), metadata)
 
             check = glx_promotion.check_rollback_package_metadata(metadata_path)
             failures = "\n".join(str(failure) for failure in check["blockers"])
@@ -7422,7 +7422,7 @@ class GlxPromotionTests(unittest.TestCase):
 
     def test_release_rollback_package_metadata_must_match_staged_archive(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            metadata_path = self.write_rollback_metadata(Path(tmp))
+            metadata_path = self.write_rollback_metadata(Path(tmp).resolve())
             args = argparse.Namespace(channel="release", glx_rollback_metadata=metadata_path)
             rollback = fnql_release.resolve_glx_rollback_package(
                 args,
@@ -7447,7 +7447,7 @@ class GlxPromotionTests(unittest.TestCase):
 
     def test_ownership_proof_requires_zero_legacy_delegation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             for platform_id in glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS:
                 self.write_manifest(
                     root,
@@ -7469,7 +7469,7 @@ class GlxPromotionTests(unittest.TestCase):
 
     def test_ownership_proof_requires_versioned_evidence_object(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             for platform_id in glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS:
                 manifest = ownership_proof_manifest(platform_id)
                 if platform_id == "windows-x86":
@@ -7491,7 +7491,7 @@ class GlxPromotionTests(unittest.TestCase):
 
     def test_ownership_proof_rejects_stale_evidence_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             for platform_id in glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS:
                 manifest = ownership_proof_manifest(platform_id)
                 if platform_id == "windows-x86":
@@ -7511,7 +7511,7 @@ class GlxPromotionTests(unittest.TestCase):
 
     def test_ownership_proof_requires_modern_post_output_ownership(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             for platform_id in glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS:
                 self.write_manifest(
                     root,
@@ -7535,7 +7535,7 @@ class GlxPromotionTests(unittest.TestCase):
 
     def test_ownership_proof_requires_modern_post_output_tier(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             for platform_id in glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS:
                 self.write_manifest(
                     root,
@@ -7557,7 +7557,7 @@ class GlxPromotionTests(unittest.TestCase):
 
     def test_ownership_proof_requires_modern_tier_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             for platform_id in glx_runtime_sweep.GLX_BLOCKING_RELEASE_PLATFORMS:
                 self.write_manifest(
                     root,
@@ -7596,7 +7596,7 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
 
     def test_glx_performance_samples_parse_compact_frame_counters(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "switch.log"
+            log = Path(tmp).resolve() / "switch.log"
             log.write_text(
                 "\n".join(
                     [
@@ -8462,7 +8462,7 @@ class GlxRuntimeSweepPerformanceTests(unittest.TestCase):
 
     def test_performance_baseline_approval_then_compare(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "glx-performance.json"
+            path = Path(tmp).resolve() / "glx-performance.json"
             manifest = {
                 "runId": "baseline-run",
                 "gate": "rc-parity",
