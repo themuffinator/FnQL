@@ -116,8 +116,21 @@ class QLFontSourceTests(unittest.TestCase):
         cgame = read("code/client/cl_cgame.cpp")
         ui = read("code/client/cl_ui.cpp")
         self.assertIn("scale, int limit, float *outMaxX", screen)
-        self.assertIn("scale, limit, maxX", cgame)
-        self.assertIn("scale, limit, maxX", ui)
+        # The native traps render into the private supersampled target, so the
+        # retail in/out extent crosses a scale boundary in both directions:
+        # the caller's maxX is converted into renderer pixels on the way in and
+        # the renderer's result is converted back to retail pixels on the way
+        # out. A null maxX must still reach the renderer as a null pointer, and
+        # limit must be forwarded verbatim -- it counts characters, not pixels.
+        for path, source in (
+            ("code/client/cl_cgame.cpp", cgame),
+            ("code/client/cl_ui.cpp", ui),
+        ):
+            self.assertIn("float *rendererMaxX = nullptr;", source, path)
+            self.assertIn("scaledMaxX = *maxX * framebufferScale.x;", source, path)
+            self.assertIn("rendererMaxX = &scaledMaxX;", source, path)
+            self.assertIn("scale * framebufferScale.y, limit, rendererMaxX", source, path)
+            self.assertIn("*maxX = scaledMaxX / framebufferScale.x;", source, path)
         self.assertIn("re.GetScaledFontMetrics( fontHandle, scale", screen)
 
     def test_native_measure_imports_write_the_retail_five_float_bounds_packet(self) -> None:
