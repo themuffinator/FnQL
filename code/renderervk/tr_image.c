@@ -1065,9 +1065,17 @@ image_t *R_CreateImage( const char *name, const char *name2, byte *pic, int widt
 	image->colorSpace = R_ImageColorSpaceForFlags( image->imgName, image->flags );
 
 	if ( namelen > 6 && Q_stristr( image->imgName, "maps/" ) == image->imgName && Q_stristr( image->imgName + 6, "/lm_" ) != NULL ) {
-		// external lightmap atlases stored in maps/<mapname>/lm_XXXX textures
-		// image->flags = IMGFLAG_NOLIGHTSCALE | IMGFLAG_NO_COMPRESSION | IMGFLAG_NOSCALE | IMGFLAG_COLORSHIFT;
-		image->flags |= IMGFLAG_NO_COMPRESSION | IMGFLAG_NOSCALE | IMGFLAG_COLORSPACE_LINEAR;
+		// external lightmap atlases stored in maps/<mapname>/lm_XXXX textures.
+		// These arrive through the regular shader/image path, so they must be
+		// forced onto the same contract R_LoadLightmaps() gives BSP lightmaps:
+		// bake the overbright/greyscale shift (R_ProcessLightmap() does that for
+		// the internal ones), skip the intensity+gamma light scale so it is not
+		// applied on top of the diffuse texture's, and keep the authored size.
+		// picmip and mipmapping are cleared because a packed atlas has no border
+		// padding, so they would blur and bleed neighbouring lightmap tiles.
+		image->flags &= ~( IMGFLAG_MIPMAP | IMGFLAG_PICMIP );
+		image->flags |= IMGFLAG_NOLIGHTSCALE | IMGFLAG_NO_COMPRESSION | IMGFLAG_NOSCALE |
+			IMGFLAG_COLORSHIFT | IMGFLAG_COLORSPACE_LINEAR;
 		image->colorSpace = IMAGE_COLORSPACE_LINEAR;
 	}
 	image->srgbDecode = R_ImageWantsSrgbDecode( image->colorSpace );
