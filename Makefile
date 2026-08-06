@@ -136,6 +136,12 @@ else ifneq ($(strip $(FNQL_ARCH_SENSITIVE_GOALS)),)
   override FNQL_ENFORCE_X86 := 1
 endif
 
+# The same goal split governs build inputs. A fresh clone can run the cleanup
+# goals before any Meson subproject has been downloaded or any compiler has
+# been installed, so those prerequisites are only demanded when a goal can
+# actually produce output.
+override FNQL_REQUIRE_BUILD_INPUTS := $(FNQL_ENFORCE_X86)
+
 ifeq ($(FNQL_ENFORCE_X86),1)
   ifneq ($(strip $(ARCH)),x86)
     $(error FnQL supports only 32-bit x86 targets; set ARCH=x86 and select a 32-bit toolchain (got ARCH=$(ARCH)))
@@ -442,19 +448,22 @@ ifeq ($(USE_CURL),1)
 endif
 
 ifeq ($(BUILD_CLIENT),1)
-  ifeq ($(wildcard $(FONTSTASHDIR)/fontstash.h),)
+  ifneq ($(wildcard $(FONTSTASHDIR)/fontstash.h),)
+    BASE_CFLAGS += -DBUILD_FONTSTASH -isystem $(FONTSTASHDIR)
+  else ifeq ($(FNQL_REQUIRE_BUILD_INPUTS),1)
     $(error Retail host fonts require $(FONTSTASHDIR)/fontstash.h; run 'meson subprojects download fontstash' before using Make)
   endif
-  BASE_CFLAGS += -DBUILD_FONTSTASH -isystem $(FONTSTASHDIR)
-  ifneq ($(USE_SYSTEM_JPEG),1)
-    $(error USE_SYSTEM_JPEG=0 requires the removed in-tree libjpeg sources; use Meson for the libjpeg-turbo subproject fallback or install system libjpeg)
-  endif
-  ifeq ($(USE_OGG_VORBIS),1)
-    ifneq ($(USE_SYSTEM_OGG),1)
-      $(error USE_SYSTEM_OGG=0 requires the removed in-tree libogg sources; use Meson for the Ogg subproject fallback or install system libogg)
+  ifeq ($(FNQL_REQUIRE_BUILD_INPUTS),1)
+    ifneq ($(USE_SYSTEM_JPEG),1)
+      $(error USE_SYSTEM_JPEG=0 requires the removed in-tree libjpeg sources; use Meson for the libjpeg-turbo subproject fallback or install system libjpeg)
     endif
-    ifneq ($(USE_SYSTEM_VORBIS),1)
-      $(error USE_SYSTEM_VORBIS=0 requires the removed in-tree libvorbis sources; use Meson for the Vorbis subproject fallback or install system libvorbis)
+    ifeq ($(USE_OGG_VORBIS),1)
+      ifneq ($(USE_SYSTEM_OGG),1)
+        $(error USE_SYSTEM_OGG=0 requires the removed in-tree libogg sources; use Meson for the Ogg subproject fallback or install system libogg)
+      endif
+      ifneq ($(USE_SYSTEM_VORBIS),1)
+        $(error USE_SYSTEM_VORBIS=0 requires the removed in-tree libvorbis sources; use Meson for the Vorbis subproject fallback or install system libvorbis)
+      endif
     endif
   endif
 endif
@@ -544,11 +553,13 @@ ifdef MINGW
     WINDRES=windres
   endif
 
-  ifeq ($(CC),)
-    $(error Cannot find a suitable cross compiler for $(PLATFORM))
-  endif
-  ifeq ($(CXX),)
-    $(error Cannot find a suitable C++ compiler for $(PLATFORM))
+  ifeq ($(FNQL_REQUIRE_BUILD_INPUTS),1)
+    ifeq ($(CC),)
+      $(error Cannot find a suitable cross compiler for $(PLATFORM))
+    endif
+    ifeq ($(CXX),)
+      $(error Cannot find a suitable C++ compiler for $(PLATFORM))
+    endif
   endif
 
   BASE_CFLAGS += -Wall -Wimplicit -Wstrict-prototypes -DUSE_ICON -DMINGW=1
