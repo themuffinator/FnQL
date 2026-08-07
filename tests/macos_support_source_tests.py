@@ -142,7 +142,7 @@ class MacOSSupportSourceTests(unittest.TestCase):
             workflow,
         )
         self.assertIn(
-            "needs: [prepare, push-build-validation, glx-release-proof]",
+            "needs: [prepare, push-build-validation]",
             workflow,
         )
         self.assertIn("needs.push-build-validation.result == 'success'", workflow)

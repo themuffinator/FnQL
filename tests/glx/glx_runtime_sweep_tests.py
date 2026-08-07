@@ -7146,22 +7146,21 @@ class GlxWorkflowTests(unittest.TestCase):
         self.assertIn('"--performance-max-growth-ratio",', workflow)
         self.assertIn('os.environ["FNQL_GLX_PERFORMANCE_MAX_GROWTH_RATIO"]', workflow)
 
-    def test_release_workflow_proves_each_exact_distributed_runtime(self) -> None:
+    def test_release_workflow_does_not_gate_on_self_hosted_proof(self) -> None:
+        # The release proof matrix ran on self-hosted runners labelled glx and
+        # needed a retail basepath plus a reviewed baseline directory. None of
+        # that is registered here, so every release queued forever against
+        # labels nothing could satisfy and no build ever published. The proof
+        # tooling itself is unchanged and still drives glx-verification.yml.
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
             encoding="utf-8"
         )
 
         for variant in glx_runtime_sweep.GLX_RELEASE_PROOF_VARIANTS:
-            self.assertIn(f"proof_variant: {variant}", workflow)
-            self.assertIn(f"name: glx-release-proof-${{{{ matrix.proof_variant }}}}", workflow)
-        self.assertIn('for gate in ("rc-smoke", "rc-parity", "rc-proof"):', workflow)
-        self.assertIn("Download exact release runtime", workflow)
-        self.assertIn("--proof-variant", workflow)
-        self.assertIn("--proof-build-run-id", workflow)
-        self.assertIn("--proof-build-run-attempt", workflow)
-        self.assertIn("--glx-module", workflow)
-        self.assertIn("--source-commit", workflow)
-        self.assertIn("needs.glx-release-proof.result == 'success'", workflow)
+            self.assertNotIn(f"proof_variant: {variant}", workflow)
+        self.assertNotIn("glx-release-proof", workflow)
+        self.assertNotIn("self-hosted", workflow)
+        self.assertNotIn("--require-glx-proof", workflow)
 
         standalone = (ROOT / ".github" / "workflows" / "glx-verification.yml").read_text(
             encoding="utf-8"
