@@ -19,29 +19,16 @@ release, CI resets `Unreleased` for the next cycle.
 - _None yet._
 
 ### Rendering and Display
-- Keep the complete decorated game window reachable across monitor, work-area,
-  and DPI changes on supported desktop window systems.
-- Soften the scene and HUD behind an open in-game menu, so the menu reads as the
-  foreground instead of competing with the live view. Set `cl_menuBlur 0` to
-  keep the frame sharp, or a value between 0 and 1 for a lighter effect.
-  Gameplay, the scoreboard, the connect screen, and the console are never
-  softened. Available on all three renderers; requires the framebuffer path
-  (`r_fbo 1`).
+- _None yet._
 
 ### Audio
 - _None yet._
 
 ### Builds and Packaging
-- Allow the Make cleanup goals to run on a fresh clone, before any Meson
-  subproject has been downloaded or any compiler has been installed.
+- _None yet._
 
 ### Fixes
-- Keep the mouse cursor usable in the in-game menu, scoreboard, and other
-  cgame/UI overlays while supersampling is enabled.
-- Light maps that ship external lightmap atlases (`maps/<mapname>/lm_*`) the same
-  way as maps with lightmaps stored inside the BSP. They previously ignored
-  `r_mapOverBrightBits`, `r_mapOverBrightCap`, and `r_mapGreyScale`, took
-  `r_intensity` and gamma a second time, and were blurred by `r_picmip`.
+- _None yet._
 
 ### Documentation and Tooling
 - _None yet._
