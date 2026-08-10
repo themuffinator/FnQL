@@ -554,6 +554,8 @@ IF(Python3_Interpreter_FOUND)
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/client_cvar_compat_source_tests.py")
 	add_test(NAME fnql_server_cvar_compat_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/server_cvar_compat_source_tests.py")
+	add_test(NAME fnql_spawn_view_angle_source
+		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/spawn_view_angle_source_tests.py")
 	add_test(NAME fnql_collision_model_parity_source
 		COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/collision_model_parity_source_tests.py")
 	add_test(NAME fnql_ql_services_source

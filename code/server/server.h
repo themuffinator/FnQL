@@ -458,7 +458,7 @@ void SV_PrintClientStateChange( const client_t *cl, clientState_t newState );
 void SV_ExecuteClientMessage( client_t *cl, msg_t *msg );
 void SV_UserinfoChanged( client_t *cl, qboolean updateUserinfo, qboolean runFilter );
 
-void SV_ClientEnterWorld( client_t *client );
+void SV_ClientEnterWorld( client_t *client, const usercmd_t *cmd );
 void SV_FreeClient( client_t *client );
 void SV_DropClient( client_t *drop, const char *reason );
 void SV_StartDemoRecord( client_t *client );

@@ -425,6 +425,7 @@ extern	cvar_t	*cl_noprint;
 extern	cvar_t	*cl_debugMove;
 extern	cvar_t	*cl_timegraph;
 extern	cvar_t	*cl_shownet;
+extern	cvar_t	*cl_debugViewAngles;
 extern	cvar_t	*cl_autoNudge;
 extern	cvar_t	*cl_autoTimeNudge;
 extern	cvar_t	*cl_timeNudge;

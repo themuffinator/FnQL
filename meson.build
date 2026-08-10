@@ -1196,6 +1196,9 @@ test('fnql_server_cvar_compat', server_cvar_compat_tests)
 test('fnql_server_cvar_compat_source', python,
   args: files('tests/server_cvar_compat_source_tests.py'),
 )
+test('fnql_spawn_view_angle_source', python,
+  args: files('tests/spawn_view_angle_source_tests.py'),
+)
 
 message_codec_tests = executable('fnql_message_codec_tests',
   'tests/message_codec_tests.cpp',

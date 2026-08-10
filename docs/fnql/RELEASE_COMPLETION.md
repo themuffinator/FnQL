@@ -23,6 +23,17 @@ only planned.
 
 ## Ready For Changelog
 
+- [x] FnQL-hosted servers keep a client's real view angles as the spawn anchor.
+  The game re-anchors `ps.delta_angles` on every spawn against the usercmd the
+  engine returns from `trap_GetUsercmd()`, which the server serves from
+  `client_t::lastUsercmd`. `SV_ClientEnterWorld()` had stopped recording the
+  command that brings a client into the world (Quake III passes it), and the
+  two acceptance-gate resets cleared the whole command instead of only its
+  `serverTime`, leaving all-zero angles as the anchor across the frames after a
+  `map_restart` in which the game respawns everyone. The server now anchors on
+  the entering command and moves only the gate, without ever rewinding it.
+  Server-side only: this does not affect an FnQL client connected to a
+  retail-hosted server.
 - [x] Manual releases publish a Quake Live-styled Discord announcement with
   release highlights, the `@quake-live` and playtester roles, a `#fnql`
   feedback link, and platform download links.

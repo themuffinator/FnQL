@@ -176,6 +176,7 @@ cvar_t	*cl_timeNudge;
 cvar_t	*cl_showTimeDelta;
 
 cvar_t	*cl_shownet;
+cvar_t	*cl_debugViewAngles;
 cvar_t	*cl_autoRecordDemo;
 cvar_t	*cl_freezeDemo;
 cvar_t	*cl_quitOnDemoCompleted;
@@ -5376,6 +5377,11 @@ void CL_Init( void ) {
 
 	cl_shownet = Cvar_Get ("cl_shownet", "0", CVAR_TEMP );
 	Cvar_SetDescription( cl_shownet, "Toggle the display of current network status." );
+	cl_debugViewAngles = Cvar_Get( "cl_debugViewAngles", "0", CVAR_TEMP );
+	Cvar_CheckRange( cl_debugViewAngles, "0", "1", CV_INTEGER );
+	Cvar_SetDescription( cl_debugViewAngles,
+		"Print one line whenever the server re-anchors ps.delta_angles (spawn, teleport, or a pitch clamp), "
+		"reporting the anchor command, the resulting clamped pitch, and whether the anchor was stale." );
 	cl_showTimeDelta = Cvar_Get ("cl_showTimeDelta", "0", CVAR_TEMP );
 	Cvar_SetDescription( cl_showTimeDelta, "Prints the time delta of each packet to the console (the time delta between server updates)." );
 	rcon_client_password = Cvar_Get ("rconPassword", "", CVAR_TEMP | CVAR_PRIVATE );
