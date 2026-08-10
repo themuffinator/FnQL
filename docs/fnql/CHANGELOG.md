@@ -28,7 +28,11 @@ release, CI resets `Unreleased` for the next cycle.
 - _None yet._
 
 ### Fixes
-- _None yet._
+- FnQL-hosted servers no longer discard a player's view angles when spawning
+  them, which could throw the spawn view to an unrelated pitch after a
+  `map_restart`.
 
 ### Documentation and Tooling
-- _None yet._
+- Added `cl_debugViewAngles`, which prints one line whenever the server
+  re-anchors the view (spawn, teleport, or a pitch clamp) for diagnosing spawn
+  view-angle reports.

@@ -2145,8 +2145,12 @@ static void SV_SendClientGameState( client_t *client ) {
 	// gamestate message was not just sent, forcing a retransmit
 	client->gamestateMessageNum = client->netchan.outgoingSequence;
 
-	// accept usercmds starting from current server time only
-	client->lastUsercmd = {};
+	// Accept usercmds starting from the current server time only. Only the
+	// acceptance gate moves: the rest of lastUsercmd is the view-angle anchor
+	// the game reads through trap_GetUsercmd() when it spawns the client, and
+	// clearing the angles here would throw the spawn view away from the spawn
+	// point. SV_ClientEnterWorld() refreshes the anchor from the command that
+	// actually brings this client into the world.
 	client->lastUsercmd.serverTime = sv.time - 1;
 
 	MSG_Init( &msg, msgBuffer.data(), MAX_MSGLEN );
@@ -2235,7 +2239,7 @@ static void SV_SendClientGameState( client_t *client ) {
 SV_ClientEnterWorld
 ==================
 */
-void SV_ClientEnterWorld( client_t *client ) {
+void SV_ClientEnterWorld( client_t *client, const usercmd_t *cmd ) {
 	sharedEntity_t *ent;
 	bool isBot;
 	int clientNum;
@@ -2268,6 +2272,25 @@ void SV_ClientEnterWorld( client_t *client ) {
 	client->deltaMessage = fnql::net::RetreatSequence(
 		client->netchan.outgoingSequence, PACKET_BACKUP + 1u ); // force delta reset
 	client->lastSnapshotTime = svs.time - 9999; // generate a snapshot immediately
+
+	// GAME_CLIENT_BEGIN spawns the client, and the spawn reads this command back
+	// through trap_GetUsercmd() to anchor ps.delta_angles against the view angles
+	// the client is currently holding. A client's cl.viewangles is a free-running
+	// accumulator that only means anything relative to that anchor, so anchoring
+	// to a cleared or pre-gamestate command makes the spawn view jump to the raw
+	// accumulator instead of the spawn point; pmove then clamps the result and
+	// the player spawns staring straight up or straight down. Callers that have
+	// no fresh command pass nullptr and keep the anchor they already had.
+	if ( cmd != nullptr ) {
+		const int acceptFrom = client->lastUsercmd.serverTime;
+
+		client->lastUsercmd = *cmd;
+		// The command acceptance gate only ever moves forwards, so adopting the
+		// angles can never replay commands from before a gamestate or restart.
+		if ( cmd->serverTime - acceptFrom < 0 ) {
+			client->lastUsercmd.serverTime = acceptFrom;
+		}
+	}
 
 	// call the game begin function
 	VM_Call( gvm, 1, GAME_CLIENT_BEGIN, clientNum );
@@ -3311,7 +3334,10 @@ static void SV_UserMove( client_t *cl, msg_t *msg, bool delta ) {
 			}
 			return;
 		}
-		SV_ClientEnterWorld( cl );
+		// Anchor the spawn on the oldest command in this packet, the way the
+		// gate below treats it: it is skipped as already executed, and the
+		// commands after it are what move the client for the first time.
+		SV_ClientEnterWorld( cl, &cmds[0] );
 		// the moves can be processed normally
 	}
 

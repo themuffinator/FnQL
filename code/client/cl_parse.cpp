@@ -558,6 +558,65 @@ static void CL_ParsePacketEntities( msg_t *msg, const clSnapshot_t *oldframe, cl
 
 /*
 ================
+CL_ReportViewAngleAnchor
+
+cl_debugViewAngles diagnostic.
+
+ps.delta_angles is the offset the game adds to a command's angles to produce the
+view, and the game only re-anchors it when it spawns a player, teleports one, or
+holds one against the pitch limit. One line per change is therefore enough to
+attribute a bad spawn view without a running trace.
+
+The anchor the game used is the command it had last executed, which ps.commandTime
+identifies, so recovering that command from our own ring shows directly whether
+the server anchored on a stale one. pmove clamps pitch to +/-16000, so reporting
+the clamped result alongside ps.viewangles separates a view the server itself
+pinned from one only local prediction pinned.
+================
+*/
+#define VIEWANGLE_PITCH_LIMIT 16000
+
+static void CL_ReportViewAngleAnchor( const clSnapshot_t *newSnap ) {
+	int i;
+	int anchorPitch = 0;
+	int anchorAge = -1;
+	int latestPitch;
+	int sum;
+
+	for ( i = 0; i < 3; i++ ) {
+		if ( cl.snap.ps.delta_angles[i] != newSnap->ps.delta_angles[i] ) {
+			break;
+		}
+	}
+	if ( i == 3 ) {
+		return;
+	}
+
+	for ( i = 0; i < CMD_BACKUP; i++ ) {
+		const usercmd_t *cmd = &cl.cmds[ ( cl.cmdNumber - i ) & CMD_MASK ];
+		if ( cmd->serverTime == newSnap->ps.commandTime ) {
+			anchorPitch = cmd->angles[PITCH];
+			anchorAge = i;
+			break;
+		}
+	}
+
+	latestPitch = cl.cmds[ cl.cmdNumber & CMD_MASK ].angles[PITCH];
+	// The truncation is pmove's: both terms are unsigned 16-bit angle units.
+	sum = (short)( latestPitch + newSnap->ps.delta_angles[PITCH] );
+
+	Com_Printf( "viewangles: snap %i t %i delta_pitch %i->%i ps_pitch %.1f "
+		"cmd_pitch %i anchor %i age %i -> %i%s\n",
+		newSnap->messageNum, newSnap->serverTime,
+		cl.snap.ps.delta_angles[PITCH], newSnap->ps.delta_angles[PITCH],
+		newSnap->ps.viewangles[PITCH], latestPitch, anchorPitch, anchorAge, sum,
+		( sum >= VIEWANGLE_PITCH_LIMIT || sum <= -VIEWANGLE_PITCH_LIMIT )
+			? " CLAMPED" : "" );
+}
+
+
+/*
+================
 CL_ParseSnapshot
 
 If the snapshot is parsed properly, it will be copied to
@@ -676,6 +735,11 @@ static void CL_ParseSnapshot( msg_t *msg ) {
 		const int missing = fnql::net::AdvanceSequence( firstMissing,
 			static_cast<std::uint32_t>( i ) );
 		cl.snapshots[ missing & PACKET_MASK ].valid = qfalse;
+	}
+
+	// Report before cl.snap is replaced: the previous anchor is the comparison.
+	if ( cl_debugViewAngles->integer && cl.snap.valid ) {
+		CL_ReportViewAngleAnchor( &newSnap );
 	}
 
 	// copy to the current good spot

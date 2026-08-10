@@ -644,7 +644,9 @@ void SV_SpawnServer( const char *mapname, qboolean killBots ) {
 					slot.client.state = CS_CONNECTED;
 					slot.client.gentity = nullptr;
 				} else {
-					SV_ClientEnterWorld( &slot.client );
+					// Bots are driven by botlib rather than by network
+					// commands, so their existing lastUsercmd stays the anchor.
+					SV_ClientEnterWorld( &slot.client, nullptr );
 				}
 			}
 		}

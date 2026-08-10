@@ -392,7 +392,9 @@ static void SV_MapRestart_f( void ) {
 		}
 
 		if ( slot.client.state == CS_ACTIVE ) {
-			SV_ClientEnterWorld( &slot.client );
+			// A restart brings the client back with no new command of its own,
+			// so the last command it sent stays the spawn's view-angle anchor.
+			SV_ClientEnterWorld( &slot.client, nullptr );
 		}
 	}
 
@@ -417,7 +419,10 @@ static void SV_MapRestart_f( void ) {
 		if ( client.state >= CS_PRIMED ) {
 			// accept usercmds starting from current server time only
 			// to emulate original behavior which dropped pre-restart commands via serverid check
-			client.lastUsercmd = {};
+			// Only the gate moves. A client's commands are dropped until it
+			// catches up to this time, which for any non-zero ping spans the
+			// frames in which the game respawns everyone, so the angles left
+			// here are the anchor trap_GetUsercmd() hands those spawns.
 			client.lastUsercmd.serverTime = sv.time - 1;
 		}
 	}
