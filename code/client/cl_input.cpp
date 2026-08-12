@@ -31,7 +31,6 @@ extern "C" {
 
 #include <array>
 #include <cmath>
-#include <cstdlib>
 
 using fnql::ScopedFileHandle;
 
@@ -47,7 +46,7 @@ struct InputCommandBinding {
 } // namespace
 
 static unsigned frame_msec;
-static int old_com_frameTime;
+static unsigned old_com_frameTime;
 
 /*
 ===============================================================================
@@ -118,6 +117,24 @@ static fnql::input::RetailViewAngleFilter retailMouseFilter;
 static ScopedFileHandle mouseAccelDebugLog;
 static bool mouseAccelDebugOpenFailed;
 
+
+/*
+Relative mouse deltas have no retained timestamp. If usercmd generation stops
+while the platform keeps delivering motion, replaying the whole gap in the
+first resumed command creates an artificial view kick (up to the 90-degree
+per-command pitch guard). Discard only that unsampleable motion and rebase the
+frame clock; held keys and persistent joystick axes retain their normal state.
+*/
+static void CL_SuspendUsercmdInputSampling( void ) {
+	for ( int i = 0; i < 2; ++i ) {
+		cl.mouseDx[i] = 0;
+		cl.mouseDy[i] = 0;
+	}
+	retailMouseFilter.Reset(
+		{ cl.viewangles[YAW], cl.viewangles[PITCH] } );
+	old_com_frameTime = static_cast<unsigned>( com_frameTime );
+}
+
 /*
 Canonical engine-owned +/- binding commands carry a reserved generation tag as
 argv(3). Return their validated source key, reject stale/malformed reserved
@@ -133,7 +150,8 @@ int CL_ValidateInputCommandSource( void ) {
 
 	const std::optional<unsigned> sourceKey =
 		fnql::input::ParseUnsignedInputCommandArgument( Cmd_Argv( 1 ) );
-	if ( !tag.valid || !sourceKey || *sourceKey >= MAX_KEYS ) {
+	if ( !tag.valid || !sourceKey || *sourceKey == 0u ||
+		*sourceKey >= MAX_KEYS ) {
 		return CL_INPUT_COMMAND_STALE;
 	}
 
@@ -141,11 +159,6 @@ int CL_ValidateInputCommandSource( void ) {
 	return tag.value == Key_GetBindingGeneration( key )
 		? key
 		: CL_INPUT_COMMAND_STALE;
-}
-
-
-static bool IN_CommandGenerationIsCurrent( void ) {
-	return CL_ValidateInputCommandSource() != CL_INPUT_COMMAND_STALE;
 }
 
 
@@ -191,7 +204,8 @@ static void IN_RemoveCommandInputSource( int sourceKey ) {
 			// Keep aggregate msec/wasPressed: without per-source provenance they
 			// may also contain a completed keyboard tap that must survive this
 			// deliberately narrow mouse-only recovery.
-			button->msec += frame_msec / 2;
+			button->msec = fnql::input::SaturatingAddUnsigned(
+				button->msec, frame_msec / 2 );
 		}
 		button->active = false;
 		button->downtime = 0;
@@ -278,16 +292,26 @@ static void IN_MLookUp( void ) {
 static void IN_KeyDown( kbutton_t *b ) {
 	const char *c;
 	int	k;
+	const int commandSource = CL_ValidateInputCommandSource();
 
-	if ( !IN_CommandGenerationIsCurrent() ) {
+	if ( commandSource == CL_INPUT_COMMAND_STALE ) {
 		return;
 	}
 
-	c = Cmd_Argv(1);
-	if ( c[0] ) {
-		k = std::atoi( c );
+	if ( commandSource >= 0 ) {
+		k = commandSource;
 	} else {
-		k = -1;		// typed manually at the console for continuous down
+		c = Cmd_Argv(1);
+		if ( c[0] ) {
+			const std::optional<int> parsed =
+				fnql::input::ParseSignedInputCommandArgument( c );
+			if ( !parsed || *parsed == 0 ) {
+				return;
+			}
+			k = *parsed;
+		} else {
+			k = -1;		// typed manually at the console for continuous down
+		}
 	}
 
 	if ( k == b->down[0] || k == b->down[1] ) {
@@ -308,8 +332,9 @@ static void IN_KeyDown( kbutton_t *b ) {
 	}
 
 	// save timestamp for partial frame summing
-	c = Cmd_Argv(2);
-	b->downtime = std::atoi( c );
+	const std::optional<unsigned> timestamp =
+		fnql::input::ParseUnsignedInputCommandArgument( Cmd_Argv( 2 ) );
+	b->downtime = timestamp.value_or( 0u );
 
 	b->active = true;
 	b->wasPressed = true;
@@ -320,19 +345,30 @@ static void IN_KeyUp( kbutton_t *b ) {
 	unsigned uptime;
 	const char *c;
 	int		k;
+	const int commandSource = CL_ValidateInputCommandSource();
 
-	if ( !IN_CommandGenerationIsCurrent() ) {
+	if ( commandSource == CL_INPUT_COMMAND_STALE ) {
 		return;
 	}
 
-	c = Cmd_Argv(1);
-	if ( c[0] ) {
-		k = std::atoi( c );
+	if ( commandSource >= 0 ) {
+		k = commandSource;
 	} else {
-		// typed manually at the console, assume for unsticking, so clear all
-		b->down[0] = b->down[1] = 0;
-		b->active = false;
-		return;
+		c = Cmd_Argv(1);
+		if ( c[0] ) {
+			const std::optional<int> parsed =
+				fnql::input::ParseSignedInputCommandArgument( c );
+			if ( !parsed || *parsed == 0 ) {
+				return;
+			}
+			k = *parsed;
+		} else {
+			// typed manually at the console, assume for unsticking, so clear all
+			b->down[0] = b->down[1] = 0;
+			b->active = false;
+			b->downtime = 0;
+			return;
+		}
 	}
 
 	if ( b->down[0] == k ) {
@@ -349,12 +385,15 @@ static void IN_KeyUp( kbutton_t *b ) {
 	b->active = false;
 
 	// save timestamp for partial frame summing
-	c = Cmd_Argv(2);
-	uptime = std::atoi( c );
+	const std::optional<unsigned> timestamp =
+		fnql::input::ParseUnsignedInputCommandArgument( Cmd_Argv( 2 ) );
+	uptime = timestamp.value_or( 0u );
 	if ( uptime ) {
-		b->msec += uptime - b->downtime;
+		b->msec = fnql::input::SaturatingAddUnsigned(
+			b->msec, uptime - b->downtime );
 	} else {
-		b->msec += frame_msec / 2;
+		b->msec = fnql::input::SaturatingAddUnsigned(
+			b->msec, frame_msec / 2 );
 	}
 
 	b->active = false;
@@ -370,7 +409,7 @@ Returns the fraction of the frame that the key was down
 */
 static float CL_KeyState( kbutton_t *key ) {
 	float		val;
-	int			msec;
+	unsigned	msec;
 
 	msec = key->msec;
 	key->msec = 0;
@@ -378,12 +417,17 @@ static float CL_KeyState( kbutton_t *key ) {
 	if ( key->active ) {
 		// still down
 		if ( !key->downtime ) {
-			msec = com_frameTime;
+			msec = fnql::input::SaturatingAddUnsigned(
+				msec, frame_msec );
 		} else {
-			msec += com_frameTime - key->downtime;
+			msec = fnql::input::SaturatingAddUnsigned(
+				msec, fnql::input::BoundedInputElapsedMilliseconds(
+					key->downtime, static_cast<unsigned>( com_frameTime ),
+					frame_msec ) );
 		}
-		key->downtime = com_frameTime;
+		key->downtime = static_cast<unsigned>( com_frameTime );
 	}
+	msec = ( std::min )( msec, frame_msec );
 
 #if 0
 	if (msec) {
@@ -392,9 +436,6 @@ static float CL_KeyState( kbutton_t *key ) {
 #endif
 
 	val = static_cast<float>( msec ) / frame_msec;
-	if ( val < 0 ) {
-		val = 0;
-	}
 	if ( val > 1 ) {
 		val = 1;
 	}
@@ -1171,6 +1212,7 @@ CL_CreateCmd
 static usercmd_t CL_CreateCmd( void ) {
 	usercmd_t	cmd{};
 	vec3_t		oldAngles;
+	bool		pitchLimited = false;
 
 	VectorCopy( cl.viewangles, oldAngles );
 
@@ -1191,12 +1233,27 @@ static usercmd_t CL_CreateCmd( void ) {
 	// check to make sure the angles haven't wrapped
 	if ( cl.viewangles[PITCH] - oldAngles[PITCH] > 90 ) {
 		cl.viewangles[PITCH] = oldAngles[PITCH] + 90;
+		pitchLimited = true;
 	} else if ( oldAngles[PITCH] - cl.viewangles[PITCH] > 90 ) {
 		cl.viewangles[PITCH] = oldAngles[PITCH] - 90;
+		pitchLimited = true;
 	}
 
 	// store out the final values
 	CL_FinishMove( &cmd );
+
+	// Mouse filtering keeps a private unfiltered base. Retain legitimate look
+	// changes made after its End() step, but discard the history when the pitch
+	// guard rejected an excessive sample. Translating that hidden overshoot
+	// would replay it as another 90-degree step on subsequent commands.
+	const fnql::input::ViewAngles finalView{
+		cl.viewangles[YAW], cl.viewangles[PITCH]
+	};
+	if ( pitchLimited ) {
+		retailMouseFilter.Reset( finalView );
+	} else {
+		retailMouseFilter.Synchronize( finalView );
+	}
 
 	// draw debug graphs of turning for mouse testing
 	if ( cl_debugMove->integer ) {
@@ -1223,10 +1280,11 @@ static void CL_CreateNewCommands( void ) {
 
 	// no need to create usercmds until we have a gamestate
 	if ( cls.state < CA_PRIMED ) {
+		CL_SuspendUsercmdInputSampling();
 		return;
 	}
 
-	frame_msec = com_frameTime - old_com_frameTime;
+	frame_msec = static_cast<unsigned>( com_frameTime ) - old_com_frameTime;
 
 	// if running over 1000fps, act as if each frame is 1ms
 	// prevents divisions by zero
@@ -1239,11 +1297,11 @@ static void CL_CreateNewCommands( void ) {
 	if ( frame_msec > 200 ) {
 		frame_msec = 200;
 	}
-	old_com_frameTime = com_frameTime;
+	old_com_frameTime = static_cast<unsigned>( com_frameTime );
 
 
 	// generate a command for this frame
-	cl.cmdNumber++;
+	cl.cmdNumber = fnql::net::NextCounter( cl.cmdNumber );
 	cmdNum = cl.cmdNumber & CMD_MASK;
 	cl.cmds[cmdNum] = CL_CreateCmd();
 }
@@ -1413,7 +1471,9 @@ void CL_WritePacket( int repeat ) {
 			static_cast<std::uint32_t>( i + 1 ) );
 		MSG_WriteByte( &buf, clc_clientCommand );
 		MSG_WriteLong( &buf, index );
-		MSG_WriteString( &buf, clc.reliableCommands[ index & ( MAX_RELIABLE_COMMANDS - 1 ) ] );
+		MSG_WriteStringForWireProfile( &buf,
+			clc.reliableCommands[ index & ( MAX_RELIABLE_COMMANDS - 1 ) ],
+			clc.netchan.wireProfile );
 	}
 
 	// we want to send all the usercmds that were generated in the last
@@ -1421,8 +1481,15 @@ void CL_WritePacket( int repeat ) {
 	// all the cmds will make it to the server
 
 	oldPacketNum = (clc.netchan.outgoingSequence - 1 - cl_packetdup->integer) & PACKET_MASK;
-	count = cl.cmdNumber - cl.outPackets[ oldPacketNum ].p_cmdNumber;
-	if ( count > MAX_PACKET_USERCMDS ) {
+	std::uint32_t pendingCommands = 0;
+	if ( !fnql::net::PendingCounterCount( cl.cmdNumber,
+		cl.outPackets[ oldPacketNum ].p_cmdNumber, pendingCommands ) ) {
+		Com_Error( ERR_DROP, "CL_WritePacket: invalid usercmd acknowledgement window" );
+		return;
+	}
+	count = static_cast<int>( ( std::min )(
+		pendingCommands, static_cast<std::uint32_t>( MAX_PACKET_USERCMDS ) ) );
+	if ( pendingCommands > MAX_PACKET_USERCMDS ) {
 		count = MAX_PACKET_USERCMDS;
 		Com_Printf("MAX_PACKET_USERCMDS\n");
 	}
@@ -1446,11 +1513,15 @@ void CL_WritePacket( int repeat ) {
 		// also use the message acknowledge
 		key ^= clc.serverMessageSequence;
 		// also use the last acknowledged server command in the key
-		key ^= MSG_HashKey(clc.serverCommands[ clc.serverCommandSequence & (MAX_RELIABLE_COMMANDS-1) ], 32);
+		key ^= clc.serverCommandHashes[
+			clc.serverCommandSequence & ( MAX_RELIABLE_COMMANDS - 1 ) ];
 
 		// write all the commands, including the predicted command
+		const int firstCommand = fnql::net::CounterSubtract(
+			cl.cmdNumber, static_cast<std::uint32_t>( count - 1 ) );
 		for ( i = 0 ; i < count ; i++ ) {
-			j = (cl.cmdNumber - count + i + 1) & CMD_MASK;
+			j = fnql::net::CounterAdd(
+				firstCommand, static_cast<std::uint32_t>( i ) ) & CMD_MASK;
 			cmd = &cl.cmds[j];
 			MSG_WriteDeltaUsercmdKey (&buf, key, oldcmd, cmd);
 			oldcmd = cmd;
@@ -1498,11 +1569,13 @@ Called every frame to builds and sends a command packet to the server.
 void CL_SendCmd( void ) {
 	// don't send any message if not connected
 	if ( cls.state < CA_CONNECTED ) {
+		CL_SuspendUsercmdInputSampling();
 		return;
 	}
 
 	// don't send commands if paused
 	if ( com_sv_running->integer && sv_paused->integer && cl_paused->integer ) {
+		CL_SuspendUsercmdInputSampling();
 		return;
 	}
 

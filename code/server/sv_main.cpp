@@ -263,7 +263,19 @@ void SV_AddServerCommand( client_t *client, const char *cmd ) {
 		return;
 	}
 	index = client->reliableSequence & ( MAX_RELIABLE_COMMANDS - 1 );
-	Q_strncpyz( client->reliableCommands[ index ], cmd, SV_ArraySize( client->reliableCommands[ index ] ) );
+	char *stored = client->reliableCommands[ index ];
+	const std::size_t capacity = SV_ArraySize( client->reliableCommands[ index ] );
+	if ( client->netchan.wireProfile == NETCHAN_WIRE_QL_RETAIL ) {
+		std::size_t offset = 0;
+		for ( ; cmd[offset] != '\0' && offset + 1 < capacity; ++offset ) {
+			// Retail readers expose '%' as '.', so storing and transmitting the
+			// safe byte also keeps the client's usercmd hash aligned with ours.
+			stored[offset] = cmd[offset] == '%' ? '.' : cmd[offset];
+		}
+		stored[offset] = '\0';
+	} else {
+		Q_strncpyz( stored, cmd, static_cast<int>( capacity ) );
+	}
 }
 
 

@@ -30,6 +30,7 @@ extern "C" {
 #include "client_cpp.h"
 #include "client_cvar_compat.hpp"
 #include "ql_font_bridge.hpp"
+#include "../qcommon/netchan_safety.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1140,13 +1141,13 @@ static qboolean CL_GetUserCmd( int cmdNumber, usercmd_t *ucmd ) {
 	// cmds[cmdNumber] is the last properly generated command
 
 	// can't return anything that we haven't created yet
-	if ( cl.cmdNumber - cmdNumber < 0 ) {
+	if ( fnql::net::IsNewerCounter( cmdNumber, cl.cmdNumber ) ) {
 		Com_Error( ERR_DROP, "CL_GetUserCmd: cmdNumber (%i) > cl.cmdNumber (%i)", cmdNumber, cl.cmdNumber );
 	}
 
 	// the usercmd has been overwritten in the wrapping
 	// buffer because it is too far out of date
-	if ( cl.cmdNumber - cmdNumber >= CMD_BACKUP ) {
+	if ( fnql::net::CounterDistance( cl.cmdNumber, cmdNumber ) >= CMD_BACKUP ) {
 		return qfalse;
 	}
 

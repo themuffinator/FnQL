@@ -77,6 +77,11 @@ inline constexpr std::size_t MaximumUdpPayload = 65'507u;
 	return CounterAdd( value, 1u );
 }
 
+[[nodiscard]] inline constexpr int CounterSubtract( int value,
+	std::uint32_t amount ) noexcept {
+	return CounterAdd( value, 0u - amount );
+}
+
 [[nodiscard]] inline constexpr std::uint32_t CounterDistance( int newer,
 	int older ) noexcept {
 	return static_cast<std::uint32_t>( newer ) - static_cast<std::uint32_t>( older );

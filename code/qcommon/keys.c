@@ -680,14 +680,20 @@ void Key_ParseBinding( int key, qboolean down, unsigned time )
 			// every other +command byte-for-byte compatible with retail.
 			char cmd[1024];
 #ifndef DEDICATED
-			if ( CL_IsEngineStatefulInputCommand( p ) )
-				Com_sprintf( cmd, sizeof( cmd ), "%c%s %d %d fnql-gen:%u\n", ( down ) ? '+' : '-', p + 1, key, time, Key_GetBindingGeneration( key ) );
-			else
+			if ( CL_IsEngineStatefulInputCommand( p ) ) {
+				Com_sprintf( cmd, sizeof( cmd ), "%c%s %d %u fnql-gen:%u\n", ( down ) ? '+' : '-', p + 1, key, time, Key_GetBindingGeneration( key ) );
+				if ( Cbuf_AddInputText( cmd ) && down )
+					keys[ key ].bound = qtrue;
+			} else
 #endif
-				Com_sprintf( cmd, sizeof( cmd ), "%c%s %d %d\n", ( down ) ? '+' : '-', p + 1, key, time );
-			Cbuf_AddText( cmd );
-			if ( down )
-				keys[ key ].bound = qtrue;
+			{
+				// Keep retail-shaped signed time text for non-engine commands, but
+				// avoid passing an unsigned value to a mismatched variadic format.
+				Com_sprintf( cmd, sizeof( cmd ), "%c%s %d %d\n", ( down ) ? '+' : '-', p + 1, key, (int)time );
+				Cbuf_AddText( cmd );
+				if ( down )
+					keys[ key ].bound = qtrue;
+			}
 		}
 		else if ( down )
 		{

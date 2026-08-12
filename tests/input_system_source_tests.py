@@ -258,11 +258,13 @@ class ClientInputStateTests(unittest.TestCase):
             self,
             parse,
             "CL_IsEngineStatefulInputCommand( p )",
-            '"%c%s %d %d fnql-gen:%u\\n"',
+            '"%c%s %d %u fnql-gen:%u\\n"',
             "Key_GetBindingGeneration( key )",
+            "Cbuf_AddInputText( cmd )",
             "else",
             '"%c%s %d %d\\n"',
         )
+        self.assertIn("qboolean Cbuf_AddInputText( const char *text );", common_header)
         self.assertIn("keyBindingGenerations[MAX_KEYS]", bindings)
         self.assertIn("keynum < 0 || keynum >= MAX_KEYS", current)
         self.assertIn("return keyBindingGenerations[keynum];", current)
@@ -306,9 +308,12 @@ class ClientInputStateTests(unittest.TestCase):
                 assert_order(
                     self,
                     command,
-                    "if ( !IN_CommandGenerationIsCurrent() )",
+                    "const int commandSource = CL_ValidateInputCommandSource();",
+                    "if ( commandSource == CL_INPUT_COMMAND_STALE )",
                     "return;",
                 )
+                self.assertIn("ParseSignedInputCommandArgument", command)
+                self.assertIn("ParseUnsignedInputCommandArgument( Cmd_Argv( 2 ) )", command)
         self.assertIn("IN_KeyDown( &in_mlook );", mlook_down)
         assert_order(
             self,
@@ -347,7 +352,7 @@ class ClientInputStateTests(unittest.TestCase):
             "button->down, sourceKey",
             "if ( button->down[0] || button->down[1] )",
             "button->active = true;",
-            "button->msec += frame_msec / 2;",
+            "button->msec = fnql::input::SaturatingAddUnsigned(",
             "button->active = false;",
             "button->downtime = 0;",
         )
@@ -434,6 +439,124 @@ class ClientInputStateTests(unittest.TestCase):
         self.assertNotIn("Key_ClearStates", reset)
         self.assertNotIn("IN_ResetInputState", reset)
         self.assertNotIn("cl.joystickAxis", reset)
+
+    def test_unsampled_mouse_motion_is_not_replayed_on_resume(self) -> None:
+        client = read_text("code/client/cl_input.cpp")
+        suspend = function_body(client, "CL_SuspendUsercmdInputSampling")
+        create_new = function_body(client, "CL_CreateNewCommands")
+        send = function_body(client, "CL_SendCmd")
+        create = function_body(client, "CL_CreateCmd")
+
+        assert_order(
+            self,
+            suspend,
+            "cl.mouseDx[i] = 0;",
+            "cl.mouseDy[i] = 0;",
+            "retailMouseFilter.Reset(",
+            "old_com_frameTime = static_cast<unsigned>( com_frameTime );",
+        )
+        self.assertIn("CL_SuspendUsercmdInputSampling();", create_new)
+        self.assertEqual(send.count("CL_SuspendUsercmdInputSampling();"), 2)
+        assert_order(
+            self,
+            create,
+            "CL_MouseMove( &cmd );",
+            "CL_FinishMove( &cmd );",
+            "if ( pitchLimited )",
+            "retailMouseFilter.Reset( finalView );",
+            "else",
+            "retailMouseFilter.Synchronize(",
+        )
+
+    def test_stateful_input_has_reserved_command_capacity(self) -> None:
+        command_buffer = read_text("code/qcommon/cmd.c")
+        common_header = read_text("code/qcommon/qcommon.h")
+        bindings = read_text("code/qcommon/keys.c")
+        add_text = function_body(command_buffer, "Cbuf_AddText")
+        add_input = function_body(command_buffer, "Cbuf_AddInputText")
+        can_append = function_body(command_buffer, "Cbuf_CanAppend")
+
+        self.assertIn("#define MAX_CMD_TEXT            65536", command_buffer)
+        self.assertIn("#define MAX_INPUT_CMD_RESERVE   65536", command_buffer)
+        self.assertIn("Cbuf_CanAppend( text, MAX_CMD_TEXT", add_text)
+        self.assertIn("Cbuf_CanAppend( text, cmd_text.maxsize", add_input)
+        self.assertIn("*length = strlen( text );", can_append)
+        self.assertIn("*length >= (size_t)( limit - cmd_text.cursize )", can_append)
+        self.assertIn("qboolean Cbuf_AddInputText( const char *text );", common_header)
+        self.assertIn("Cbuf_AddInputText( cmd )", bindings)
+
+    def test_native_directinput_buffer_matches_retail_depth(self) -> None:
+        native = read_text("code/win32/win_input.cpp")
+        self.assertRegex(native, r"#define DINPUT_BUFFERSIZE\s+0x200")
+
+    def test_usercmd_counters_and_clock_deltas_are_wrap_safe(self) -> None:
+        client = read_text("code/client/cl_input.cpp")
+        messages = read_text("code/qcommon/msg.cpp")
+        server = read_text("code/server/sv_client.cpp")
+        create_new = function_body(client, "CL_CreateNewCommands")
+        write_packet = function_body(client, "CL_WritePacket")
+        write_delta = function_body(messages, "MSG_WriteDeltaUsercmdKey")
+        read_delta = function_body(messages, "MSG_ReadDeltaUsercmdKey")
+        user_move = section(server, "static void SV_UserMove", "SV_ExecuteClientMessage")
+
+        self.assertIn("fnql::net::NextCounter( cl.cmdNumber )", create_new)
+        self.assertIn("fnql::net::PendingCounterCount(", write_packet)
+        self.assertIn("fnql::net::CounterAdd(", write_packet)
+        self.assertIn("fnql::net::CounterSubtract(", write_packet)
+        self.assertIn("fnql::net::CounterDistance(", write_delta)
+        self.assertIn("fnql::net::CounterAdd(", read_delta)
+        self.assertEqual(user_move.count("fnql::net::IsNewerCounter("), 2)
+
+    def test_protocol_91_uses_the_retail_usercmd_hash_on_both_ends(self) -> None:
+        client = function_body(
+            read_text("code/client/cl_input.cpp"), "CL_WritePacket"
+        )
+        server = section(
+            read_text("code/server/sv_client.cpp"),
+            "static void SV_UserMove",
+            "SV_ExecuteClientMessage",
+        )
+        messages = read_text("code/qcommon/msg.cpp")
+        profile_hash = function_body(messages, "MSG_HashKeyForWireProfile")
+        profile_string = function_body(
+            messages, "MSG_ReadStringForWireProfile"
+        )
+
+        self.assertIn("key ^= clc.serverCommandHashes[", client)
+        self.assertIn(
+            "MSG_HashKeyForWireProfile( cl->netchan.wireProfile,", server
+        )
+        self.assertIn("profile != NETCHAN_WIRE_QL_RETAIL", profile_hash)
+        self.assertIn("return MSG_HashKey( string, maxlen );", profile_hash)
+        self.assertNotIn("string[i] == '%'", profile_hash)
+        self.assertIn("profile == NETCHAN_WIRE_QL_RETAIL", profile_string)
+        self.assertIn(
+            "MSG_ReadCommandStringForWireProfile( msg, clc.netchan.wireProfile )",
+            read_text("code/client/cl_parse.cpp"),
+        )
+        self.assertIn(
+            "clc.serverCommandHashes[ index ] = wireHash;",
+            read_text("code/client/cl_parse.cpp"),
+        )
+        self.assertIn(
+            "MSG_ReadStringForWireProfile( msg, cl->netchan.wireProfile )",
+            read_text("code/server/sv_client.cpp"),
+        )
+        self.assertIn(
+            "MSG_WriteStringForWireProfile( &buf,", client
+        )
+        self.assertIn(
+            "MSG_WriteStringForWireProfile( msg,",
+            read_text("code/server/sv_snapshot.cpp"),
+        )
+        add_server_command = function_body(
+            read_text("code/server/sv_main.cpp"), "SV_AddServerCommand"
+        )
+        self.assertIn(
+            "client->netchan.wireProfile == NETCHAN_WIRE_QL_RETAIL",
+            add_server_command,
+        )
+        self.assertIn("cmd[offset] == '%' ? '.' : cmd[offset]", add_server_command)
 
     def test_voice_binding_has_source_ownership_and_synchronous_resets(
         self,

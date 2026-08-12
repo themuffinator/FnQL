@@ -946,7 +946,10 @@ DEFINE_GUID(GUID_YAxis,   0xA36D02E1,0xC9F3,0x11CF,0xBF,0xC7,0x44,0x45,0x53,0x54
 DEFINE_GUID(GUID_ZAxis,   0xA36D02E2,0xC9F3,0x11CF,0xBF,0xC7,0x44,0x45,0x53,0x54,0x00,0x00);
 
 
-#define DINPUT_BUFFERSIZE           64
+// Retail Quake Live configures 0x200 buffered DirectInput elements. Match that
+// capacity so high-polling mice and frame hitches do not turn an otherwise
+// recoverable burst into DI_BUFFEROVERFLOW and an input reset.
+#define DINPUT_BUFFERSIZE           0x200
 using DirectInputCreateFn = HRESULT (WINAPI *)( HINSTANCE hinst, DWORD dwVersion,
 	LPDIRECTINPUT *lplpDirectInput, LPUNKNOWN punkOuter );
 

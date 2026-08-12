@@ -58,6 +58,58 @@ unchanged FnQ3 paths. With the default `cl_mouseAccel 0`, `m_cpi 0`, and
 through the engine filesystem and closes the handle when disabled or during
 input shutdown.
 
+The retail filter owns an unfiltered view-angle base while presenting an
+average. FnQL preserves that mouse transform but synchronizes its private base
+after keyboard look, joystick look, centerview, cgame adjustments, finite-angle
+reduction, and the per-command pitch guard. This is a deliberate reliability
+choice: without synchronization, the next mouse sample can restore a view that
+one of those owners already replaced, making a key look change disappear. If
+the pitch guard rejects an excessive sample, FnQL resets the filter instead of
+preserving its hidden overshoot; otherwise the rejected motion can return as
+another 90-degree step on following commands. Normal mouse-only output is
+unchanged when neither correction applies.
+
+## Usercmd sampling and stateful commands
+
+Relative mouse deltas do not carry timestamps in the engine ABI. When usercmd
+generation is suspended before a gamestate, while disconnected, or by a local
+pause, FnQL therefore discards deltas collected during that unsampleable gap
+and rebases the input frame clock. Held keyboard state and persistent joystick
+axes remain intact. Replaying the accumulated mouse gap in the first resumed
+command previously produced an artificial view kick which the pitch guard then
+clipped to exactly up or down.
+
+Engine-owned `+`/`-` transitions use the normal FIFO command stream and retain
+retail `wait` ordering, but have a 64 KiB reserved tail beyond the historical
+64 KiB general command-text limit. A large script or console burst can no
+longer consume the storage needed by a matching movement/button press or
+release. Arbitrary module and console commands retain the historical capacity
+and text format.
+
+Input event times are parsed as checked wrapping 32-bit millisecond values and
+bounded to the current command interval. Malformed, stale, or future text can
+no longer become an unbounded movement fraction. Usercmd indices and
+`serverTime` deltas use explicit modulo-32-bit arithmetic on the client,
+message codec, and server acceptance gate. The protocol representation is
+unchanged; the defined arithmetic only removes signed-overflow failure at the
+clock and command-number boundary.
+
+Protocol 91's keyed usercmd codec hashes the last acknowledged server command
+exactly as retail Quake Live does. In particular, it hashes `%` and signed
+high-bit bytes directly. The inherited Quake III message hash substitutes `.`
+for those bytes because Quake III's legacy string reader can rewrite them;
+using that hash for a retail connection gives the two peers different XOR keys
+and silently turns otherwise valid pitch, movement, and button changes into
+unrelated values. FnQL selects the retail hash only for the Quake Live wire
+profile, preserving the established Quake III and ioquake3 codecs.
+The protocol-91 string writer and reader likewise preserve high-bit bytes,
+matching retail and keeping UTF-8 command text identical to the bytes that
+feed the checksum. For reliable server commands, the client hashes the raw
+wire text and keeps a separate `%`-sanitized copy for game/UI execution.
+FnQL servers sanitize `%` before both storage and transmission, which is what
+retail clients expose, so FnQL-to-retail and FnQL-to-FnQL checksum keys remain
+aligned without weakening format-string hardening.
+
 Character input keeps each platform producer intact. The shared client lane
 accepts Unicode scalar values directly and combines valid UTF-16 surrogate
 pairs from Win32 before encoding one-to-four UTF-8 bytes. Invalid scalars and
@@ -222,7 +274,9 @@ Backend notes:
   no physical motion. The SDL backend gobbles queued motion on mode changes and
   X11 re-bases its warp origin under a reset delay; this gate is the Win32
   equivalent. Raw Input and DirectInput activation failures unwind partial
-  ownership before falling back to a usable Win32 source. Raw Input device
+  ownership before falling back to a usable Win32 source. DirectInput uses the
+  retail-observed 0x200-element device buffer, reducing recoverable high-polling
+  bursts from becoming buffer-loss resets during a frame hitch. Raw Input device
   removal, temporary-capture loss, minimization, and hidden-window transitions
   recover held state through ordered barriers. Cursor display-count changes are
   transition-only, temporary capture is checked, and fractional or
@@ -310,10 +364,12 @@ Focus regain reconstructs families that remain physically held.
   the identical cases);
 - linear, CPI-normalized, positive/negative accelerated, capped, and
   non-finite mouse inputs;
-- QL view-angle history initialization, averaging, wraparound, and reset;
+- QL view-angle history initialization, averaging, wraparound, reset, and
+  synchronization with non-mouse view changes;
 - WinMM axis normalization, movement deadzones, look acceleration, and
   inversion;
-- canonical command matching, reserved generation-tag parsing, and selective
+- canonical command matching, checked event-time/source parsing, wrapping and
+  bounded time accounting, reserved generation-tag parsing, and selective
   removal from a two-source engine button;
 - ASCII, BMP, supplementary-plane, invalid-scalar, UTF-16 surrogate, strict
   UTF-8 decode, and saturating arithmetic.
@@ -330,10 +386,13 @@ retail UI and cgame dispatch converts the drawable position into the public
 capture space while the console and browser keep the private one.
 
 `tests/input_system_source_tests.py` additionally gates reset ordering and
-scope, deferred per-key command invalidation, source-aware push-to-talk
+scope, suspended-mouse disposal, reserved stateful-command capacity, wrap-safe
+usercmd production/acceptance, DirectInput buffer depth, deferred per-key
+command invalidation, source-aware push-to-talk
 shutdown, queue-overflow recovery, atomic UTF-8 field capacity and completion
-safety, modifier-family and AltGr handling, Win32 source fallback and wheel
-balance, SDL text/focus/device/window routing, and X11 XIM, minimize-property,
+safety, protocol-91 usercmd hashing on both peers, modifier-family and AltGr
+handling, Win32 source fallback and wheel balance, SDL
+text/focus/device/window routing, and X11 XIM, minimize-property,
 native-joystick, and fallback behavior.
 
 Strict-warning x86 builds compile and link both the SDL3 and native Win32

@@ -102,8 +102,14 @@ void MSG_WriteLong (msg_t *sb, int c);
 void MSG_WriteFloat (msg_t *sb, float f);
 void MSG_WriteString (msg_t *sb, const char *s);
 void MSG_WriteBigString (msg_t *sb, const char *s);
+void MSG_WriteStringForWireProfile( msg_t *sb, const char *s,
+	netchanWireProfile_t profile );
+void MSG_WriteBigStringForWireProfile( msg_t *sb, const char *s,
+	netchanWireProfile_t profile );
 void MSG_WriteAngle16 (msg_t *sb, float f);
 int MSG_HashKey(const char *string, int maxlen);
+int MSG_HashKeyForWireProfile( netchanWireProfile_t profile,
+	const char *string, int maxlen );
 
 void	MSG_BeginReading (msg_t *sb);
 void	MSG_BeginReadingOOB(msg_t *sb);
@@ -116,6 +122,12 @@ float	MSG_ReadFloat (msg_t *sb);
 const char *MSG_ReadString (msg_t *sb);
 const char *MSG_ReadBigString (msg_t *sb);
 const char *MSG_ReadStringLine (msg_t *sb);
+const char *MSG_ReadStringForWireProfile( msg_t *sb,
+	netchanWireProfile_t profile );
+const char *MSG_ReadCommandStringForWireProfile( msg_t *sb,
+	netchanWireProfile_t profile );
+const char *MSG_ReadBigStringForWireProfile( msg_t *sb,
+	netchanWireProfile_t profile );
 float MSG_ReadAngle16 (msg_t *sb);
 void  MSG_ReadData(msg_t *sb, void *buffer, int size);
 int   MSG_ReadEntitynum(msg_t *sb);
@@ -492,6 +504,9 @@ void Cbuf_Init( void );
 
 void Cbuf_AddText( const char *text );
 // Adds command text at the end of the buffer, does NOT add a final \n
+
+qboolean Cbuf_AddInputText( const char *text );
+// Adds an engine-owned key transition using the reserved input capacity
 
 void Cbuf_NestedAdd( const char *text );
 // Adds nested command text at the specified position of the buffer, adds \n when needed

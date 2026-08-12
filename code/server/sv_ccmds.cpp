@@ -21,6 +21,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 #include "server.h"
+#include "../qcommon/netchan_safety.hpp"
 
 #include <array>
 
@@ -423,7 +424,8 @@ static void SV_MapRestart_f( void ) {
 			// catches up to this time, which for any non-zero ping spans the
 			// frames in which the game respawns everyone, so the angles left
 			// here are the anchor trap_GetUsercmd() hands those spawns.
-			client.lastUsercmd.serverTime = sv.time - 1;
+			client.lastUsercmd.serverTime =
+				fnql::net::CounterSubtract( sv.time, 1u );
 		}
 	}
 

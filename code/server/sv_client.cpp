@@ -705,22 +705,24 @@ static bool SV_DemoMessageCommand( const msg_t *msg, int *command )
 }
 
 
-static void SV_WriteConfigstringMessage( msg_t &msg, int index, const char *value ) {
+static void SV_WriteConfigstringMessage( msg_t &msg, int index,
+	const char *value, netchanWireProfile_t profile ) {
 	MSG_WriteByte( &msg, svc_configstring );
 	MSG_WriteShort( &msg, index );
-	MSG_WriteBigString( &msg, value );
+	MSG_WriteBigStringForWireProfile( &msg, value, profile );
 }
 
 
-static void SV_WritePureAwareConfigstring( msg_t &msg, int index ) {
+static void SV_WritePureAwareConfigstring( msg_t &msg, int index,
+	netchanWireProfile_t profile ) {
 	if ( index == CS_SYSTEMINFO && sv.pure != sv_pure->integer ) {
 		std::array<char, BIG_INFO_STRING> systemInfo{};
 
 		Q_strncpyz( systemInfo.data(), sv.configstrings[ index ], SV_ArraySize(systemInfo) );
 		Info_SetValueForKey_s( systemInfo.data(), SV_ArraySize(systemInfo), "sv_pure", va( "%i", sv.pure ) );
-		SV_WriteConfigstringMessage( msg, index, systemInfo.data() );
+		SV_WriteConfigstringMessage( msg, index, systemInfo.data(), profile );
 	} else {
-		SV_WriteConfigstringMessage( msg, index, sv.configstrings[ index ] );
+		SV_WriteConfigstringMessage( msg, index, sv.configstrings[ index ], profile );
 	}
 }
 
@@ -751,7 +753,8 @@ static void SV_WriteDemoGamestate( client_t *client )
 
 	for ( int index : SV_Indices( MAX_CONFIGSTRINGS ) ) {
 		if ( *sv.configstrings[ index ] != '\0' ) {
-			SV_WritePureAwareConfigstring( msg, index );
+			SV_WritePureAwareConfigstring(
+				msg, index, client->netchan.wireProfile );
 		}
 	}
 
@@ -2070,15 +2073,18 @@ int SV_RemainingGameState( void )
 	// write the configstrings
 	for ( int index : SV_Indices( MAX_CONFIGSTRINGS ) ) {
 		if ( index == CS_SERVERINFO ) {
-			SV_WriteConfigstringMessage( msg, index, Cvar_InfoString( CVAR_SERVERINFO, nullptr ) );
+			SV_WriteConfigstringMessage( msg, index,
+				Cvar_InfoString( CVAR_SERVERINFO, nullptr ), NETCHAN_WIRE_QL_RETAIL );
 			continue;
 		}
 		if ( index == CS_SYSTEMINFO ) {
-			SV_WriteConfigstringMessage( msg, index, Cvar_InfoString_Big( CVAR_SYSTEMINFO, nullptr ) );
+			SV_WriteConfigstringMessage( msg, index,
+				Cvar_InfoString_Big( CVAR_SYSTEMINFO, nullptr ), NETCHAN_WIRE_QL_RETAIL );
 			continue;
 		}
 		if ( sv.configstrings[index][0] ) {
-			SV_WriteConfigstringMessage( msg, index, sv.configstrings[index] );
+			SV_WriteConfigstringMessage( msg, index,
+				sv.configstrings[index], NETCHAN_WIRE_QL_RETAIL );
 		}
 	}
 
@@ -2151,7 +2157,8 @@ static void SV_SendClientGameState( client_t *client ) {
 	// clearing the angles here would throw the spawn view away from the spawn
 	// point. SV_ClientEnterWorld() refreshes the anchor from the command that
 	// actually brings this client into the world.
-	client->lastUsercmd.serverTime = sv.time - 1;
+	client->lastUsercmd.serverTime =
+		fnql::net::CounterSubtract( sv.time, 1u );
 
 	MSG_Init( &msg, msgBuffer.data(), MAX_MSGLEN );
 
@@ -2173,7 +2180,8 @@ static void SV_SendClientGameState( client_t *client ) {
 	csUpdated = false;
 	for ( int index : SV_Indices( MAX_CONFIGSTRINGS ) ) {
 		if ( *sv.configstrings[ index ] != '\0' ) {
-			SV_WritePureAwareConfigstring( msg, index );
+			SV_WritePureAwareConfigstring(
+				msg, index, client->netchan.wireProfile );
 		}
 		if ( client->csUpdated[index] ) {
 			csUpdated = true;
@@ -2287,7 +2295,7 @@ void SV_ClientEnterWorld( client_t *client, const usercmd_t *cmd ) {
 		client->lastUsercmd = *cmd;
 		// The command acceptance gate only ever moves forwards, so adopting the
 		// angles can never replay commands from before a gamestate or restart.
-		if ( cmd->serverTime - acceptFrom < 0 ) {
+		if ( fnql::net::IsNewerCounter( acceptFrom, cmd->serverTime ) ) {
 			client->lastUsercmd.serverTime = acceptFrom;
 		}
 	}
@@ -2550,7 +2558,8 @@ static int SV_WriteDownloadToClient( client_t *cl )
 			MSG_WriteByte( &msg, svc_download );
 			MSG_WriteShort( &msg, 0 ); // client is expecting block zero
 			MSG_WriteLong( &msg, -1 ); // illegal file size
-			MSG_WriteString( &msg, errorMessage.data() );
+			MSG_WriteStringForWireProfile(
+				&msg, errorMessage.data(), cl->netchan.wireProfile );
 
 			MSG_WriteByte( &msg, svc_EOF );
 			SV_Netchan_Transmit( cl, &msg );
@@ -3217,7 +3226,7 @@ static bool SV_ClientCommand( client_t *cl, msg_t *msg ) {
 	const char	*s;
 
 	seq = MSG_ReadLong( msg );
-	s = MSG_ReadString( msg );
+	s = MSG_ReadStringForWireProfile( msg, cl->netchan.wireProfile );
 
 	// see if we have already executed it
 	if ( seq - cl->lastClientCommand <= 0 ) {
@@ -3309,7 +3318,9 @@ static void SV_UserMove( client_t *cl, msg_t *msg, bool delta ) {
 	// also use the message acknowledge
 	key ^= cl->messageAcknowledge;
 	// also use the last acknowledged server command in the key
-	key ^= MSG_HashKey(cl->reliableCommands[ cl->reliableAcknowledge & (MAX_RELIABLE_COMMANDS-1) ], 32);
+	key ^= MSG_HashKeyForWireProfile( cl->netchan.wireProfile,
+		cl->reliableCommands[
+			cl->reliableAcknowledge & ( MAX_RELIABLE_COMMANDS - 1 ) ], 32 );
 
 	oldcmd = &nullcmd;
 	for ( int i : SV_Indices( cmdCount ) ) {
@@ -3358,7 +3369,8 @@ static void SV_UserMove( client_t *cl, msg_t *msg, bool delta ) {
 	// in the commands will cause them to be immediately discarded
 	for ( int i : SV_Indices( cmdCount ) ) {
 		// if this is a cmd from before a map_restart ignore it
-		if ( cmds[i].serverTime - cmds[cmdCount-1].serverTime > 0 ) {
+		if ( fnql::net::IsNewerCounter(
+			cmds[i].serverTime, cmds[cmdCount - 1].serverTime ) ) {
 			continue;
 		}
 		// extremely lagged or cmd from before a map_restart
@@ -3368,7 +3380,8 @@ static void SV_UserMove( client_t *cl, msg_t *msg, bool delta ) {
 		// don't execute if this is an old cmd which is already executed
 		// these old cmds are included when cl_packetdup > 0
 		//if ( cmds[i].serverTime <= cl->lastUsercmd.serverTime ) {
-		if ( cmds[i].serverTime - cl->lastUsercmd.serverTime <= 0 ) {
+		if ( !fnql::net::IsNewerCounter(
+			cmds[i].serverTime, cl->lastUsercmd.serverTime ) ) {
 			continue;
 		}
 		SV_ClientThink( cl, &cmds[ i ] );

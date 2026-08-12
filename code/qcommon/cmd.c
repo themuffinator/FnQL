@@ -24,7 +24,13 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "q_shared.h"
 #include "qcommon.h"
 
-#define MAX_CMD_BUFFER  65536
+// Preserve the historical command-text capacity while reserving additional
+// storage for engine-owned key transitions. A saturated script/console queue
+// must not silently drop the matching +forward/-forward (or similar) command
+// and leave one physical input unregistered or held.
+#define MAX_CMD_TEXT            65536
+#define MAX_INPUT_CMD_RESERVE   65536
+#define MAX_CMD_BUFFER          ( MAX_CMD_TEXT + MAX_INPUT_CMD_RESERVE )
 
 typedef struct {
 	byte *data;
@@ -81,6 +87,26 @@ void Cbuf_Init( void )
 }
 
 
+static qboolean Cbuf_CanAppend( const char *text, int limit,
+	size_t *length, const char *owner ) {
+	if ( !text || !length || limit <= 0 || cmd_text.cursize < 0 ||
+		cmd_text.cursize >= limit ) {
+		Com_Printf( "%s: overflow\n", owner );
+		return qfalse;
+	}
+
+	*length = strlen( text );
+	// Preserve the historical rule that an append may not fill the final byte,
+	// while avoiding a narrowing conversion or signed addition before bounds
+	// have been established.
+	if ( *length >= (size_t)( limit - cmd_text.cursize ) ) {
+		Com_Printf( "%s: overflow\n", owner );
+		return qfalse;
+	}
+	return qtrue;
+}
+
+
 /*
 ============
 Cbuf_AddText
@@ -89,17 +115,37 @@ Adds command text at the end of the buffer, does NOT add a final \n
 ============
 */
 void Cbuf_AddText( const char *text ) {
+	size_t length;
 
-	const int l = (int)strlen( text );
-
-	if (cmd_text.cursize + l >= cmd_text.maxsize)
-	{
-		Com_Printf ("Cbuf_AddText: overflow\n");
+	if ( !Cbuf_CanAppend( text, MAX_CMD_TEXT, &length, "Cbuf_AddText" ) ) {
 		return;
 	}
 
-	Com_Memcpy(&cmd_text.data[cmd_text.cursize], text, l);
-	cmd_text.cursize += l;
+	Com_Memcpy( &cmd_text.data[cmd_text.cursize], text, length );
+	cmd_text.cursize += (int)length;
+}
+
+
+/*
+================
+Cbuf_AddInputText
+
+Adds an engine-owned input transition with access to the reserved tail of the
+command buffer. Commands retain normal FIFO and wait semantics; only admission
+under ordinary command-buffer pressure differs.
+================
+*/
+qboolean Cbuf_AddInputText( const char *text ) {
+	size_t length;
+
+	if ( !Cbuf_CanAppend( text, cmd_text.maxsize, &length,
+		"Cbuf_AddInputText" ) ) {
+		return qfalse;
+	}
+
+	Com_Memcpy( &cmd_text.data[cmd_text.cursize], text, length );
+	cmd_text.cursize += (int)length;
+	return qtrue;
 }
 
 
@@ -156,7 +202,7 @@ void Cbuf_NestedAdd( const char *text ) {
 		len += 1;
 	}
 
-	if ( len + cmd_text.cursize > cmd_text.maxsize ) {
+	if ( len + cmd_text.cursize > MAX_CMD_TEXT ) {
 		Com_Printf( S_COLOR_YELLOW "%s(%i) overflowed\n", __func__, pos );
 		nestedCmdOffset = cmd_text.cursize;
 		return;
@@ -196,7 +242,7 @@ void Cbuf_InsertText( const char *text ) {
 
 	len = strlen( text ) + 1;
 
-	if ( len + cmd_text.cursize > cmd_text.maxsize ) {
+	if ( len + cmd_text.cursize > MAX_CMD_TEXT ) {
 		Com_Printf( "Cbuf_InsertText overflowed\n" );
 		return;
 	}

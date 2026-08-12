@@ -249,7 +249,9 @@ void SV_UpdateServerCommandsToClient( client_t *client, msg_t *msg ) {
 			static_cast<std::uint32_t>( i + 1 ) );
 		MSG_WriteByte( msg, svc_serverCommand );
 		MSG_WriteLong( msg, index );
-		MSG_WriteString( msg, client->reliableCommands[ index & (MAX_RELIABLE_COMMANDS-1) ] );
+		MSG_WriteStringForWireProfile( msg,
+			client->reliableCommands[ index & ( MAX_RELIABLE_COMMANDS - 1 ) ],
+			client->netchan.wireProfile );
 	}
 }
 
