@@ -1296,7 +1296,10 @@ static void RB_IterateStagesGeneric( const shaderCommands_t *input )
 
 			GL_SelectTexture( 0 );
 
-			if ( r_lightmap->integer && pStage->bundle[1].lightmap != LIGHTMAP_INDEX_NONE ) {
+			if ( r_lightmap->integer &&
+				( pStage->bundle[1].lightmap != LIGHTMAP_INDEX_NONE ||
+					( pStage->bundle[0].vertexLightmap && r_vertexLight->integer &&
+						!qlRendererCvars.uiFullscreen->integer ) ) ) {
 				// Replace diffuse texture with a white one thus effectively render only lightmap.
 				vk_material_set_descriptor( &material, VK_DESC_TEXTURE0, R_ImageDescriptor( tr.whiteImage ) );
 			}
@@ -1354,7 +1357,12 @@ static void RB_IterateStagesGeneric( const shaderCommands_t *input )
 			//
 			// set state
 			//
-			R_BindAnimatedImage( &pStage->bundle[0] );
+			if ( pStage->bundle[0].vertexLightmap && r_vertexLight->integer &&
+				!qlRendererCvars.uiFullscreen->integer && r_lightmap->integer ) {
+				GL_Bind( tr.whiteImage );
+			} else {
+				R_BindAnimatedImage( &pStage->bundle[0] );
+			}
 
 			GL_State( pStage->stateBits );
 
@@ -1366,7 +1374,8 @@ static void RB_IterateStagesGeneric( const shaderCommands_t *input )
 #endif
 
 		// allow skipping out to show just lightmaps during development
-		if ( r_lightmap->integer && ( pStage->bundle[0].lightmap != LIGHTMAP_INDEX_NONE || pStage->bundle[1].lightmap != LIGHTMAP_INDEX_NONE ) )
+		if ( r_lightmap->integer && ( pStage->bundle[0].lightmap != LIGHTMAP_INDEX_NONE ||
+			pStage->bundle[1].lightmap != LIGHTMAP_INDEX_NONE || pStage->bundle[0].vertexLightmap ) )
 			break;
 
 		tess_flags = 0;

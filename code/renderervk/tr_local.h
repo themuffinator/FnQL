@@ -422,6 +422,7 @@ typedef struct {
 
 	int				videoMapHandle;
 	int				lightmap;				// LIGHTMAP_INDEX_NONE, LIGHTMAP_INDEX_SHADER, LIGHTMAP_INDEX_OFFSET
+	qboolean		vertexLightmap;			// vertex-lit replacement for a world lightmap
 	qboolean		isVideoMap;
 	unsigned int 	isScreenMap : 1;
 	unsigned int 	dlight : 1;

@@ -309,58 +309,36 @@ expand the 24 bit on-disk to 32 bit and return max.intensity
 */
 static float R_ProcessLightmap( byte *image, const byte *buf_p, float maxIntensity )
 {
+	const int stride = tr.mergeLightmaps ? LIGHTMAP_LEN : LIGHTMAP_SIZE;
+	const int border = tr.mergeLightmaps ? LIGHTMAP_BORDER : 0;
+	const qboolean debugIntensity = r_lightmap->integer == 2;
 	int x, y;
 
-	if ( 0 && r_lightmap->integer == 2 ) {
-		int j;
-		// color code by intensity as development tool	(FIXME: check range)
-		for ( j = 0; j < LIGHTMAP_SIZE * LIGHTMAP_SIZE; j++ )
-		{
-			float r = buf_p[j*3+0];
-			float g = buf_p[j*3+1];
-			float b = buf_p[j*3+2];
-			float intensity;
-			float out[3] = {0.0, 0.0, 0.0};
+	for ( y = 0; y < LIGHTMAP_SIZE; y++ ) {
+		for ( x = 0; x < LIGHTMAP_SIZE; x++, buf_p += 3 ) {
+			byte *dst = &image[( ( y + border ) * stride + x + border ) * 4];
 
-			intensity = 0.33f * r + 0.685f * g + 0.063f * b;
+			if ( debugIntensity ) {
+				float intensity = 0.33f * buf_p[0] + 0.685f * buf_p[1] + 0.063f * buf_p[2];
+				float out[3];
 
-			if ( intensity > 255 )
-				intensity = 1.0f;
-			else
-				intensity /= 255.0f;
-
-			if ( intensity > maxIntensity )
-				maxIntensity = intensity;
-
-			HSVtoRGB( intensity, 1.00, 0.50, out );
-
-			image[j*4+0] = out[0] * 255;
-			image[j*4+1] = out[1] * 255;
-			image[j*4+2] = out[2] * 255;
-			image[j*4+3] = 255;
-		}
-	} else {
-		if ( tr.mergeLightmaps ) {
-			for ( y = 0 ; y < LIGHTMAP_SIZE; y++ ) {
-				for ( x = 0 ; x < LIGHTMAP_SIZE; x++ ) {
-					byte *dst = &image[((y + LIGHTMAP_BORDER) * LIGHTMAP_LEN + x + LIGHTMAP_BORDER) * 4];
-					R_ColorShiftLightingBytes( buf_p, dst, qfalse );
-					dst[3] = 255;
-					buf_p += 3;
+				intensity = intensity > 255.0f ? 1.0f : intensity / 255.0f;
+				if ( intensity > maxIntensity ) {
+					maxIntensity = intensity;
 				}
+				HSVtoRGB( intensity, 1.0f, 0.5f, out );
+				dst[0] = (byte)( out[0] * 255.0f );
+				dst[1] = (byte)( out[1] * 255.0f );
+				dst[2] = (byte)( out[2] * 255.0f );
+			} else {
+				R_ColorShiftLightingBytes( buf_p, dst, qfalse );
 			}
-			FillBorders( image );
-		} else {
-			// legacy path
-			for ( y = 0 ; y < LIGHTMAP_SIZE; y++ ) {
-				for ( x = 0 ; x < LIGHTMAP_SIZE; x++ ) {
-					byte *dst = &image[(y * LIGHTMAP_SIZE + x) * 4];
-					R_ColorShiftLightingBytes( buf_p, dst, qfalse );
-					dst[3] = 255;
-					buf_p += 3;
-				}
-			}
+			dst[3] = 255;
 		}
+	}
+
+	if ( tr.mergeLightmaps ) {
+		FillBorders( image );
 	}
 
 	return maxIntensity;
@@ -483,7 +461,7 @@ static void R_LoadMergedLightmaps( const lump_t *l, byte *image )
 				if ( offs >= l->filelen )
 					break;
 
-				R_ProcessLightmap( image, buf + offs, maxIntensity );
+				maxIntensity = R_ProcessLightmap( image, buf + offs, maxIntensity );
 				{
 					vec3_t averageColor;
 
@@ -514,9 +492,9 @@ static void R_LoadMergedLightmaps( const lump_t *l, byte *image )
 		}
 	}
 
-	//if ( r_lightmap->integer == 2 )	{
-	//	ri.Printf( PRINT_ALL, "Brightest lightmap value: %d\n", ( int ) ( maxIntensity * 255 ) );
-	//}
+	if ( r_lightmap->integer == 2 ) {
+		ri.Printf( PRINT_ALL, "Brightest lightmap value: %d\n", (int)( maxIntensity * 255.0f ) );
+	}
 }
 
 
@@ -583,9 +561,9 @@ static void R_LoadLightmaps( const lump_t *l ) {
 			lightmapFlags | IMGFLAG_CLAMPTOEDGE );
 	}
 
-	//if ( r_lightmap->integer == 2 )	{
-	//	ri.Printf( PRINT_ALL, "Brightest lightmap value: %d\n", ( int ) ( maxIntensity * 255 ) );
-	//}
+	if ( r_lightmap->integer == 2 ) {
+		ri.Printf( PRINT_ALL, "Brightest lightmap value: %d\n", (int)( maxIntensity * 255.0f ) );
+	}
 }
 
 
@@ -1934,7 +1912,7 @@ static shader_t *ShaderForShaderNum( const int shaderNum, int lightmapNum ) {
 
 	dsh = &s_worldData.shaders[ shaderNum ];
 
-	if ( ( r_vertexLight->integer && tr.vertexLightingAllowed ) || glConfig.hardwareType == GLHW_PERMEDIA2 ) {
+	if ( ( r_vertexLight->integer && !qlRendererCvars.uiFullscreen->integer ) || glConfig.hardwareType == GLHW_PERMEDIA2 ) {
 		lightmapNum = LIGHTMAP_BY_VERTEX;
 	}
 
@@ -3715,7 +3693,7 @@ static void R_LoadEntities( const lump_t *l ) {
 				break;
 			}
 			*vs++ = '\0';
-			if ( r_vertexLight->integer && tr.vertexLightingAllowed ) {
+			if ( r_vertexLight->integer ) {
 				RE_RemapShader(value, s, "0");
 			}
 			continue;

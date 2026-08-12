@@ -1350,6 +1350,9 @@ test('fnql_platform_port_safety_source', python,
 test('fnql_renderer_contract_source', python,
   args: files('tests/renderer_contract_source_tests.py'),
 )
+test('fnql_lightmap_parity_source', python,
+  args: files('tests/lightmap_parity_source_tests.py'),
+)
 test('fnql_renderer_cvar_compat_source', python,
   args: files('tests/renderer_cvar_compat_source_tests.py'),
 )

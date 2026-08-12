@@ -424,6 +424,7 @@ typedef struct {
 
 	int				videoMapHandle;
 	int				lightmap;				// LIGHTMAP_INDEX_NONE, LIGHTMAP_INDEX_SHADER, LIGHTMAP_INDEX_OFFSET
+	qboolean		vertexLightmap;			// vertex-lit replacement for a world lightmap
 	qboolean		isVideoMap;
 	qboolean		isScreenMap;
 } textureBundle_t;

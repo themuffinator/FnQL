@@ -2889,7 +2889,6 @@ static void VertexLightingCollapse( void ) {
 	shaderStage_t	*bestStage;
 	int		bestImageRank;
 	int		rank;
-	qboolean vertexColors;
 
 	// if we aren't opaque, just use the first pass
 	if ( shader.sort == SS_OPAQUE ) {
@@ -2897,7 +2896,6 @@ static void VertexLightingCollapse( void ) {
 		// pick the best texture for the single pass
 		bestStage = &stages[0];
 		bestImageRank = -999999;
-		vertexColors = qfalse;
 
 		for ( stage = 0; stage < MAX_SHADER_STAGES; stage++ ) {
 			shaderStage_t *pStage = &stages[stage];
@@ -2924,11 +2922,6 @@ static void VertexLightingCollapse( void ) {
 				bestImageRank = rank;
 				bestStage = pStage;
 			}
-
-			// detect missing vertex colors on ojfc-17 for green/dark pink flags
-			if ( pStage->rgbGen != CGEN_IDENTITY || pStage->bundle[0].tcGen == TCGEN_LIGHTMAP || pStage->stateBits & GLS_ATEST_BITS ) {
-				vertexColors = qtrue;
-			}
 		}
 
 		stages[0].bundle[0] = bestStage->bundle[0];
@@ -2937,11 +2930,9 @@ static void VertexLightingCollapse( void ) {
 		if ( shader.lightmapIndex == LIGHTMAP_NONE ) {
 			stages[0].rgbGen = CGEN_LIGHTING_DIFFUSE;
 		} else {
-			if ( vertexColors ) {
-				stages[0].rgbGen = CGEN_EXACT_VERTEX;
-			} else {
-				stages[0].rgbGen = CGEN_IDENTITY_LIGHTING;
-			}
+			// Retail always preserves the BSP's exact vertex colors for a
+			// lightmapped shader collapsed to vertex lighting.
+			stages[0].rgbGen = CGEN_EXACT_VERTEX;
 		}
 		stages[0].alphaGen = AGEN_SKIP;
 	} else {
@@ -2963,6 +2954,11 @@ static void VertexLightingCollapse( void ) {
 			stages[0].rgbGen = CGEN_IDENTITY_LIGHTING;
 		}
 	}
+
+	// Retail clears the raster-lightmap role and records that this bundle is
+	// the single-pass vertex-lit replacement used by r_lightmap diagnostics.
+	stages[0].bundle[0].lightmap = LIGHTMAP_INDEX_NONE;
+	stages[0].bundle[0].vertexLightmap = qtrue;
 
 	for ( stage = 1; stage < MAX_SHADER_STAGES; stage++ ) {
 		shaderStage_t *pStage = &stages[stage];
@@ -3235,11 +3231,13 @@ static shader_t *FinishShader( void ) {
 	int			stage, i, n, m;
 	qboolean	hasLightmapStage;
 	qboolean	vertexLightmap;
+	qboolean	vertexLightMode;
 	qboolean	colorBlend;
 	qboolean	depthMask;
 
 	hasLightmapStage = qfalse;
 	vertexLightmap = qfalse;
+	vertexLightMode = qfalse;
 	colorBlend = qfalse;
 	depthMask = qfalse;
 
@@ -3393,8 +3391,21 @@ static shader_t *FinishShader( void ) {
 			pStage->alphaGen = AGEN_SKIP;
 	}
 
+	// Vertex-light mode must consume the original stage layout before white
+	// lightmap stages are simplified away. Retail applies this collapse whenever
+	// vertex lighting is active, including when r_fullbright is also set.
+	vertexLightMode = ( r_vertexLight->integer && !qlRendererCvars.uiFullscreen->integer ) ||
+		glConfig.hardwareType == GLHW_PERMEDIA2;
+
+	// if we are in r_vertexLight mode, never use a lightmap texture
+	if ( stage > 1 && vertexLightMode && !shader.noVLcollapse ) {
+		VertexLightingCollapse();
+		stage = 1;
+		hasLightmapStage = qfalse;
+	}
+
 	// whiteimage + "filter" texture == texture
-	if ( stage > 1 && stages[0].bundle[0].image[0] == tr.whiteImage && stages[0].bundle[0].numImageAnimations <= 1 && stages[0].rgbGen == CGEN_IDENTITY && stages[0].alphaGen == AGEN_SKIP ) {
+	if ( !vertexLightMode && stage > 1 && stages[0].bundle[0].image[0] == tr.whiteImage && stages[0].bundle[0].numImageAnimations <= 1 && stages[0].rgbGen == CGEN_IDENTITY && stages[0].alphaGen == AGEN_SKIP ) {
 		if ( stages[1].stateBits == ( GLS_SRCBLEND_DST_COLOR | GLS_DSTBLEND_ZERO ) ) {
 			stages[1].stateBits = stages[0].stateBits & ( GLS_DEPTHMASK_TRUE | GLS_DEPTHTEST_DISABLE | GLS_DEPTHFUNC_EQUAL );
 #ifdef USE_PMLIGHT
@@ -3407,7 +3418,7 @@ static shader_t *FinishShader( void ) {
 	}
 
 	// identity texture + "filter" whiteimage rgbGen == texture + rgbGen
-	if ( stage > 1 ) {
+	if ( !vertexLightMode && stage > 1 ) {
 		if ( stages[0].rgbGen == CGEN_IDENTITY && stages[0].alphaGen == AGEN_SKIP && stages[1].alphaGen == AGEN_SKIP ) {
 			if ( ( stages[1].stateBits & GLS_BLEND_BITS ) == ( GLS_SRCBLEND_DST_COLOR | GLS_DSTBLEND_ZERO ) ) {
 				if ( stages[1].bundle[0].image[0] == tr.whiteImage && !stages[1].bundle[0].dlight ) {
@@ -3420,15 +3431,6 @@ static shader_t *FinishShader( void ) {
 				}
 			}
 		}
-	}
-
-	//
-	// if we are in r_vertexLight mode, never use a lightmap texture
-	//
-	if ( stage > 1 && ( ( r_vertexLight->integer && tr.vertexLightingAllowed && !shader.noVLcollapse ) || glConfig.hardwareType == GLHW_PERMEDIA2 ) ) {
-		VertexLightingCollapse();
-		stage = 1;
-		hasLightmapStage = qfalse;
 	}
 
 	for ( i = 0; i < stage; i++ ) {
@@ -3637,12 +3639,20 @@ static void R_CreateDefaultShading( image_t *image ) {
 			GLS_SRCBLEND_SRC_ALPHA |
 			GLS_DSTBLEND_ONE_MINUS_SRC_ALPHA;
 	} else if ( shader.lightmapIndex == LIGHTMAP_WHITEIMAGE ) {
-		// fullbright level
+		// Keep retail's two-stage fullbright structure. Besides producing the
+		// same filtered texture, this lets r_vertexLight collapse the white
+		// stage when both diagnostic cvars are active.
+		stages[0].bundle[0].image[0] = tr.whiteImage;
 		stages[0].active = qtrue;
-		stages[0].bundle[0].image[0] = image;
 		stages[0].bundle[0].tcGen = TCGEN_TEXTURE;
 		stages[0].rgbGen = CGEN_IDENTITY_LIGHTING;
 		stages[0].stateBits = GLS_DEFAULT;
+
+		stages[1].bundle[0].image[0] = image;
+		stages[1].active = qtrue;
+		stages[1].bundle[0].tcGen = TCGEN_TEXTURE;
+		stages[1].rgbGen = CGEN_IDENTITY;
+		stages[1].stateBits = GLS_SRCBLEND_DST_COLOR | GLS_DSTBLEND_ZERO;
 	} else {
 		// two pass lightmap
 		stages[0].bundle[0].image[0] = tr.lightmaps[shader.lightmapIndex];

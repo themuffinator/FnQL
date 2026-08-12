@@ -2973,6 +2973,12 @@ static void CL_DownloadsComplete( void ) {
 		return;
 	}
 
+	// Retail leaves full-screen UI mode before rebuilding renderer/UI state for
+	// the map. This must precede CL_FlushMemory: world registration can begin as
+	// part of the restarted hunk users, and vertex lighting is gated by this
+	// live cvar in the renderer.
+	Cvar_Set( "r_uiFullScreen", "0" );
+
 	// flush client memory and start loading stuff
 	// this will also (re)load the UI
 	// if this is a local client then only the client part of the hunk

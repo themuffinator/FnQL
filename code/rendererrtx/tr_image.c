@@ -1730,6 +1730,10 @@ void R_SetColorMappings( void ) {
 	tr.identityLight = 1.0f / ( 1 << tr.overbrightBits );
 	tr.identityLightByte = 255 * tr.identityLight;
 
+	if ( r_intensity->value <= 1 ) {
+		ri.Cvar_Set( "r_intensity", "1" );
+	}
+
 	g = r_gamma->value;
 
 	shift = tr.overbrightBits;
