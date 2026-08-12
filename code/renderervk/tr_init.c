@@ -23,6 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "tr_local.h"
 #include "../renderercommon/tr_fnq3_bloom_config.h"
+#include "../renderercommon/tr_ql_lighting_config.h"
 #include "../renderercommon/tr_levelshot.h"
 
 glconfig_t	glConfig;
@@ -2665,6 +2666,7 @@ R_Register
 static void R_Register( void )
 {
 	R_QLRegisterRendererCvars();
+	R_MigrateQLLightingConfig();
 	R_MigrateFnQ3BloomConfig();
 
 	// make sure all the commands added here are also removed in R_Shutdown
@@ -2690,7 +2692,7 @@ static void R_Register( void )
 	//
 	// temporary latched variables that can only change over a restart
 	//
-	r_fullbright = ri.Cvar_Get( "r_fullbright", "0", CVAR_LATCH );
+	r_fullbright = ri.Cvar_Get( "r_fullbright", "0", CVAR_ARCHIVE | CVAR_LATCH | CVAR_PROTECTED | CVAR_CLOUD );
 	ri.Cvar_SetDescription( r_fullbright, "Debugging tool to render the entire level without lighting." );
 	r_overBrightBits = ri.Cvar_Get( "r_overBrightBits", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_SetDescription( r_overBrightBits, "Sets the intensity of overall brightness of texture pixels." );
@@ -2700,8 +2702,7 @@ static void R_Register( void )
 	r_mapOverBrightCap = ri.Cvar_Get( "r_mapOverBrightCap", "255", CVAR_ARCHIVE | CVAR_LATCH | CVAR_VM_CREATED | CVAR_CLOUD );
 	ri.Cvar_CheckRange( r_mapOverBrightCap, "0", "255", CV_FLOAT );
 	ri.Cvar_SetDescription( r_mapOverBrightCap, "Caps the brightest normalized map-lighting channel after overbright conversion; 255 preserves retail default brightness." );
-	r_intensity = ri.Cvar_Get( "r_intensity", "1.25", CVAR_ARCHIVE_ND | CVAR_LATCH );
-	ri.Cvar_CheckRange( r_intensity, "1", "255", CV_FLOAT );
+	r_intensity = ri.Cvar_Get( "r_intensity", "1", CVAR_ARCHIVE | CVAR_LATCH );
 	ri.Cvar_SetDescription( r_intensity, "Global texture lighting scale." );
 	r_singleShader = ri.Cvar_Get( "r_singleShader", "0", CVAR_CHEAT | CVAR_LATCH );
 	ri.Cvar_SetDescription( r_singleShader, "Debugging tool that only uses the default shader for all rendering." );
@@ -2710,7 +2711,7 @@ static void R_Register( void )
 
 	r_simpleMipMaps = ri.Cvar_Get( "r_simpleMipMaps", "1", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	ri.Cvar_SetDescription( r_simpleMipMaps, "Whether or not to use a simple mipmapping algorithm or a more correct one:\n 0: off (proper linear filter)\n 1: on (for slower machines)" );
-	r_vertexLight = ri.Cvar_Get( "r_vertexLight", "0", CVAR_ARCHIVE | CVAR_LATCH );
+	r_vertexLight = ri.Cvar_Get( "r_vertexLight", "0", CVAR_ARCHIVE | CVAR_LATCH | CVAR_PROTECTED | CVAR_CLOUD );
 	ri.Cvar_SetDescription( r_vertexLight, "Set to 1 to use vertex light instead of lightmaps, collapse all multi-stage shaders into single-stage ones, might cause rendering artifacts." );
 
 	r_picmip = ri.Cvar_Get( "r_picmip", "0", CVAR_ARCHIVE | CVAR_LATCH );
@@ -3056,7 +3057,7 @@ static void R_Register( void )
 	ri.Cvar_SetDescription( r_dlightBacks, "Whether or not dynamic lights should light up back-face culled geometry, affects only VQ3 dynamic lights." );
 	r_finish = ri.Cvar_Get( "r_finish", "0", CVAR_ARCHIVE_ND );
 	ri.Cvar_SetDescription( r_finish, "Force a glFinish call after rendering a scene." );
-	r_textureMode = ri.Cvar_Get( "r_textureMode", "GL_LINEAR_MIPMAP_NEAREST", CVAR_ARCHIVE );
+	r_textureMode = ri.Cvar_Get( "r_textureMode", "GL_LINEAR_MIPMAP_LINEAR", CVAR_ARCHIVE | CVAR_CLOUD );
 	ri.Cvar_SetDescription( r_textureMode, "Texture interpolation mode:\n GL_NEAREST: Nearest neighbor interpolation and will therefore appear similar to Quake II except with the added colored lighting\n GL_LINEAR: Linear interpolation and will appear to blend in objects that are closer than the resolution that the textures are set as\n GL_NEAREST_MIPMAP_NEAREST: Nearest neighbor interpolation with mipmapping for bilinear hardware, mipmapping will blend objects that are farther away than the resolution that they are set as\n GL_LINEAR_MIPMAP_NEAREST: Linear interpolation with mipmapping for bilinear hardware\n GL_NEAREST_MIPMAP_LINEAR: Nearest neighbor interpolation with mipmapping for trilinear hardware\n GL_LINEAR_MIPMAP_LINEAR: Linear interpolation with mipmapping for trilinear hardware" );
 	ri.Cvar_SetGroup( r_textureMode, CVG_RENDERER );
 	r_gamma = ri.Cvar_Get( "r_gamma", "1", CVAR_ARCHIVE_ND );
@@ -3114,7 +3115,7 @@ static void R_Register( void )
 	r_drawworld = ri.Cvar_Get ("r_drawworld", "1", CVAR_CHEAT );
 	ri.Cvar_SetDescription( r_drawworld, "Set to 0 to disable drawing the world. Set to 1 to enable." );
 	r_lightmap = ri.Cvar_Get ("r_lightmap", "0", 0 );
-	ri.Cvar_SetDescription( r_lightmap, "Show only lightmaps on all world surfaces." );
+	ri.Cvar_SetDescription( r_lightmap, "Lightmap debugging: 1 shows only lightmaps; 2 also color-codes their intensity." );
 	r_portalOnly = ri.Cvar_Get ("r_portalOnly", "0", CVAR_CHEAT );
 	ri.Cvar_SetDescription( r_portalOnly, "Set to 1 to render only first portal view if it is present on the scene." );
 

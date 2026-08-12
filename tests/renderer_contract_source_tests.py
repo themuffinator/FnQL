@@ -11,6 +11,121 @@ RENDERERS = ("glx", "vk", "rtx")
 
 
 class RendererContractSourceTests(unittest.TestCase):
+    def test_vertex_light_collapse_precedes_white_lightmap_simplification(self) -> None:
+        shader_paths = (
+            "code/renderer/tr_shader.c",
+            "code/renderervk/tr_shader.c",
+            "code/rendererrtx/tr_shader.c",
+        )
+
+        for relative_path in shader_paths:
+            with self.subTest(renderer=relative_path):
+                source = (ROOT / relative_path).read_text(encoding="utf-8")
+                finish = source.index("static shader_t *FinishShader( void )")
+                collapse = source.index("VertexLightingCollapse();", finish)
+                white_simplification = source.index(
+                    '// whiteimage + "filter" texture == texture', finish
+                )
+
+                # Vertex mode also substitutes white for $lightmap. Collapsing
+                # after this algebraic simplification would leave a fullbright
+                # one-stage texture that can no longer acquire vertex colors.
+                self.assertLess(collapse, white_simplification)
+                mode_assignment = source.index("vertexLightMode =", finish)
+                collapse_guard = source.index(
+                    "if ( stage > 1 && vertexLightMode", mode_assignment
+                )
+                # Retail still performs vertex collapse when r_fullbright and
+                # r_vertexLight are enabled together; WHITEIMAGE must not
+                # suppress the active vertex-light mode.
+                self.assertNotIn(
+                    "LIGHTMAP_WHITEIMAGE",
+                    source[mode_assignment:collapse_guard],
+                )
+                self.assertIn(
+                    "if ( stage > 1 && vertexLightMode && !shader.noVLcollapse )",
+                    source[finish:white_simplification],
+                )
+
+                self.assertIn(
+                    "stages[0].bundle[0].lightmap = LIGHTMAP_INDEX_NONE;",
+                    source[source.rfind("static void VertexLightingCollapse", 0, finish):finish],
+                )
+                self.assertIn(
+                    "stages[0].bundle[0].vertexLightmap = qtrue;",
+                    source[source.rfind("static void VertexLightingCollapse", 0, finish):finish],
+                )
+                collapse_body = source[
+                    source.rfind("static void VertexLightingCollapse", 0, finish):finish
+                ]
+                self.assertIn("CGEN_EXACT_VERTEX", collapse_body)
+                self.assertNotIn("qboolean vertexColors", collapse_body)
+                self.assertNotIn("detect missing vertex colors", collapse_body)
+                self.assertIn("!qlRendererCvars.uiFullscreen->integer", source[finish:white_simplification])
+
+    def test_default_fullbright_preserves_retail_two_stage_structure(self) -> None:
+        shader_paths = (
+            "code/renderer/tr_shader.c",
+            "code/renderervk/tr_shader.c",
+            "code/rendererrtx/tr_shader.c",
+        )
+
+        for relative_path in shader_paths:
+            with self.subTest(renderer=relative_path):
+                source = (ROOT / relative_path).read_text(encoding="utf-8")
+                fullbright = source.index(
+                    "else if ( shader.lightmapIndex == LIGHTMAP_WHITEIMAGE )"
+                )
+                next_branch = source.index("\n\t} else {", fullbright)
+                branch = source[fullbright:next_branch]
+
+                self.assertIn("stages[0].bundle[0].image[0] = tr.whiteImage;", branch)
+                self.assertIn("stages[1].bundle[0].image[0] = image;", branch)
+                self.assertIn(
+                    "GLS_SRCBLEND_DST_COLOR | GLS_DSTBLEND_ZERO", branch
+                )
+
+    def test_fullbright_selects_white_world_lightmap_in_every_renderer(self) -> None:
+        bsp_paths = (
+            "code/renderer/tr_bsp.c",
+            "code/renderervk/tr_bsp.c",
+            "code/rendererrtx/tr_bsp.c",
+        )
+
+        for relative_path in bsp_paths:
+            with self.subTest(renderer=relative_path):
+                source = (ROOT / relative_path).read_text(encoding="utf-8")
+                shader_for_num = source.index("static shader_t *ShaderForShaderNum")
+                find_shader = source.index("R_FindShader", shader_for_num)
+                selection = source[shader_for_num:find_shader]
+                vertex = selection.index("lightmapNum = LIGHTMAP_BY_VERTEX;")
+                fullbright = selection.index("lightmapNum = LIGHTMAP_WHITEIMAGE;")
+
+                # This selects fullbright's white lightmap structure. When both
+                # cvars are set, FinishShader subsequently performs the retail
+                # vertex collapse on that structure.
+                self.assertLess(vertex, fullbright)
+
+    def test_retail_novlcollapse_directive_is_honored_by_every_renderer(self) -> None:
+        shader_paths = (
+            "code/renderer/tr_shader.c",
+            "code/renderervk/tr_shader.c",
+            "code/rendererrtx/tr_shader.c",
+        )
+
+        for relative_path in shader_paths:
+            with self.subTest(renderer=relative_path):
+                source = (ROOT / relative_path).read_text(encoding="utf-8")
+                self.assertIn('!Q_stricmp( token, "novlcollapse" )', source)
+                self.assertIn("vertexLightMode && !shader.noVLcollapse", source)
+
+    def test_map_transition_clears_retail_ui_gate_before_hunk_restart(self) -> None:
+        client = (ROOT / "code/client/cl_main.cpp").read_text(encoding="utf-8")
+        downloads = client.index("void CL_DownloadsComplete( void )")
+        clear_gate = client.index('Cvar_Set( "r_uiFullScreen", "0" );', downloads)
+        flush = client.index("CL_FlushMemory();", clear_gate)
+        self.assertLess(clear_gate, flush)
+
     def test_meson_exposes_exactly_three_renderers(self) -> None:
         options = (ROOT / "meson_options.txt").read_text(encoding="utf-8")
         match = re.search(

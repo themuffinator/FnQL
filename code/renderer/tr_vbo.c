@@ -1864,6 +1864,7 @@ static void RB_IterateStagesVBO( const shaderCommands_t *input )
 	int i;
 	GLbitfield stateBits, normalMask;
 	qboolean fogPass;
+	qboolean vertexLightmapOnly;
 	GLuint vp, fp;
 
 	fogPass = ( tess.fogNum && tess.shader->fogPass );
@@ -1891,6 +1892,10 @@ static void RB_IterateStagesVBO( const shaderCommands_t *input )
 			break;
 
 		pStage = input->xstages[i];
+		vertexLightmapOnly = pStage->bundle[0].vertexLightmap &&
+			( ( r_vertexLight->integer && !qlRendererCvars.uiFullscreen->integer ) ||
+				glConfig.hardwareType == GLHW_PERMEDIA2 ) &&
+			r_lightmap->integer;
 
 #ifdef RENDERER_GLX
 		GLX_CompatRecordMaterialStage( pStage, GLX_STAGE_PATH_VBO,
@@ -1942,7 +1947,11 @@ static void RB_IterateStagesVBO( const shaderCommands_t *input )
 		qglColorPointer( 4, GL_UNSIGNED_BYTE, 0, (const GLvoid *)(intptr_t)pStage->color_offset );
 
 		GL_SelectTexture( 0 );
-		R_BindAnimatedImage( &pStage->bundle[0] );
+		if ( vertexLightmapOnly ) {
+			GL_Bind( tr.whiteImage );
+		} else {
+			R_BindAnimatedImage( &pStage->bundle[0] );
+		}
 
 		if ( pStage->mtEnv ) { // multitexture
 			if ( fp == 0 ) {
@@ -1978,6 +1987,11 @@ static void RB_IterateStagesVBO( const shaderCommands_t *input )
 		} else {
 			GL_ClientState( 1, CLS_NONE );
 			VBO_RenderIndexes();
+		}
+
+		if ( r_lightmap->integer && ( pStage->bundle[0].lightmap != LIGHTMAP_INDEX_NONE ||
+			pStage->bundle[1].lightmap != LIGHTMAP_INDEX_NONE || pStage->bundle[0].vertexLightmap ) ) {
+			break;
 		}
 	}
 

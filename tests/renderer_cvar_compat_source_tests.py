@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -110,6 +111,30 @@ class RendererCvarCompatibilitySourceTests(unittest.TestCase):
                     init,
                 )
                 self.assertIn('Cvar_CheckRange( r_teleporterFlash, "0", "1", CV_INTEGER )', init)
+                self.assertIn(
+                    'r_fullbright = ri.Cvar_Get( "r_fullbright", "0", '
+                    'CVAR_ARCHIVE | CVAR_LATCH | CVAR_PROTECTED | CVAR_CLOUD )',
+                    init,
+                )
+                self.assertIn(
+                    'r_vertexLight = ri.Cvar_Get( "r_vertexLight", "0", '
+                    'CVAR_ARCHIVE | CVAR_LATCH | CVAR_PROTECTED | CVAR_CLOUD )',
+                    init,
+                )
+                self.assertIn(
+                    'r_intensity = ri.Cvar_Get( "r_intensity", "1", '
+                    'CVAR_ARCHIVE | CVAR_LATCH )',
+                    init,
+                )
+                self.assertNotIn("Cvar_CheckRange( r_intensity", init)
+                image = read(f"code/{renderer}/tr_image.c")
+                self.assertIn("if ( r_intensity->value <= 1 )", image)
+                self.assertIn('ri.Cvar_Set( "r_intensity", "1" );', image)
+                self.assertIn(
+                    'r_textureMode = ri.Cvar_Get( "r_textureMode", '
+                    '"GL_LINEAR_MIPMAP_LINEAR", CVAR_ARCHIVE | CVAR_CLOUD )',
+                    init,
+                )
 
         advert_debug = read("code/renderercommon/tr_ql_ad_debug.h")
         self.assertIn("AdvertisementBridge_GetCellDisplayState", advert_debug)
@@ -189,6 +214,35 @@ class RendererCvarCompatibilitySourceTests(unittest.TestCase):
             self.assertLess(
                 init.index("R_QLRegisterRendererCvars();"),
                 init.index("R_MigrateFnQ3BloomConfig();"),
+            )
+
+    def test_inherited_fnq3_lighting_defaults_are_narrowly_migrated(self) -> None:
+        migration = read("code/renderercommon/tr_ql_lighting_config.h")
+
+        self.assertIn('"r_qlLightingConfigVersion", "0"', migration)
+        self.assertIn('CVAR_ARCHIVE | CVAR_PROTECTED', migration)
+        self.assertIn('atof( intensity ) - 1.25f', migration)
+        self.assertIn('"GL_LINEAR_MIPMAP_NEAREST"', migration)
+        self.assertIsNotNone(
+            re.search(
+                r"if \( intensity\[0\] && textureMode\[0\].*?"
+                r"atof\( intensity \) - 1\.25f.*?GL_LINEAR_MIPMAP_NEAREST",
+                migration,
+                re.DOTALL,
+            )
+        )
+        self.assertIn('ri.Cvar_Set( "r_intensity", "1" )', migration)
+        self.assertIn(
+            'ri.Cvar_Set( "r_textureMode", "GL_LINEAR_MIPMAP_LINEAR" )',
+            migration,
+        )
+
+        for renderer in RENDERERS:
+            init = read(f"code/{renderer}/tr_init.c")
+            self.assertIn('renderercommon/tr_ql_lighting_config.h"', init)
+            self.assertLess(
+                init.index("R_MigrateQLLightingConfig();"),
+                init.index('r_intensity = ri.Cvar_Get( "r_intensity"'),
             )
 
     def test_fnq3_controls_exclusively_own_framebuffer_and_bloom_storage(self) -> None:
