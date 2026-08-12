@@ -115,6 +115,67 @@ ParseUnsignedInputCommandArgument( const char* text ) noexcept
 	return value;
 }
 
+[[nodiscard]] inline std::optional<int>
+ParseSignedInputCommandArgument( const char* text ) noexcept
+{
+	if ( !text || !text[0] ) {
+		return std::nullopt;
+	}
+
+	const char* cursor = text;
+	bool negative = false;
+	if ( *cursor == '+' || *cursor == '-' ) {
+		negative = *cursor == '-';
+		++cursor;
+		if ( !*cursor ) {
+			return std::nullopt;
+		}
+	}
+
+	const unsigned positiveLimit = static_cast<unsigned>(
+		( std::numeric_limits<int>::max )() );
+	const unsigned limit = negative ? positiveLimit + 1u : positiveLimit;
+	unsigned magnitude = 0;
+	for ( ; *cursor; ++cursor ) {
+		if ( *cursor < '0' || *cursor > '9' ) {
+			return std::nullopt;
+		}
+		const unsigned digit = static_cast<unsigned>( *cursor - '0' );
+		if ( magnitude > ( limit - digit ) / 10u ) {
+			return std::nullopt;
+		}
+		magnitude = magnitude * 10u + digit;
+	}
+
+	if ( !negative ) {
+		return static_cast<int>( magnitude );
+	}
+	if ( magnitude == positiveLimit + 1u ) {
+		return ( std::numeric_limits<int>::min )();
+	}
+	return -static_cast<int>( magnitude );
+}
+
+[[nodiscard]] constexpr unsigned SaturatingAddUnsigned(
+	unsigned lhs, unsigned rhs ) noexcept
+{
+	const unsigned maximum = ( std::numeric_limits<unsigned>::max )();
+	return lhs > maximum - rhs ? maximum : lhs + rhs;
+}
+
+/*
+Input timestamps use the engine's wrapping 32-bit millisecond clock. Perform
+the subtraction in unsigned space, then bound it to the usercmd interval so a
+stale, malformed, or future timestamp cannot turn one transition into an
+unbounded movement sample.
+*/
+[[nodiscard]] constexpr unsigned BoundedInputElapsedMilliseconds(
+	unsigned start, unsigned end, unsigned maximum ) noexcept
+{
+	const unsigned elapsed = end - start;
+	return elapsed < maximum ? elapsed : maximum;
+}
+
 struct InputCommandGenerationTag {
 	bool tagged = false;
 	bool valid = false;
@@ -602,6 +663,8 @@ public:
 			Reset( current );
 			active_ = true;
 			sampleLimit_ = samples;
+		} else {
+			Synchronize( current );
 		}
 		return raw_;
 	}
@@ -617,17 +680,78 @@ public:
 		count_ = ( std::min )( count_ + 1, static_cast<std::size_t>( sampleLimit_ ) );
 		raw_ = unfiltered;
 
-		ViewAngles sum{};
+		double yaw = 0.0;
+		double pitch = 0.0;
 		std::size_t index = next_;
 		for ( std::size_t i = 0; i < count_; ++i ) {
-			sum.yaw += history_[index].yaw;
-			sum.pitch += history_[index].pitch;
+			yaw += static_cast<double>( history_[index].yaw );
+			pitch += static_cast<double>( history_[index].pitch );
 			index = index == 0 ? history_.size() - 1 : index - 1;
 		}
 
 		next_ = ( next_ + 1 ) % history_.size();
-		const float divisor = static_cast<float>( count_ );
-		return { sum.yaw / divisor, sum.pitch / divisor };
+		const double divisor = static_cast<double>( count_ );
+		visible_ = {
+			static_cast<float>( yaw / divisor ),
+			static_cast<float>( pitch / divisor )
+		};
+		if ( !std::isfinite( visible_.yaw ) ||
+			!std::isfinite( visible_.pitch ) ) {
+			Reset( unfiltered );
+			return unfiltered;
+		}
+		return visible_;
+	}
+
+	/*
+	The filter owns an unfiltered base while the client exposes the averaged
+	view. Keyboard look, joystick look, centerview, cgame adjustments, and the
+	per-command pitch guard can all change that exposed view between mouse
+	samples. Translate the complete filter state by the same delta so those
+	changes are retained instead of being overwritten on the next Begin().
+	*/
+	void Synchronize( ViewAngles current ) noexcept
+	{
+		if ( !active_ ) {
+			raw_ = current;
+			visible_ = current;
+			return;
+		}
+		if ( current.yaw == visible_.yaw &&
+			current.pitch == visible_.pitch ) {
+			return;
+		}
+
+		const float yawDelta = current.yaw - visible_.yaw;
+		const float pitchDelta = current.pitch - visible_.pitch;
+		if ( !std::isfinite( yawDelta ) || !std::isfinite( pitchDelta ) ) {
+			Reset( current );
+			return;
+		}
+
+		const auto shift = [yawDelta, pitchDelta]( ViewAngles angle ) noexcept {
+			return ViewAngles{
+				angle.yaw + yawDelta,
+				angle.pitch + pitchDelta
+			};
+		};
+		const ViewAngles shiftedRaw = shift( raw_ );
+		if ( !std::isfinite( shiftedRaw.yaw ) ||
+			!std::isfinite( shiftedRaw.pitch ) ) {
+			Reset( current );
+			return;
+		}
+		for ( ViewAngles& angle : history_ ) {
+			angle = shift( angle );
+			if ( !std::isfinite( angle.yaw ) ||
+				!std::isfinite( angle.pitch ) ) {
+				Reset( current );
+				return;
+			}
+		}
+
+		raw_ = shiftedRaw;
+		visible_ = current;
 	}
 
 	void Reset( ViewAngles current = {} ) noexcept
@@ -638,6 +762,7 @@ public:
 		sampleLimit_ = 0;
 		active_ = false;
 		raw_ = current;
+		visible_ = current;
 	}
 
 private:
@@ -647,6 +772,7 @@ private:
 	int sampleLimit_ = 0;
 	bool active_ = false;
 	ViewAngles raw_{};
+	ViewAngles visible_{};
 };
 
 [[nodiscard]] inline float NormaliseJoystickAxis( long value ) noexcept

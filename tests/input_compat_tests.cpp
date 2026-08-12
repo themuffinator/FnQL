@@ -88,6 +88,29 @@ void TestDeferredInputCommandGenerationHelpers()
 	CHECK( !fnql::input::ParseUnsignedInputCommandArgument( "+1" ) );
 	CHECK( !fnql::input::ParseUnsignedInputCommandArgument( "1x" ) );
 
+	auto signedParsed =
+		fnql::input::ParseSignedInputCommandArgument( "-1" );
+	CHECK( signedParsed && *signedParsed == -1 );
+	signedParsed = fnql::input::ParseSignedInputCommandArgument( "+1" );
+	CHECK( signedParsed && *signedParsed == 1 );
+	signedParsed = fnql::input::ParseSignedInputCommandArgument( "2147483647" );
+	CHECK( signedParsed &&
+		*signedParsed == ( std::numeric_limits<int>::max )() );
+	signedParsed = fnql::input::ParseSignedInputCommandArgument(
+		std::to_string( ( std::numeric_limits<int>::min )() ).c_str() );
+	CHECK( signedParsed &&
+		*signedParsed == ( std::numeric_limits<int>::min )() );
+	CHECK( !fnql::input::ParseSignedInputCommandArgument( "1x" ) );
+	CHECK( !fnql::input::ParseSignedInputCommandArgument( "2147483648" ) );
+	CHECK( !fnql::input::ParseSignedInputCommandArgument( "-2147483649" ) );
+	CHECK( !fnql::input::ParseSignedInputCommandArgument( "" ) );
+	CHECK( fnql::input::SaturatingAddUnsigned(
+		( std::numeric_limits<unsigned>::max )() - 1u, 2u ) ==
+		( std::numeric_limits<unsigned>::max )() );
+	CHECK( fnql::input::BoundedInputElapsedMilliseconds(
+		( std::numeric_limits<unsigned>::max )() - 2u, 3u, 20u ) == 6u );
+	CHECK( fnql::input::BoundedInputElapsedMilliseconds( 100u, 90u, 20u ) == 20u );
+
 	auto tag = fnql::input::ParseInputCommandGenerationTag(
 		"fnql-gen:42" );
 	CHECK( tag.tagged && tag.valid && tag.value == 42u );
@@ -185,6 +208,23 @@ void TestRetailViewFilter()
 	visible = filter.End( { 20.0f, 4.0f } );
 	CHECK( Near( visible.yaw, 20.0f ) );
 	CHECK( Near( visible.pitch, 4.0f ) );
+
+	begin = filter.Begin( { 25.0f, -6.0f }, 1 );
+	CHECK( Near( begin.yaw, 25.0f ) );
+	CHECK( Near( begin.pitch, -6.0f ) );
+	visible = filter.End( { 27.0f, -4.0f } );
+	CHECK( Near( visible.yaw, 27.0f ) );
+	CHECK( Near( visible.pitch, -4.0f ) );
+
+	filter.Reset( { 0.0f, 0.0f } );
+	begin = filter.Begin( { 0.0f, 0.0f }, 3 );
+	visible = filter.End( { 3.0f, -3.0f } );
+	begin = filter.Begin( { visible.yaw + 10.0f, visible.pitch + 20.0f }, 3 );
+	CHECK( Near( begin.yaw, 13.0f ) );
+	CHECK( Near( begin.pitch, 17.0f ) );
+	visible = filter.End( { 16.0f, 14.0f } );
+	CHECK( Near( visible.yaw, 14.5f ) );
+	CHECK( Near( visible.pitch, 15.5f ) );
 }
 
 void TestRetailJoystickMath()

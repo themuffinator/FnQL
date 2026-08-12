@@ -67,7 +67,10 @@ class SpawnViewAngleAnchorTests(unittest.TestCase):
         body = function_body(read("code/server/sv_client.cpp"), "SV_ClientEnterWorld")
 
         self.assertIn("const int acceptFrom = client->lastUsercmd.serverTime;", body)
-        self.assertIn("if ( cmd->serverTime - acceptFrom < 0 ) {", body)
+        self.assertIn(
+            "if ( fnql::net::IsNewerCounter( acceptFrom, cmd->serverTime ) ) {",
+            body,
+        )
         self.assertIn("client->lastUsercmd.serverTime = acceptFrom;", body)
 
     def test_first_move_packet_supplies_the_anchor(self) -> None:
@@ -93,16 +96,19 @@ class SpawnViewAngleAnchorTests(unittest.TestCase):
             (
                 "SV_SendClientGameState",
                 function_body(read("code/server/sv_client.cpp"), "SV_SendClientGameState"),
-                "client->lastUsercmd.serverTime = sv.time - 1;",
+                "client->lastUsercmd.serverTime =",
+                "fnql::net::CounterSubtract( sv.time, 1u );",
             ),
             (
                 "SV_MapRestart_f",
                 function_body(read("code/server/sv_ccmds.cpp"), "SV_MapRestart_f"),
-                "client.lastUsercmd.serverTime = sv.time - 1;",
+                "client.lastUsercmd.serverTime =",
+                "fnql::net::CounterSubtract( sv.time, 1u );",
             ),
         )
-        for name, body, gate in cases:
+        for name, body, assignment, gate in cases:
             with self.subTest(function=name):
+                self.assertIn(assignment, body)
                 self.assertIn(gate, body)
                 self.assertNotIn("lastUsercmd = {}", body)
 
@@ -119,7 +125,7 @@ class SpawnViewAngleUnaffectedPathTests(unittest.TestCase):
         body = function_body(read("code/server/sv_ccmds.cpp"), "SV_MapRestart_f")
         self.assertLess(
             body.index("SV_ClientEnterWorld( &slot.client, nullptr );"),
-            body.index("client.lastUsercmd.serverTime = sv.time - 1;"),
+            body.index("client.lastUsercmd.serverTime ="),
         )
 
     def test_every_executed_command_still_becomes_the_anchor(self) -> None:
@@ -130,13 +136,16 @@ class SpawnViewAngleUnaffectedPathTests(unittest.TestCase):
             body.index("VM_Call( gvm, 1, GAME_CLIENT_THINK, SV_ClientIndex( cl ) );"),
         )
 
-    def test_command_acceptance_gate_itself_is_unchanged(self) -> None:
+    def test_command_acceptance_gate_retains_order_across_signed_wrap(self) -> None:
         body = function_body(read("code/server/sv_client.cpp"), "SV_UserMove")
         self.assertIn(
-            "if ( cmds[i].serverTime - cmds[cmdCount-1].serverTime > 0 ) {", body
+            "fnql::net::IsNewerCounter(", body
         )
         self.assertIn(
-            "if ( cmds[i].serverTime - cl->lastUsercmd.serverTime <= 0 ) {", body
+            "cmds[i].serverTime, cmds[cmdCount - 1].serverTime", body
+        )
+        self.assertIn(
+            "cmds[i].serverTime, cl->lastUsercmd.serverTime", body
         )
 
     def test_trap_getusercmd_is_still_served_from_the_anchor(self) -> None:

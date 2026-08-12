@@ -567,21 +567,23 @@ view, and the game only re-anchors it when it spawns a player, teleports one, or
 holds one against the pitch limit. One line per change is therefore enough to
 attribute a bad spawn view without a running trace.
 
-The anchor the game used is the command it had last executed, which ps.commandTime
-identifies, so recovering that command from our own ring shows directly whether
-the server anchored on a stale one. pmove clamps pitch to +/-16000, so reporting
-the clamped result alongside ps.viewangles separates a view the server itself
-pinned from one only local prediction pinned.
+The command the game last executed is identified by ps.commandTime. Recovering
+that command from our own ring and comparing it with the pitch implied by the
+snapshot exposes duplicate timestamps separately from commands damaged before
+they reached game code. The latter is especially important for keyed usercmd
+codec failures: the local ring remains internally consistent while the server
+executes a completely different angle.
 ================
 */
-#define VIEWANGLE_PITCH_LIMIT 16000
-
 static void CL_ReportViewAngleAnchor( const clSnapshot_t *newSnap ) {
 	int i;
-	int anchorPitch = 0;
-	int anchorAge = -1;
+	int localPitch = 0;
+	int localAge = -1;
+	int matchingTimes = 0;
+	int oldestMatchingAge = -1;
 	int latestPitch;
-	int sum;
+	int impliedPitch;
+	int pitchError = 0;
 
 	for ( i = 0; i < 3; i++ ) {
 		if ( cl.snap.ps.delta_angles[i] != newSnap->ps.delta_angles[i] ) {
@@ -593,25 +595,37 @@ static void CL_ReportViewAngleAnchor( const clSnapshot_t *newSnap ) {
 	}
 
 	for ( i = 0; i < CMD_BACKUP; i++ ) {
-		const usercmd_t *cmd = &cl.cmds[ ( cl.cmdNumber - i ) & CMD_MASK ];
+		const int commandNumber = fnql::net::CounterSubtract(
+			cl.cmdNumber, static_cast<std::uint32_t>( i ) );
+		const usercmd_t *cmd = &cl.cmds[ commandNumber & CMD_MASK ];
 		if ( cmd->serverTime == newSnap->ps.commandTime ) {
-			anchorPitch = cmd->angles[PITCH];
-			anchorAge = i;
-			break;
+			if ( localAge < 0 ) {
+				localPitch = cmd->angles[PITCH];
+				localAge = i;
+			}
+			++matchingTimes;
+			oldestMatchingAge = i;
 		}
 	}
 
 	latestPitch = cl.cmds[ cl.cmdNumber & CMD_MASK ].angles[PITCH];
-	// The truncation is pmove's: both terms are unsigned 16-bit angle units.
-	sum = (short)( latestPitch + newSnap->ps.delta_angles[PITCH] );
+	const int snapshotPitch = ANGLE2SHORT( newSnap->ps.viewangles[PITCH] );
+	impliedPitch = static_cast<unsigned short>(
+		snapshotPitch - newSnap->ps.delta_angles[PITCH] );
+	if ( localAge >= 0 ) {
+		pitchError = static_cast<short>( localPitch - impliedPitch );
+	}
 
-	Com_Printf( "viewangles: snap %i t %i delta_pitch %i->%i ps_pitch %.1f "
-		"cmd_pitch %i anchor %i age %i -> %i%s\n",
+	Com_Printf( "viewangles: snap %i t %i cmd_t %i delta_pitch %i->%i "
+		"ps_pitch %.1f implied_cmd %i local_cmd %i age %i matches %i "
+		"oldest_age %i error %i latest %i%s\n",
 		newSnap->messageNum, newSnap->serverTime,
+		newSnap->ps.commandTime,
 		cl.snap.ps.delta_angles[PITCH], newSnap->ps.delta_angles[PITCH],
-		newSnap->ps.viewangles[PITCH], latestPitch, anchorPitch, anchorAge, sum,
-		( sum >= VIEWANGLE_PITCH_LIMIT || sum <= -VIEWANGLE_PITCH_LIMIT )
-			? " CLAMPED" : "" );
+		newSnap->ps.viewangles[PITCH], impliedPitch, localPitch, localAge,
+		matchingTimes, oldestMatchingAge, pitchError, latestPitch,
+		( localAge >= 0 && ( pitchError < -2 || pitchError > 2 ) )
+			? " DESYNC" : "" );
 }
 
 
@@ -994,7 +1008,8 @@ static void CL_ParseGamestate( msg_t *msg ) {
 				Com_Error( ERR_DROP, "%s: configstring > MAX_CONFIGSTRINGS", __func__ );
 			}
 
-			s = MSG_ReadBigString( msg );
+			s = MSG_ReadBigStringForWireProfile(
+				msg, clc.netchan.wireProfile );
 			len = strlen( s );
 			i = CL_TranslateLegacyConfigstringIndex( rawIndex );
 			if ( i < 0 ) {
@@ -1159,7 +1174,8 @@ static void CL_ParseDownload( msg_t *msg ) {
 
 		if (clc.downloadSize < 0)
 		{
-			Com_Error( ERR_DROP, "%s", MSG_ReadString( msg ) );
+			Com_Error( ERR_DROP, "%s", MSG_ReadStringForWireProfile(
+				msg, clc.netchan.wireProfile ) );
 			return;
 		}
 	}
@@ -1245,14 +1261,27 @@ static void CL_ParseCommandString( msg_t *msg ) {
 	const char *s;
 	int		seq;
 	int		index;
+	int		wireHash;
+	std::array<char, MAX_STRING_CHARS> safeCommand;
 	std::array<char, MAX_STRING_CHARS> translated;
 	bool	keepCommand;
 	const char *storedCommand;
 
 	seq = MSG_ReadLong( msg );
-	s = MSG_ReadString( msg );
+	s = MSG_ReadCommandStringForWireProfile( msg, clc.netchan.wireProfile );
+	wireHash = MSG_HashKeyForWireProfile(
+		clc.netchan.wireProfile, s, 32 );
 	storedCommand = s;
-	keepCommand = CL_TranslateLegacyConfigstringCommand( s, translated.data(), static_cast<int>( translated.size() ) );
+	if ( clc.netchan.wireProfile == NETCHAN_WIRE_QL_RETAIL ) {
+		std::size_t offset = 0;
+		for ( ; s[offset] != '\0' && offset + 1 < safeCommand.size(); ++offset ) {
+			safeCommand[offset] = s[offset] == '%' ? '.' : s[offset];
+		}
+		safeCommand[offset] = '\0';
+		storedCommand = safeCommand.data();
+	}
+	keepCommand = CL_TranslateLegacyConfigstringCommand( storedCommand,
+		translated.data(), static_cast<int>( translated.size() ) );
 	if ( keepCommand ) {
 		storedCommand = translated.data();
 	}
@@ -1267,6 +1296,7 @@ static void CL_ParseCommandString( msg_t *msg ) {
 	clc.serverCommandSequence = seq;
 
 	index = seq & (MAX_RELIABLE_COMMANDS-1);
+	clc.serverCommandHashes[ index ] = wireHash;
 	if ( keepCommand ) {
 		Q_strncpyz( clc.serverCommands[ index ], storedCommand, sizeof( clc.serverCommands[ index ] ) );
 		clc.serverCommandsIgnore[ index ] = qfalse;

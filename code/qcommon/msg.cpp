@@ -21,6 +21,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 #include "q_shared.h"
 #include "qcommon.h"
+#include "netchan_safety.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -514,6 +515,40 @@ void MSG_WriteBigString( msg_t *sb, const char *s ) {
 	MSG_WriteChar( sb, '\0' );
 }
 
+
+static void MSG_WriteRetailString( msg_t *sb, const char *s,
+	std::size_t capacity, const char *overflowMessage ) {
+	const std::size_t length = s ? std::strlen( s ) : 0;
+	if ( length >= capacity ) {
+		Com_Printf( "%s\n", overflowMessage );
+		MSG_WriteChar( sb, '\0' );
+		return;
+	}
+	MSG_WriteData( sb, s ? s : "", static_cast<int>( length + 1 ) );
+}
+
+
+void MSG_WriteStringForWireProfile( msg_t *sb, const char *s,
+	netchanWireProfile_t profile ) {
+	if ( profile != NETCHAN_WIRE_QL_RETAIL ) {
+		MSG_WriteString( sb, s );
+		return;
+	}
+	MSG_WriteRetailString( sb, s, MAX_STRING_CHARS,
+		"MSG_WriteString: MAX_STRING_CHARS" );
+}
+
+
+void MSG_WriteBigStringForWireProfile( msg_t *sb, const char *s,
+	netchanWireProfile_t profile ) {
+	if ( profile != NETCHAN_WIRE_QL_RETAIL ) {
+		MSG_WriteBigString( sb, s );
+		return;
+	}
+	MSG_WriteRetailString( sb, s, BIG_INFO_STRING,
+		"MSG_WriteString: BIG_INFO_STRING" );
+}
+
 void MSG_WriteAngle( msg_t *sb, float f ) {
 	MSG_WriteByte (sb, (int)(f*256/360) & 255);
 }
@@ -585,87 +620,76 @@ float MSG_ReadFloat( msg_t *msg ) {
 }
 
 
-const char *MSG_ReadString( msg_t *msg ) {
-	static char	string[MAX_STRING_CHARS];
-	size_t	l;
-	int	c;
-	
-	l = 0;
+static const char *MSG_ReadStringInto( msg_t *msg, char *string,
+	std::size_t capacity, bool preserveHighBytes, bool sanitizePercent,
+	bool stopAtNewline ) {
+	std::size_t l = 0;
 	do {
+		int c;
 		c = MSG_ReadByte( msg ); // use ReadByte so -1 is out of bounds
-		if ( c <= 0 /*c == -1 || c == 0 */ || l >= sizeof(string)-1 ) {
+		if ( c <= 0 || ( stopAtNewline && c == '\n' ) ||
+			l >= capacity - 1 ) {
 			break;
 		}
 		// translate all fmt spec to avoid crash bugs
-		if ( c == '%' ) {
+		if ( sanitizePercent && c == '%' ) {
 			c = '.';
-		} else
-		// don't allow higher ascii values
-		if ( c > 127 ) {
+		} else if ( !preserveHighBytes && c > 127 ) {
+			// The Quake III wire profiles accept only ASCII here. Retail
+			// Quake Live preserves these bytes so UTF-8 and its usercmd hash
+			// see the same command on both peers.
 			c = '.';
 		}
 		string[ l++ ] = c;
 	} while ( qtrue );
-	
 	string[ l ] = '\0';
-	
 	return string;
+}
+
+
+const char *MSG_ReadString( msg_t *msg ) {
+	static char string[MAX_STRING_CHARS];
+	return MSG_ReadStringInto(
+		msg, string, sizeof( string ), false, true, false );
+}
+
+
+const char *MSG_ReadStringForWireProfile( msg_t *msg,
+	netchanWireProfile_t profile ) {
+	static char string[MAX_STRING_CHARS];
+	return MSG_ReadStringInto( msg, string, sizeof( string ),
+		profile == NETCHAN_WIRE_QL_RETAIL, true, false );
+}
+
+
+const char *MSG_ReadCommandStringForWireProfile( msg_t *msg,
+	netchanWireProfile_t profile ) {
+	static char string[MAX_STRING_CHARS];
+	const bool retail = profile == NETCHAN_WIRE_QL_RETAIL;
+	return MSG_ReadStringInto( msg, string, sizeof( string ),
+		retail, !retail, false );
 }
 
 
 const char *MSG_ReadBigString( msg_t *msg ) {
-	static char	string[ BIG_INFO_STRING ];
-	size_t	l;
-	int	c;
-	
-	l = 0;
-	do {
-		c = MSG_ReadByte( msg ); // use ReadByte so -1 is out of bounds
-		if ( c <= 0 /*c == -1 || c == 0*/ || l >= sizeof(string)-1 ) {
-			break;
-		}
-		// translate all fmt spec to avoid crash bugs
-		if ( c == '%' ) {
-			c = '.';
-		} else
-		// don't allow higher ascii values
-		if ( c > 127 ) {
-			c = '.';
-		}
-		string[ l++ ] = c;
-	} while ( qtrue );
-	
-	string[ l ] = '\0';
-	
-	return string;
+	static char string[BIG_INFO_STRING];
+	return MSG_ReadStringInto(
+		msg, string, sizeof( string ), false, true, false );
+}
+
+
+const char *MSG_ReadBigStringForWireProfile( msg_t *msg,
+	netchanWireProfile_t profile ) {
+	static char string[BIG_INFO_STRING];
+	return MSG_ReadStringInto( msg, string, sizeof( string ),
+		profile == NETCHAN_WIRE_QL_RETAIL, true, false );
 }
 
 
 const char *MSG_ReadStringLine( msg_t *msg ) {
-	static char	string[MAX_STRING_CHARS];
-	size_t	l;
-	int	c;
-
-	l = 0;
-	do {
-		c = MSG_ReadByte( msg ); // use ReadByte so -1 is out of bounds
-		if ( c <= 0 /*c == -1 || c == 0*/ || c == '\n' || l >= sizeof(string)-1 ) {
-			break;
-		}
-		// translate all fmt spec to avoid crash bugs
-		if ( c == '%' ) {
-			c = '.';
-		} else
-		// don't allow higher ascii values
-		if ( c > 127 ) {
-			c = '.';
-		}
-		string[ l++ ] = c;
-	} while ( qtrue );
-	
-	string[ l ] = '\0';
-	
-	return string;
+	static char string[MAX_STRING_CHARS];
+	return MSG_ReadStringInto(
+		msg, string, sizeof( string ), false, true, true );
 }
 
 
@@ -720,6 +744,44 @@ int MSG_HashKey(const char *string, int maxlen) {
 	}
 	hash = (hash ^ (hash >> 10) ^ (hash >> 20));
 	return hash;
+}
+
+
+/*
+Retail Quake Live uses the original Quake Live Com_HashKey bytes for the
+usercmd checksum key. Quake III's message-local variant substitutes '.' for
+'%' and bytes with the high bit set so its hash survives legacy string
+rewrites. Applying that substitution to protocol 91 corrupts every changed
+usercmd field whenever the last acknowledged server command contains one of
+those bytes. Keep the inherited codec for Q3/ioq3 connections and make the QL
+choice explicit at the wire-profile boundary.
+*/
+int MSG_HashKeyForWireProfile( netchanWireProfile_t profile,
+	const char *string, int maxlen ) {
+	if ( profile != NETCHAN_WIRE_QL_RETAIL ) {
+		return MSG_HashKey( string, maxlen );
+	}
+	if ( !string || maxlen <= 0 ) {
+		return 0;
+	}
+
+	std::uint32_t hash = 0;
+	for ( int i = 0; i < maxlen && string[i] != '\0'; ++i ) {
+		// Retail's Win32 build hashes plain signed char values. State that
+		// contract explicitly so protocol 91 has the same result on hosts
+		// whose default char signedness differs.
+		const std::uint32_t byteValue = static_cast<unsigned char>( string[i] );
+		const int value = byteValue <= 127u
+			? static_cast<int>( byteValue )
+			: static_cast<int>( byteValue ) - 256;
+		hash += static_cast<std::uint32_t>( value ) *
+			( 119u + static_cast<std::uint32_t>( i ) );
+	}
+	const int signedHash = fnql::net::CounterAdd( 0, hash );
+	const std::uint32_t folded = hash ^
+		static_cast<std::uint32_t>( signedHash >> 10 ) ^
+		static_cast<std::uint32_t>( signedHash >> 20 );
+	return fnql::net::CounterAdd( 0, folded );
 }
 
 #ifndef DEDICATED
@@ -781,9 +843,11 @@ MSG_WriteDeltaUsercmdKey
 =====================
 */
 void MSG_WriteDeltaUsercmdKey( msg_t *msg, int key, const usercmd_t *from, const usercmd_t *to ) {
-	if ( (unsigned)(to->serverTime - from->serverTime) < 256 ) {
+	const std::uint32_t serverTimeDelta = fnql::net::CounterDistance(
+		to->serverTime, from->serverTime );
+	if ( serverTimeDelta < 256u ) {
 		MSG_WriteBits( msg, 1, 1 );
-		MSG_WriteBits( msg, to->serverTime - from->serverTime, 8 );
+		MSG_WriteBits( msg, static_cast<int>( serverTimeDelta ), 8 );
 	} else {
 		MSG_WriteBits( msg, 0, 1 );
 		MSG_WriteBits( msg, to->serverTime, 32 );
@@ -823,7 +887,8 @@ MSG_ReadDeltaUsercmdKey
 */
 void MSG_ReadDeltaUsercmdKey( msg_t *msg, int key, const usercmd_t *from, usercmd_t *to ) {
 	if ( MSG_ReadBits( msg, 1 ) ) {
-		to->serverTime = from->serverTime + MSG_ReadBits( msg, 8 );
+		to->serverTime = fnql::net::CounterAdd( from->serverTime,
+			static_cast<std::uint32_t>( MSG_ReadBits( msg, 8 ) ) );
 	} else {
 		to->serverTime = MSG_ReadBits( msg, 32 );
 	}

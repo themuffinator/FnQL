@@ -210,6 +210,7 @@ struct clientConnection_t {
 	int			serverCommandSequence;
 	int			lastExecutedServerCommand;		// last server command grabbed or executed with CL_GetServerCommand
 	char		serverCommands[MAX_RELIABLE_COMMANDS][MAX_STRING_CHARS];
+	int			serverCommandHashes[MAX_RELIABLE_COMMANDS]; // protocol hash of the unmodified wire command
 	qboolean	serverCommandsIgnore[MAX_RELIABLE_COMMANDS];
 
 	// file transfer from server

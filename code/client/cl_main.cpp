@@ -625,7 +625,9 @@ static void CL_WriteServerCommands( msg_t *msg ) {
 		for ( i = clc.demoCommandSequence + 1 ; i <= clc.serverCommandSequence; i++ ) {
 			MSG_WriteByte( msg, svc_serverCommand );
 			MSG_WriteLong( msg, i );
-			MSG_WriteString( msg, clc.serverCommands[ i & (MAX_RELIABLE_COMMANDS-1) ] );
+			MSG_WriteStringForWireProfile( msg,
+				clc.serverCommands[ i & ( MAX_RELIABLE_COMMANDS - 1 ) ],
+				clc.netchan.wireProfile );
 		}
 	}
 
@@ -675,7 +677,8 @@ static void CL_WriteGamestate( qboolean initial )
 		s = cl.gameState.stringData + cl.gameState.stringOffsets[i];
 		MSG_WriteByte( &msg, svc_configstring );
 		MSG_WriteShort( &msg, i );
-		MSG_WriteBigString( &msg, s );
+		MSG_WriteBigStringForWireProfile(
+			&msg, s, clc.netchan.wireProfile );
 	}
 
 	// baselines

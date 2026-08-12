@@ -31,6 +31,8 @@ int main() {
 		std::numeric_limits<int>::min() );
 	CHECK( CounterAdd( std::numeric_limits<int>::max(), 2u ) ==
 		std::numeric_limits<int>::min() + 1 );
+	CHECK( CounterSubtract( std::numeric_limits<int>::min(), 1u ) ==
+		std::numeric_limits<int>::max() );
 	CHECK( CounterDistance( std::numeric_limits<int>::min(),
 		std::numeric_limits<int>::max() ) == 1u );
 	CHECK( IsNewerCounter( std::numeric_limits<int>::min(),
