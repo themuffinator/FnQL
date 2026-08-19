@@ -1156,6 +1156,8 @@ int main( int argc, const char* argv[] )
 
 	while (1)
 	{
+		Sys_HandlePendingSignals();
+
 #ifdef __linux__
 		Sys_ConfigureFPU();
 #endif

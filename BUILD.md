@@ -163,6 +163,10 @@ Linux has two distinct compatibility surfaces:
 
 - Native dedicated servers load the retail `qagamei386.so` from
   `baseq3/bin.pk3`; FnQL does not build or validate the x86_64 alternative.
+- The same retail archive also contains `qagamex64.so` and the Win32
+  `qagamex86.dll`, `cgamex86.dll`, and `uix86.dll`. Native Linux i686 uses
+  `qagamei386.so`; `dlopen` cannot load PE32 DLLs, so the Linux server does not
+  rename or emulate the Windows module.
 - Retail Quake Live does not ship native Linux `cgame` or UI modules; those
   modules and the retained Awesomium WebUI runtime are Win32-only. Native Linux
   client builds are maintained engine/platform development targets, but are not
@@ -192,9 +196,13 @@ legacy X11 backend using system development packages while Meson fetches only
 missing wrap fallbacks (including the required pinned FontStash source):
 
 ```sh
+sudo dpkg --add-architecture i386
 sudo apt update
 sudo apt install gcc-multilib g++-multilib libc6-dev-i386 \
-  linux-libc-dev:i386 git meson ninja-build pkg-config python3
+  libgl-dev:i386 libx11-dev:i386 libxext-dev:i386 \
+  libxrandr-dev:i386 libxxf86dga-dev:i386 libxxf86vm-dev:i386 \
+  linux-libc-dev:i386 mesa-common-dev:i386 \
+  git glslang-tools meson ninja-build pkg-config python3
 meson setup meson/build-linux-x86 \
   --cross-file misc/meson/linux-x86.ini \
   --buildtype=debugoptimized -Dsdl=disabled -Dcurl=disabled \
@@ -207,6 +215,21 @@ For a complete i686 client build, install the corresponding `:i386` SDL3,
 OpenAL, cURL, JPEG, Ogg/Vorbis, and X11 development packages. The release
 workflow is the canonical dependency baseline when distribution package names
 differ.
+
+The bundled SDL3 fallback additionally needs its Linux platform dependencies.
+On Ubuntu 24.04, install them and exercise the same i686 path used by Linux CI:
+
+```sh
+sudo apt install libdbus-1-dev:i386 libegl-dev:i386 \
+  libpipewire-0.3-dev:i386 libudev-dev:i386 libwayland-dev:i386 \
+  libxcursor-dev:i386 libxi-dev:i386 libxkbcommon-dev:i386 wayland-protocols
+meson setup meson/build-linux-sdl-x86 \
+  --cross-file misc/meson/linux-x86.ini \
+  --force-fallback-for=sdl3,fontstash \
+  -Dbuild-server=false -Dcurl=disabled -Dogg-vorbis=false \
+  -Drenderer-dlopen=false -Drenderer-default=glx -Dsdl=enabled
+meson compile -C meson/build-linux-sdl-x86 fnql
+```
 
 Stage a build without writing into the Steam library, verify it, and then copy
 the whole flat runtime root together:
