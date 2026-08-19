@@ -50,6 +50,8 @@ class CiRegressionWorkflowTests(unittest.TestCase):
         )
 
         self.assertIn("Build bundled SDL3 i686 client", workflow)
+        self.assertIn("actions/setup-python@v6", workflow)
+        self.assertIn("python -m pip install meson==1.9.1", workflow)
         self.assertIn("libxcursor-dev:i386", workflow)
         self.assertIn("libxi-dev:i386", workflow)
         self.assertIn("--force-fallback-for=sdl3,fontstash", workflow)
