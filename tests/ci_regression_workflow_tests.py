@@ -44,6 +44,23 @@ class CiRegressionWorkflowTests(unittest.TestCase):
             workflow,
         )
 
+    def test_linux_ci_keeps_sdl3_and_cmake_on_the_i686_target(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "linux-verification.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("Build bundled SDL3 i686 client", workflow)
+        self.assertIn("libxcursor-dev:i386", workflow)
+        self.assertIn("libxi-dev:i386", workflow)
+        self.assertIn("--force-fallback-for=sdl3,fontstash", workflow)
+        self.assertIn("-Dsdl=enabled", workflow)
+        self.assertIn("meson-linux-sdl fnql", workflow)
+        self.assertIn("Build CMake i686 dedicated server", workflow)
+        self.assertIn("-DCMAKE_C_FLAGS=-m32", workflow)
+        self.assertIn("-DCMAKE_CXX_FLAGS=-m32", workflow)
+        self.assertIn("--target fnql.ded", workflow)
+        self.assertNotIn("x86_64", workflow)
+
     def test_release_source_validation_uses_recursive_pytest_discovery(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
             encoding="utf-8"

@@ -74,7 +74,11 @@ static void signal_handler( int sig )
 
 void InitSig( void )
 {
-	signal( SIGINT, SIG_IGN );
+	/* Keep interactive dedicated servers manageable from a normal terminal.
+	 * Retail's Linux signal setup does not ignore SIGINT, and treating Ctrl+C
+	 * like the existing service-stop signals gives FnQL a chance to shut down
+	 * the retail game module and server state cleanly. */
+	signal( SIGINT, signal_handler );
 	signal( SIGHUP, signal_handler );
 	signal( SIGQUIT, signal_handler );
 	signal( SIGILL, signal_handler );
