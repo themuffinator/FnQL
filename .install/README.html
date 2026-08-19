@@ -384,7 +384,7 @@
           </ol>
         </article>
       </div>
-      <p class="footer">Official releases support the Windows Win32/x86 retail client and Linux i686 dedicated server. Retail ships no native Linux client/UI modules and no macOS game, client, UI, or QVM modules, so FnQL publishes no macOS package and makes no native macOS retail-play claim.</p>
+      <p class="footer">Official releases support the Windows Win32/x86 retail client and Linux i686 dedicated server. Retail <code>bin.pk3</code> includes native <code>qagamei386.so</code> and <code>qagamex64.so</code> server modules, so the Linux server loads the i386 ELF directly rather than attempting to load the Win32 PE DLL. Retail ships no native Linux client/UI modules and no macOS game, client, UI, or QVM modules, so FnQL publishes no macOS package and makes no native macOS retail-play claim.</p>
       <p class="footer">FnQL locates conventional Steam libraries automatically. For a custom library, start it with <code>+set fs_steampath "&lt;Quake Live folder&gt;"</code>. Steam and WebUI features fail safely when optional runtime components are unavailable.</p>
       <p class="footer">To compile FnQL yourself, use the <a href="https://github.com/themuffinator/FnQL/blob/main/BUILD.md">Build Guide</a>.</p>
     </section>

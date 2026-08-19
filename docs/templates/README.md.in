@@ -108,8 +108,11 @@ Retail Quake Live ships native Linux server modules, but its client and WebUI
 modules are Win32-only. The native Linux client executable is therefore an
 engine/platform development target, not a supported retail-play path. Use the
 Win32/x86 package for retail client play and the Linux i686 package for native
-dedicated hosting. FnQL does not support or build macOS because retail ships no
-macOS game, client, UI, or QVM modules, and FnQL will not reconstruct them.
+dedicated hosting. Retail `bin.pk3` contains `qagamei386.so` and
+`qagamex64.so`; the i686 server loads the former directly and does not try to
+load or rename the Win32 PE DLLs. FnQL does not support or build macOS because
+retail ships no macOS game, client, UI, or QVM modules, and FnQL will not
+reconstruct them.
 FnQL discovers conventional Steam
 libraries on each supported OS; for a custom library use
 `+set fs_steampath "<Quake Live folder>"`. Optional Steam and WebUI services
