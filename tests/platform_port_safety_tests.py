@@ -14,9 +14,19 @@ def read(relative_path: str) -> str:
 class PlatformPortSafetyTests(unittest.TestCase):
     def test_linux_sigint_requests_a_clean_shutdown(self) -> None:
         signals = read("code/unix/linux_signals.cpp")
+        unix = read("code/unix/unix_main.cpp")
 
-        self.assertIn("signal( SIGINT, signal_handler );", signals)
+        self.assertIn("static volatile sig_atomic_t pendingShutdownSignal", signals)
+        self.assertIn("signal( SIGINT, shutdown_signal_handler );", signals)
         self.assertNotIn("signal( SIGINT, SIG_IGN );", signals)
+        handler = signals[
+            signals.index("static void shutdown_signal_handler") :
+            signals.index("static void fatal_signal_handler")
+        ]
+        self.assertIn("pendingShutdownSignal = sig;", handler)
+        self.assertNotIn("SV_Shutdown", handler)
+        self.assertNotIn("Sys_Exit", handler)
+        self.assertIn("Sys_HandlePendingSignals();", unix)
 
     def test_retail_linux_i386_module_uses_the_native_so_name(self) -> None:
         platform = read("code/qcommon/q_platform.h")
