@@ -1,7 +1,7 @@
 {
   "schema": "q3rtx.rendererrtx.shader_reflection.v1",
   "generator": "code/rendererrtx/shaders/build_shaders.py",
-  "shader_count": 88,
+  "shader_count": 89,
   "shaders": [
     {
       "symbol": "color_vert_spv",
@@ -413,6 +413,31 @@
           }
         ],
         "push_constants": []
+      }
+    },
+    {
+      "symbol": "menu_blur_frag_spv",
+      "source": "menu_blur.frag",
+      "stage": "frag",
+      "defines": [],
+      "byte_size": 1532,
+      "reflection": {
+        "descriptor_bindings": [
+          {
+            "name": "texture0",
+            "set": 0,
+            "binding": 0,
+            "storage_class": "UniformConstant",
+            "descriptor_class": "combined_image_sampler",
+            "descriptor_count": 1
+          }
+        ],
+        "push_constants": [
+          {
+            "name": "pc",
+            "size_bytes": 16
+          }
+        ]
       }
     },
     {
