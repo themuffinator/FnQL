@@ -12,6 +12,44 @@ def read(relative_path: str) -> str:
 
 
 class PlatformPortSafetyTests(unittest.TestCase):
+    def test_linux_sigint_requests_a_clean_shutdown(self) -> None:
+        signals = read("code/unix/linux_signals.cpp")
+        unix = read("code/unix/unix_main.cpp")
+
+        self.assertIn("static volatile sig_atomic_t pendingShutdownSignal", signals)
+        self.assertIn("signal( SIGINT, shutdown_signal_handler );", signals)
+        self.assertNotIn("signal( SIGINT, SIG_IGN );", signals)
+        handler = signals[
+            signals.index("static void shutdown_signal_handler") :
+            signals.index("static void fatal_signal_handler")
+        ]
+        self.assertIn("pendingShutdownSignal = sig;", handler)
+        self.assertNotIn("SV_Shutdown", handler)
+        self.assertNotIn("Sys_Exit", handler)
+        self.assertIn("Sys_HandlePendingSignals();", unix)
+
+    def test_retail_linux_i386_module_uses_the_native_so_name(self) -> None:
+        platform = read("code/qcommon/q_platform.h")
+        vm = read("code/qcommon/vm.c")
+        build_guide = read("BUILD.md")
+
+        unix_platform = platform[
+            platform.index("#else // !defined _WIN32") :
+            platform.index("// ============================== Linux")
+        ]
+        self.assertIn('#define DLL_EXT ".so"', unix_platform)
+        self.assertIn(
+            '#if defined (__i386__)\n#define ARCH_STRING "i386"',
+            unix_platform,
+        )
+        self.assertIn(
+            'Com_sprintf( filename, sizeof( filename ), "%s" ARCH_STRING DLL_EXT, name );',
+            vm,
+        )
+        self.assertIn("qagamei386.so", build_guide)
+        self.assertIn("qagamex64.so", build_guide)
+        self.assertIn("cannot load PE32 DLLs", build_guide)
+
     def test_linux_vulkan_and_x11_types_are_width_safe(self) -> None:
         qvk = read("code/unix/linux_qvk.cpp")
         x11 = read("code/unix/linux_glimp.cpp")
@@ -296,11 +334,22 @@ class PlatformPortSafetyTests(unittest.TestCase):
         self.assertIn("-Dbuild-server=false", workflow)
         self.assertIn("-Drenderers=glx,vk,rtx", workflow)
         self.assertIn("fnql_${renderer}_x86.so", workflow)
+        self.assertIn("Build bundled SDL3 i686 client", workflow)
+        self.assertIn("libxcursor-dev:i386", workflow)
+        self.assertIn("libxi-dev:i386", workflow)
+        self.assertIn("--force-fallback-for=sdl3,fontstash", workflow)
+        self.assertIn("-Dsdl=enabled", workflow)
+        self.assertIn("meson-linux-sdl fnql", workflow)
+        self.assertIn("Build CMake i686 dedicated server", workflow)
+        self.assertIn("-DCMAKE_C_FLAGS=-m32", workflow)
+        self.assertIn("-DCMAKE_CXX_FLAGS=-m32", workflow)
+        self.assertIn("cmake-linux-server --parallel 2 --target fnql.ded", workflow)
         self.assertIn("Intel 80386", workflow)
         self.assertNotIn("x86_64", workflow)
         self.assertNotIn("ELF 64-bit", workflow)
         self.assertIn("c_args = ['-m32']", cross_file)
         self.assertIn("cpp_args = ['-m32']", cross_file)
+        self.assertIn("subsystem = 'linux'", cross_file)
         self.assertIn("cpu_family = 'x86'", cross_file)
         self.assertIn("cpu = 'i686'", cross_file)
         self.assertIn("/usr/lib/i386-linux-gnu/pkgconfig", cross_file)
