@@ -57,6 +57,7 @@ char *strlwr (char *s);
 
 // signals.c
 void InitSig(void);
+void Sys_HandlePendingSignals(void);
 
 #ifdef __cplusplus
 }

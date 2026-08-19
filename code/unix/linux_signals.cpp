@@ -36,10 +36,17 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #endif
 
 static qboolean signalcaught = qfalse;
+static volatile sig_atomic_t pendingShutdownSignal = 0;
 
 extern void NORETURN Sys_Exit( int code );
 
-static void signal_handler( int sig )
+static void shutdown_signal_handler( int sig )
+{
+	pendingShutdownSignal = sig;
+}
+
+
+static void fatal_signal_handler( int sig )
 {
 	char msg[32];
 
@@ -72,20 +79,43 @@ static void signal_handler( int sig )
 }
 
 
+void Sys_HandlePendingSignals( void )
+{
+	const int sig = pendingShutdownSignal;
+	char msg[32];
+
+	if ( sig == 0 )
+	{
+		return;
+	}
+
+	pendingShutdownSignal = 0;
+	printf( "Received signal %d, exiting...\n", sig );
+	Com_sprintf( msg, sizeof( msg ), "Signal caught (%d)", sig );
+	VM_Forced_Unload_Start();
+#ifndef DEDICATED
+	CL_Shutdown( msg, qtrue );
+#endif
+	SV_Shutdown( msg );
+	VM_Forced_Unload_Done();
+	Sys_Exit( 0 );
+}
+
+
 void InitSig( void )
 {
 	/* Keep interactive dedicated servers manageable from a normal terminal.
 	 * Retail's Linux signal setup does not ignore SIGINT, and treating Ctrl+C
 	 * like the existing service-stop signals gives FnQL a chance to shut down
 	 * the retail game module and server state cleanly. */
-	signal( SIGINT, signal_handler );
-	signal( SIGHUP, signal_handler );
-	signal( SIGQUIT, signal_handler );
-	signal( SIGILL, signal_handler );
-	signal( SIGTRAP, signal_handler );
-	signal( SIGIOT, signal_handler );
-	signal( SIGBUS, signal_handler );
-	signal( SIGFPE, signal_handler );
-	signal( SIGSEGV, signal_handler );
-	signal( SIGTERM, signal_handler );
+	signal( SIGINT, shutdown_signal_handler );
+	signal( SIGHUP, shutdown_signal_handler );
+	signal( SIGQUIT, shutdown_signal_handler );
+	signal( SIGTERM, shutdown_signal_handler );
+	signal( SIGILL, fatal_signal_handler );
+	signal( SIGTRAP, fatal_signal_handler );
+	signal( SIGIOT, fatal_signal_handler );
+	signal( SIGBUS, fatal_signal_handler );
+	signal( SIGFPE, fatal_signal_handler );
+	signal( SIGSEGV, fatal_signal_handler );
 }
