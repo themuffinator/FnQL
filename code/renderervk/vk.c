@@ -480,26 +480,28 @@ static VkAccessFlags2 vk_access_flags2( VkAccessFlags flags )
 }
 
 
-/*
-static VkFlags get_composite_alpha( VkCompositeAlphaFlagsKHR flags )
+// compositeAlpha must name a single bit out of VkSurfaceCapabilitiesKHR::
+// supportedCompositeAlpha. Hardcoding OPAQUE is invalid usage on a surface that
+// does not report it, and ICDs are not required to reject invalid usage.
+static VkCompositeAlphaFlagBitsKHR get_composite_alpha( VkCompositeAlphaFlagsKHR flags )
 {
 	const VkCompositeAlphaFlagBitsKHR compositeFlags[] = {
 		VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+		VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
 		VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
-		VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
-		VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR
+		VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR
 	};
 	int i;
 
-	for ( i = 1; i < ARRAY_LEN( compositeFlags ); i++ ) {
+	for ( i = 0; i < ARRAY_LEN( compositeFlags ); i++ ) {
 		if ( flags & compositeFlags[i] ) {
 			return compositeFlags[i];
 		}
 	}
 
-	return compositeFlags[0];
+	// nothing reported - keep the historic value
+	return VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 }
-*/
 
 
 static void vk_wait_upload_context( vk_upload_context_t *context, const char *location )
@@ -1382,9 +1384,28 @@ static void vk_create_swapchain( VkPhysicalDevice physical_device, VkDevice devi
 	VK_CHECK( qvkGetPhysicalDeviceSurfaceCapabilitiesKHR( physical_device, surface, &surface_caps ) );
 
 	image_extent = surface_caps.currentExtent;
-	if ( image_extent.width == 0xffffffff && image_extent.height == 0xffffffff ) {
-		image_extent.width = MIN( surface_caps.maxImageExtent.width, MAX( surface_caps.minImageExtent.width, (uint32_t) glConfig.vidWidth ) );
-		image_extent.height = MIN( surface_caps.maxImageExtent.height, MAX( surface_caps.minImageExtent.height, (uint32_t) glConfig.vidHeight ) );
+	if ( ( image_extent.width == 0xffffffff && image_extent.height == 0xffffffff ) ||
+		image_extent.width == 0 || image_extent.height == 0 ) {
+		// 0xffffffff: the surface takes its size from the swapchain instead.
+		// 0: the window is minimized or otherwise not drawable right now. A zero
+		// imageExtent has no defined behaviour and the Windows AMD ICD - which
+		// presents through DXGI/D3D12 - faults inside its own present path rather
+		// than failing the call, so never hand one over. Fall back to the last
+		// known drawable size; vk_restart_swapchain() picks up the real one once
+		// the window is restored.
+		image_extent.width = (uint32_t) ( gls.windowWidth > 0 ? gls.windowWidth : glConfig.vidWidth );
+		image_extent.height = (uint32_t) ( gls.windowHeight > 0 ? gls.windowHeight : glConfig.vidHeight );
+	}
+
+	// imageExtent must stay inside [minImageExtent..maxImageExtent]
+	image_extent.width = MIN( surface_caps.maxImageExtent.width, MAX( surface_caps.minImageExtent.width, image_extent.width ) );
+	image_extent.height = MIN( surface_caps.maxImageExtent.height, MAX( surface_caps.minImageExtent.height, image_extent.height ) );
+
+	if ( image_extent.width == 0 || image_extent.height == 0 ) {
+		ri.Error( ERR_FATAL, "create_swapchain: surface has no drawable extent (current %ux%u, max %ux%u)",
+			surface_caps.currentExtent.width, surface_caps.currentExtent.height,
+			surface_caps.maxImageExtent.width, surface_caps.maxImageExtent.height );
+		return;
 	}
 
 	vk.clearAttachment = qtrue;
@@ -1461,9 +1482,15 @@ static void vk_create_swapchain( VkPhysicalDevice physical_device, VkDevice devi
 		image_count = MIN( MIN( image_count, surface_caps.maxImageCount ), MAX_SWAPCHAIN_IMAGES );
 	}
 
+	// the clamps above must not push the request below what the surface needs
+	if ( image_count < surface_caps.minImageCount ) {
+		image_count = surface_caps.minImageCount;
+	}
+
 	if ( verbose ) {
-		ri.Printf( PRINT_ALL, "...selected presentation mode: %s, image count: %i, format: %s, %s%s\n",
-			pmode_to_str( present_mode ), image_count, vk_format_string( surface_format.format ),
+		ri.Printf( PRINT_ALL, "...selected presentation mode: %s, image count: %i, extent: %ux%u, format: %s, %s%s\n",
+			pmode_to_str( present_mode ), image_count, image_extent.width, image_extent.height,
+			vk_format_string( surface_format.format ),
 			vk_color_space_string( surface_format.colorSpace ), vk.hdrDisplayActive ? " (native HDR)" : "" );
 	}
 
@@ -1479,14 +1506,17 @@ static void vk_create_swapchain( VkPhysicalDevice physical_device, VkDevice devi
 	desc.imageArrayLayers = 1;
 	desc.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 	if ( !vk.fboActive ) {
-		desc.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+		// request only what the surface reports: the TRANSFER_DST check above
+		// merely warns and disables r_clear, it must not leave an unsupported
+		// usage bit in the create info
+		desc.imageUsage |= ( VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT ) &
+			surface_caps.supportedUsageFlags;
 	}
 	desc.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	desc.queueFamilyIndexCount = 0;
 	desc.pQueueFamilyIndices = NULL;
 	desc.preTransform = surface_caps.currentTransform;
-	//desc.compositeAlpha = get_composite_alpha( surface_caps.supportedCompositeAlpha );
-	desc.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+	desc.compositeAlpha = get_composite_alpha( surface_caps.supportedCompositeAlpha );
 	desc.presentMode = present_mode;
 	desc.clipped = VK_TRUE;
 	desc.oldSwapchain = VK_NULL_HANDLE;
@@ -3520,6 +3550,18 @@ static void init_vulkan_library( void )
 	uint32_t device_count;
 	int device_index, i;
 	VkResult res;
+
+	// A previous vk_initialize() can die part-way through - the Win32 exception
+	// filter turns a driver fault into ERR_DROP, and Com_ErrorHandler restarts
+	// the renderer with the window (and therefore vk_instance/vk_surface) still
+	// alive. glConfig.vidWidth is non-zero by then, so InitOpenGL() skips
+	// VKimp_Init and calls straight back in here. Zeroing vk would drop the old
+	// device on the floor and leave its swapchain bound to the surface, and the
+	// next vkCreateSwapchainKHR() would be creating a second swapchain for the
+	// same window - undefined behaviour that crashes instead of failing.
+	if ( vk.device != VK_NULL_HANDLE ) {
+		vk_shutdown( REF_KEEP_CONTEXT ); // keeps vk_instance and vk_surface
+	}
 
 	Com_Memset( &vk, 0, sizeof( vk ) );
 	vk_current_render_pass = VK_NULL_HANDLE;
