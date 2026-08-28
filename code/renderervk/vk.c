@@ -3551,18 +3551,6 @@ static void init_vulkan_library( void )
 	int device_index, i;
 	VkResult res;
 
-	// A previous vk_initialize() can die part-way through - the Win32 exception
-	// filter turns a driver fault into ERR_DROP, and Com_ErrorHandler restarts
-	// the renderer with the window (and therefore vk_instance/vk_surface) still
-	// alive. glConfig.vidWidth is non-zero by then, so InitOpenGL() skips
-	// VKimp_Init and calls straight back in here. Zeroing vk would drop the old
-	// device on the floor and leave its swapchain bound to the surface, and the
-	// next vkCreateSwapchainKHR() would be creating a second swapchain for the
-	// same window - undefined behaviour that crashes instead of failing.
-	if ( vk.device != VK_NULL_HANDLE ) {
-		vk_shutdown( REF_KEEP_CONTEXT ); // keeps vk_instance and vk_surface
-	}
-
 	Com_Memset( &vk, 0, sizeof( vk ) );
 	vk_current_render_pass = VK_NULL_HANDLE;
 	vk_current_render_pass_label[0] = '\0';
@@ -6998,6 +6986,19 @@ void vk_initialize( void )
 	uint32_t patch;
 	uint32_t maxSize;
 	uint32_t i;
+
+	// A previous vk_initialize() can die part-way through - the Win32 exception
+	// filter turns a driver fault into ERR_DROP and Com_ErrorHandler restarts the
+	// renderer with the window (and therefore vk_instance/vk_surface) still
+	// alive. glConfig.vidWidth is non-zero by then, so InitOpenGL() skips
+	// VKimp_Init and calls straight back in here, where init_vulkan_library()
+	// would zero vk - dropping the old device on the floor and leaving its
+	// swapchain bound to the surface. The next vkCreateSwapchainKHR() would then
+	// be creating a second swapchain for the same window: undefined behaviour
+	// that crashes instead of failing.
+	if ( vk.device != VK_NULL_HANDLE ) {
+		vk_shutdown( REF_KEEP_CONTEXT ); // keeps vk_instance and vk_surface
+	}
 
 	init_vulkan_library();
 
