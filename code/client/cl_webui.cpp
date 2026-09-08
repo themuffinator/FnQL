@@ -25,6 +25,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../server/server.h"
 #include "awesomium_backend_win32.hpp"
 #include "webui_backend.hpp"
+#include "webui_native_request.hpp"
+#include "webui_request_schedule.hpp"
 #include "../platform/fnql_steam.h"
 #include "../platform/fnql_steam_stats.hpp"
 
@@ -63,9 +65,6 @@ BackendHost &ClientBackendHost() noexcept {
 #define CL_WEB_EVENT_NAME_LENGTH 128
 #define CL_WEB_EVENT_PAYLOAD_LENGTH 4096
 #define CL_WEB_NATIVE_REQUESTS_PER_FRAME 8
-#define CL_WEB_NATIVE_REQUEST_BUSY_POLL_FRAMES 1
-#define CL_WEB_NATIVE_REQUEST_IDLE_POLL_FRAMES 15
-#define CL_WEB_NATIVE_REQUEST_LOADING_POLL_FRAMES 30
 #define CL_WEB_MAX_RESOURCE_BYTES ( 64 * 1024 * 1024 )
 #define CL_WEB_BRIDGE_RETRY_FRAMES 30
 #define CL_WEB_SNAPSHOT_RETRY_FRAMES 30
@@ -132,7 +131,6 @@ typedef struct {
 	int			eventHead;
 	int			lastReplayedEventSequence;
 	int			frameSequence;
-	int			nextNativeRequestPollFrame;
 	int			nextBridgeRetryFrame;
 	int			nextNativeStateRetryFrame;
 	int			nextConfigSnapshotRetryFrame;
@@ -192,6 +190,7 @@ typedef struct {
 } clAdvertisementBridgeState_t;
 
 static clWebUiState_t cl_webui;
+static fnql::webui::RequestSchedule cl_webRequestSchedule;
 static clAdvertisementBridgeState_t cl_advertisementBridge;
 
 void CL_WebHost_InvalidateFactoryCatalog( void ) {
@@ -1003,7 +1002,7 @@ static void CL_WebHost_InvalidateDocumentSnapshots( void ) {
 	cl_webui.fnqlOverlayAvailable = qfalse;
 	cl_webui.fnqlOverlayInjected = qfalse;
 	cl_webui.nextBridgeRetryFrame = 0;
-	cl_webui.nextNativeRequestPollFrame = 0;
+	cl_webRequestSchedule.Reset();
 	cl_webui.nextNativeStateRetryFrame = 0;
 	cl_webui.nativeStateSynced = qfalse;
 	CL_WebHost_InvalidateConfigSnapshot();
@@ -1934,6 +1933,7 @@ void CL_WebHost_Init( void ) {
 
 	CL_WebUI_FreeSurfaceBuffer();
 	Com_Memset( &cl_webui, 0, sizeof( cl_webui ) );
+	cl_webRequestSchedule.Reset();
 	cl_webui.initialized = qtrue;
 	cl_webui.commandsRegistered = commandsRegistered;
 	cl_webui.appActive = qtrue;
@@ -2022,8 +2022,9 @@ void CL_WebHost_Frame( void ) {
 					CL_WebHost_EnsureStartupBridge();
 					CL_WebHost_SyncNativeSnapshots( qfalse );
 				}
-				// Preserve the lightweight state/request handoff while hidden.
-				// Retail preload code can queue commands during a transition.
+				// Hidden retail pages still send lobby/connection commands. The
+				// request notification path keeps those alive without waiting on
+				// the browser child process just to discover an empty queue.
 				CL_WebHost_UpdateBrowserNativeState();
 				CL_WebHost_PumpNativeJavascriptRequests();
 			}
@@ -2448,9 +2449,14 @@ static void CL_WebHost_BuildStartupBridgeScript( char *buffer, size_t bufferSize
 		"var pendingNativeFactories={};"
 		"var config={appId:" STEAMPATH_APPID ",steamId:'0',playerName:'',playerAvatar:'',playerAvatarUrl:'',playerProfileUrl:'',playerProfile:{id:'0',name:'',avatar:'',avatarUrl:'',profileUrl:''},onlineServicesMode:'Unavailable',onlineServicesPolicy:'compatibility-unavailable',matchmakingProvider:'Unavailable',matchmakingPolicy:'Steamworks bridge unavailable',workshopProvider:'Unavailable',workshopPolicy:'Steamworks bridge unavailable',cvars:{},binds:[]};"
 		"var nativeQueue=window.__qlr_native_requests=window.__qlr_native_requests||[];"
+		"var nativeWakePending=false,nativeWakeSequence=0,nativeWakeRetry=0;"
+		"var wakeNative=function(){if(nativeWakePending||(!nativeQueue.length&&nativeWakeSequence)){return;}clearTimeout(nativeWakeRetry);nativeWakeRetry=0;nativeWakePending=true;"
+		"var finished=false,timer=0;var done=function(){if(finished){return;}finished=true;clearTimeout(timer);nativeWakePending=false;if(nativeQueue.length){nativeWakeRetry=setTimeout(wakeNative,100);}};"
+		"try{var r=new XMLHttpRequest();r.open('GET','asset://fnqlbridge/pending/'+new Date().getTime()+'-'+(++nativeWakeSequence),true);r.onload=r.onerror=r.onabort=done;timer=setTimeout(function(){done();r.abort();},1000);r.send(null);}catch(e){done();}};"
+		"wakeNative();"
 		"var fileExistsCache={};var cursorPosition={x:0,y:0};var clipboardText='';var clipboardPrimed=false;var mapPrimed=false;var factoryPrimed=false;var demoList=[];var demoPrimed=false;var friendList=[];var friendPrimed=false;var ugcList=[];var ugcPrimed=false;var nativeState={pakPresent:false,gameRunning:false};"
 		"var canon=function(n){return String(n||'').toLowerCase();};"
-		"var queue=function(kind,payload){try{nativeQueue.push(String(kind||'')+'\\n'+String(payload||''));return true;}catch(e){return false;}};"
+		"var queue=function(kind,payload){try{nativeQueue.push(String(kind||'')+'\\n'+String(payload||''));wakeNative();return true;}catch(e){return false;}};"
 		"var queueSocial=function(kind,payload){return queue('social.'+String(kind||''),String(payload||''));};"
 		"var hasOwn=function(o,k){return Object.prototype.hasOwnProperty.call(o,k);};"
 		"var putOwn=function(o,k,v){Object.defineProperty(o,k,{value:v,writable:true,enumerable:true,configurable:true});return v;};"
@@ -6017,6 +6023,22 @@ cleanup:
 	if ( members ) Z_Free( members );
 }
 
+static void CL_WebHost_NotifyAvatarAvailable( uint64_t steamId ) {
+	if ( !steamId ) {
+		return;
+	}
+	// The retail callback identifies the player, not a browser URL. Wake all
+	// supported sizes and the unsized (large) alias without fetching pixels in
+	// the Steam callback or disturbing pending avatars for other players.
+	static const char *const sizes[] = { "", "small/", "medium/", "large/" };
+	for ( const char *size : sizes ) {
+		char path[96];
+		Com_sprintf( path, sizeof( path ), "asset://steam/avatar/%s%llu",
+			size, static_cast<unsigned long long>( steamId ) );
+		fnql::webui::ClientBackendHost().NotifyResourceAvailable( path );
+	}
+}
+
 static void CL_Steam_OnProviderEvent( const fnqlSteamEvent_t *event, void *context ) {
 	char payload[CL_WEB_EVENT_PAYLOAD_LENGTH];
 	(void)context;
@@ -6027,6 +6049,9 @@ static void CL_Steam_OnProviderEvent( const fnqlSteamEvent_t *event, void *conte
 	switch ( event->type ) {
 		case FNQL_STEAM_EVENT_PROVIDER_READY:
 		case FNQL_STEAM_EVENT_PROVIDER_STOPPED:
+			if ( event->type == FNQL_STEAM_EVENT_PROVIDER_READY ) {
+				fnql::webui::ClientBackendHost().NotifyResourceAvailable( {} );
+			}
 			// Provider availability changes the service labels and the source
 			// of the projected friend list. Coalesce the callbacks into one
 			// refresh on the next visible WebUI frame.
@@ -6269,6 +6294,7 @@ static void CL_Steam_OnProviderEvent( const fnqlSteamEvent_t *event, void *conte
 			break;
 		case FNQL_STEAM_EVENT_AVATAR_IMAGE_LOADED:
 			CL_InvalidateAvatarImageHandle( event->subject_id );
+			CL_WebHost_NotifyAvatarAvailable( event->subject_id );
 			Com_sprintf( payload, sizeof( payload ),
 				"{\"steamId\":\"%llu\",\"width\":%u,\"height\":%u}",
 				(unsigned long long)event->subject_id, event->flags & 0xffffu,
@@ -6297,6 +6323,7 @@ static void CL_Steam_OnProviderEvent( const fnqlSteamEvent_t *event, void *conte
 			if ( event->type == FNQL_STEAM_EVENT_PERSONA_STATE_CHANGED ) {
 				if ( event->flags & 0x40u ) {
 					CL_InvalidateAvatarImageHandle( event->subject_id );
+					CL_WebHost_NotifyAvatarAvailable( event->subject_id );
 				}
 				Com_sprintf( payload, sizeof( payload ),
 					"{\"id\":\"%llu\",\"state\":%u,\"friend\":%s}",
@@ -6998,22 +7025,33 @@ static void CL_WebHost_ProcessNativeJavascriptRequest( const char *request ) {
 }
 
 static void CL_WebHost_PumpNativeJavascriptRequests( void ) {
-	qboolean handledRequest;
-
 	if ( !CL_WebHost_HasLiveView() ) {
 		return;
 	}
 
-	if ( cl_webui.frameSequence < cl_webui.nextNativeRequestPollFrame ) {
+	auto &host = fnql::webui::ClientBackendHost();
+	const auto status = host.Status();
+	const bool notifications = fnql::webui::HasCapability(
+		host.Descriptor().capabilities,
+		fnql::webui::Capability::NativeRequestNotifications );
+	const int64_t now = Sys_Microseconds();
+	if ( !cl_webRequestSchedule.ShouldPoll( now,
+		notifications && status.nativeRequestNotificationsReady,
+		notifications && status.nativeRequestsPending ) ) {
 		return;
+	}
+	// Acknowledge before draining: a callback received during a script read
+	// must remain pending for the following frame, even if this drain ends.
+	if ( notifications && status.nativeRequestsPending ) {
+		CL_WebUI_RecordBackendResult( host.AcknowledgeNativeRequests() );
 	}
 
 	// Retail can queue SendGameCommand("quit") from the preload shell while the
 	// final document is still loading. The native request queue remains safe to
 	// drain during that handoff; snapshot/live-event synchronization is gated
 	// separately.
-	handledRequest = qfalse;
-	for ( int i = 0; i < CL_WEB_NATIVE_REQUESTS_PER_FRAME; ++i ) {
+	int consumed = 0;
+	for ( ; consumed < CL_WEB_NATIVE_REQUESTS_PER_FRAME; ++consumed ) {
 		char request[MAX_STRING_CHARS];
 
 		if ( !CL_Awesomium_PopJavascriptRequest( request, sizeof( request ) ) ) {
@@ -7022,12 +7060,10 @@ static void CL_WebHost_PumpNativeJavascriptRequests( void ) {
 
 		if ( request[0] ) {
 			CL_WebHost_ProcessNativeJavascriptRequest( request );
-			handledRequest = qtrue;
 		}
 	}
 
-	cl_webui.nextNativeRequestPollFrame = cl_webui.frameSequence +
-		( handledRequest ? CL_WEB_NATIVE_REQUEST_BUSY_POLL_FRAMES : CL_WEB_NATIVE_REQUEST_IDLE_POLL_FRAMES );
+	cl_webRequestSchedule.DidPoll( now, consumed == CL_WEB_NATIVE_REQUESTS_PER_FRAME );
 }
 
 static void CL_WebView_DispatchLiveEvent( const char *name, const char *payload ) {
@@ -8057,109 +8093,32 @@ qboolean CL_Awesomium_ExecuteJavascriptInteger( const char *script, const char *
 }
 
 qboolean CL_Awesomium_PopJavascriptRequest( char *buffer, int bufferSize ) {
-	int length;
-	int i;
-	int outputLength = 0;
-
 	if ( buffer && bufferSize > 0 ) {
 		buffer[0] = '\0';
 	}
-
 	if ( !buffer || bufferSize <= 0 ) {
 		return qfalse;
 	}
 
-	if ( !CL_Awesomium_ExecuteJavascriptInteger(
-		"(function(){var q=window.__qlr_native_requests||[];if(!q.length){return -1;}window.__qlr_native_read=String(q.shift());return window.__qlr_native_read.length;})()",
-		"",
-		&length ) ) {
+	static_assert( MAX_STRING_CHARS == fnql::webui::kNativeRequestBytes,
+		"native request transport must match the engine command limit" );
+	fnql::webui::BackendHost &host = fnql::webui::ClientBackendHost();
+	if ( !host.IsRunning() ) {
 		return qfalse;
 	}
-
-	if ( length < 0 ) {
+	std::array<char, fnql::webui::kNativeRequestTransportCapacity> encoded{};
+	const fnql::webui::StringScriptResult scriptResult = host.EvaluateString(
+		{ fnql::webui::kPopNativeRequestScript, "" }, encoded.data(), encoded.size() );
+	if ( !CL_WebUI_RecordBackendResult( scriptResult.result ) ) {
 		return qfalse;
 	}
-
-	const auto rejectRequest = [buffer]( const char *reason ) {
-		buffer[0] = '\0';
-		(void)CL_Awesomium_ExecuteJavascriptInteger(
-			"(function(){window.__qlr_native_read='';return 0;})()", "", nullptr );
-		CL_WebUI_SetLastError( reason,
-			static_cast<int>( fnql::webui::BackendError::InvalidArgument ) );
+	const fnql::webui::NativeRequestResult request = fnql::webui::DecodeNativeRequest(
+		std::string_view( encoded.data(), scriptResult.length ),
+		buffer, static_cast<std::size_t>( bufferSize ) );
+	if ( !CL_WebUI_RecordBackendResult( request.result ) ) {
 		return qfalse;
-	};
-	const auto readCodeUnit = []( int index, int *codeUnit ) {
-		char script[160];
-		Com_sprintf(
-			script,
-			sizeof( script ),
-			"(function(){var s=window.__qlr_native_read||'';return s.charCodeAt(%d)||0;})()",
-			index
-		);
-		return CL_Awesomium_ExecuteJavascriptInteger( script, "", codeUnit ) != qfalse;
-	};
-
-	if ( length >= bufferSize ) {
-		return rejectRequest( "WebUI native request exceeded the bridge buffer" );
 	}
-
-	for ( i = 0; i < length; ++i ) {
-		int codeUnit;
-		std::uint32_t scalar;
-		unsigned char encoded[4];
-		int encodedLength;
-
-		if ( !readCodeUnit( i, &codeUnit ) ) {
-			buffer[0] = '\0';
-			return qfalse;
-		}
-		if ( codeUnit <= 0 || codeUnit > 0xffff ) {
-			return rejectRequest( "WebUI native request contains an invalid UTF-16 code unit" );
-		}
-
-		scalar = static_cast<std::uint32_t>( codeUnit );
-		if ( scalar >= 0xd800u && scalar <= 0xdbffu ) {
-			int lowSurrogate;
-			if ( ++i >= length || !readCodeUnit( i, &lowSurrogate )
-				|| lowSurrogate < 0xdc00 || lowSurrogate > 0xdfff ) {
-				return rejectRequest( "WebUI native request contains malformed UTF-16" );
-			}
-			scalar = 0x10000u + ( ( scalar - 0xd800u ) << 10u )
-				+ ( static_cast<std::uint32_t>( lowSurrogate ) - 0xdc00u );
-		} else if ( scalar >= 0xdc00u && scalar <= 0xdfffu ) {
-			return rejectRequest( "WebUI native request contains malformed UTF-16" );
-		}
-
-		if ( scalar <= 0x7fu ) {
-			encoded[0] = static_cast<unsigned char>( scalar );
-			encodedLength = 1;
-		} else if ( scalar <= 0x7ffu ) {
-			encoded[0] = static_cast<unsigned char>( 0xc0u | ( scalar >> 6u ) );
-			encoded[1] = static_cast<unsigned char>( 0x80u | ( scalar & 0x3fu ) );
-			encodedLength = 2;
-		} else if ( scalar <= 0xffffu ) {
-			encoded[0] = static_cast<unsigned char>( 0xe0u | ( scalar >> 12u ) );
-			encoded[1] = static_cast<unsigned char>( 0x80u | ( ( scalar >> 6u ) & 0x3fu ) );
-			encoded[2] = static_cast<unsigned char>( 0x80u | ( scalar & 0x3fu ) );
-			encodedLength = 3;
-		} else {
-			encoded[0] = static_cast<unsigned char>( 0xf0u | ( scalar >> 18u ) );
-			encoded[1] = static_cast<unsigned char>( 0x80u | ( ( scalar >> 12u ) & 0x3fu ) );
-			encoded[2] = static_cast<unsigned char>( 0x80u | ( ( scalar >> 6u ) & 0x3fu ) );
-			encoded[3] = static_cast<unsigned char>( 0x80u | ( scalar & 0x3fu ) );
-			encodedLength = 4;
-		}
-
-		if ( outputLength > bufferSize - 1 - encodedLength ) {
-			return rejectRequest( "WebUI native request exceeds the UTF-8 bridge buffer" );
-		}
-		Com_Memcpy( buffer + outputLength, encoded, encodedLength );
-		outputLength += encodedLength;
-	}
-
-	buffer[outputLength] = '\0';
-	CL_Awesomium_ExecuteJavascript( "(function(){window.__qlr_native_read='';})()", "" );
-	return qtrue;
+	return request.hasRequest ? qtrue : qfalse;
 }
 
 qboolean CL_Awesomium_SetZoom( int zoomPercent ) {

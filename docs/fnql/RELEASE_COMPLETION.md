@@ -23,6 +23,18 @@ only planned.
 
 ## Ready For Changelog
 
+- [x] Make pending WebUI avatars use a steady-clock retry backoff and immediate
+  availability hints from Steam, with four distinct image paths per frame.
+  Duplicate requests share provider/PNG work and successful buffers; navigation
+  clears abandoned requests and overflow completes with an unavailable image.
+  See [avatar resource scheduling](WEBUI_BACKEND.md#pending-avatar-resources).
+- [x] Remove idle synchronous WebUI request polling after an asynchronous
+  notification handshake, and replace per-character browser IPC with one
+  bounded request transfer. Preserve hidden lobby/connection commands, preload
+  requests, per-frame limits, retries, and Unicode/buffer validation. An
+  offscreen retail x86 probe verifies the callback and string-result ABI;
+  deterministic scheduling and JavaScript tests cover idle and failure paths.
+  See [the investigation and validation](WEBUI_BACKEND.md#native-request-scheduling-and-stutter-investigation).
 - [x] Usercmd and input delivery is hardened against the intermittent lost
   transitions and vertical view kicks found in the end-to-end audit. Relative
   mouse motion collected while usercmd sampling is suspended is discarded

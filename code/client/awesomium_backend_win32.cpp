@@ -14,6 +14,7 @@ version.
 
 #include "awesomium_backend_win32.hpp"
 #include "webui_backend.hpp"
+#include "webui_resource_queue.hpp"
 
 #if defined( _WIN32 ) && ( defined( _M_IX86 ) || defined( __i386__ ) )
 
@@ -46,7 +47,9 @@ public:
 			kBackendInterfaceVersion,
 			"Retail Awesomium 1.7",
 			Capability::SoftwareSurface | Capability::IntegerScriptResult
-				| Capability::TransparentView | Capability::ResourceRequests,
+				| Capability::StringScriptResult
+				| Capability::TransparentView | Capability::ResourceRequests
+				| Capability::NativeRequestNotifications,
 			true
 		};
 	}
@@ -131,6 +134,9 @@ public:
 				return Fail( BackendError::ResourceUnavailable,
 					"could not allocate an Awesomium WebURL" );
 			}
+			CancelPendingResources();
+			status_.nativeRequestsPending = false;
+			status_.nativeRequestNotificationsReady = false;
 			imports_.webViewLoadUrl( view_, urlObject );
 			imports_.deleteWebUrl( urlObject );
 			status_.loading = true;
@@ -207,6 +213,57 @@ public:
 		}
 	}
 
+	StringScriptResult EvaluateString( const ScriptRequest &request,
+		char *buffer, std::size_t capacity ) noexcept override {
+		if ( !buffer || capacity == 0 ) {
+			return { Fail( BackendError::InvalidArgument,
+				"invalid string script destination" ), 0 };
+		}
+		buffer[0] = '\0';
+		try {
+			const std::wstring source = ToWide( request.source );
+			const std::wstring frame = ToWide( request.frame );
+			if ( source.empty() ) {
+				return { Fail( BackendError::InvalidArgument,
+					"could not convert JavaScript to UTF-16" ), 0 };
+			}
+			void *value = imports_.webViewExecuteJavascriptWithResult(
+				view_, source.c_str(), frame.c_str() );
+			if ( !value ) {
+				return { Fail( BackendError::OperationFailed,
+					"Awesomium returned no JavaScript result" ), 0 };
+			}
+			// The retail x86 _Awe_JSValue_ToString@4 export invokes the
+			// registered WString callback and returns its borrowed pointer.
+			// Verify the bounded callback completed before consuming its data.
+			returnedStringCaptured_ = false;
+			returnedStringTruncated_ = false;
+			const wchar_t *text = imports_.jsValueToString( value );
+			imports_.deleteJsValue( value );
+			if ( !text || !returnedStringCaptured_ || returnedStringTruncated_ ) {
+				return { Fail( BackendError::OperationFailed,
+					"Awesomium string result was missing or exceeded its transfer buffer" ), 0 };
+			}
+			const int bytes = WideCharToMultiByte( CP_UTF8, WC_ERR_INVALID_CHARS,
+				text, -1, nullptr, 0, nullptr, nullptr );
+			if ( bytes <= 0 || static_cast<std::size_t>( bytes ) > capacity ) {
+				return { Fail( BackendError::InvalidArgument,
+					"Awesomium string result is invalid UTF-16 or exceeds its UTF-8 destination" ), 0 };
+			}
+			if ( WideCharToMultiByte( CP_UTF8, WC_ERR_INVALID_CHARS,
+				text, -1, buffer, bytes, nullptr, nullptr ) != bytes ) {
+				buffer[0] = '\0';
+				return { Fail( BackendError::OperationFailed,
+					"could not convert the Awesomium string result to UTF-8" ), 0 };
+			}
+			return { BackendResult::Success(), static_cast<std::size_t>( bytes - 1 ) };
+		} catch ( ... ) {
+			buffer[0] = '\0';
+			return { Fail( BackendError::OperationFailed,
+				"failed to evaluate a string in the retail Awesomium view" ), 0 };
+		}
+	}
+
 	BackendResult CopySurface( const MutableSurface &destination ) noexcept override {
 		void *surface = view_ ? imports_.webViewSurface( view_ ) : nullptr;
 		if ( !surface ) {
@@ -254,6 +311,15 @@ public:
 		}
 		status_.focused = focused;
 		return BackendResult::Success();
+	}
+
+	BackendResult AcknowledgeNativeRequests() noexcept override {
+		status_.nativeRequestsPending = false;
+		return BackendResult::Success();
+	}
+
+	void NotifyResourceAvailable( std::string_view path ) noexcept override {
+		pendingResources_.Wake( path, ResourceRetryQueue::Clock::now() );
 	}
 
 	BackendResult InjectMouseMove( const MouseMoveEvent &event ) noexcept override {
@@ -327,6 +393,9 @@ public:
 	}
 
 	BackendResult Reload( bool ignoreCache ) noexcept override {
+		CancelPendingResources();
+		status_.nativeRequestsPending = false;
+		status_.nativeRequestNotificationsReady = false;
 		imports_.webViewReload( view_, ignoreCache );
 		return BackendResult::Success();
 	}
@@ -364,6 +433,7 @@ private:
 	using ExecuteJavascript = void (__stdcall *)( void *, const wchar_t *, const wchar_t * );
 	using ExecuteJavascriptWithResult = void *(__stdcall *)( void *, const wchar_t *, const wchar_t * );
 	using JsValueToInteger = int (__stdcall *)( void * );
+	using JsValueToString = const wchar_t *(__stdcall *)( void * );
 	using UpcastFactory = void *(__stdcall *)( void * );
 	using SetSurfaceFactory = void (__stdcall *)( void *, void * );
 	using BitmapInt = int (__stdcall *)( void * );
@@ -426,6 +496,7 @@ private:
 		ExecuteJavascript webViewExecuteJavascript = nullptr;
 		ExecuteJavascriptWithResult webViewExecuteJavascriptWithResult = nullptr;
 		JsValueToInteger jsValueToInteger = nullptr;
+		JsValueToString jsValueToString = nullptr;
 		DeleteObject deleteJsValue = nullptr;
 		ViewVoid webViewStop = nullptr;
 		ViewSetBool webViewReload = nullptr;
@@ -508,6 +579,7 @@ private:
 		FNQL_AWE_IMPORT( webViewExecuteJavascript, "_Awe_WebView_ExecuteJavascript@12" );
 		FNQL_AWE_IMPORT( webViewExecuteJavascriptWithResult, "_Awe_WebView_ExecuteJavascriptWithResult@12" );
 		FNQL_AWE_IMPORT( jsValueToInteger, "_Awe_JSValue_ToInteger@4" );
+		FNQL_AWE_IMPORT( jsValueToString, "_Awe_JSValue_ToString@4" );
 		FNQL_AWE_IMPORT( deleteJsValue, "_Awe_delete_JSValue@4" );
 		FNQL_AWE_IMPORT( webViewStop, "_Awe_WebView_Stop@4" );
 		FNQL_AWE_IMPORT( webViewReload, "_Awe_WebView_Reload@8" );
@@ -610,6 +682,20 @@ private:
 			imports_.webSessionAddDataSource( session_, L"steam", steamDataSource_ );
 		}
 
+		// The notification carries no command data. The engine still drains the
+		// queue owned by its trusted view, but no longer needs a synchronous
+		// JavaScript round trip merely to find out that the queue is empty.
+		requestNotificationSource_ = imports_.newDataSource();
+		if ( requestNotificationSource_ ) {
+			activeBackend_ = this;
+			imports_.dataSourceDirectorConnect( requestNotificationSource_,
+				reinterpret_cast<void *>( &OnNativeRequestNotification ) );
+			imports_.webSessionAddDataSource( session_, L"fnqlbridge",
+				requestNotificationSource_ );
+		}
+		// Missing notification resources leave the handshake false; callers
+		// retain their fallback polling instead of losing an otherwise live UI.
+
 		view_ = imports_.webCoreCreateView(
 			core_, parameters.initialSurface.width, parameters.initialSurface.height,
 			session_, 0 );
@@ -628,7 +714,7 @@ private:
 		if ( activeBackend_ == this ) {
 			activeBackend_ = nullptr;
 		}
-		pendingResources_.fill( {} );
+		pendingResources_.Clear();
 		if ( view_ && imports_.webViewDestroy ) {
 			imports_.webViewDestroy( view_ );
 		}
@@ -640,6 +726,7 @@ private:
 		session_ = nullptr;
 		dataPakSource_ = nullptr; // owned by the WebCore-managed WebSession
 		steamDataSource_ = nullptr; // owned by the WebCore-managed WebSession
+		requestNotificationSource_ = nullptr; // owned by WebSession
 		if ( core_ && imports_.webCoreShutdown ) {
 			imports_.webCoreShutdown();
 		}
@@ -656,13 +743,6 @@ private:
 		hostServices_ = {};
 	}
 
-	struct PendingResource {
-		int requestId = 0;
-		unsigned int attempts = 0;
-		bool active = false;
-		std::array<char, 4096> path{};
-	};
-
 	static void __stdcall OnSteamResourceRequest( int requestId, void *,
 		const wchar_t *path ) noexcept {
 		if ( activeBackend_ ) {
@@ -670,15 +750,79 @@ private:
 		}
 	}
 
+	static void __stdcall OnNativeRequestNotification( int requestId, void *,
+		const wchar_t *path ) noexcept {
+		if ( activeBackend_ ) {
+			activeBackend_->HandleNativeRequestNotification( requestId, path );
+		}
+	}
+
+	void HandleNativeRequestNotification( int requestId,
+		const wchar_t *path ) noexcept {
+		if ( requestId <= 0 || !requestNotificationSource_ ) {
+			return;
+		}
+
+		bool valid = false;
+		if ( path ) {
+			// The retail DataSource normally supplies a relative resource path.
+			// Accept its qualified form too, without permitting another host,
+			// query arguments, encoded commands, or an unbounded sequence.
+			std::size_t length = 0;
+			while ( length < 96u && path[length] ) ++length;
+			if ( length < 96u ) {
+				std::wstring_view resource( path, length );
+				constexpr std::wstring_view host = L"asset://fnqlbridge/";
+				if ( resource.substr( 0, host.size() ) == host ) {
+					resource.remove_prefix( host.size() );
+				} else if ( !resource.empty() && resource.front() == L'/' ) {
+					resource.remove_prefix( 1 );
+				}
+				constexpr std::wstring_view prefix = L"pending/";
+				if ( resource.substr( 0, prefix.size() ) == prefix ) {
+					resource.remove_prefix( prefix.size() );
+					valid = !resource.empty() && resource.size() <= 41u;
+					std::size_t separator = std::wstring_view::npos;
+					for ( std::size_t i = 0; i < resource.size(); ++i ) {
+						const wchar_t digit = resource[i];
+						if ( digit == L'-' && separator == std::wstring_view::npos ) {
+							separator = i;
+						} else if ( digit < L'0' || digit > L'9' ) {
+							valid = false;
+						}
+					}
+					valid = valid && separator > 0u && separator <= 20u
+						&& separator + 1u < resource.size()
+						&& resource.size() - separator - 1u <= 20u;
+				}
+			}
+		}
+		if ( valid ) {
+			status_.nativeRequestsPending = true;
+			status_.nativeRequestNotificationsReady = true;
+		}
+
+		// Finish even rejected notifications so no resource stays outstanding.
+		// The sender only needs completion; response data is never a command.
+		static unsigned char response = '1';
+		imports_.dataSourceSendResponse( requestNotificationSource_, requestId,
+			1, &response, L"text/plain" );
+	}
+
 	void HandleSteamResourceRequest( int requestId, const wchar_t *widePath ) noexcept {
 		std::array<char, 4096> utf8{};
-		if ( requestId <= 0 || !widePath || !widePath[0] ) {
+		if ( requestId <= 0 ) {
+			return;
+		}
+		if ( !widePath || !widePath[0] ) {
+			SendUnavailableResource( requestId );
 			return;
 		}
 
 		const int converted = WideCharToMultiByte( CP_UTF8, 0, widePath, -1,
 			utf8.data(), static_cast<int>( utf8.size() ), nullptr, nullptr );
 		if ( converted <= 0 ) {
+			SendUnavailableResource( requestId );
 			return;
 		}
 
@@ -692,6 +836,7 @@ private:
 			path += 8;
 		}
 		if ( _strnicmp( path, "avatar/", 7 ) != 0 ) {
+			SendUnavailableResource( requestId );
 			return;
 		}
 
@@ -699,69 +844,67 @@ private:
 		const int written = std::snprintf( virtualPath.data(), virtualPath.size(),
 			"asset://steam/%s", path );
 		if ( written <= 0 || static_cast<std::size_t>( written ) >= virtualPath.size() ) {
+			SendUnavailableResource( requestId );
 			return;
 		}
-		if ( !TrySendSteamResource( requestId, virtualPath.data() ) ) {
-			QueuePendingResource( requestId, virtualPath.data() );
+		// Materialize resources only in the budgeted pump. A browser callback
+		// burst must not encode an entire friends list in one engine frame.
+		if ( !pendingResources_.Enqueue( requestId, virtualPath.data(),
+			ResourceRetryQueue::Clock::now() ) ) {
+			SendUnavailableResource( requestId );
 		}
 	}
 
-	bool TrySendResource( void *dataSource, int requestId, const char *path,
-		const wchar_t *mimeType ) noexcept {
-		ResourceBuffer resource{};
-		if ( !dataSource || !mimeType || !hostServices_.CanRequestResources()
-			|| !hostServices_.requestResource( hostServices_.context, path, &resource ) ) {
-			return false;
+	void SendUnavailableResource( int requestId ) noexcept {
+		// Completing an empty image lets the browser use its existing fallback.
+		// Never leave queue-overflow or abandoned-document requests hanging.
+		if ( steamDataSource_ && requestId > 0 ) {
+			static std::uint8_t empty = 0;
+			imports_.dataSourceSendResponse( steamDataSource_, requestId,
+				0, &empty, L"image/png" );
 		}
-
-		const bool valid = resource.bytes && resource.size > 0
-			&& resource.size <= static_cast<std::size_t>(
-				( std::numeric_limits<int>::max )() );
-		if ( valid ) {
-			imports_.dataSourceSendResponse( dataSource, requestId,
-				static_cast<int>( resource.size ),
-				const_cast<std::uint8_t *>( resource.bytes ), mimeType );
-		}
-		hostServices_.releaseResource( hostServices_.context, &resource );
-		return valid;
 	}
 
-	bool TrySendSteamResource( int requestId, const char *path ) noexcept {
-		return TrySendResource( steamDataSource_, requestId, path, L"image/png" );
-	}
-
-	void QueuePendingResource( int requestId, const char *path ) noexcept {
-		PendingResource *freeSlot = nullptr;
-		for ( PendingResource &pending : pendingResources_ ) {
-			if ( pending.active && pending.requestId == requestId ) {
-				freeSlot = &pending;
-				break;
-			}
-			if ( !pending.active && !freeSlot ) {
-				freeSlot = &pending;
-			}
+	void CancelPendingResources() noexcept {
+		std::array<int, ResourceRetryQueue::kCapacity> ids{};
+		const std::size_t count = pendingResources_.TakeAll( ids );
+		for ( std::size_t i = 0; i < count; ++i ) {
+			SendUnavailableResource( ids[i] );
 		}
-		if ( !freeSlot ) {
-			return;
-		}
-		freeSlot->requestId = requestId;
-		freeSlot->attempts = 0;
-		freeSlot->active = true;
-		std::snprintf( freeSlot->path.data(), freeSlot->path.size(), "%s", path );
 	}
 
 	void RetryPendingResources() noexcept {
-		for ( PendingResource &pending : pendingResources_ ) {
-			if ( !pending.active ) {
+		if ( pendingResources_.Empty() || !steamDataSource_
+			|| !hostServices_.CanRequestResources() ) {
+			return;
+		}
+		const auto now = ResourceRetryQueue::Clock::now();
+		// Bound both first attempts and retries. Each materialization can call
+		// Steam, allocate RGBA pixels and encode a PNG; duplicate URLs share it.
+		constexpr unsigned int kResourcesPerPump = 4;
+		for ( unsigned int i = 0; i < kResourcesPerPump; ++i ) {
+			ResourceRetryQueue::Batch batch;
+			if ( !pendingResources_.NextDue( now, batch ) ) {
+				break;
+			}
+			ResourceBuffer resource{};
+			if ( !hostServices_.requestResource( hostServices_.context,
+				batch.Path(), &resource ) ) {
 				continue;
 			}
-			++pending.attempts;
-			if ( pending.attempts % 5u != 0u ) {
-				continue;
+			if ( resource.bytes && resource.size > 0
+				&& resource.size <= static_cast<std::size_t>(
+					( std::numeric_limits<int>::max )() ) ) {
+				// Detach completed IDs before invoking the runtime. Complete also
+				// filters any ID reused while the provider callback was running.
+				pendingResources_.Complete( batch );
+				for ( std::size_t id = 0; id < batch.count; ++id ) {
+					imports_.dataSourceSendResponse( steamDataSource_, batch.requestIds[id],
+						static_cast<int>( resource.size ),
+						const_cast<std::uint8_t *>( resource.bytes ), L"image/png" );
+				}
 			}
-			if ( TrySendSteamResource( pending.requestId, pending.path.data() ) ) {
-				pending = {};
-			}
+			hostServices_.releaseResource( hostServices_.context, &resource );
 		}
 	}
 
@@ -978,6 +1121,8 @@ private:
 		thread_local std::array<std::array<wchar_t, kBufferCharacters>, kBufferCount> buffers{};
 		thread_local std::size_t nextBuffer = 0;
 		auto &buffer = buffers[nextBuffer++ % buffers.size()];
+		returnedStringCaptured_ = value != nullptr;
+		returnedStringTruncated_ = false;
 		if ( !value ) {
 			buffer[0] = L'\0';
 			return buffer.data();
@@ -988,8 +1133,12 @@ private:
 			++index;
 		}
 		buffer[index] = L'\0';
+		returnedStringTruncated_ = value[index] != L'\0';
 		return buffer.data();
 	}
+
+	inline static thread_local bool returnedStringCaptured_ = false;
+	inline static thread_local bool returnedStringTruncated_ = false;
 
 	BackendResult LastFailure() const noexcept {
 		return { lastErrorCode_, std::string_view( lastError_.data() ) };
@@ -1015,9 +1164,10 @@ private:
 	void *session_ = nullptr;
 	void *dataPakSource_ = nullptr;
 	void *steamDataSource_ = nullptr;
+	void *requestNotificationSource_ = nullptr;
 	void *view_ = nullptr;
 	HostServices hostServices_{};
-	std::array<PendingResource, 64> pendingResources_{};
+	ResourceRetryQueue pendingResources_{};
 	BackendStatus status_{};
 	BackendError lastErrorCode_ = BackendError::None;
 	std::array<char, kBackendDiagnosticCapacity> lastError_{};

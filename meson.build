@@ -1414,6 +1414,20 @@ webui_backend_tests = executable('fnql_webui_backend_tests',
 )
 test('fnql_webui_backend', webui_backend_tests)
 
+webui_request_schedule_tests = executable('fnql_webui_request_schedule_tests',
+  'tests/webui_request_schedule_tests.cpp',
+  include_directories: include_directories('code/client'),
+  cpp_args: common_cpp_args,
+)
+test('fnql_webui_request_schedule', webui_request_schedule_tests)
+
+webui_resource_queue_tests = executable('fnql_webui_resource_queue_tests',
+  'tests/webui_resource_queue_tests.cpp',
+  include_directories: include_directories('code/client'),
+  cpp_args: common_cpp_args,
+)
+test('fnql_webui_resource_queue', webui_resource_queue_tests)
+
 zmq_endpoint_tests = executable('fnql_zmq_endpoint_tests',
   'tests/zmq_endpoint_tests.cpp',
   include_directories: include_directories('code/server'),

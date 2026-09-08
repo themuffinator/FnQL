@@ -1,4 +1,5 @@
 #include "webui_backend.hpp"
+#include "webui_native_request.hpp"
 
 #include <algorithm>
 #include <array>
@@ -26,6 +27,7 @@ using fnql::webui::MouseWheelEvent;
 using fnql::webui::MutableSurface;
 using fnql::webui::ResourceBuffer;
 using fnql::webui::ScriptRequest;
+using fnql::webui::StringScriptResult;
 using fnql::webui::StartupParameters;
 using fnql::webui::SurfaceSize;
 
@@ -101,6 +103,10 @@ public:
 	std::string lastUrl;
 	std::string lastScript;
 	std::string lastFrame;
+	std::string stringValue = "result";
+	bool failString = false;
+	bool invalidStringLength = false;
+	int stringCount = 0;
 	StartupParameters lastStartup{};
 	MouseMoveEvent lastMouseMove{};
 	MouseButtonEvent lastMouseButton{};
@@ -180,6 +186,19 @@ public:
 		lastScript.assign( request.source.data(), request.source.size() );
 		lastFrame.assign( request.frame.data(), request.frame.size() );
 		return { BackendResult::Success(), 42 };
+	}
+
+	StringScriptResult EvaluateString( const ScriptRequest &request,
+		char *buffer, std::size_t capacity ) noexcept override {
+		++stringCount;
+		lastScript.assign( request.source );
+		lastFrame.assign( request.frame );
+		const std::size_t bytes = ( std::min )( stringValue.size(), capacity - 1 );
+		std::memcpy( buffer, stringValue.data(), bytes );
+		buffer[bytes] = '\0';
+		return { failString ? BackendResult::Failure( BackendError::OperationFailed,
+			"partial fake string result" ) : BackendResult::Success(),
+			invalidStringLength ? capacity : bytes };
 	}
 
 	BackendResult CopySurface( const MutableSurface &surface ) noexcept override {
@@ -489,6 +508,85 @@ bool ForwardsTypedNavigationScriptAndInput() {
 	return true;
 }
 
+bool BoundsStringScriptResultsAndClearsFailures() {
+	FakeBackend fake;
+	BackendHost host;
+	std::array<char, 32> buffer{};
+	buffer[0] = 'x';
+	CHECK( !host.EvaluateString( { "1", "" }, buffer.data(), buffer.size() ).result );
+	CHECK( buffer[0] == '\0' );
+	CHECK( host.InstallBackend( fake ) );
+	CHECK( host.Start( MakeStartup() ) );
+	CHECK( host.EvaluateString( { "1", "" }, buffer.data(), buffer.size() ).result.code
+		== BackendError::Unsupported );
+	CHECK( fake.stringCount == 0 );
+	fake.descriptor.capabilities = fake.descriptor.capabilities | Capability::StringScriptResult;
+	CHECK( host.EvaluateString( { "", "" }, buffer.data(), buffer.size() ).result.code
+		== BackendError::InvalidArgument );
+	CHECK( !host.EvaluateString( { "1", "" }, nullptr, 32 ).result );
+	CHECK( !host.EvaluateString( { "1", "" }, buffer.data(), 0 ).result );
+	CHECK( fake.stringCount == 0 );
+	const auto result = host.EvaluateString( { "'result'", "main" }, buffer.data(), buffer.size() );
+	CHECK( result.result && result.length == 6 );
+	CHECK( std::string_view( buffer.data(), result.length ) == "result" );
+	CHECK( fake.stringCount == 1 && fake.lastScript == "'result'" && fake.lastFrame == "main" );
+	fake.failString = true;
+	const auto failure = host.EvaluateString( { "1", "" }, buffer.data(), buffer.size() );
+	CHECK( !failure.result && failure.length == 0 && buffer[0] == '\0' );
+	fake.failString = false;
+	fake.invalidStringLength = true;
+	CHECK( !host.EvaluateString( { "1", "" }, buffer.data(), buffer.size() ).result );
+	CHECK( buffer[0] == '\0' );
+	fake.invalidStringLength = false;
+	fake.stringValue.assign( "part\0suffix", 11 );
+	CHECK( !host.EvaluateString( { "1", "" }, buffer.data(), buffer.size() ).result );
+	CHECK( buffer[0] == '\0' );
+	return true;
+}
+
+bool DecodesCompleteNativeRequestsWithoutTruncation() {
+	using fnql::webui::DecodeNativeRequest;
+	std::array<char, fnql::webui::kNativeRequestBytes> buffer{};
+	auto decode = [&buffer]( std::string_view value ) {
+		return DecodeNativeRequest( value, buffer.data(), buffer.size() );
+	};
+	auto result = decode( "e" );
+	CHECK( result.result && !result.hasRequest && buffer[0] == '\0' );
+	result = decode( "r!" );
+	CHECK( result.result && result.hasRequest && buffer[0] == '\0' );
+	result = decode( "r006100e96c34d83dde00!" );
+	CHECK( result.result && result.hasRequest );
+	CHECK( std::string( buffer.data() ) == "a\xc3\xa9\xe6\xb0\xb4\xf0\x9f\x98\x80" );
+	result = decode( "r007f008007ff0800ffffd800dc00dbffdfff!" );
+	CHECK( result.result && result.hasRequest );
+	CHECK( std::string( buffer.data() ) == "\x7f\xc2\x80\xdf\xbf\xe0\xa0\x80"
+		"\xef\xbf\xbf\xf0\x90\x80\x80\xf4\x8f\xbf\xbf" );
+	for ( const auto malformed : { "o", "", "r", "r0061", "r0061!x", "r061!",
+		"r006100000062!", "r0061d800!", "rdc00!", "rd8000061!", "rzzzz!" } ) {
+		buffer[0] = 'x';
+		result = decode( malformed );
+		CHECK( !result.result && !result.hasRequest && buffer[0] == '\0' );
+	}
+	std::string maximum = "r";
+	for ( std::size_t i = 0; i < buffer.size() - 1; ++i ) {
+		maximum += "0061";
+	}
+	maximum += '!';
+	result = decode( maximum );
+	CHECK( result.result && result.hasRequest && std::strlen( buffer.data() ) == buffer.size() - 1 );
+	CHECK( buffer.back() == '\0' );
+	maximum.insert( 1, "0061" );
+	CHECK( !decode( maximum ).result && buffer[0] == '\0' );
+	std::array<char, 5> exact{};
+	CHECK( DecodeNativeRequest( "rd83dde00!", exact.data(), exact.size() ).result );
+	CHECK( std::strlen( exact.data() ) == 4 );
+	CHECK( !DecodeNativeRequest( "rd83dde00!", exact.data(), 4 ).result );
+	CHECK( exact[0] == '\0' );
+	CHECK( !DecodeNativeRequest( "r0061!", nullptr, 8 ).result );
+	CHECK( !DecodeNativeRequest( "r0061!", exact.data(), 0 ).result );
+	return true;
+}
+
 bool RestrictsPrivilegedNavigationToRetailAssetOrigin() {
 	CHECK( fnql::webui::IsTrustedNavigationUrl( "asset://ql/index.html" ) );
 	CHECK( fnql::webui::IsTrustedNavigationUrl( "asset://ql/index.html#home" ) );
@@ -513,6 +611,8 @@ int main() {
 		&& ValidatesAndCopiesSoftwareSurfaces()
 		&& ConstrainsBrowserSurfacesWithoutChangingAspectRatio()
 		&& ForwardsTypedNavigationScriptAndInput()
+		&& BoundsStringScriptResultsAndClearsFailures()
+		&& DecodesCompleteNativeRequestsWithoutTruncation()
 		&& RestrictsPrivilegedNavigationToRetailAssetOrigin();
 	return passed ? 0 : 1;
 }

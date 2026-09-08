@@ -411,7 +411,11 @@ class WebUiWiringTests(unittest.TestCase):
 
         self.assertIn("#define CL_WEB_NATIVE_REQUESTS_PER_FRAME 8", source)
         self.assertIn("int\t\t\tframeSequence;", source)
-        self.assertIn("int\t\t\tnextNativeRequestPollFrame;", source)
+        self.assertNotIn("nextNativeRequestPollFrame", source)
+        self.assertIn("cl_webRequestSchedule.ShouldPoll", pump)
+        self.assertIn("status.nativeRequestNotificationsReady", pump)
+        self.assertIn("status.nativeRequestsPending", pump)
+        self.assertIn("Sys_Microseconds()", pump)
         self.assertIn("cl_webui.frameSequence++;", source)
         self.assertIn("CL_WebHost_PumpNativeJavascriptRequests();", source)
         self.assertIn("static void CL_WebHost_ProcessNativeJavascriptRequest", source)
@@ -422,14 +426,23 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn('Cbuf_ExecuteText( EXEC_APPEND, va( "%s\\n", payload ) );', source)
         self.assertIn("CL_WebHost_UpdateBrowserCvarCache( name, value );", source)
         self.assertIn("CL_Awesomium_PopJavascriptRequest( request, sizeof( request ) )", source)
-        self.assertIn("CL_WEB_NATIVE_REQUEST_BUSY_POLL_FRAMES", source)
+        self.assertIn("cl_webRequestSchedule.DidPoll", pump)
+        self.assertLess(pump.index("AcknowledgeNativeRequests()"),
+                        pump.index("CL_Awesomium_PopJavascriptRequest"))
         self.assertNotIn("CL_Awesomium_IsLoading()", pump)
-        self.assertIn("window.__qlr_native_requests||[]", source)
+        request_header = (ROOT / "code/client/webui_native_request.hpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("window.__qlr_native_requests||[]", request_header)
         self.assertIn("SendGameCommand:function(cmd)", source)
         self.assertIn("return queue('cmd',cmd);", source)
-        self.assertIn("window.__qlr_native_read=String(q.shift())", source)
-        self.assertIn("s.charCodeAt(%d)||0", source)
-        self.assertIn('CL_Awesomium_ExecuteJavascript( "(function(){window.__qlr_native_read=\'\';})()", "" );', source)
+        self.assertIn("String(q.shift())", request_header)
+        pop = source[source.index("qboolean CL_Awesomium_PopJavascriptRequest"):
+                     source.index("qboolean CL_Awesomium_SetZoom")]
+        self.assertEqual(pop.count("host.EvaluateString("), 1)
+        self.assertIn("DecodeNativeRequest", pop)
+        self.assertNotIn("ExecuteJavascriptInteger", pop)
+        self.assertNotIn("__qlr_native_read", pop)
 
     def test_webui_startup_bridge_installs_qz_instance_helper(self) -> None:
         source = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
@@ -1255,7 +1268,7 @@ class WebUiWiringTests(unittest.TestCase):
             "if ( cl_webui.browserVisible && cl_webui.browserActive ) {"
         )
         visible_work_end = frame.index(
-            "// Preserve the lightweight state/request handoff while hidden."
+            "// Hidden retail pages still send lobby/connection commands."
         )
         visible_work = frame[visible_work_start:visible_work_end]
         self.assertIn("CL_WebHost_SyncNativeSnapshots( qfalse );", visible_work)

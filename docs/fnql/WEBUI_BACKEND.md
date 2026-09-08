@@ -120,6 +120,126 @@ Windows x86 adapter around the runtime's generated stdcall C exports:
 - no Steamworks success emulation. Unavailable social/online operations remain
   explicit and do not prevent the offline retail menu from rendering.
 
+### Native request scheduling and stutter investigation
+
+The September 2026 report describes gameplay stutter on Linux/Proton with
+0.1.0.92 that mostly disappears with `cl_webuiEnable 0`. Static comparison
+confirmed that release contains the earlier event-driven snapshot fix
+(`d8f1905`), but still polls the retained browser synchronously every 15 game
+frames when idle. At 250 FPS that means about 17 empty-queue round trips per
+second. A nonempty request additionally used one synchronous evaluation per
+UTF-16 code unit. Pausing browser rendering does not remove those waits.
+
+The request bridge now sends an asynchronous, coalesced wake to a dedicated
+`asset://fnqlbridge/pending/<timestamp>-<sequence>` data source. The wake carries
+no command text: commands still come from the queue in the engine's trusted
+view. After the first received wake proves the transport works, an idle queue
+causes no result-producing JavaScript calls. Until that handshake, or for a
+backend without notifications, a 60 ms wall-clock fallback preserves request
+delivery independently of game FPS. Navigation and reload reset the handshake;
+hiding the retained menu preserves it.
+
+Nonempty requests use one bounded string result. An ASCII envelope preserves
+every UTF-16 code unit, including invalid units and embedded NULs, so native
+validation can reject malformed, oversized, or truncated commands without
+executing a partial prefix. The existing eight-request frame budget remains;
+exhausting it schedules another drain. A browser-side watchdog retries a stalled
+notification while requests remain, including a valid request behind a rejected
+one. Successful idle views have no notification retry timer.
+
+Hidden views continue to receive lifecycle/social events and send commands.
+Inspection of the retail bundle confirms that `game.start` updates the lobby
+server, and lobby join/game-created events can request disconnect, join, or
+connect during gameplay. Disabling all hidden request handling would regress
+those paths. WebCore maintenance and the earlier visible-only snapshot policy
+are preserved.
+
+An offscreen x86 probe against the installed retail Awesomium 1.7.4.2 verified
+the generated `_Awe_JSValue_ToString@4` return/callback ABI and the asynchronous
+data-source callback, including a paused view. Single local timing samples for
+the old per-character transfer versus the new bulk transfer were:
+
+| Request length (UTF-16 units) | Old transfer | Bulk transfer |
+| --- | ---: | ---: |
+| 32 | 494.3 ms | 15.5 ms |
+| 256 | 3954.7 ms | 16.0 ms |
+| 1023 | 15747.4 ms | 15.5 ms |
+
+These measure isolated browser IPC with a paused 64x64 view, not gameplay frame
+times. They establish avoidable blocking in the old path; the effect on the
+reporter's Linux/Proton setup still needs confirmation there.
+
+The normal tests cover scheduling, Unicode/buffer boundaries, the actual
+bridge JavaScript's idle behavior, notification coalescing, and failed/stalled
+requests. The optional retail probe compiles only x86 and uses an isolated
+profile with no game window, input injection, or operating-system capture.
+From an x86 MSVC developer prompt:
+
+```powershell
+python scripts/verify_webui_requests.py --retail-path "C:\Program Files (x86)\Steam\steamapps\common\Quake Live"
+```
+
+Add `--benchmark` to compare the old per-character transfer with the production
+bulk transfer. Numbers vary with browser scheduling; this is an IPC probe.
+
+The probe uses the production wake/queue script and adapter against external
+retail files. It checks handshake, idle behavior, paused backlog delivery,
+watchdog recovery, rejected notification paths, and document/backend resets.
+It never packages or copies retail assets into FnQL.
+
+The request-bridge strict-warning MSVC x86 release build and full Meson suite
+passed on 2026-09-06 (97 passed, one optional OpenAL loopback skip).
+
+### Pending avatar resources
+
+The subsequent avatar audit found a separate FPS-dependent loop: each missing
+image retried every five WebCore pumps indefinitely. The provider already emits
+`AVATAR_IMAGE_LOADED`, and Steam documents retrying a pending large avatar after
+that callback. [Steamworks avatar contract](https://partner.steamgames.com/doc/api/ISteamFriends#GetLargeFriendAvatar)
+
+Avatar requests now enter a bounded queue, and the WebCore pump materializes
+at most four distinct pending image paths per frame. Requests for the same path
+share one provider read and PNG encoding; every waiting request ID receives the
+result before its buffer is released once. Case differences and query/fragment
+suffixes do not cause duplicate materialization because the avatar resolver
+already ignores them. Adding another request for a pending path preserves its
+existing retry delay.
+
+The first attempt is immediately eligible. Missing images then retry after
+250 ms, 500 ms, 1 second, and at most every 2 seconds, using a steady clock
+independently of game FPS. Avatar-loaded and persona-avatar-change events wake
+the affected player's pending size variants on the next budgeted pump. Provider
+recovery wakes all pending paths. The event handlers do not fetch or encode
+pixels themselves.
+
+The boolean host resource contract cannot distinguish a temporarily unavailable
+image from a player with no avatar. Capped fallback retries therefore remain
+available for missed callbacks or provider recovery; an arbitrary timeout does
+not permanently discard a slow download. Navigation and reload finish and clear
+the previous document's requests, shutdown clears them with the view, and hiding
+the retained menu preserves them. Queue overflow receives an empty image
+response so the browser can use its existing fallback rather than wait forever.
+
+`webui_resource_queue_tests.cpp` uses a synthetic clock to check exact retry
+cadence, fairness, duplicate requests, event wakes, bounds, and reused request
+IDs. The optional retail probe also uses generated PNG fixtures through fake
+host resource callbacks to check paused image delivery, shared buffers, retry
+limits, per-pump limits, completion, and document cleanup without a Steam session.
+It also verifies that an invalid Steam resource path completes with an empty
+response and reaches the browser's error/fallback handler without querying the
+host provider. The same terminal response handles queue overflow.
+
+The avatar changes passed the strict-warning MSVC x86 release build and full
+Meson suite on 2026-09-06 (98 passed, one optional OpenAL loopback skip). The
+offscreen probe also passed against the installed retail x86 Awesomium runtime.
+
+The probe exposed an unrelated retail DataPak limitation: the query-suffixed
+document URL `asset://ql/index.html?fnql_avatar_probe=1` reached
+`chrome://chromewebdata/`, and reloading that error document failed the startup
+handshake. The probe now navigates to the canonical `asset://ql/index.html` and
+asserts the actual document URL. This document-URL limitation is recorded
+separately from avatar retry scheduling.
+
 ### Keyboard and text input
 
 The generated C ABI publishes one WebKeyboardEvent constructor,
