@@ -28,11 +28,7 @@ release, CI resets `Unreleased` for the next cycle.
 - _None yet._
 
 ### Fixes
-- Reduce avatar-loading work with Steam event-driven retries, timed backoff,
-  shared image fetches, and a per-frame budget.
-- Remove recurring synchronous WebUI request polling during gameplay and
-  transfer queued menu commands in one bounded read, addressing a remaining
-  source of stutter with the WebUI enabled.
+- _None yet._
 
 ### Documentation and Tooling
 - _None yet._
