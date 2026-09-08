@@ -82,7 +82,7 @@ class WebUiBackendSourceTests(unittest.TestCase):
 
         shutdown = adapter[
             adapter.index("void ShutdownRuntimeObjects() noexcept") :
-            adapter.index("struct PendingResource")
+            adapter.index("static void __stdcall OnSteamResourceRequest")
         ]
         self.assertLess(
             shutdown.index("imports_.webViewDestroy"),
@@ -101,9 +101,43 @@ class WebUiBackendSourceTests(unittest.TestCase):
 
         self.assertIn('kTrustedNavigationPrefix = "asset://ql/"', header)
         self.assertIn("IsTrustedNavigationUrl", source)
-        self.assertIn("malformed UTF-16", source)
-        self.assertIn("exceeds the UTF-8 bridge buffer", source)
+        request_header = (ROOT / "code/client/webui_native_request.hpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("DecodeNativeRequest", source)
+        self.assertIn("malformed UTF-16", request_header)
+        self.assertIn("exceeds the UTF-8 bridge buffer", request_header)
         self.assertNotIn("codepoint <= 0 || codepoint > 255", source)
+
+    def test_avatar_availability_wakes_only_deferred_resource_work(self) -> None:
+        source = (ROOT / "code/client/cl_webui.cpp").read_text(encoding="utf-8")
+        helper_start = source.index("static void CL_WebHost_NotifyAvatarAvailable(")
+        helper = source[helper_start:source.index("static void CL_Steam_OnProviderEvent", helper_start)]
+        self.assertIn('{ "", "small/", "medium/", "large/" }', helper)
+        self.assertIn('"asset://steam/avatar/%s%llu"', helper)
+        self.assertIn("NotifyResourceAvailable( path )", helper)
+        self.assertNotIn("GetAvatarRGBA", helper)
+
+        event_start = source.index("case FNQL_STEAM_EVENT_AVATAR_IMAGE_LOADED:")
+        events = source[event_start:source.index("qboolean CL_Steam_OpenOverlayUrl", event_start)]
+        self.assertEqual(events.count("CL_WebHost_NotifyAvatarAvailable( event->subject_id );"), 2)
+        self.assertIn("event->flags & 0x40u", events)
+        self.assertIn("event->type == FNQL_STEAM_EVENT_PROVIDER_READY", source)
+        self.assertIn("ClientBackendHost().NotifyResourceAvailable( {} )", source)
+
+        adapter = (ROOT / "code/client/awesomium_backend_win32.cpp").read_text(encoding="utf-8")
+        callback = adapter[adapter.index("void HandleSteamResourceRequest("):
+                           adapter.index("void SendUnavailableResource(")]
+        self.assertIn("pendingResources_.Enqueue", callback)
+        self.assertNotIn("hostServices_.requestResource", callback)
+        pump = adapter[adapter.index("void RetryPendingResources()"):
+                       adapter.index("bool SelectRuntimePaths")]
+        self.assertIn("kResourcesPerPump = 4", pump)
+        self.assertEqual(pump.count("hostServices_.requestResource("), 1)
+        self.assertEqual(pump.count("hostServices_.releaseResource("), 1)
+        self.assertIn("pendingResources_.Complete( batch )", pump)
+        self.assertIn("id < batch.count", pump)
+        self.assertNotIn("attempts %", pump)
 
     def test_native_ui_ownership_requires_the_live_surface_presenter(self) -> None:
         source = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(

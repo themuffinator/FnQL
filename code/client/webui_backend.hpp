@@ -32,7 +32,7 @@ version.
 
 namespace fnql::webui {
 
-inline constexpr std::uint32_t kBackendInterfaceVersion = 1;
+inline constexpr std::uint32_t kBackendInterfaceVersion = 3;
 inline constexpr std::size_t kBackendDiagnosticCapacity = 384;
 inline constexpr std::string_view kTrustedNavigationPrefix = "asset://ql/";
 
@@ -75,7 +75,9 @@ enum class Capability : std::uint32_t {
 	SoftwareSurface = 1u << 0,
 	IntegerScriptResult = 1u << 1,
 	TransparentView = 1u << 2,
-	ResourceRequests = 1u << 3
+	ResourceRequests = 1u << 3,
+	StringScriptResult = 1u << 4,
+	NativeRequestNotifications = 1u << 5
 };
 
 constexpr Capability operator|( Capability lhs, Capability rhs ) noexcept {
@@ -247,6 +249,8 @@ struct BackendStatus {
 	bool surfaceDirty = false;
 	bool renderingPaused = false;
 	bool focused = false;
+	bool nativeRequestsPending = false;
+	bool nativeRequestNotificationsReady = false;
 	SurfaceSize surface{};
 	SurfaceFormat surfaceFormat = SurfaceFormat::Rgba8Premultiplied;
 	int nativeErrorCode = 0;
@@ -265,6 +269,14 @@ struct IntegerScriptResult {
 	BackendResult result = BackendResult::Failure(
 		BackendError::OperationFailed, "script result was not produced" );
 	int value = 0;
+};
+
+struct StringScriptResult {
+	BackendResult result = BackendResult::Failure(
+		BackendError::OperationFailed, "script result was not produced" );
+	// UTF-8 bytes written, excluding the terminating NUL. The destination is
+	// caller-owned and is cleared on failure; partial results are never usable.
+	std::size_t length = 0;
 };
 
 enum class MouseButton : std::uint8_t {
@@ -346,6 +358,17 @@ public:
 		return { Unsupported( "integer script results are unsupported" ), 0 };
 	}
 
+	// NUL-terminated script strings. Callers transporting arbitrary JavaScript
+	// strings must use an encoding that preserves embedded NULs (the native
+	// request bridge uses hexadecimal UTF-16 with a terminal marker).
+	virtual StringScriptResult EvaluateString( const ScriptRequest &,
+		char *buffer, std::size_t capacity ) noexcept {
+		if ( buffer && capacity > 0 ) {
+			buffer[0] = '\0';
+		}
+		return { Unsupported( "string script results are unsupported" ), 0 };
+	}
+
 	virtual BackendResult CopySurface( const MutableSurface & ) noexcept {
 		return Unsupported( "software surface copies are unsupported" );
 	}
@@ -360,6 +383,18 @@ public:
 
 	virtual BackendResult SetFocus( bool ) noexcept {
 		return Unsupported( "focus changes are unsupported" );
+	}
+
+	// Clear the notification before draining requests so a later notification
+	// cannot be lost when it arrives during a script evaluation.
+	virtual BackendResult AcknowledgeNativeRequests() noexcept {
+		return Unsupported( "native request notifications are unsupported" );
+	}
+
+	// Optional host hint: retry pending requests for this resource on the next
+	// pump. An empty path reconsiders all pending resources (provider recovery).
+	// A hint never fetches pixels or changes the backend's error diagnostics.
+	virtual void NotifyResourceAvailable( std::string_view ) noexcept {
 	}
 
 	virtual BackendResult InjectMouseMove( const MouseMoveEvent & ) noexcept {
@@ -629,6 +664,40 @@ public:
 		return result;
 	}
 
+	StringScriptResult EvaluateString( ScriptRequest request,
+		char *buffer, std::size_t capacity ) noexcept {
+		if ( buffer && capacity > 0 ) {
+			buffer[0] = '\0';
+		}
+		BackendResult ready = RequireRunning();
+		if ( !ready ) {
+			return { ready, 0 };
+		}
+		if ( request.source.empty() || !buffer || capacity == 0 ) {
+			return { Remember( BackendResult::Failure( BackendError::InvalidArgument,
+				"WebUI string script source or destination is invalid" ) ), 0 };
+		}
+		if ( !HasCapability( backend_->Describe().capabilities,
+			Capability::StringScriptResult ) ) {
+			return { Remember( BackendResult::Failure( BackendError::Unsupported,
+				"WebUI backend does not support string script results" ) ), 0 };
+		}
+
+		StringScriptResult result = backend_->EvaluateString( request, buffer, capacity );
+		if ( result.result && ( result.length >= capacity
+			|| buffer[result.length] != '\0'
+			|| std::memchr( buffer, '\0', result.length ) != nullptr ) ) {
+			result.result = BackendResult::Failure( BackendError::OperationFailed,
+				"WebUI backend returned an invalid string result length" );
+		}
+		result.result = Remember( result.result );
+		if ( !result.result ) {
+			buffer[0] = '\0';
+			result.length = 0;
+		}
+		return result;
+	}
+
 	BackendResult CopySurface( const MutableSurface &surface ) noexcept {
 		BackendResult ready = RequireRunning();
 		if ( !ready ) {
@@ -673,6 +742,17 @@ public:
 	BackendResult SetFocus( bool focused ) noexcept {
 		BackendResult ready = RequireRunning();
 		return ready ? Remember( backend_->SetFocus( focused ) ) : ready;
+	}
+
+	BackendResult AcknowledgeNativeRequests() noexcept {
+		BackendResult ready = RequireRunning();
+		return ready ? Remember( backend_->AcknowledgeNativeRequests() ) : ready;
+	}
+
+	void NotifyResourceAvailable( std::string_view path ) noexcept {
+		if ( IsRunning() ) {
+			backend_->NotifyResourceAvailable( path );
+		}
 	}
 
 	BackendResult InjectMouseMove( MouseMoveEvent event ) noexcept {
