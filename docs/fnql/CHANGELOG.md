@@ -28,7 +28,7 @@ release, CI resets `Unreleased` for the next cycle.
 - _None yet._
 
 ### Fixes
-- _None yet._
+- Fixed scoreboard key presses unexpectedly leaving spectator follow mode.
 
 ### Documentation and Tooling
 - _None yet._
