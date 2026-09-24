@@ -12,6 +12,12 @@ static_assert( offsetof( usercmd_t, forwardmove ) == 23 );
 static_assert( offsetof( usercmd_t, rightmove ) == 24 );
 static_assert( offsetof( usercmd_t, upmove ) == 25 );
 
+// Retail CL_CmdButtons (0x004B5C67) emits bit 12 for key activity.
+// Bit 11 is a separate stop-follow input in retail SpectatorThink.
+static_assert( BUTTON_ANY == 0x1000 );
+static_assert( ( BUTTON_ANY & 0x0800 ) == 0 );
+static_assert( BUTTON_ANY_Q3 == 0x0800 );
+
 static_assert( sizeof( trajectory_t ) == 40 );
 static_assert( offsetof( trajectory_t, gravity ) == 36 );
 

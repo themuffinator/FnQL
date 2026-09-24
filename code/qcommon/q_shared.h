@@ -1322,7 +1322,10 @@ typedef struct playerState_s {
 #define BUTTON_PATROL		512
 #define BUTTON_FOLLOWME		1024
 
-#define	BUTTON_ANY			2048			// any key whatsoever
+// Retail CL_CmdButtons (0x004B5C67) uses bit 12 for key activity. Quake III's
+// bit 11 instead requests stop-follow in retail SpectatorThink (0x10033F82).
+#define	BUTTON_ANY			4096			// any key whatsoever
+#define BUTTON_ANY_Q3		2048			// retained Quake III wire profiles
 
 #define	MOVE_RUN			120			// if forwardmove or rightmove are >= MOVE_RUN,
 										// then BUTTON_WALKING should be set

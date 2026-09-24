@@ -1097,7 +1097,8 @@ static void CL_CmdButtons( usercmd_t *cmd ) {
 	// allow the game to know if any key at all is
 	// currently pressed, even if it isn't bound to anything
 	if ( anykeydown && !gameplayInputCaptured ) {
-		cmd->buttons |= BUTTON_ANY;
+		cmd->buttons |= clc.netchan.wireProfile == NETCHAN_WIRE_QL_RETAIL
+			? BUTTON_ANY : BUTTON_ANY_Q3;
 	}
 }
 
