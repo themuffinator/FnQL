@@ -23,6 +23,12 @@ only planned.
 
 ## Ready For Changelog
 
+- [x] Correct the engine's key-activity button to retail Quake Live's `0x1000`,
+  preventing scoreboard key presses from emitting the separate `0x0800`
+  stop-follow input while retaining Quake III wire-profile behavior.
+  Retail executable/module inspection and ABI/usercmd
+  regression tests cover the correction; interactive Proton validation is
+  still pending. See [input compatibility](INPUT_COMPATIBILITY.md#key-activity-and-spectator-follow).
 - [x] Make pending WebUI avatars use a steady-clock retry backoff and immediate
   availability hints from Steam, with four distinct image paths per frame.
   Duplicate requests share provider/PNG work and successful buffers; navigation
