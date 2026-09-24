@@ -88,6 +88,58 @@ int TestWireProfileUserCommandHash() {
 	return 0;
 }
 
+int TestRetailAnyKeyButtons() {
+	struct ButtonSample {
+		int buttons;
+		int expected;
+	};
+	// A scoreboard/unbound key must report activity without asserting retail's
+	// stop-follow bit (0x0800). Exercise presses, holds, releases, chords, and
+	// an explicit stop-follow bit across successive delta baselines.
+	const ButtonSample samples[] = {
+		{ 0, 0 },
+		{ BUTTON_ANY, 0x1000 },
+		{ BUTTON_ANY, 0x1000 },
+		{ 0, 0 },
+		{ BUTTON_ANY | BUTTON_ATTACK, 0x1001 },
+		{ BUTTON_ANY | BUTTON_WALKING, 0x1010 },
+		{ BUTTON_ANY, 0x1000 },
+		{ 0, 0 },
+		{ 0x0800, 0x0800 },
+		{ BUTTON_ANY | 0x0800, 0x1800 },
+		{ BUTTON_TALK, 0x0002 },
+		{ 0, 0 },
+		// Retained Quake III/ioquake3 connections keep their original flag.
+		{ BUTTON_ANY_Q3, 0x0800 },
+		{ BUTTON_ANY_Q3 | BUTTON_ATTACK, 0x0801 },
+		{ BUTTON_ANY_Q3 | BUTTON_WALKING, 0x0810 },
+		{ 0, 0 },
+	};
+	std::array<byte, 64> storage{};
+	usercmd_t baseline{};
+	for ( const ButtonSample& sample : samples ) {
+		usercmd_t sent = baseline;
+		sent.serverTime += 16;
+		sent.buttons = sample.buttons;
+		usercmd_t received{};
+		msg_t writer{};
+		MSG_Init( &writer, storage.data(), static_cast<int>( storage.size() ) );
+		MSG_WriteDeltaUsercmdKey( &writer, 0x10203040, &baseline, &sent );
+		CHECK( !writer.overflowed );
+
+		msg_t reader{};
+		MSG_Init( &reader, storage.data(), static_cast<int>( storage.size() ) );
+		reader.cursize = writer.cursize;
+		MSG_BeginReading( &reader );
+		MSG_ReadDeltaUsercmdKey( &reader, 0x10203040, &baseline, &received );
+		CHECK( received.buttons == sample.expected );
+		CHECK( received.serverTime == sent.serverTime );
+		CHECK( reader.readcount <= reader.cursize );
+		baseline = received;
+	}
+	return 0;
+}
+
 int TestWireProfileCommandStrings() {
 	static const char command[] = { 'p', 'r', 'i', 'n', 't', ' ', '"',
 		'c', 'a', 'f', '\xc3', '\xa9', ' ', '%', '"', '\0' };
@@ -286,6 +338,7 @@ int TestPlayerStateRoundTrip() {
 int main() {
 	if ( const int result = TestBounds() ) return result;
 	if ( const int result = TestWireProfileUserCommandHash() ) return result;
+	if ( const int result = TestRetailAnyKeyButtons() ) return result;
 	if ( const int result = TestWireProfileCommandStrings() ) return result;
 	if ( const int result = TestUserCommandRoundTrip() ) return result;
 	if ( const int result = TestUserCommandClockWrap() ) return result;

@@ -71,6 +71,46 @@ unchanged when neither correction applies.
 
 ## Usercmd sampling and stateful commands
 
+### Key activity and spectator follow
+
+Retail Quake Live uses `0x1000` for the engine's `BUTTON_ANY` key-activity
+flag. The inherited Quake III value, `0x0800`, is a separate stop-follow
+input in retail QL. Sending it for every physical key press made `+scores`
+bindings leave follow mode ([issue #5](https://github.com/themuffinator/FnQL/issues/5)).
+FnQL now emits the retail key-activity value for protocol 91 connections.
+Retained Quake III/ioquake3 wire profiles continue to use `BUTTON_ANY_Q3`
+(`0x0800`), preserving their existing key-activity behavior.
+
+Observed evidence, checked against the legitimate Steam build `1168251` on
+2026-09-24 and the [QLSRP reference corpus](https://github.com/themuffinator/QL-SRP):
+
+- `quakelive_steam.exe` `CL_CmdButtons` at `0x004B5BD0` masks catcher bit
+  `0x10` out for both `BUTTON_TALK` and key activity. At `0x004B5C67`, it
+  ORs `0x1000` into `usercmd_t.buttons`. Its SHA-256 is
+  `c926fe9f6c851e00b3b9332e88903ad01f28fdd60454873891c0158f5ded1299`.
+- Retail `bin.pk3`'s `qagamex86.dll` `SpectatorThink` tests a rising `0x0800`
+  edge at `0x10033F82`/`0x10033F89`, then calls `StopFollowing` at
+  `0x10033FB1`. Its SHA-256 is
+  `9bfad1b5df4cbbb3fcfb20781024fc5c0abe73ba8389c2f20be8c0a55552e83d`.
+- QLSRP's reconstructed `q_shared.h` still defines `BUTTON_ANY` as `2048`;
+  the retail instructions above take precedence over that source definition.
+
+These facts explain the reported distinction between console commands and
+physical bindings: console `+scores` does not create a key-activity edge.
+Holding another key already asserts the old flag, so the scoreboard key does
+not create another rising edge. This explanation is an inference from the
+report and the retail instructions, not a Proton runtime reproduction.
+
+The correction keeps the scoreboard's `0x10` catcher transparent to movement,
+preserves held-key state and command routing, and leaves explicit button bits
+and their wire encoding intact. The ABI assertion and successive usercmd codec
+tests reject the old value and cover press/hold/release, attack/walk chords,
+chat, the separate `0x0800` input, and the legacy key-activity value.
+Existing scoreboard/input tests protect
+the catcher behavior. Interactive Proton/Wayland validation remains pending.
+
+### Sampling and command delivery
+
 Relative mouse deltas do not carry timestamps in the engine ABI. When usercmd
 generation is suspended before a gamestate, while disconnected, or by a local
 pause, FnQL therefore discards deltas collected during that unsampleable gap
