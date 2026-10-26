@@ -241,6 +241,26 @@ class WebUiWiringTests(unittest.TestCase):
         arm = webui[webui.index('if ( !Q_stricmp( kind, "keycapture" ) ) {') :]
         self.assertIn("cl_webui.keyCapturePressedKey = 0;", arm[: arm.index("}")])
 
+    def test_bind_prompt_withholds_keyboard_input_from_the_page(self) -> None:
+        webui = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
+
+        # Retail's window procedure skips keyboard and character injection
+        # while capture is armed; Backspace would otherwise navigate back.
+        key = webui[webui.index("void CL_WebView_OnKeyEvent( int key, qboolean down ) {") :]
+        key = key[: key.index("\n}\n")]
+        capture = key.index("if ( cl_webui.keyCaptureArmed ) {")
+        self.assertLess(capture, key.index("CL_Awesomium_InjectKeyboardEvent("))
+        armed = key[capture : key.index("virtualKey = CL_WebHost_MapVirtualKey( key );")]
+        self.assertIn("CL_WebView_PublishGameKey( key );", armed)
+        self.assertIn("return;", armed)
+
+        char = webui[webui.index("void CL_WebView_OnCharEvent( int codepoint ) {") :]
+        char = char[: char.index("\n}\n")]
+        self.assertLess(
+            char.index("if ( cl_webui.keyCaptureArmed ) {"),
+            char.index("CL_Awesomium_InjectKeyboardEvent("),
+        )
+
     def test_every_route_to_disconnected_restores_the_webui_menu(self) -> None:
         """CL_Disconnect_f returns early after SV_Shutdown on a listen server, so
         SV_Shutdown's non-menu disconnect must be followed by the terminal
@@ -1431,7 +1451,7 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("#define CL_WEB_KEYBOARD_EVENT_ACTIVATION_TYPE 0u", source)
         self.assertIn("#define CL_WEB_KEYBOARD_EVENT_ACTIVATION_VIRTUAL_KEY 0x11u", source)
         self.assertIn("#define CL_WEB_KEYBOARD_EVENT_ACTIVATION_NATIVE_KEY 0x1d0001L", source)
-        self.assertIn("if ( !down && cl_webui.keyCaptureArmed )", source)
+        self.assertIn("if ( cl_webui.keyCaptureArmed ) {\n\t\tif ( !down ) {", source)
         self.assertIn("CL_WebView_PublishGameKey( key );", source)
         self.assertIn("cl_webui.keyCaptureArmed = qfalse;", source)
         self.assertIn("down ? CL_WEB_KEYBOARD_EVENT_KEYDOWN_TYPE : CL_WEB_KEYBOARD_EVENT_KEYUP_TYPE", source)

@@ -7627,9 +7627,15 @@ void CL_WebView_OnKeyEvent( int key, qboolean down ) {
 		return;
 	}
 
-	if ( !down && cl_webui.keyCaptureArmed ) {
-		CL_WebView_PublishGameKey( key );
-		cl_webui.keyCaptureArmed = qfalse;
+	// Retail's window procedure withholds every keyboard message from the page
+	// while capture is armed, so the answering key cannot also act on it --
+	// Backspace, for one, would navigate the menu back to the previous tab.
+	if ( cl_webui.keyCaptureArmed ) {
+		if ( !down ) {
+			CL_WebView_PublishGameKey( key );
+			cl_webui.keyCaptureArmed = qfalse;
+		}
+		return;
 	}
 
 	virtualKey = CL_WebHost_MapVirtualKey( key );
@@ -7659,6 +7665,11 @@ void CL_WebView_OnCharEvent( int codepoint ) {
 	unsigned int scalar;
 
 	if ( !CL_WebHost_BrowserAcceptsInput() || codepoint <= 0 ) {
+		return;
+	}
+
+	// Character messages are withheld during key capture as well.
+	if ( cl_webui.keyCaptureArmed ) {
 		return;
 	}
 
