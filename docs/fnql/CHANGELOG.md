@@ -29,6 +29,8 @@ release, CI resets `Unreleased` for the next cycle.
 
 ### Fixes
 - Fixed scoreboard key presses unexpectedly leaving spectator follow mode.
+- The mouse wheel scrolls menu pages up and down again, at retail's speed,
+  instead of sideways.
 
 ### Documentation and Tooling
 - _None yet._
