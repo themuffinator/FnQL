@@ -192,7 +192,15 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("static void CL_DispatchBrowserKeyEvent", keys)
         self.assertIn("key >= K_MOUSE1 && key <= K_MOUSE9", keys)
         self.assertIn("CL_WebView_OnMouseButtonEvent( key, down );", keys)
-        self.assertIn("CL_WebView_OnMouseWheelEvent( 1 );", keys)
+        # Retail scrolls on both the press and the release of a wheel notch.
+        dispatch = keys[keys.index("static void CL_DispatchBrowserKeyEvent") :]
+        dispatch = dispatch[: dispatch.index("\n}\n")]
+        wheel = dispatch[
+            dispatch.index("} else if ( key == K_MWHEELUP || key == K_MWHEELDOWN ) {") :
+            dispatch.index("CL_WebView_OnKeyEvent( key, down );")
+        ]
+        self.assertIn("CL_WebView_OnMouseWheelEvent( key == K_MWHEELUP ? 1 : -1 );", wheel)
+        self.assertNotIn("down", wheel)
         self.assertIn("fnql::input::EncodeUtf8( *codepoint )", keys)
         self.assertIn("CL_WebView_OnCharEvent( static_cast<int>( *codepoint ) );", keys)
         self.assertIn("Key_GetCatcher( ) & KEYCATCH_BROWSER", keys)

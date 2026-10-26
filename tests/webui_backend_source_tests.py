@@ -80,6 +80,19 @@ class WebUiBackendSourceTests(unittest.TestCase):
         self.assertIn("MapVirtualKeyW( event.virtualKey, MAPVK_VK_TO_VSC )", adapter)
         self.assertIn("static bool IsExtendedVirtualKey", adapter)
 
+        # Retail calls WebView::InjectMouseWheel( direction * 30, 0 ): vertical
+        # first. Swapping the order scrolls the page sideways instead.
+        wheel = adapter[
+            adapter.index("BackendResult InjectMouseWheel") :
+            adapter.index("BackendResult InjectKeyboard")
+        ]
+        self.assertIn("constexpr int kAwesomiumWheelDelta = 30;", wheel)
+        self.assertIn(
+            "view_, event.verticalTicks * kAwesomiumWheelDelta,\n"
+            "\t\t\tevent.horizontalTicks * kAwesomiumWheelDelta );",
+            wheel,
+        )
+
         shutdown = adapter[
             adapter.index("void ShutdownRuntimeObjects() noexcept") :
             adapter.index("static void __stdcall OnSteamResourceRequest")
