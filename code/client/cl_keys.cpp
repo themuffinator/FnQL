@@ -706,14 +706,10 @@ browser keycatcher owns input.
 static void CL_DispatchBrowserKeyEvent( int key, qboolean down ) {
 	if ( key >= K_MOUSE1 && key <= K_MOUSE9 ) {
 		CL_WebView_OnMouseButtonEvent( key, down );
-	} else if ( key == K_MWHEELUP ) {
-		if ( down ) {
-			CL_WebView_OnMouseWheelEvent( 1 );
-		}
-	} else if ( key == K_MWHEELDOWN ) {
-		if ( down ) {
-			CL_WebView_OnMouseWheelEvent( -1 );
-		}
+	} else if ( key == K_MWHEELUP || key == K_MWHEELDOWN ) {
+		// Retail's browser bridge scrolls on both halves of the press/release
+		// pair every platform queues per notch, so each notch moves twice.
+		CL_WebView_OnMouseWheelEvent( key == K_MWHEELUP ? 1 : -1 );
 	} else {
 		CL_WebView_OnKeyEvent( key, down );
 	}

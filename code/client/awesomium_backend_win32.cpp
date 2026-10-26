@@ -339,8 +339,9 @@ public:
 
 	// WebView::InjectMouseWheel takes ( scroll_vert, scroll_horz ), and the C
 	// export forwards its two values to that vtable slot in order.  Retail's
-	// wheel bridge passes ( direction * 30, 0 ): wheel up +1, wheel down -1,
-	// 30 per notch rather than the Win32 WHEEL_DELTA of 120.
+	// wheel bridge passes ( direction * 30, 0 ): wheel up +1, wheel down -1.
+	// It runs for both the press and the release of each notch, so a notch
+	// scrolls 60 in total rather than the Win32 WHEEL_DELTA of 120.
 	BackendResult InjectMouseWheel( const MouseWheelEvent &event ) noexcept override {
 		constexpr int kAwesomiumWheelDelta = 30;
 		imports_.webViewInjectMouseWheel(
