@@ -29,6 +29,9 @@ release, CI resets `Unreleased` for the next cycle.
 
 ### Fixes
 - Fixed scoreboard key presses unexpectedly leaving spectator follow mode.
+- Mouse buttons (including side buttons) and the mouse wheel can now be bound
+  from the settings menu, and Escape cancels the "press a key" prompt in game
+  instead of closing the menu.
 
 ### Documentation and Tooling
 - _None yet._

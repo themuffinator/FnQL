@@ -216,6 +216,31 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn('( Key_GetCatcher() & ~KEYCATCH_RETAIL_MOUSEPASS ) == 0', input_source)
         self.assertIn('Cvar_Get( "cg_ignoreMouseInput", "0", CVAR_ROM )', input_source)
 
+    def test_bind_prompt_captures_mouse_buttons_and_wheel(self) -> None:
+        keys = (ROOT / "code" / "client" / "cl_keys.cpp").read_text(encoding="utf-8")
+        webui = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
+
+        dispatch = keys[keys.index("static void CL_DispatchBrowserKeyEvent") :]
+        dispatch = dispatch[: dispatch.index("\n}\n")]
+        capture = dispatch.index("CL_WebView_CaptureMouseKeyEvent( key, down )")
+        self.assertIn("key == K_MWHEELUP || key == K_MWHEELDOWN", dispatch)
+        self.assertLess(capture, dispatch.index("CL_WebView_OnMouseButtonEvent( key, down );"))
+        self.assertLess(capture, dispatch.index("CL_WebView_OnMouseWheelEvent( 1 );"))
+        # Keyboard capture keeps its existing path.
+        self.assertIn("CL_WebView_OnKeyEvent( key, down );", dispatch)
+
+        body = webui[webui.index("qboolean CL_WebView_CaptureMouseKeyEvent( int key, qboolean down ) {") :]
+        body = body[: body.index("\n}\n")]
+        self.assertIn("if ( !CL_WebHost_KeyCapturePending() ) {", body)
+        self.assertIn("cl_webui.keyCapturePressedKey = key;", body)
+        # Only the release of the press capture held back answers the prompt.
+        self.assertIn("if ( key != cl_webui.keyCapturePressedKey ) {", body)
+        self.assertIn("CL_WebView_PublishGameKey( key );", body)
+        self.assertIn("cl_webui.keyCaptureArmed = qfalse;", body)
+
+        arm = webui[webui.index('if ( !Q_stricmp( kind, "keycapture" ) ) {') :]
+        self.assertIn("cl_webui.keyCapturePressedKey = 0;", arm[: arm.index("}")])
+
     def test_every_route_to_disconnected_restores_the_webui_menu(self) -> None:
         """CL_Disconnect_f returns early after SV_Shutdown on a listen server, so
         SV_Shutdown's non-menu disconnect must be followed by the terminal
