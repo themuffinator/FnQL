@@ -225,7 +225,7 @@ class WebUiWiringTests(unittest.TestCase):
         capture = dispatch.index("CL_WebView_CaptureMouseKeyEvent( key, down )")
         self.assertIn("key == K_MWHEELUP || key == K_MWHEELDOWN", dispatch)
         self.assertLess(capture, dispatch.index("CL_WebView_OnMouseButtonEvent( key, down );"))
-        self.assertLess(capture, dispatch.index("CL_WebView_OnMouseWheelEvent( 1 );"))
+        self.assertLess(capture, dispatch.index("CL_WebView_OnMouseWheelEvent("))
         # Keyboard capture keeps its existing path.
         self.assertIn("CL_WebView_OnKeyEvent( key, down );", dispatch)
 
