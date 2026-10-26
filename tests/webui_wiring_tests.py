@@ -196,7 +196,7 @@ class WebUiWiringTests(unittest.TestCase):
         dispatch = keys[keys.index("static void CL_DispatchBrowserKeyEvent") :]
         dispatch = dispatch[: dispatch.index("\n}\n")]
         wheel = dispatch[
-            dispatch.index("key == K_MWHEELUP || key == K_MWHEELDOWN") :
+            dispatch.index("} else if ( key == K_MWHEELUP || key == K_MWHEELDOWN ) {") :
             dispatch.index("CL_WebView_OnKeyEvent( key, down );")
         ]
         self.assertIn("CL_WebView_OnMouseWheelEvent( key == K_MWHEELUP ? 1 : -1 );", wheel)
