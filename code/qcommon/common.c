@@ -4444,6 +4444,19 @@ Com_FrameInit
 */
 void Com_FrameInit( void )
 {
+	static qboolean lockstepClockStarted = qfalse;
+
+	if ( SV_LockstepFrameMsec() > 0 ) {
+		// sv_lockstep: com_frameTime is a virtual clock that starts at a fixed
+		// origin and is never rewound, so no wall-clock time reaches the server
+		if ( !lockstepClockStarted ) {
+			com_frameTime = SV_LockstepClockOrigin();
+			lockstepClockStarted = qtrue;
+		}
+		lastTime = com_frameTime;
+		return;
+	}
+
 	lastTime = com_frameTime = Com_Milliseconds();
 }
 
@@ -4461,6 +4474,7 @@ void Com_Frame( qboolean noDelay ) {
 	int	sleepMsec;
 	int	timeVal;
 	int	timeValSV;
+	int	lockstepMsec;
 
 	int	timeBeforeFirstEvents;
 	int	timeBeforeServer;
@@ -4473,6 +4487,10 @@ void Com_Frame( qboolean noDelay ) {
 	}
 
 	minMsec = 0; // silent compiler warning
+
+	// sv_lockstep (dedicated tooling, default off) runs fixed-length frames
+	// back to back on a virtual clock; 0 keeps the normal paced loop
+	lockstepMsec = SV_LockstepFrameMsec();
 
 	// bk001204 - init to zero.
 	//  also:  might be clobbered by `longjmp' or `vfork'
@@ -4543,6 +4561,10 @@ void Com_Frame( qboolean noDelay ) {
 	}
 
 	// waiting for incoming packets
+	if ( lockstepMsec > 0 ) {
+		// never sleep: only poll the sockets so the console and network stay live
+		NET_Sleep( 0 );
+	} else
 	if ( noDelay == qfalse )
 	do {
 		if ( com_sv_running->integer ) {
@@ -4566,13 +4588,22 @@ void Com_Frame( qboolean noDelay ) {
 	lastTime = com_frameTime;
 	com_frameTime = Com_EventLoop();
 	realMsec = com_frameTime - lastTime;
+	if ( lockstepMsec > 0 ) {
+		// the virtual clock advances exactly one server frame per Com_Frame
+		com_frameTime = lastTime + lockstepMsec;
+		realMsec = lockstepMsec;
+	}
 
 	Cbuf_Execute();
 	FNQL_Steam_Pump();
 	Com_WorkshopFrame();
 
 	// mess with msec if needed
-	gameMsec = Com_ModifyMsec( realMsec );
+	if ( lockstepMsec > 0 ) {
+		gameMsec = lockstepMsec;
+	} else {
+		gameMsec = Com_ModifyMsec( realMsec );
+	}
 
 	//
 	// server side

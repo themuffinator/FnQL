@@ -1345,6 +1345,10 @@ void SV_Frame( int msec, int realMsec );
 void SV_TrackCvarChanges( void );
 void SV_PacketEvent( const netadr_t *from, msg_t *msg );
 int SV_FrameMsec( void );
+// sv_lockstep (dedicated tooling, default off): the fixed frame length while
+// lockstep runs, 0 otherwise; and the origin of its virtual clock
+int SV_LockstepFrameMsec( void );
+int SV_LockstepClockOrigin( void );
 qboolean SV_GameCommand( void );
 int SV_SendQueuedPackets( void );
 

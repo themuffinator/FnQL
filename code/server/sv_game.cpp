@@ -173,6 +173,8 @@ Sends a command string to a client
 ===============
 */
 static void SV_GameSendServerCommand( int clientNum, const char *text ) {
+	SV_LockstepRecordServerCommand( clientNum, text );	// no-op unless sv_lockstep records
+
 	if ( clientNum == -1 ) {
 		SV_SendServerCommand( nullptr, "%s", text );
 	} else {
@@ -574,7 +576,8 @@ static intptr_t SV_GameSystemCalls( intptr_t *args ) {
 		Com_Error( ERR_DROP, "%s", static_cast<const char *>( VMA(1) ) );
 		return 0;
 	case G_MILLISECONDS:
-		return Sys_Milliseconds();
+		// sv_lockstep pins the game's clock to its virtual frame clock
+		return SV_LockstepActive() ? SV_LockstepMilliseconds() : Sys_Milliseconds();
 	case G_CVAR_REGISTER:
 		if ( gvm->dllExports ) {
 			Cvar_Register( VMA(1), VMA(2), VMA(3), args[4], gvm->privateFlag );
@@ -757,7 +760,8 @@ static intptr_t SV_GameSystemCalls( intptr_t *args ) {
 		BotImport_DebugPolygonDelete( args[1] );
 		return 0;
 	case G_REAL_TIME:
-		return Com_RealTime( VMA(1) );
+		// sv_lockstep reports a fixed UTC epoch plus elapsed virtual time
+		return SV_LockstepActive() ? SV_LockstepRealTime( VMA(1) ) : Com_RealTime( VMA(1) );
 	case G_SNAPVECTOR:
 		Sys_SnapVector( VMA(1) );
 		return 0;
@@ -1943,6 +1947,12 @@ static void QDECL QL_G_trap_GenerateMatchGuid( char *buffer, int bufferSize ) {
 		bufferSize = GAME_MATCH_GUID_BUFFER_SIZE;
 	}
 
+	if ( SV_LockstepActive() ) {
+		// sv_lockstep: a seeded, reproducible GUID instead of a system one
+		SV_LockstepMatchGuid( buffer, bufferSize );
+		return;
+	}
+
 	SV_GenerateMatchGuid( buffer, bufferSize );
 }
 
@@ -2527,8 +2537,19 @@ static void SV_InitGameVM( bool restart ) {
 	}
 	
 	// use the current msec count for a random seed
-	// init for this gamestate
-	VM_Call( gvm, 3, GAME_INIT, sv.time, Com_Milliseconds(), SV_QBool( restart ) );
+	// init for this gamestate (sv_lockstep derives it from sv_lockstepSeed)
+	const int randomSeed = SV_LockstepActive() ? SV_LockstepGameSeed() : Com_Milliseconds();
+	if ( SV_LockstepActive() && gvm->dllExports ) {
+		// any export locates the module image for sv_lockstepTraceRand
+		void **const exports = reinterpret_cast<void **>( gvm->dllExports );
+		for ( int i = 0; i < 8; i++ ) {
+			if ( exports[i] ) {
+				SV_LockstepTraceGameRand( exports[i] );
+				break;
+			}
+		}
+	}
+	VM_Call( gvm, 3, GAME_INIT, sv.time, randomSeed, SV_QBool( restart ) );
 }
 
 

@@ -562,6 +562,27 @@ void BotDrawDebugPolygons(void (*drawPoly)(int color, int numPoints, float *poin
 
 void SV_BotInitBotLib(void);
 
+//
+// sv_lockstep.cpp -- deterministic lockstep tooling, off unless sv_lockstep 1
+// on a dedicated server (docs/fnql/SERVER_LOCKSTEP.md)
+//
+void		SV_LockstepInit( void );
+void		SV_LockstepShutdown( const char *reason );
+qboolean	SV_LockstepActive( void );
+void		SV_LockstepBeginFrame( void );
+void		SV_LockstepClientThink( void );
+void		SV_LockstepEndFrame( void );
+int			SV_LockstepGameSeed( void );
+void		SV_LockstepTraceGameRand( void *addressInModule );
+void		SV_LockstepSeedLevel( int *checksumFeed );
+int			SV_LockstepMilliseconds( void );
+int			SV_LockstepRealTime( qtime_t *qtime );
+void		SV_LockstepMatchGuid( char *buffer, int bufferSize );
+void		SV_LockstepRecordServerCommand( int clientNum, const char *text );
+qboolean	SV_LockstepIsScriptedClient( const client_t *client );
+const char	*SV_LockstepClientAddress( const client_t *client );
+qboolean	SV_LockstepClientPing( const client_t *client, int *ping );
+
 //============================================================
 //
 // high level object sorting to reduce interaction tests

@@ -159,6 +159,7 @@ SET(SERVER_SRCS
 	code/server/sv_filter.cpp
 	code/server/sv_game.cpp
 	code/server/sv_init.cpp
+	code/server/sv_lockstep.cpp
 	code/server/sv_main.cpp
 	code/server/sv_net_chan.cpp
 	code/server/sv_platform.cpp

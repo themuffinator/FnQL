@@ -563,8 +563,13 @@ void SV_SpawnServer( const char *mapname, qboolean killBots ) {
 	sv.pure = sv_pure->integer;
 
 	// get a new checksum feed and restart the file system
-	srand( Com_Milliseconds() );
-	Com_RandomBytes( reinterpret_cast<byte *>( &sv.checksumFeed ), sizeof( sv.checksumFeed ) );
+	if ( SV_LockstepActive() ) {
+		// sv_lockstep: seed rand() and the feed from sv_lockstepSeed
+		SV_LockstepSeedLevel( &sv.checksumFeed );
+	} else {
+		srand( Com_Milliseconds() );
+		Com_RandomBytes( reinterpret_cast<byte *>( &sv.checksumFeed ), sizeof( sv.checksumFeed ) );
+	}
 	FS_Restart( sv.checksumFeed );
 
 	Sys_SetStatus( "Loading map %s", mapname );
@@ -943,6 +948,9 @@ void SV_Init( void )
 	sv_filter = Cvar_Get( "sv_filter", "filter.txt", CVAR_ARCHIVE );
 	Cvar_SetDescription( sv_filter, "Cvar that point on filter file, if it is "" then filtering will be disabled." );
 
+	// deterministic lockstep tooling; inert unless sv_lockstep 1 on a dedicated server
+	SV_LockstepInit();
+
 	// initialize bot cvars so they are listed and can be set before loading the botlib
 	SV_BotInitCvars();
 
@@ -1022,6 +1030,9 @@ void SV_Shutdown( const char *finalmsg ) {
 	}
 
 	Com_Printf( "----- Server Shutdown (%s) -----\n", finalmsg );
+
+	// close an sv_lockstep recording before the final messages and the game shutdown
+	SV_LockstepShutdown( finalmsg );
 
 #ifdef USE_IPV6
 	NET_LeaveMulticast6();

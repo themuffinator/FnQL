@@ -92,6 +92,14 @@ only planned.
   the desktop rate the mode set retries at the driver default, and an explicit
   `r_displayRefresh` is honored unchanged, so previously working setups keep
   their behavior.
+- [x] Dedicated servers gain a default-off, command-line-only lockstep mode
+  (`sv_lockstep`) for game-module differentials: fixed frames on a virtual
+  clock, pinned engine seeds and clocks, networkless scripted clients driven
+  by a scenario timeline, and a per-frame recording of playerStates,
+  entities, configstrings and game server commands. Observed: two runs on
+  the retail qagame record identically apart from the module's own CRT
+  wall-clock read (`g_levelStartTime`). Source tests guard the default-off
+  hooks. See [server lockstep](SERVER_LOCKSTEP.md).
 
 ## Carry Forward
 

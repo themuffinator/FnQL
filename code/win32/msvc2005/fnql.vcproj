@@ -446,6 +446,10 @@
 				>
 			</File>
 			<File
+				RelativePath="..\..\server\sv_lockstep.cpp"
+				>
+			</File>
+			<File
 				RelativePath="..\..\server\sv_main.cpp"
 				>
 			</File>

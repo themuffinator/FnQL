@@ -1200,6 +1200,12 @@ static void SV_CalcPings( void ) {
 			client.ping = 0;
 			continue;
 		}
+		// sv_lockstep scripted clients acknowledge nothing; report their
+		// scripted ping instead of the 999 an unacknowledged client gets
+		if ( SV_LockstepClientPing( &client, &client.ping ) ) {
+			SV_GameClientNum( slot.index )->ping = client.ping;
+			continue;
+		}
 
 		total = 0;
 		count = 0;
@@ -1489,7 +1495,19 @@ void SV_Frame( int msec, int realMsec ) {
 		}
 	}
 
-	sv.timeResidual += msec;
+	const bool lockstep = SV_LockstepActive() != qfalse;
+	if ( lockstep ) {
+		// sv_lockstep: exactly one 1000/sv_fps game frame per server frame.
+		// Timeline commands run here, where console and rcon commands run.
+		frameMsec = SV_LockstepFrameMsec();
+		SV_LockstepBeginFrame();
+		if ( !com_sv_running->integer ) {
+			return;
+		}
+		sv.timeResidual = frameMsec;
+	} else {
+		sv.timeResidual += msec;
+	}
 
 	if ( !com_dedicated->integer )
 		SV_BotFrame( sv.time + sv.timeResidual );
@@ -1570,8 +1588,16 @@ void SV_Frame( int msec, int realMsec ) {
 		sv.timeResidual -= frameMsec;
 		sv.time += frameMsec;
 
+		if ( lockstep ) {
+			SV_LockstepClientThink();
+		}
+
 		// let everything in the world think and move
 		VM_Call( gvm, 1, GAME_RUN_FRAME, sv.time );
+
+		if ( lockstep ) {
+			SV_LockstepEndFrame();
+		}
 	}
 
 	if ( com_speeds->integer ) {
