@@ -1473,7 +1473,10 @@ QL_IMPORT4( QL_G_trap_BotMoveToGoal, BOTLIB_AI_MOVE_TO_GOAL, void *, int, void *
 QL_IMPORT1( QL_G_trap_BotResetAvoidReach, BOTLIB_AI_RESET_AVOID_REACH, int )
 QL_IMPORT1( QL_G_trap_BotResetLastAvoidReach, BOTLIB_AI_RESET_LAST_AVOID_REACH, int )
 QL_IMPORT2( QL_G_trap_BotReachabilityArea, BOTLIB_AI_REACHABILITY_AREA, vec3_t, int )
-QL_IMPORT3( QL_G_trap_BotPredictVisiblePosition, BOTLIB_AI_PREDICT_VISIBLE_POSITION, vec3_t, int, void * )
+// Retail qagame pushes origin, areanum, goal, travelflags and target for this
+// slot (QLSRP HLIL qagamex86.dll 0x1001ae1d..0x1001ae2b); botlib writes the
+// predicted position through target, so all five must reach it.
+QL_IMPORT5( QL_G_trap_BotPredictVisiblePosition, BOTLIB_AI_PREDICT_VISIBLE_POSITION, vec3_t, int, void *, int, vec3_t )
 QL_IMPORT0( QL_G_trap_BotAllocMoveState, BOTLIB_AI_ALLOC_MOVE_STATE )
 QL_IMPORT1( QL_G_trap_BotFreeMoveState, BOTLIB_AI_FREE_MOVE_STATE, int )
 QL_IMPORT2( QL_G_trap_BotInitMoveState, BOTLIB_AI_INIT_MOVE_STATE, int, void * )
@@ -1748,13 +1751,20 @@ static qboolean QDECL QL_G_trap_GetSteamId( int clientNum, unsigned int *steamId
 	return qtrue;
 }
 
-// Retail native import slot 200 returns only the low SteamID dword.  The
-// older compatibility syscall uses the three-argument output-pointer shape
-// above; sharing one function between those ABIs corrupts the caller stack.
-static unsigned int QDECL QL_G_trap_GetSteamIdLow( int clientNum ) {
+// Retail native import slot 200 takes only the client number and returns the
+// 64-bit SteamID in EDX:EAX: retail ClientConnect stores EAX and then EDX as
+// the two halves of the client's SteamID (qagamex86 0x1003adc4: call [import
+// +0x320]; mov [esi+0x2c0], eax; mov [esi+0x2c4], edx), which later feeds
+// the "st" key of CS_PLAYERS.  A 32-bit return left EDX undefined.  The older
+// compatibility syscall uses the three-argument output-pointer shape above;
+// sharing one function between those ABIs corrupts the caller stack.
+static std::uint64_t QDECL QL_G_trap_GetSteamId64( int clientNum ) {
 	unsigned int low = 0;
 	unsigned int high = 0;
-	return SV_ClientSteamId( clientNum, &low, &high ) ? low : 0u;
+	if ( !SV_ClientSteamId( clientNum, &low, &high ) ) {
+		return 0;
+	}
+	return ( static_cast<std::uint64_t>( high ) << 32 ) | low;
 }
 
 static qboolean QDECL QL_G_trap_VerifySteamAuth( int clientNum ) {
@@ -2209,7 +2219,7 @@ static void SV_InitGameImports( void ) {
 	QL_BIND( G_QL_IMPORT_MARK_CLIENT_GOT_CP, QL_G_trap_MarkClientGotCP );
 	QL_BIND( G_QL_IMPORT_RETURN_ZERO_198, QL_G_trap_ReturnZero );
 	QL_BIND( G_QL_IMPORT_RETURN_ZERO_199, QL_G_trap_ReturnZero );
-	QL_BIND( G_QL_IMPORT_STEAMID_QUERY, QL_G_trap_GetSteamIdLow );
+	QL_BIND( G_QL_IMPORT_STEAMID_QUERY, QL_G_trap_GetSteamId64 );
 	QL_BIND( G_QL_IMPORT_STEAM_STAT_ADD, QL_G_trap_AddSteamStat );
 	QL_BIND( G_QL_IMPORT_GENERATE_MATCH_GUID, QL_G_trap_GenerateMatchGuid );
 	QL_BIND( G_QL_IMPORT_STEAM_UNLOCK_ACHIEVEMENT, QL_G_trap_UnlockSteamAchievement );

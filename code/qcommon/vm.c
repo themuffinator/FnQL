@@ -36,6 +36,7 @@ and one exported function: Perform
 
 #include "vm_local.h"
 #include "vm_header_bounds.h"
+#include "fnql_module.h"
 #include "../game/g_public.h"
 #include "../ui/ui_public.h"
 #include "../renderercommon/tr_types.h"
@@ -242,6 +243,15 @@ static const char *vmName[ VM_COUNT ] = {
 	"ui"
 };
 
+// Who supplies a native module: the retail-named module the filesystem offers
+// (historical behavior), or the FnQL-game companion module.
+typedef enum {
+	VM_PROVIDER_RETAIL,
+	VM_PROVIDER_FNQL
+} vmProvider_t;
+
+static cvar_t *vm_gameProvider;
+
 static void VM_VmInfo_f( void );
 static void VM_VmProfile_f( void );
 
@@ -394,6 +404,13 @@ void VM_Init( void ) {
 	Cvar_Get( "vm_cgame", "0", CVAR_ARCHIVE | CVAR_PROTECTED );	// Quake Live ships native cgame by default.
 #endif
 	Cvar_Get( "vm_game", "0", CVAR_ARCHIVE | CVAR_PROTECTED );
+	vm_gameProvider = Cvar_Get( "vm_gameProvider", "retail", CVAR_ARCHIVE | CVAR_PROTECTED );
+	Cvar_SetDescription( vm_gameProvider,
+		"Who supplies the native server game module:\n"
+		" retail - qagame as the filesystem offers it (default)\n"
+		" fnql   - the FnQL-game companion module (" FNQL_GAME_SERVER_MODULE_FILE "), "
+		"falling back to retail when it is missing or invalid\n"
+		"Takes effect on the next map load." );
 
 	Cmd_AddCommand( "vmprofile", VM_VmProfile_f );
 	Cmd_AddCommand( "vminfo", VM_VmInfo_f );
@@ -2176,6 +2193,150 @@ static void * QDECL VM_LoadDll( vmIndex_t index, const char *name,
 
 
 /*
+=================
+VM_RequestedProvider
+
+Only qagame has a provider choice.  A pure server validates the pak that
+holds cgamex86.dll rather than the bytes a client executes, so FnQL-game
+cgame/ui stay unselectable until the purity rules in
+docs/fnql/GAME_MODULES.md are implemented for them.
+=================
+*/
+static vmProvider_t VM_RequestedProvider( vmIndex_t index ) {
+	const char *value;
+
+	if ( index != VM_GAME || !vm_gameProvider ) {
+		return VM_PROVIDER_RETAIL;
+	}
+
+	value = vm_gameProvider->string;
+	if ( !Q_stricmp( value, "fnql" ) ) {
+		return VM_PROVIDER_FNQL;
+	}
+	if ( value[0] && Q_stricmp( value, "retail" ) ) {
+		Com_Printf( S_COLOR_YELLOW "vm_gameProvider '%s' is not recognized; "
+			"using the retail module.\n", value );
+	}
+	return VM_PROVIDER_RETAIL;
+}
+
+
+/*
+=================
+VM_IdentifyNativeModule
+
+Reads the optional FnQL_GetModuleInfo record of a freshly loaded native
+module.  Returns qtrue only for a well-formed FnQL-game record that names
+this VM slot and the native API the engine expects.
+=================
+*/
+static qboolean VM_IdentifyNativeModule( vm_t *vm ) {
+	const int minimumInfoSize = (int)( offsetof( fnqlModuleInfo_t, nativeApi ) +
+		sizeof( ( (fnqlModuleInfo_t *)0 )->nativeApi ) );
+	fnqlGetModuleInfo_t getInfo;
+	const fnqlModuleInfo_t *info;
+	void *symbol;
+
+	Q_strncpyz( vm->providerName, "unidentified", sizeof( vm->providerName ) );
+	vm->providerVersion[0] = '\0';
+	vm->providerCapabilities = 0;
+
+	symbol = Sys_LoadFunction( vm->dllHandle, FNQL_MODULE_INFO_SYMBOL );
+	if ( !symbol ) {
+		return qfalse;
+	}
+	if ( !VM_AssignDllFunction( &getInfo, sizeof( getInfo ), symbol, FNQL_MODULE_INFO_SYMBOL ) ) {
+		return qfalse;
+	}
+
+	info = getInfo();
+	if ( !info || info->size < minimumInfoSize || info->infoVersion < 1 ||
+		!info->product || !info->module || !info->version ||
+		Q_stricmp( info->product, FNQL_MODULE_PRODUCT ) ||
+		Q_stricmp( info->module, vmName[ vm->index ] ) ||
+		info->nativeApi != VM_GetExpectedNativeApiVersion( vm->index ) ) {
+		Com_Printf( S_COLOR_YELLOW "VM_LoadDll(%s): '%s' has a malformed or mismatched "
+			"%s record.\n", vm->name, vm->moduleFile, FNQL_MODULE_INFO_SYMBOL );
+		return qfalse;
+	}
+
+	Q_strncpyz( vm->providerName, info->product, sizeof( vm->providerName ) );
+	Q_strncpyz( vm->providerVersion, info->version, sizeof( vm->providerVersion ) );
+	vm->providerCapabilities = info->capabilities;
+	return qtrue;
+}
+
+
+/*
+=================
+VM_LoadNativeModule
+
+Loads, validates and identifies one native module candidate.  A candidate
+requested through a provider must identify itself as that provider's module;
+otherwise it is unloaded so the caller can fall back.
+=================
+*/
+static qboolean VM_LoadNativeModule( vm_t *vm, const char *moduleName,
+	qboolean pinnedOnly, qboolean requireFnQLModule ) {
+	const int engineApiVersion = vm->dllApiVersion;
+	qboolean identified;
+
+	Com_Printf( "Loading dll file %s.\n", moduleName );
+	Com_sprintf( vm->moduleFile, sizeof( vm->moduleFile ), "%s" ARCH_STRING DLL_EXT, moduleName );
+
+	vm->dllHandle = VM_LoadDll( vm->index, moduleName, &vm->entryPoint, vm->dllSyscall,
+		&vm->dllExports, vm->dllImports, vm->dllImports ? &vm->dllApiVersion : NULL,
+		pinnedOnly );
+	if ( !vm->dllHandle ) {
+		vm->moduleFile[0] = '\0';
+		return qfalse;
+	}
+
+	if ( vm->dllExports && !VM_ValidateNativeDllInterface( vm ) ) {
+		goto reject;
+	}
+
+	identified = VM_IdentifyNativeModule( vm );
+	if ( requireFnQLModule ) {
+		// FnQL-game modules always use the structured retail ABI.
+		if ( !identified || !vm->dllExports ) {
+			Com_Printf( S_COLOR_YELLOW "'%s' is not a usable %s %s module; ignoring it.\n",
+				vm->moduleFile, FNQL_MODULE_PRODUCT, vm->name );
+			goto reject;
+		}
+	}
+
+	if ( identified ) {
+		Com_Printf( "VM_LoadDll(%s): %s %s module (capabilities 0x%x)\n", vm->name,
+			vm->providerName, vm->providerVersion, vm->providerCapabilities );
+		if ( vm->index == VM_GAME && !( vm->providerCapabilities & FNQL_MODULE_CAP_RETAIL_WIRE ) ) {
+			Com_Printf( S_COLOR_YELLOW "WARNING: %s does not declare retail wire parity yet; "
+				"retail clients joining this server may see inconsistent game state.\n",
+				vm->moduleFile );
+		}
+	}
+
+	vm->privateFlag = 0; // allow reading private cvars
+	vm->dataAlloc = ~0U;
+	vm->dataMask = ~0U;
+	vm->dataBase = 0;
+	return qtrue;
+
+reject:
+	Sys_UnloadLibrary( vm->dllHandle );
+	vm->dllHandle = NULL;
+	vm->dllExports = NULL;
+	vm->entryPoint = NULL;
+	vm->dllApiVersion = engineApiVersion;
+	vm->moduleFile[0] = '\0';
+	vm->providerName[0] = '\0';
+	vm->providerVersion[0] = '\0';
+	vm->providerCapabilities = 0;
+	return qfalse;
+}
+
+
+/*
 ================
 VM_Create
 
@@ -2232,24 +2393,22 @@ vm_t *VM_CreateNative( vmIndex_t index, syscall_t systemCalls, dllSyscall_t dllS
 	}
 
 	if ( interpret == VMI_NATIVE || interpret == VMI_PINNED_NATIVE ) {
-		// try to load as a system dll
-		Com_Printf( "Loading dll file %s.\n", name );
-		vm->dllHandle = VM_LoadDll( index, name, &vm->entryPoint, dllSyscalls,
-			&vm->dllExports, vm->dllImports, vm->dllImports ? &vm->dllApiVersion : NULL,
-			interpret == VMI_PINNED_NATIVE ? qtrue : qfalse );
-		if ( vm->dllHandle ) {
-			if ( vm->dllExports && !VM_ValidateNativeDllInterface( vm ) ) {
-				Sys_UnloadLibrary( vm->dllHandle );
-				vm->dllHandle = NULL;
-				vm->dllExports = NULL;
-				vm->entryPoint = NULL;
-			} else {
-				vm->privateFlag = 0; // allow reading private cvars
-				vm->dataAlloc = ~0U;
-				vm->dataMask = ~0U;
-				vm->dataBase = 0;
+		// an explicitly requested FnQL-game module goes first; any failure
+		// falls back to the retail-named module below
+		if ( interpret == VMI_NATIVE && VM_RequestedProvider( index ) == VM_PROVIDER_FNQL ) {
+			char fnqlModuleName[ MAX_QPATH ];
+
+			Com_sprintf( fnqlModuleName, sizeof( fnqlModuleName ), FNQL_GAME_MODULE_PREFIX "%s", name );
+			if ( VM_LoadNativeModule( vm, fnqlModuleName, qfalse, qtrue ) ) {
 				return vm;
 			}
+			Com_Printf( S_COLOR_YELLOW "vm_gameProvider fnql: no usable %s %s module; "
+				"loading the retail module instead.\n", FNQL_MODULE_PRODUCT, name );
+		}
+
+		// try to load as a system dll
+		if ( VM_LoadNativeModule( vm, name, interpret == VMI_PINNED_NATIVE ? qtrue : qfalse, qfalse ) ) {
+			return vm;
 		}
 
 #ifdef __APPLE__
@@ -3081,7 +3240,12 @@ static void VM_VmInfo_f( void ) {
 		}
 		Com_Printf( "%s : ", vm->name );
 		if ( vm->dllHandle ) {
-			Com_Printf( "native\n" );
+			if ( vm->providerVersion[0] ) {
+				Com_Printf( "native %s (%s %s, capabilities 0x%x)\n", vm->moduleFile,
+					vm->providerName, vm->providerVersion, vm->providerCapabilities );
+			} else {
+				Com_Printf( "native %s (%s)\n", vm->moduleFile, vm->providerName );
+			}
 			continue;
 		}
 		if ( vm->compiled ) {

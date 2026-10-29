@@ -29,6 +29,12 @@ release, CI resets `Unreleased` for the next cycle.
 
 ### Fixes
 - Fixed scoreboard key presses unexpectedly leaving spectator follow mode.
+- Fixed bots on servers running the retail game module passing an invalid
+  target to the engine when predicting where an enemy went out of view.
+- Fixed retail game modules receiving a corrupted upper half of each
+  player's SteamID.
 
 ### Documentation and Tooling
-- _None yet._
+- Servers can load the clean-room FnQL-game server module with
+  `vm_gameProvider fnql`; the retail module stays the default, and `vminfo`
+  now shows which module is running.

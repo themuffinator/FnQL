@@ -16,6 +16,8 @@ architecture for FnQL. The mandatory rewrite and non-regression rules live in
 
 1. FnQL remains engine-only. `qagame`, `cgame`, and UI implementations are not
    imported; only their documented ABI and host requirements belong here.
+   Clean-room modules are built in the companion FnQL-game repository and
+   hosted through [`GAME_MODULES.md`](GAME_MODULES.md).
 2. QLSRP-derived work is independently designed and implemented around FnQL's
    architecture. Mechanical transplantation, cosmetic rewriting, and importing
    QLSRP implementation structure are not acceptable.

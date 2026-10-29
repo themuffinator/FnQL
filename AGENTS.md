@@ -6,6 +6,9 @@ FnQL is Fappin' Quake Live: a modernized Quake Live engine derived from
 FnQuake3 and guided by the reconstructed Quake Live source in QLSRP. The target
 is retail Quake Live compatibility under a legitimate Steam installation. This
 repository is engine-only; do not reconstruct or ship game code as part of FnQL.
+Clean-room game modules belong to the companion repository FnQL-game (see
+Reference Repositories); FnQL hosts them through the contract in
+`docs/fnql/GAME_MODULES.md`.
 
 Every change should protect these project constraints:
 
@@ -34,9 +37,13 @@ Every change should protect these project constraints:
    Quake Live evidence requires intentionally replacing incompatible behavior,
    document the evidence, scope the change narrowly, and add a regression gate
    for both the corrected behavior and unaffected paths.
-9. FnQL is a 32-bit-only project. Build, test, package, and launch only x86
-   artifacts (Win32 on Windows and the corresponding 32-bit target elsewhere).
-   Do not use x86_64 artifacts as validation and do not ship them.
+9. FnQL is currently a 32-bit-only project. Build, test, package, and launch
+   only x86 artifacts (Win32 on Windows and the corresponding 32-bit target
+   elsewhere). Do not use x86_64 or other non-x86 artifacts as validation and
+   do not ship them. This is the current state, not the end goal: Project Plan
+   step 7 lifts it one target at a time, and a target counts as supported only
+   once that step's gates pass for it. Retail-module compatibility remains
+   x86-only regardless.
 
 ## Reference Repositories
 
@@ -50,6 +57,16 @@ Every change should protect these project constraints:
   reference point was commit `94bdd7acdce0c90bf890416e23e704795eac716e`;
   that reference worktree also had local uncommitted changes when this project
   was initialized.
+- `E:\Repositories\FnQL-game`: companion repository for clean-room game
+  modules (qagame, cgame, ui) that replace the retail ones. Remote:
+  `https://github.com/themuffinator/FnQL-game.git`. Its baseline is
+  `https://github.com/ec-/baseq3a` at commit
+  `a3085f7aa6a9242383795b2806b0124401d8a409`; Quake Live behavior is rewritten
+  there from retail and QLSRP evidence. Its `docs/PLAN.md` holds the milestone
+  plan, and its `AGENTS.md` governs work in that tree. Engine-side hosting
+  changes (module providers, identity, purity, negotiation) land here, game
+  logic lands there, and a change to a structure shared by pointer must land
+  in both (FnQL-game's `scripts/check_engine_abi.py` compares them).
 - Retail Quake Live install: use the user's legitimate Steam installation as
   the runtime compatibility target, normally
   `C:\Program Files (x86)\Steam\steamapps\common\Quake Live`.
@@ -103,6 +120,15 @@ Every change should protect these project constraints:
    mount retail QL assets and prove compatibility without bundling those assets.
 6. De-scope, isolate, or remove inherited game-code paths once equivalent QL
    engine/module boundaries are proven.
+7. Reach FnQ3's full architecture and platform range. FnQL-game gives us
+   source-built game modules, so the engine is no longer bound to the 32-bit
+   retail binaries: FnQL must support every architecture and platform FnQ3
+   supports (x86, x86_64, aarch64, armv7l, and ppc64/ppc64le, with their VM
+   compilers; Windows, Linux, macOS, and the BSDs). The retail-module path
+   stays x86, since the retail Steam binaries are 32-bit. Constraint 9 governs
+   until a target is enabled through this step; enable each target only behind
+   a build, test, and FnQL-game module-hosting gate, and keep x86 retail
+   compatibility unregressed throughout.
 
 ## Repository Rules
 
@@ -135,6 +161,8 @@ Every change should protect these project constraints:
 - `BUILD.md`: platform-specific build instructions.
 - `CREDITS.md`: upstream lineage, imported baselines, and acknowledgements.
 - `docs/fnql/TECHNICAL.md`: maintainer-facing project, release, and repo notes.
+- `docs/fnql/GAME_MODULES.md`: module providers, module identity, and the
+  interoperability rules shared with FnQL-game.
 - `version/fnql_version.h`: single source of truth for project version metadata.
 - `scripts/version.py`: version/channel helper for humans and CI.
 - `scripts/generate_docs.py`: refreshes `README.md` and `.install/README.html`

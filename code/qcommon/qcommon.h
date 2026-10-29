@@ -317,6 +317,10 @@ PROTOCOL
 // are migrated and validated against retail Steam assets.
 #define	QL_RETAIL_PROTOCOL_VERSION	NETCHAN_QL_RETAIL_PROTOCOL_VERSION
 #define	QL_NATIVE_CGAME_DLL	"cgamex86.dll"
+// FnQL-game modules carry this prefix so they never shadow the retail
+// modules in a search path; vm_gameProvider selects them explicitly.
+#define	FNQL_GAME_MODULE_PREFIX	"fnql_"
+#define	FNQL_GAME_SERVER_MODULE_FILE	FNQL_GAME_MODULE_PREFIX "qagame" ARCH_STRING DLL_EXT
 // 1.31 - 67
 
 #define DEFAULT_PROTOCOL_VERSION	QL_RETAIL_PROTOCOL_VERSION
