@@ -156,6 +156,10 @@ fail safely when unavailable. FnQL builds are 32-bit x86 only; use the
   Live ABI boundary, conservative defaults, build gates, and runtime validation.
 - [Technical Notes](docs/fnql/TECHNICAL.md) for repository structure, release
   flow, compatibility workflow, and maintainer conventions.
+- [Game Modules](docs/fnql/GAME_MODULES.md) for module providers, the
+  `vm_gameProvider` switch, and how FnQL hosts the clean-room modules of the
+  companion [FnQL-game](https://github.com/themuffinator/FnQL-game) project
+  without breaking retail interoperability.
 
 ## 5. Credits
 

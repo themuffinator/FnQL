@@ -75,11 +75,14 @@ class QLServicesSourceTests(unittest.TestCase):
 
     def test_retail_native_steam_imports_keep_distinct_abi_adapters(self) -> None:
         source = (ROOT / "code/server/sv_game.cpp").read_text(encoding="utf-8")
-        self.assertIn("QL_G_trap_GetSteamIdLow( int clientNum )", source)
+        # Retail slot 200 returns the whole SteamID in EDX:EAX (retail
+        # ClientConnect stores both registers; qagamex86 0x1003adc4).
+        self.assertIn("static std::uint64_t QDECL QL_G_trap_GetSteamId64( int clientNum )", source)
         self.assertIn(
-            "QL_BIND( G_QL_IMPORT_STEAMID_QUERY, QL_G_trap_GetSteamIdLow )",
+            "QL_BIND( G_QL_IMPORT_STEAMID_QUERY, QL_G_trap_GetSteamId64 )",
             source,
         )
+        self.assertNotIn("QL_G_trap_GetSteamIdLow", source)
         self.assertIn("QL_G_trap_BeginSteamAuthSession( int clientNum )", source)
         self.assertIn(
             "QL_BIND( G_QL_IMPORT_STEAM_AUTH_VALIDATE, QL_G_trap_BeginSteamAuthSession )",

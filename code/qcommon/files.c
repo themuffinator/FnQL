@@ -2070,6 +2070,13 @@ static qboolean FS_GeneralRef( const char *filename )
 	if ( !Q_stricmp( filename, "vm/qagame.qvm" ) )
 		return qfalse;
 
+	// Like qagame.qvm above, the FnQL-game server module is server-only:
+	// reading it must not make clients (retail ones included) download or
+	// require the package that carries it.  The retail qagamex86.dll keeps its
+	// historical reference behavior.
+	if ( !Q_stricmp( filename, FNQL_GAME_SERVER_MODULE_FILE ) )
+		return qfalse;
+
 	if ( strstr( filename, "levelshots" ) )
 		return qfalse;
 

@@ -190,6 +190,13 @@ struct vm_s {
 	int			dllApiVersion;
 	void (*destroy)(vm_t* self);
 
+	// native module provenance: "retail" unless the module identified itself
+	// through FnQL_GetModuleInfo (see qcommon/fnql_module.h)
+	char		moduleFile[MAX_QPATH];
+	char		providerName[32];
+	char		providerVersion[32];
+	unsigned int providerCapabilities;
+
 	// for interpreted modules
 	//qboolean	currentlyInterpreting;
 

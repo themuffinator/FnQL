@@ -15,7 +15,9 @@ compatibility or the useful FnQ3 modernization baseline:
    compatibility-sensitive changes land.
 3. Game-code reconstruction is out of scope for FnQL. Treat inherited
    `qagame`, `cgame`, and UI code as ABI/reference boundaries until a later
-   isolation or removal pass proves they are unnecessary.
+   isolation or removal pass proves they are unnecessary. Clean-room game
+   modules are developed in the companion FnQL-game repository; FnQL hosts
+   them as described in [`GAME_MODULES.md`](GAME_MODULES.md).
 4. Performance regressions need a clear reason and measurement.
 5. Platform additions should not silently narrow the supported matrix.
 
@@ -49,6 +51,12 @@ so this maintainer document stays portable.
   commit `94bdd7acdce0c90bf890416e23e704795eac716e`. Use this repository as the
   first stop for Quake Live behavior before inferring from Quake III code.
 - Retail runtime target: a legitimate Steam install of Quake Live.
+- FnQL-game companion: remote `https://github.com/themuffinator/FnQL-game.git`,
+  clean-room replacements for the retail game modules built on baseq3a
+  (`https://github.com/ec-/baseq3a`, commit
+  `a3085f7aa6a9242383795b2806b0124401d8a409`). The engine side of the module
+  contract is [`GAME_MODULES.md`](GAME_MODULES.md); the milestone plan lives
+  in FnQL-game's `docs/PLAN.md`.
 
 Current migration rule: compare first, reconstruct second, validate third.
 Keep observed QLSRP or retail facts distinct from inferred design intent.
