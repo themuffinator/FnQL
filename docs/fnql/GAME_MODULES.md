@@ -130,6 +130,10 @@ peers:
   `FNQL_RETAIL_QL_PATH=<Quake Live install>`.
 - FnQL-game ships its own gates (ABI layout parity, dedicated-server boot
   smoke) and the parity gates its plan adds per milestone.
+- `tests/server_lockstep_source_tests.py`: the dedicated-server lockstep mode
+  ([`SERVER_LOCKSTEP.md`](SERVER_LOCKSTEP.md)) stays default-off and every
+  engine hook stays gated. FnQL-game's `scripts/server_lockstep.py` (gate G3)
+  drives it to diff the retail qagame against FnQL-game's frame by frame.
 
 ## Retail evidence recorded here
 

@@ -2980,7 +2980,9 @@ void SV_UserinfoChanged( client_t *cl, qboolean updateUserinfo, qboolean runFilt
 	// TTimo
 	// maintain the IP information
 	// the banning code relies on this being consistently present
-	if ( NET_IsLocalAddress( &cl->netchan.remoteAddress ) )
+	if ( const char *scriptedAddress = SV_LockstepClientAddress( cl ) )
+		ip = scriptedAddress;	// sv_lockstep scripted client (no network address)
+	else if ( NET_IsLocalAddress( &cl->netchan.remoteAddress ) )
 		ip = "localhost";
 	else
 		ip = NET_AdrToString( &cl->netchan.remoteAddress );

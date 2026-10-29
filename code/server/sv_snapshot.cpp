@@ -950,6 +950,9 @@ void SV_SendClientMessages( void )
 		if ( client.state == CS_FREE )
 			continue;		// not connected
 
+		if ( SV_LockstepIsScriptedClient( &client ) )
+			continue;		// sv_lockstep scripted client: no network channel
+
 		//if ( *client.downloadName )
 		//	continue;		// Client is downloading, don't send snapshots
 

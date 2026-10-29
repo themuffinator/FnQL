@@ -178,6 +178,9 @@
     <ClCompile Include="..\..\server\sv_init.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\server\sv_lockstep.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\server\sv_main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

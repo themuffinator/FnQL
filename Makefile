@@ -1268,6 +1268,7 @@ Q3OBJ = \
   $(B)/client/sv_filter.o \
   $(B)/client/sv_game.o \
   $(B)/client/sv_init.o \
+  $(B)/client/sv_lockstep.o \
   $(B)/client/sv_main.o \
   $(B)/client/sv_net_chan.o \
   $(B)/client/sv_platform.o \
@@ -1483,6 +1484,7 @@ Q3DOBJ = \
   $(B)/ded/sv_filter.o \
   $(B)/ded/sv_game.o \
   $(B)/ded/sv_init.o \
+  $(B)/ded/sv_lockstep.o \
   $(B)/ded/sv_main.o \
   $(B)/ded/sv_net_chan.o \
   $(B)/ded/sv_platform.o \

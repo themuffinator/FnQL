@@ -38,3 +38,6 @@ release, CI resets `Unreleased` for the next cycle.
 - Servers can load the clean-room FnQL-game server module with
   `vm_gameProvider fnql`; the retail module stays the default, and `vminfo`
   now shows which module is running.
+- Dedicated servers gain an off-by-default lockstep test mode
+  (`+set sv_lockstep 1`) that replays scripted players deterministically and
+  records every frame, for comparing game modules.

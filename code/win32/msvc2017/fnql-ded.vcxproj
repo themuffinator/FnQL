@@ -290,6 +290,7 @@
     <ClCompile Include="..\..\server\sv_filter.cpp" />
     <ClCompile Include="..\..\server\sv_game.cpp" />
     <ClCompile Include="..\..\server\sv_init.cpp" />
+    <ClCompile Include="..\..\server\sv_lockstep.cpp" />
     <ClCompile Include="..\..\server\sv_main.cpp" />
     <ClCompile Include="..\..\server\sv_net_chan.cpp" />
     <ClCompile Include="..\..\server\sv_platform.cpp" />

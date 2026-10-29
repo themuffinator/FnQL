@@ -131,6 +131,11 @@ capability fallbacks, and non-regression contract are recorded in
 The opt-in, visual-only per-map fog sidecar grammar, filesystem precedence,
 renderer coverage, and feature-local fallback behavior are recorded in
 [`GLOBAL_FOG.md`](./GLOBAL_FOG.md).
+The default-off dedicated-server lockstep mode behind FnQL-game's full-server
+differential (gate G3) -- fixed frames on a virtual clock, pinned seeds,
+scripted networkless clients, the scenario grammar, and the per-frame
+recording format -- is documented in
+[`SERVER_LOCKSTEP.md`](./SERVER_LOCKSTEP.md).
 
 ## Repository Layout
 

@@ -393,10 +393,12 @@ std::size_t RuntimeRandomIndex() {
 	// Retail combines two process-global rand() draws with the current engine
 	// millisecond counter.  Perform the shift in unsigned space to avoid the
 	// signed-overflow UB present in a literal transcription.
+	// sv_lockstep seeds rand() and supplies its virtual clock instead, so a
+	// recorded run picks the same vote maps every time.
 	const std::uint32_t upper = static_cast<std::uint32_t>( std::rand() ) << 16u;
 	const std::uint32_t lower = static_cast<std::uint32_t>( std::rand() );
-	const std::uint32_t mixed = upper ^ lower ^
-		static_cast<std::uint32_t>( Com_Milliseconds() );
+	const int msec = SV_LockstepActive() ? SV_LockstepMilliseconds() : Com_Milliseconds();
+	const std::uint32_t mixed = upper ^ lower ^ static_cast<std::uint32_t>( msec );
 	// Retail normalizes the signed result with (x ^ sign) - sign. Express the
 	// INT_MIN case in unsigned arithmetic so the result is defined everywhere.
 	const std::uint32_t normalized = ( mixed & 0x80000000u )
