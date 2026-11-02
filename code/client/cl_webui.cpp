@@ -122,6 +122,7 @@ typedef struct {
 	qboolean	fnqlOverlayAvailable;
 	qboolean	fnqlOverlayInjected;
 	qboolean	keyCaptureArmed;
+	int			keyCapturePressedKey;	// mouse/wheel key whose press capture held back
 	qboolean	menuMusicOwned;
 	char		pendingHash[MAX_STRING_CHARS];
 	char		currentUrl[MAX_STRING_CHARS];
@@ -7021,6 +7022,7 @@ static void CL_WebHost_ProcessNativeJavascriptRequest( const char *request ) {
 
 	if ( !Q_stricmp( kind, "keycapture" ) ) {
 		cl_webui.keyCaptureArmed = ( !payload[0] || atoi( payload ) != 0 ) ? qtrue : qfalse;
+		cl_webui.keyCapturePressedKey = 0;
 	}
 }
 
@@ -7497,6 +7499,54 @@ static int CL_WebHost_MapCursorCoordinate( int coordinate, int sourceDimension,
 		* (double)targetDimension + 0.5 );
 }
 
+/*
+=============
+CL_WebHost_KeyCapturePending
+
+True while retail's bind dialog is waiting for GetNextKeyDown to answer.  The
+dialog closes only on the game.key event, so Escape must reach the capture
+rather than the menu toggle while this holds.
+=============
+*/
+qboolean CL_WebHost_KeyCapturePending( void ) {
+	return ( cl_webui.keyCaptureArmed && CL_WebHost_BrowserAcceptsInput() ) ? qtrue : qfalse;
+}
+
+/*
+=============
+CL_WebView_CaptureMouseKeyEvent
+
+Retail's bind dialog binds whatever key name the next game.key event carries
+and has no page-side handling for mouse buttons or the wheel, so the engine
+must publish them as it does keyboard keys.  The press is held back from the
+browser so the click or scroll that answers the prompt does not also act on
+the page.  The key is published when that same key is released, which keeps
+a button already held when capture was armed from being taken as the answer.
+Wheel notches arrive as a press/release pair, so they follow the same path.
+
+Returns qtrue when the event was consumed by the capture.
+=============
+*/
+qboolean CL_WebView_CaptureMouseKeyEvent( int key, qboolean down ) {
+	if ( !CL_WebHost_KeyCapturePending() ) {
+		return qfalse;
+	}
+
+	if ( down ) {
+		cl_webui.keyCapturePressedKey = key;
+		return qtrue;
+	}
+
+	if ( key != cl_webui.keyCapturePressedKey ) {
+		return qfalse;
+	}
+
+	cl_webui.keyCapturePressedKey = 0;
+	cl_webui.keyCaptureArmed = qfalse;
+	CL_WebView_PublishGameKey( key );
+	return qtrue;
+}
+
 void CL_WebView_OnMouseMove( int x, int y ) {
 	const fnql::webui::BackendStatus status =
 		fnql::webui::ClientBackendHost().Status();
@@ -7577,9 +7627,15 @@ void CL_WebView_OnKeyEvent( int key, qboolean down ) {
 		return;
 	}
 
-	if ( !down && cl_webui.keyCaptureArmed ) {
-		CL_WebView_PublishGameKey( key );
-		cl_webui.keyCaptureArmed = qfalse;
+	// Retail's window procedure withholds every keyboard message from the page
+	// while capture is armed, so the answering key cannot also act on it --
+	// Backspace, for one, would navigate the menu back to the previous tab.
+	if ( cl_webui.keyCaptureArmed ) {
+		if ( !down ) {
+			CL_WebView_PublishGameKey( key );
+			cl_webui.keyCaptureArmed = qfalse;
+		}
+		return;
 	}
 
 	virtualKey = CL_WebHost_MapVirtualKey( key );
@@ -7609,6 +7665,11 @@ void CL_WebView_OnCharEvent( int codepoint ) {
 	unsigned int scalar;
 
 	if ( !CL_WebHost_BrowserAcceptsInput() || codepoint <= 0 ) {
+		return;
+	}
+
+	// Character messages are withheld during key capture as well.
+	if ( cl_webui.keyCaptureArmed ) {
 		return;
 	}
 

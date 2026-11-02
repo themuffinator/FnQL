@@ -34,6 +34,10 @@ release, CI resets `Unreleased` for the next cycle.
   target to the engine when predicting where an enemy went out of view.
 - Fixed retail game modules receiving a corrupted upper half of each
   player's SteamID.
+- Mouse buttons (including side buttons) and the mouse wheel can now be bound
+  from the settings menu. At the "press a key" prompt, Escape cancels it in
+  game instead of closing the menu, and Backspace unbinds without switching
+  menu tabs.
 
 ### Documentation and Tooling
 - Servers can load the clean-room FnQL-game server module with

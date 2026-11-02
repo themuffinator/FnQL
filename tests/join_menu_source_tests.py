@@ -116,6 +116,16 @@ class JoinMenuSourceTests(unittest.TestCase):
             body,
         )
 
+    def test_pending_bind_prompt_keeps_escape_in_game(self) -> None:
+        body = function_body(read_source(), "CL_ToggleMenuInternal")
+
+        # Retail's bind dialog cancels on a game.key ESCAPE. In game, the
+        # Escape press must not hide the browser before its release publishes.
+        pending = body.index("if ( CL_WebHost_KeyCapturePending() ) {")
+        self.assertLess(pending, body.index("CL_WebHost_HideForGameTransition();"))
+        self.assertLess(pending, body.index("CL_ActivateNativeMenu( UIMENU_INGAME );"))
+        self.assertLess(body.index("Key_GetCatcher() & KEYCATCH_BROWSER"), pending)
+
     def test_menu_toggle_records_its_entry_state_for_developers(self) -> None:
         body = function_body(read_source(), "CL_ToggleMenuInternal")
 

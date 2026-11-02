@@ -216,6 +216,51 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn('( Key_GetCatcher() & ~KEYCATCH_RETAIL_MOUSEPASS ) == 0', input_source)
         self.assertIn('Cvar_Get( "cg_ignoreMouseInput", "0", CVAR_ROM )', input_source)
 
+    def test_bind_prompt_captures_mouse_buttons_and_wheel(self) -> None:
+        keys = (ROOT / "code" / "client" / "cl_keys.cpp").read_text(encoding="utf-8")
+        webui = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
+
+        dispatch = keys[keys.index("static void CL_DispatchBrowserKeyEvent") :]
+        dispatch = dispatch[: dispatch.index("\n}\n")]
+        capture = dispatch.index("CL_WebView_CaptureMouseKeyEvent( key, down )")
+        self.assertIn("key == K_MWHEELUP || key == K_MWHEELDOWN", dispatch)
+        self.assertLess(capture, dispatch.index("CL_WebView_OnMouseButtonEvent( key, down );"))
+        self.assertLess(capture, dispatch.index("CL_WebView_OnMouseWheelEvent("))
+        # Keyboard capture keeps its existing path.
+        self.assertIn("CL_WebView_OnKeyEvent( key, down );", dispatch)
+
+        body = webui[webui.index("qboolean CL_WebView_CaptureMouseKeyEvent( int key, qboolean down ) {") :]
+        body = body[: body.index("\n}\n")]
+        self.assertIn("if ( !CL_WebHost_KeyCapturePending() ) {", body)
+        self.assertIn("cl_webui.keyCapturePressedKey = key;", body)
+        # Only the release of the press capture held back answers the prompt.
+        self.assertIn("if ( key != cl_webui.keyCapturePressedKey ) {", body)
+        self.assertIn("CL_WebView_PublishGameKey( key );", body)
+        self.assertIn("cl_webui.keyCaptureArmed = qfalse;", body)
+
+        arm = webui[webui.index('if ( !Q_stricmp( kind, "keycapture" ) ) {') :]
+        self.assertIn("cl_webui.keyCapturePressedKey = 0;", arm[: arm.index("}")])
+
+    def test_bind_prompt_withholds_keyboard_input_from_the_page(self) -> None:
+        webui = (ROOT / "code" / "client" / "cl_webui.cpp").read_text(encoding="utf-8")
+
+        # Retail's window procedure skips keyboard and character injection
+        # while capture is armed; Backspace would otherwise navigate back.
+        key = webui[webui.index("void CL_WebView_OnKeyEvent( int key, qboolean down ) {") :]
+        key = key[: key.index("\n}\n")]
+        capture = key.index("if ( cl_webui.keyCaptureArmed ) {")
+        self.assertLess(capture, key.index("CL_Awesomium_InjectKeyboardEvent("))
+        armed = key[capture : key.index("virtualKey = CL_WebHost_MapVirtualKey( key );")]
+        self.assertIn("CL_WebView_PublishGameKey( key );", armed)
+        self.assertIn("return;", armed)
+
+        char = webui[webui.index("void CL_WebView_OnCharEvent( int codepoint ) {") :]
+        char = char[: char.index("\n}\n")]
+        self.assertLess(
+            char.index("if ( cl_webui.keyCaptureArmed ) {"),
+            char.index("CL_Awesomium_InjectKeyboardEvent("),
+        )
+
     def test_every_route_to_disconnected_restores_the_webui_menu(self) -> None:
         """CL_Disconnect_f returns early after SV_Shutdown on a listen server, so
         SV_Shutdown's non-menu disconnect must be followed by the terminal
@@ -1406,7 +1451,7 @@ class WebUiWiringTests(unittest.TestCase):
         self.assertIn("#define CL_WEB_KEYBOARD_EVENT_ACTIVATION_TYPE 0u", source)
         self.assertIn("#define CL_WEB_KEYBOARD_EVENT_ACTIVATION_VIRTUAL_KEY 0x11u", source)
         self.assertIn("#define CL_WEB_KEYBOARD_EVENT_ACTIVATION_NATIVE_KEY 0x1d0001L", source)
-        self.assertIn("if ( !down && cl_webui.keyCaptureArmed )", source)
+        self.assertIn("if ( cl_webui.keyCaptureArmed ) {\n\t\tif ( !down ) {", source)
         self.assertIn("CL_WebView_PublishGameKey( key );", source)
         self.assertIn("cl_webui.keyCaptureArmed = qfalse;", source)
         self.assertIn("down ? CL_WEB_KEYBOARD_EVENT_KEYDOWN_TYPE : CL_WEB_KEYBOARD_EVENT_KEYUP_TYPE", source)
