@@ -4381,6 +4381,7 @@ void CL_Frame( int msec, int realMsec ) {
 	cls.realtime += realMsec;
 	cls.gametime += gameMsec;
 	CL_SteamP2PFrame();
+	CL_Steam_AvatarFrame();
 	CL_Workshop_Frame();
 
 	if ( cl_timegraph->integer ) {

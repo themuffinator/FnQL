@@ -63,6 +63,23 @@ fnqlSteamResult_t FNQL_Steam_GetItemState(uint64_t itemId,
 fnqlSteamResult_t FNQL_Steam_GetAvatarRGBA(uint64_t steamId,
 	uint32_t avatarSize, void *rgba, uint32_t rgbaCapacity,
 	uint32_t *width, uint32_t *height, uint32_t *requiredSize);
+/* Non-blocking avatar transfer. Request queues one fetch on the platform
+ * worker and returns PENDING when exactly one result for that SteamID and size
+ * will follow through Take; any other return queued nothing. Take hands back
+ * the oldest finished transfer. rgba holds width * height * 4 bytes when
+ * result is OK and stays valid until the next Take or FNQL_Steam_Shutdown; the
+ * caller may rewrite it in place, as renderer uploads do. */
+typedef struct fnqlSteamAvatarImage_s {
+	uint64_t steamId;
+	uint32_t avatarSize;
+	fnqlSteamResult_t result;
+	uint32_t width;
+	uint32_t height;
+	uint8_t *rgba;
+} fnqlSteamAvatarImage_t;
+fnqlSteamResult_t FNQL_Steam_RequestAvatarRGBA(uint64_t steamId,
+	uint32_t avatarSize);
+qboolean FNQL_Steam_TakeAvatarRGBA(fnqlSteamAvatarImage_t *image);
 fnqlSteamResult_t FNQL_Steam_GetFriends(uint32_t friendFlags,
 	fnqlSteamFriend_t *friends, uint32_t capacity, uint32_t *count);
 fnqlSteamResult_t FNQL_Steam_GetFriend(uint64_t steamId,
