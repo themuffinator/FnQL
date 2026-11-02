@@ -16,7 +16,8 @@ release, CI resets `Unreleased` for the next cycle.
 - _None yet._
 
 ### Compatibility
-- _None yet._
+- Steam integration now starts under Proton/Wine, where the retail install was
+  not found and FnQL fell back to non-Steam mode unless `com_steamApi` was set.
 
 ### Rendering and Display
 - _None yet._

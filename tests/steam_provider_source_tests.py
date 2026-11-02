@@ -265,6 +265,14 @@ class SteamProviderSourceTests(unittest.TestCase):
         self.assertIn("Sys_SteamPath", windows)
         self.assertIn("Sys_SteamPath", unix)
 
+    def test_windows_steam_path_falls_back_to_executable_install(self) -> None:
+        windows = (ROOT / "code/win32/win_shared.cpp").read_text(encoding="utf-8")
+        lookup = windows[windows.index("const char *Sys_SteamPath( void )") :]
+        lookup = lookup[: lookup.index("Sys_QuakeLiveProfilePath")]
+        known = lookup.index("Sys_FindSteamRootFromKnownPaths")
+        fallback = lookup.index("Sys_CopyValidQuakeLiveSteamInstall( Sys_Pwd()")
+        self.assertLess(known, fallback)
+
     def test_webui_routes_provider_services_with_legacy_fallbacks(self) -> None:
         source = (ROOT / "code/client/cl_webui.cpp").read_text(encoding="utf-8")
         for call in (
