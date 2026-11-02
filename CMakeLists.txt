@@ -449,6 +449,10 @@ ADD_EXECUTABLE(fnql_filesystem_write_bounds_tests
 target_include_directories(fnql_filesystem_write_bounds_tests PRIVATE code/qcommon)
 add_test(NAME fnql_filesystem_write_bounds COMMAND fnql_filesystem_write_bounds_tests)
 
+ADD_EXECUTABLE(fnql_cvar_integer_tests tests/cvar_integer_tests.c)
+target_include_directories(fnql_cvar_integer_tests PRIVATE code/qcommon)
+add_test(NAME fnql_cvar_integer COMMAND fnql_cvar_integer_tests)
+
 ADD_EXECUTABLE(fnql_png_loader_tests
 	tests/png_loader_tests.c
 	code/renderercommon/tr_image_png.c
