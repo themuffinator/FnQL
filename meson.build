@@ -1156,6 +1156,13 @@ filesystem_write_bounds_tests = executable('fnql_filesystem_write_bounds_tests',
 )
 test('fnql_filesystem_write_bounds', filesystem_write_bounds_tests)
 
+cvar_integer_tests = executable('fnql_cvar_integer_tests',
+  'tests/cvar_integer_tests.c',
+  include_directories: include_directories('code/qcommon'),
+  c_args: common_c_args,
+)
+test('fnql_cvar_integer', cvar_integer_tests)
+
 png_loader_tests = executable('fnql_png_loader_tests',
   [
     'tests/png_loader_tests.c',
