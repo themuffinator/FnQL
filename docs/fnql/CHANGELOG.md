@@ -38,6 +38,8 @@ release, CI resets `Unreleased` for the next cycle.
   from the settings menu. At the "press a key" prompt, Escape cancels it in
   game instead of closing the menu, and Backspace unbinds without switching
   menu tabs.
+- The mouse wheel scrolls menu pages up and down again, at retail's speed,
+  instead of sideways.
 
 ### Documentation and Tooling
 - Servers can load the clean-room FnQL-game server module with
