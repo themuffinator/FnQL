@@ -2851,6 +2851,14 @@ void CL_InitCGame( void ) {
 	}
 	cls.state = CA_LOADING;
 
+	// Retail CL_InitCGame (0x004B04C0) hides the browser (0x004F24D0) right
+	// after entering CA_LOADING, before CG_INIT, on every cgame load. Without
+	// it a demo started from the console (which bypasses the WebUI's own
+	// game-transition hide) played under the still-visible main menu, with the
+	// browser keeping Escape. The game-transition variant also cancels a
+	// pending bind capture, as CL_MapLoading and CL_Connect already do.
+	CL_WebHost_HideForGameTransition();
+
 	// init for this gamestate
 	// use the lastExecutedServerCommand instead of the serverCommandSequence
 	// otherwise server commands sent just before a gamestate are dropped
