@@ -304,7 +304,15 @@ const char *Sys_SteamPath( void )
 		return steamPath;
 	}
 
-	Sys_FindSteamRootFromKnownPaths( steamPath, sizeof( steamPath ) );
+	if ( Sys_FindSteamRootFromKnownPaths( steamPath, sizeof( steamPath ) ) ) {
+		return steamPath;
+	}
+
+	// Under Wine/Proton the registry and Program Files point at the prefix's
+	// stub Steam client, which has no steamapps. Steam still launches the
+	// retail executable from the install itself, so accept the executable's
+	// directory when it holds the retail assets.
+	Sys_CopyValidQuakeLiveSteamInstall( Sys_Pwd(), steamPath, sizeof( steamPath ) );
 	return steamPath;
 }
 
