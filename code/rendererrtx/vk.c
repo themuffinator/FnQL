@@ -20661,7 +20661,7 @@ void vk_end_frame( void )
 	vk.cmd->waitForFence = qtrue;
 
 	// presentation may take undefined time to complete, we can't measure it in a reliable way
-	backEnd.pc.msec = ri.Milliseconds() - backEnd.pc.msec;
+	backEnd.pc.msec = R_ProfileMilliseconds() - backEnd.pc.msec;
 	vk_lifetime_end_frame( qtrue );
 
 	vk.renderPassIndex = RENDER_PASS_MAIN;

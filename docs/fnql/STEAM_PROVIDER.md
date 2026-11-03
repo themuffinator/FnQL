@@ -507,6 +507,21 @@ by full 64-bit SteamID, and invalidates the cache on avatar callbacks and
 renderer shutdown. Both `asset://steam/avatar/large/<id>` and the retail-style
 `steam://avatar/large/<id>` resource spellings use the same bridge.
 
+Avatar transfers for that shader cache run on a single engine worker thread,
+because each Steam call is an IPC round trip with unbounded latency and the
+retail cgame asks for avatars from its draw path (issue #7 measured ~70 ms
+main-thread stalls under Proton). Retail `SteamClient_GetAvatarImageHandle`
+fetches synchronously; FnQL keeps its observable contract (a handle once the
+pixels exist, `0` until then, with cgame falling back to the model icon) and
+moves only the wait. A lookup queues the transfer and returns `0`; the client
+frame takes finished pixels and uploads at most one avatar per frame. The
+provider's `get_avatar_rgba` must therefore be callable from a thread other than
+the one that pumps callbacks; the sibling provider meets this by reading only
+interfaces and entry points fixed at initialization. `FNQL_Steam_Shutdown`
+joins the worker before the provider shuts down or unloads. If the platform
+cannot start a thread, the transfer runs inline as before. The WebUI's PNG
+resource bridge still transfers on the calling thread.
+
 Server stat ownership is asynchronous. FnQL loads provider baselines before
 applying retail-mapped event deltas, submits dirty fields and achievements, and
 keeps them dirty until a successful `FNQL_STEAM_EVENT_USER_STATS_STORED`

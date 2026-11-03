@@ -7438,7 +7438,7 @@ void vk_warm_pipelines( qboolean include_screenmap )
 
 	count = vk.pipelines_count;
 	warmed = 0;
-	start_msec = ri.Milliseconds();
+	start_msec = R_ProfileMilliseconds();
 
 	for ( i = 0; i < count; i++ ) {
 		VK_Pipeline_t *pipeline = &vk.pipelines[i];
@@ -7463,7 +7463,7 @@ void vk_warm_pipelines( qboolean include_screenmap )
 
 	if ( warmed > 0 ) {
 		ri.Printf( PRINT_DEVELOPER, "Vulkan: warmed %u pipeline handles in %i msec\n",
-			warmed, ri.Milliseconds() - start_msec );
+			warmed, R_ProfileMilliseconds() - start_msec );
 	}
 }
 
@@ -12100,7 +12100,7 @@ void vk_end_frame( void )
 	vk.cmd->waitForFence = qtrue;
 
 	// presentation may take undefined time to complete, we can't measure it in a reliable way
-	backEnd.pc.msec = ri.Milliseconds() - backEnd.pc.msec;
+	backEnd.pc.msec = R_ProfileMilliseconds() - backEnd.pc.msec;
 
 	vk.renderPassIndex = RENDER_PASS_MAIN;
 }

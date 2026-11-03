@@ -495,13 +495,16 @@ class SteamProviderSourceTests(unittest.TestCase):
         # Steam swaps a placeholder for the real portrait mid-download, so the
         # sizing call's extents cannot be trusted to describe the transfer.
         client = (ROOT / "code/client/cl_webui.cpp").read_text(encoding="utf-8")
-        self.assertEqual(client.count("uint32_t loadedWidth = 0;"), 2)
-        self.assertEqual(client.count("uint32_t loadedHeight = 0;"), 2)
-        self.assertEqual(client.count("uint32_t loadedRequired = 0;"), 2)
-        self.assertEqual(client.count("loadedWidth != width"), 1)
+        platform = (ROOT / "code/platform/fnql_steam.cpp").read_text(encoding="utf-8")
+        # The WebUI PNG bridge transfers in place; the shader cache's transfer
+        # runs on the platform avatar worker.
+        self.assertEqual(client.count("uint32_t loadedWidth = 0;"), 1)
         self.assertEqual(client.count("loadedWidth == width"), 1)
-        self.assertEqual(client.count("loadedRequired != required"), 1)
         self.assertEqual(client.count("loadedRequired == required"), 1)
+        self.assertEqual(platform.count("uint32_t loadedWidth = 0;"), 1)
+        self.assertEqual(platform.count("loadedWidth != width"), 1)
+        self.assertEqual(platform.count("loadedRequired != required"), 1)
+        self.assertIn("required > MaxAvatarBytes", platform)
         # RE_RegisterShaderFromImage returns the shader already bound to a name
         # and drops the new pixels, so no two attempts may share a name.
         self.assertIn("++cl_steamAvatarSerial", client)
@@ -512,6 +515,37 @@ class SteamProviderSourceTests(unittest.TestCase):
         # A pending avatar must not re-query the provider on every frame.
         self.assertIn("CL_STEAM_AVATAR_RETRY_MSEC", client)
         self.assertIn("cls.realtime < entry.retryTime", client)
+
+    def test_avatar_lookup_never_calls_steam_on_the_main_thread(self) -> None:
+        # Issue #7: Steam IPC latency is unbounded (~70 ms under Proton) and the
+        # retail cgame asks for avatars from its draw path.
+        client = (ROOT / "code/client/cl_webui.cpp").read_text(encoding="utf-8")
+        main = (ROOT / "code/client/cl_main.cpp").read_text(encoding="utf-8")
+        platform = (ROOT / "code/platform/fnql_steam.cpp").read_text(encoding="utf-8")
+        start = client.index("static qhandle_t CL_GetSteamAvatarImageHandle(")
+        end = client.index("qhandle_t CL_GetAvatarImageHandle(", start)
+        lookup = client[start:end]
+        self.assertNotIn("GetAvatarRGBA(", lookup)
+        self.assertNotIn("CL_RegisterSteamAvatarShader", lookup)
+        self.assertIn("FNQL_Steam_RequestAvatarRGBA( steamId, avatarSize )", lookup)
+        # Pending answers 0, never a placeholder handle: cgame caches any
+        # nonzero handle in clientInfo_t and would stop asking.
+        self.assertTrue(lookup.rstrip().endswith("return 0;\n}"))
+        self.assertIn("CL_STEAM_AVATAR_REQUEST_TIMEOUT_MSEC", lookup)
+        # Uploads happen in the client frame before the screen, bounded per frame.
+        frame = main[main.index("void CL_Frame( int msec, int realMsec ) {"):]
+        self.assertLess(frame.index("CL_Steam_AvatarFrame();"),
+            frame.index("// update the screen"))
+        self.assertIn("CL_STEAM_AVATAR_UPLOADS_PER_FRAME", client)
+        self.assertIn("FNQL_Steam_TakeAvatarRGBA( &image )", client)
+        # The worker is joined before the provider shuts down or unloads, and is
+        # heap-owned so a skipped shutdown cannot terminate the process.
+        shutdown = platform[platform.index("void FNQL_Steam_Shutdown(void) {"):]
+        self.assertLess(shutdown.index("avatarWorker->Stop();"),
+            shutdown.index("state.provider->shutdown();"))
+        self.assertIn("AvatarWorker *avatarWorker;", platform)
+        self.assertIn("thread.join();", platform)
+        self.assertIn("static constexpr std::size_t MaxOutstanding", platform)
 
     def test_friend_snapshot_is_bounded_and_keeps_server_identity_fallback(self) -> None:
         source = (ROOT / "code/client/cl_webui.cpp").read_text(encoding="utf-8")

@@ -19,6 +19,14 @@ version.
 #include <cstdio>
 #include <cstring>
 #include <array>
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <new>
+#include <system_error>
+#include <thread>
+#include <utility>
+#include <vector>
 
 #if defined(_WIN32)
 # include <windows.h>
@@ -72,6 +80,224 @@ struct SteamState {
 };
 
 SteamState state;
+
+/* Every ISteamFriends and ISteamUtils call is an IPC round trip to the Steam
+ * client with no upper bound on its latency. Under Proton it crosses
+ * lsteamclient into the Linux client, and issue #7 measured ~70 ms main-thread
+ * stalls while a replay's scoreboard asked for strangers' avatars. The retail
+ * cgame drives avatar transfers from its draw path, so they run on one worker
+ * that owns no engine state: it calls the provider's get_avatar_rgba and
+ * nothing else, and the main thread takes the pixels on a later frame.
+ *
+ * The provider implements get_avatar_rgba with immutable post-init state and
+ * Steam's flat API, which keeps per-thread parameter memory for exactly this
+ * kind of caller. FNQL_Steam_Shutdown joins the worker before the provider is
+ * shut down or unloaded, so a transfer never outlives the provider. */
+class AvatarWorker {
+public:
+	using FetchFn = decltype(fnqlSteamProvider_t::get_avatar_rgba);
+
+	fnqlSteamResult_t Request(FetchFn fn, uint64_t steamId, uint32_t size) {
+		{
+			std::lock_guard<std::mutex> lock(mutex);
+			if (stopping) {
+				return FNQL_STEAM_RESULT_UNAVAILABLE;
+			}
+			if (IsOutstanding(steamId, size)) {
+				return FNQL_STEAM_RESULT_PENDING;
+			}
+			if (queue.size() + results.size() + (busy ? 1u : 0u)
+				>= MaxOutstanding) {
+				// Not queued, so no result will follow: the caller retries.
+				return FNQL_STEAM_RESULT_UNAVAILABLE;
+			}
+			if (!thread.joinable() && !threadFailed) {
+				fetch = fn;
+				try {
+					thread = std::thread(&AvatarWorker::Run, this);
+				} catch (const std::system_error &) {
+					threadFailed = true;
+				}
+			}
+			if (thread.joinable()) {
+				queue.push_back({steamId, size});
+				wake.notify_one();
+				return FNQL_STEAM_RESULT_PENDING;
+			}
+		}
+		// A platform that cannot start the worker keeps the original blocking
+		// transfer rather than losing avatars; the result still arrives
+		// through Take so the caller has one code path.
+		Result result = Transfer(fn, steamId, size);
+		std::lock_guard<std::mutex> lock(mutex);
+		results.push_back(std::move(result));
+		return FNQL_STEAM_RESULT_PENDING;
+	}
+
+	bool Take(fnqlSteamAvatarImage_t *image) {
+		{
+			std::lock_guard<std::mutex> lock(mutex);
+			if (results.empty()) {
+				return false;
+			}
+			// The worker only appends; the taken record is main-thread owned
+			// so the pixels stay put until the next Take.
+			taken = std::move(results.front());
+			results.pop_front();
+		}
+		image->steamId = taken.steamId;
+		image->avatarSize = taken.size;
+		image->result = taken.result;
+		image->width = taken.result == FNQL_STEAM_RESULT_OK ? taken.width : 0;
+		image->height = taken.result == FNQL_STEAM_RESULT_OK ? taken.height : 0;
+		image->rgba = taken.result == FNQL_STEAM_RESULT_OK
+			? taken.rgba.data() : nullptr;
+		return true;
+	}
+
+	void Stop() {
+		{
+			std::lock_guard<std::mutex> lock(mutex);
+			stopping = true;
+			queue.clear();
+		}
+		wake.notify_all();
+		if (thread.joinable()) {
+			thread.join();
+		}
+		std::lock_guard<std::mutex> lock(mutex);
+		results.clear();
+		taken = {};
+		busy = false;
+		fetch = nullptr;
+	}
+
+private:
+	struct Key {
+		uint64_t steamId;
+		uint32_t size;
+	};
+	struct Result {
+		uint64_t steamId{};
+		uint32_t size{};
+		fnqlSteamResult_t result{FNQL_STEAM_RESULT_FAILED};
+		uint32_t width{};
+		uint32_t height{};
+		std::vector<uint8_t> rgba;
+	};
+
+	// One slot per connected client plus the UI's small and medium variants
+	// fits comfortably; anything beyond is refused and retried by the caller.
+	static constexpr std::size_t MaxOutstanding = 64;
+	static constexpr uint32_t MaxAvatarBytes = 4u * 1024u * 1024u;
+
+	bool IsOutstanding(uint64_t steamId, uint32_t size) const {
+		if (busy && inFlight.steamId == steamId && inFlight.size == size) {
+			return true;
+		}
+		for (const Key &key : queue) {
+			if (key.steamId == steamId && key.size == size) {
+				return true;
+			}
+		}
+		for (const Result &result : results) {
+			if (result.steamId == steamId && result.size == size) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	static Result Transfer(FetchFn fn, uint64_t steamId, uint32_t size) {
+		Result result;
+		uint32_t width = 0;
+		uint32_t height = 0;
+		uint32_t required = 0;
+		result.steamId = steamId;
+		result.size = size;
+		const fnqlSteamResult_t query = fn(steamId, size, nullptr, 0,
+			&width, &height, &required);
+		if (query != FNQL_STEAM_RESULT_BUFFER_TOO_SMALL) {
+			// PENDING means Steam is still downloading; a sizing call that
+			// claims to have filled a null buffer is a provider fault.
+			result.result = query == FNQL_STEAM_RESULT_PENDING
+				? FNQL_STEAM_RESULT_PENDING : FNQL_STEAM_RESULT_FAILED;
+			return result;
+		}
+		if (!width || !height
+			|| static_cast<uint64_t>(width) * height * 4u != required
+			|| required > MaxAvatarBytes) {
+			return result;
+		}
+		try {
+			result.rgba.resize(required);
+		} catch (const std::bad_alloc &) {
+			return result;
+		}
+		// Read the transfer's own extents rather than reusing the sizing
+		// call's: Steam swaps a placeholder for the real portrait as the
+		// download lands, so the provider can legitimately describe a larger
+		// image on the second call than the buffer was sized for.
+		uint32_t loadedWidth = 0;
+		uint32_t loadedHeight = 0;
+		uint32_t loadedRequired = 0;
+		const fnqlSteamResult_t loaded = fn(steamId, size, result.rgba.data(),
+			required, &loadedWidth, &loadedHeight, &loadedRequired);
+		if (loaded != FNQL_STEAM_RESULT_OK || loadedWidth != width
+			|| loadedHeight != height || loadedRequired != required) {
+			result.rgba.clear();
+			result.result = loaded == FNQL_STEAM_RESULT_PENDING
+				? FNQL_STEAM_RESULT_PENDING : FNQL_STEAM_RESULT_FAILED;
+			return result;
+		}
+		result.width = width;
+		result.height = height;
+		result.result = FNQL_STEAM_RESULT_OK;
+		return result;
+	}
+
+	void Run() {
+		for (;;) {
+			Key key{};
+			FetchFn fn = nullptr;
+			{
+				std::unique_lock<std::mutex> lock(mutex);
+				wake.wait(lock, [this] { return stopping || !queue.empty(); });
+				if (stopping) {
+					return;
+				}
+				key = queue.front();
+				queue.pop_front();
+				inFlight = key;
+				busy = true;
+				fn = fetch;
+			}
+			Result result = Transfer(fn, key.steamId, key.size);
+			std::lock_guard<std::mutex> lock(mutex);
+			busy = false;
+			if (!stopping) {
+				results.push_back(std::move(result));
+			}
+		}
+	}
+
+	std::mutex mutex;
+	std::condition_variable wake;
+	std::thread thread;
+	std::deque<Key> queue;
+	std::deque<Result> results;
+	Result taken;
+	Key inFlight{};
+	FetchFn fetch{};
+	bool busy{};
+	bool stopping{};
+	bool threadFailed{};
+};
+
+/* Heap-owned on purpose: an exit path that skips FNQL_Steam_Shutdown must not
+ * run ~std::thread on a joinable worker during static destruction, which
+ * terminates the process instead of letting it exit. */
+AvatarWorker *avatarWorker;
 
 bool IsAbsolutePath(const char *path) {
 	if (!path || !path[0]) {
@@ -740,6 +966,11 @@ void FNQL_Steam_Reconfigure(uint32_t roles) {
 }
 
 void FNQL_Steam_Shutdown(void) {
+	if (avatarWorker) {
+		avatarWorker->Stop();
+		delete avatarWorker;
+		avatarWorker = nullptr;
+	}
 	if (state.provider && state.initialized) {
 		state.provider->shutdown();
 	}
@@ -983,6 +1214,32 @@ fnqlSteamResult_t FNQL_Steam_GetAvatarRGBA(uint64_t steamId,
 	}
 	return state.provider->get_avatar_rgba(steamId, avatarSize, rgba,
 		rgbaCapacity, width, height, requiredSize);
+}
+fnqlSteamResult_t FNQL_Steam_RequestAvatarRGBA(uint64_t steamId,
+	uint32_t avatarSize) {
+	if (!steamId || avatarSize > FNQL_STEAM_AVATAR_LARGE) {
+		return FNQL_STEAM_RESULT_INVALID_ARGUMENT;
+	}
+	if (!FNQL_Steam_Available(FNQL_STEAM_CAP_AVATARS)
+		|| !FNQL_HAS_PROVIDER_FIELD(get_avatar_rgba)
+		|| !state.provider->get_avatar_rgba) {
+		return UnavailableResult();
+	}
+	if (!avatarWorker) {
+		avatarWorker = new (std::nothrow) AvatarWorker();
+		if (!avatarWorker) {
+			return FNQL_STEAM_RESULT_FAILED;
+		}
+	}
+	return avatarWorker->Request(state.provider->get_avatar_rgba, steamId,
+		avatarSize);
+}
+qboolean FNQL_Steam_TakeAvatarRGBA(fnqlSteamAvatarImage_t *image) {
+	if (!image) {
+		return qfalse;
+	}
+	*image = {};
+	return avatarWorker && avatarWorker->Take(image) ? qtrue : qfalse;
 }
 fnqlSteamResult_t FNQL_Steam_GetFriends(uint32_t friendFlags,
 	fnqlSteamFriend_t *friends, uint32_t capacity, uint32_t *count) {

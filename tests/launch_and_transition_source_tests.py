@@ -93,6 +93,19 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
         queue = native_request.index("Cbuf_ExecuteText( EXEC_APPEND")
         self.assertLess(hide, queue)
 
+    def test_every_cgame_load_releases_the_browser_like_retail(self) -> None:
+        # Retail CL_InitCGame hides the browser right after entering
+        # CA_LOADING and before CG_INIT. A console `demo` reaches the cgame
+        # without passing CL_MapLoading, CL_Connect_f, or the WebUI's own
+        # transition hide, so this is its only release (issue #7).
+        init = function_body(read_source("code/client/cl_cgame.cpp"), "CL_InitCGame")
+        loading = init.index("cls.state = CA_LOADING;")
+        hide = init.index("CL_WebHost_HideForGameTransition();")
+        cg_init = init.index("VM_Call( cgvm, 3, CG_INIT")
+        self.assertLess(loading, hide)
+        self.assertLess(hide, cg_init)
+        self.assertNotIn("CL_WebHost_Shutdown();", init)
+
     def test_connection_and_level_load_screens_redraw_after_browser_release(self) -> None:
         screen = read_source("code/client/cl_scrn.cpp")
         main = read_source("code/client/cl_main.cpp")
