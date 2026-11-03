@@ -16,8 +16,7 @@ release, CI resets `Unreleased` for the next cycle.
 - _None yet._
 
 ### Compatibility
-- Steam integration now starts under Proton/Wine, where the retail install was
-  not found and FnQL fell back to non-Steam mode unless `com_steamApi` was set.
+- _None yet._
 
 ### Rendering and Display
 - _None yet._
@@ -29,22 +28,7 @@ release, CI resets `Unreleased` for the next cycle.
 - _None yet._
 
 ### Fixes
-- Fixed scoreboard key presses unexpectedly leaving spectator follow mode.
-- Fixed bots on servers running the retail game module passing an invalid
-  target to the engine when predicting where an enemy went out of view.
-- Fixed retail game modules receiving a corrupted upper half of each
-  player's SteamID.
-- Mouse buttons (including side buttons) and the mouse wheel can now be bound
-  from the settings menu. At the "press a key" prompt, Escape cancels it in
-  game instead of closing the menu, and Backspace unbinds without switching
-  menu tabs.
-- The mouse wheel scrolls menu pages up and down again, at retail's speed,
-  instead of sideways.
+- _None yet._
 
 ### Documentation and Tooling
-- Servers can load the clean-room FnQL-game server module with
-  `vm_gameProvider fnql`; the retail module stays the default, and `vminfo`
-  now shows which module is running.
-- Dedicated servers gain an off-by-default lockstep test mode
-  (`+set sv_lockstep 1`) that replays scripted players deterministically and
-  records every frame, for comparing game modules.
+- _None yet._
