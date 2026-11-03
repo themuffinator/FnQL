@@ -173,8 +173,8 @@ def check_backend(
         f"{label} manager publication receiver gate",
         failures,
     )
-    require(render, "startMsec = ri.Milliseconds();", f"{label} CSM atlas timer start", failures)
-    require(render, "backEnd.pc.c_csmShadowAtlasMsec += ri.Milliseconds() - startMsec;", f"{label} CSM atlas elapsed counter", failures)
+    require(render, "startMsec = R_ProfileMilliseconds();", f"{label} CSM atlas timer start", failures)
+    require(render, "backEnd.pc.c_csmShadowAtlasMsec += R_ProfileMilliseconds() - startMsec;", f"{label} CSM atlas elapsed counter", failures)
 
 
 def check_glx_gpu_pass(failures: list[str]) -> None:
@@ -195,10 +195,10 @@ def check_glx_gpu_pass(failures: list[str]) -> None:
     require_order(
         render,
         [
-            "startMsec = ri.Milliseconds();",
+            "startMsec = R_ProfileMilliseconds();",
             "GLX_CompatBeginGpuPassTimer( GLX_GPU_PASS_CSM_SHADOW );",
             "GLX_CompatEndGpuPassTimer( GLX_GPU_PASS_CSM_SHADOW );",
-            "backEnd.pc.c_csmShadowAtlasMsec += ri.Milliseconds() - startMsec;",
+            "backEnd.pc.c_csmShadowAtlasMsec += R_ProfileMilliseconds() - startMsec;",
         ],
         "OpenGL CSM CPU/GPU timer order",
         failures,

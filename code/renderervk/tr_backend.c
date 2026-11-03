@@ -1316,7 +1316,7 @@ void RE_StretchRaw( int x, int y, int w, int h, int cols, int rows, const byte *
 
 	start = 0;
 	if ( r_speeds->integer ) {
-		start = ri.Milliseconds();
+		start = R_ProfileMilliseconds();
 	}
 
 	// make sure rows and cols are powers of 2
@@ -1332,7 +1332,7 @@ void RE_StretchRaw( int x, int y, int w, int h, int cols, int rows, const byte *
 	RE_UploadCinematic( w, h, cols, rows, data, client, dirty );
 
 	if ( r_speeds->integer ) {
-		end = ri.Milliseconds();
+		end = R_ProfileMilliseconds();
 		ri.Printf( PRINT_ALL, "RE_UploadCinematic( %i, %i ): %i msec\n", cols, rows, end - start );
 	}
 
@@ -2805,7 +2805,7 @@ static void RB_RenderCSMShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
 		return;
 	}
 
-	startMsec = ri.Milliseconds();
+	startMsec = R_ProfileMilliseconds();
 	savedRefdef = backEnd.refdef;
 	savedViewParms = backEnd.viewParms;
 	savedOr = backEnd.or;
@@ -2842,7 +2842,7 @@ static void RB_RenderCSMShadowAtlas( drawSurf_t *drawSurfs, int numDrawSurfs )
 	tess.depthRange = DEPTH_RANGE_NORMAL;
 	vk_update_mvp( NULL );
 	vk_end_csm_shadow_render_pass();
-	backEnd.pc.c_csmShadowAtlasMsec += ri.Milliseconds() - startMsec;
+	backEnd.pc.c_csmShadowAtlasMsec += R_ProfileMilliseconds() - startMsec;
 	R_ShadowManagerPublishCSMAtlas( &tr.shadowManager,
 		vk_csm_shadow_atlas_ready(), generation );
 
@@ -3400,7 +3400,7 @@ static void RB_RenderDlightShadowAtlas( void )
 	if ( !vk_begin_dlight_shadow_render_pass() ) {
 		return;
 	}
-	startMsec = ri.Milliseconds();
+	startMsec = R_ProfileMilliseconds();
 	savedRefdef = backEnd.refdef;
 	savedViewParms = backEnd.viewParms;
 	savedOr = backEnd.or;
@@ -3510,7 +3510,7 @@ static void RB_RenderDlightShadowAtlas( void )
 		tr.shadowCorrectnessDebug.atlasPublished =
 			tr.shadowManager.pointAtlasPublication.published;
 	}
-	backEnd.pc.c_dlightShadowAtlasMsec += ri.Milliseconds() - startMsec;
+	backEnd.pc.c_dlightShadowAtlasMsec += R_ProfileMilliseconds() - startMsec;
 }
 
 
@@ -3972,7 +3972,7 @@ void RB_ShowImages( void ) {
 	GL_ClientState( 0, CLS_TEXCOORD_ARRAY );
 	qglTexCoordPointer( 2, GL_FLOAT, 0, t );
 
-	start = ri.Milliseconds();
+	start = R_ProfileMilliseconds();
 
 	for ( i = 0; i < tr.numImages; i++ ) {
 		image = tr.images[ i ];
@@ -4000,7 +4000,7 @@ void RB_ShowImages( void ) {
 
 	qglFinish();
 
-	end = ri.Milliseconds();
+	end = R_ProfileMilliseconds();
 	ri.Printf( PRINT_ALL, "%i msec to draw all images\n", end - start );
 }
 #endif
@@ -4296,7 +4296,7 @@ RB_ExecuteRenderCommands
 */
 void RB_ExecuteRenderCommands( const void *data ) {
 
-	backEnd.pc.msec = ri.Milliseconds();
+	backEnd.pc.msec = R_ProfileMilliseconds();
 
 	while ( 1 ) {
 		data = PADP(data, sizeof(void *));
@@ -4344,7 +4344,7 @@ void RB_ExecuteRenderCommands( const void *data ) {
 //				vk_end_frame();
 //			}
 #else
-			backEnd.pc.msec = ri.Milliseconds() - backEnd.pc.msec;
+			backEnd.pc.msec = R_ProfileMilliseconds() - backEnd.pc.msec;
 #endif
 			return;
 		}

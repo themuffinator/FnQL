@@ -709,6 +709,7 @@ void CL_RefreshOnlineServicesBridgeState( void );
 qboolean CL_IsSubscribedApp( int appId );
 qhandle_t CL_GetAvatarImageHandle( unsigned int identityLow, unsigned int identityHigh );
 void CL_ClearAvatarImageHandles( void );
+void CL_Steam_AvatarFrame( void );
 qboolean CL_Steam_OpenOverlayUrl( const char *url );
 qhandle_t CL_Steam_RegisterShader( const char *url );
 qboolean CL_Steam_RequestServers( int requestMode );
