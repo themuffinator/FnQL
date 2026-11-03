@@ -47,7 +47,12 @@ version.
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#ifdef _MSC_VER
 #include <intrin.h>
+#define FNQL_RETURN_ADDRESS() _ReturnAddress()
+#else
+#define FNQL_RETURN_ADDRESS() __builtin_return_address( 0 )
+#endif
 #endif
 
 namespace {
@@ -1532,7 +1537,7 @@ unsigned tracedDraws = 0;
 
 int __cdecl TraceRand( void ) {
 	const int value = tracedRand();
-	const std::uintptr_t caller = reinterpret_cast<std::uintptr_t>( _ReturnAddress() );
+	const std::uintptr_t caller = reinterpret_cast<std::uintptr_t>( FNQL_RETURN_ADDRESS() );
 	Com_Printf( "sv_lockstep: rand #%u = %d at frame %d from +0x%x\n", tracedDraws++, value, session.frame,
 		static_cast<unsigned>( caller - tracedModuleBase ) );
 	return value;
