@@ -23,6 +23,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include "q_shared.h"
 #include "qcommon.h"
+#include "cvar_integer.h"
 
 #ifndef DEDICATED
 void CL_WebView_PublishCvarChange( const char *name, const char *value, qboolean replicate );
@@ -542,7 +543,7 @@ cvar_t *Cvar_Get( const char *var_name, const char *var_value, int flags ) {
 	var->modified = qtrue;
 	var->modificationCount = 1;
 	var->value = Q_atof( var->string );
-	var->integer = atoi( var->string );
+	var->integer = Cvar_ParseInteger( var->string );
 	var->resetString = CopyString( var_value );
 	var->validator = CV_NONE;
 	var->description = NULL;
@@ -832,7 +833,7 @@ cvar_t *Cvar_Set2( const char *var_name, const char *value, qboolean force ) {
 	
 	var->string = CopyString( value );
 	var->value = Q_atof( var->string );
-	var->integer = atoi( var->string );
+	var->integer = Cvar_ParseInteger( var->string );
 #ifndef DEDICATED
 	Cvar_PublishChange( var );
 #endif

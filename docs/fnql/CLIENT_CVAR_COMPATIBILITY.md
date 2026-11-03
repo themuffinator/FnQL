@@ -64,6 +64,7 @@ engine owner.
 | Networking | Retail timeout, packet, delta, resend, and diagnostic controls keep their recovered defaults/bounds while retaining compatible FnQL persistence metadata. |
 | Download UI | Retail name/item/time publications and the retained byte counters have stable, inert defaults and continue to be updated by existing download paths. |
 | Input | Retail yaw, pitch, run, freelook, mouse-acceleration, sensitivity-cap, and debug controls retain their owners and runtime wiring. |
+| Hex cvar integers | Retail computes `cvar->integer` with `sscanf( s, "0x%08x" )` when the string contains `0x` (helper at `0x4cccc0` in `quakelive_steam.exe`) and `atoi` otherwise. The retail cgame reads packed colour cvars such as `cg_enemyUpperColor "0x2a8000FF"` through `vmCvar_t::integer`, so `atoi`'s 0 left forced player models untinted (issue #11). `Cvar_ParseInteger` (`code/qcommon/cvar_integer.h`) takes the hex path for strings that start with `0x` and keeps `atoi` for strings that only contain it later (`1920x1080`), where retail would return 0. |
 | Player identity | `name` keeps the retail `UnnamedPlayer` default and is published from the signed-in Steam persona, with `country` registered beside it from the same identity and routed to the replicated config as retail does. Local writes are reverted before userinfo is sent, matching a retail UI that has no rename control and a retail engine that never persists a name. FnQL keeps `name` archived anyway so provider-free sessions retain one; `cl_steamNameLock 0` returns `name` to local management. See [STEAM_PROVIDER.md](STEAM_PROVIDER.md). |
 
 FnQL-only controls such as `cl_autoNudge`, `cl_aviFrameRate`,
@@ -77,7 +78,7 @@ out-of-contract values during registration.
 
 ## Non-Regression Gates
 
-The compatibility surface is checked at three levels:
+The compatibility surface is checked at four levels:
 
 1. `client_cvar_compat_tests` exercises retail time-nudge boundaries,
    spectator/local behavior, retained auto selection, the preserved FnQL auto
@@ -85,7 +86,10 @@ The compatibility surface is checked at three levels:
 2. `client_cvar_compat_source_tests.py` inventories all observed retail names,
    their exceptional owners, every recovered default, important flags/ranges,
    behavior wiring, and representative FnQL extensions.
-3. A strict-warning full client build compiles and links every affected client
+3. `cvar_integer_tests` pins the retail hex parse for packed colours, its
+   eight-digit limit and zero default, and the unchanged `atoi` result for
+   decimal and embedded-`0x` strings.
+4. A strict-warning full client build compiles and links every affected client
    translation unit. Runtime probes must use `+set r_fullscreen 0`; x64 probes
    can mount and initialize retail assets but cannot load the retail install's
    x86-only native UI module, so complete retail runtime validation remains a
