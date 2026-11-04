@@ -3207,5 +3207,92 @@ class NativeX11InputProducerTests(unittest.TestCase):
         )
 
 
+class ControllerBackendEnablementTests(unittest.TestCase):
+    """Controller input must be compiled into every client backend.
+
+    USE_JOYSTICK was once only defined for Linux non-SDL builds, which silently
+    compiled the Win32 WinMM and SDL3 controller backends out of the shipped
+    clients. The Win32 and SDL backends now enable it in their own headers so
+    every build system (Meson, CMake, Make, MSVC) agrees.
+    """
+
+    BACKENDS = (
+        ("code/win32/win_local.h", "code/win32/win_input.cpp", '#include "win_local.h"'),
+        ("code/sdl/sdl_glw.h", "code/sdl/sdl_input.cpp", '#include "sdl_glw.h"'),
+    )
+
+    def test_win32_and_sdl_headers_enable_the_controller_backend(self) -> None:
+        for header_path, _source_path, _include in self.BACKENDS:
+            with self.subTest(header=header_path):
+                header = read_text(header_path)
+                self.assertNotIn("//#define USE_JOYSTICK", header)
+                # Tolerate a build-system definition without a redefinition.
+                assert_order(
+                    self,
+                    header,
+                    "#ifndef USE_JOYSTICK",
+                    "#define USE_JOYSTICK",
+                    "#endif",
+                )
+
+    def test_backend_sources_see_the_definition_before_their_first_guard(
+        self,
+    ) -> None:
+        for _header_path, source_path, include in self.BACKENDS:
+            with self.subTest(source=source_path):
+                source = read_text(source_path)
+                self.assertIn(include, source)
+                self.assertLess(
+                    source.index(include), source.index("#ifdef USE_JOYSTICK")
+                )
+
+    def test_linux_native_builds_keep_their_build_system_definition(self) -> None:
+        meson = read_text("meson.build")
+        cmake = read_text("CMakeLists.txt")
+        make = read_text("Makefile")
+
+        self.assertIn("if linux and build_client and not use_sdl", meson)
+        self.assertIn("client_cpp_args += ['-DUSE_JOYSTICK']", meson)
+        self.assertIn("TARGET_COMPILE_DEFINITIONS(q3ui PRIVATE USE_JOYSTICK)", cmake)
+        self.assertIn(
+            "$(B)/client/linux_glimp.o $(B)/client/linux_joystick.o: "
+            "CXXFLAGS += -DUSE_JOYSTICK",
+            make,
+        )
+
+    def test_controllers_stay_opt_in_on_every_backend(self) -> None:
+        # Compiling the backends in must not change behavior for players who
+        # never enabled a controller: in_joystick stays off by default, and the
+        # Win32 Quake Live mapping stays behind its own latched profile cvar.
+        self.assertIn(
+            'Cvar_Get( "in_joystick", "0", CVAR_ARCHIVE | CVAR_LATCH )',
+            read_text("code/win32/win_input.cpp"),
+        )
+        self.assertIn(
+            'Cvar_Get( "in_joystickProfile", "0", CVAR_ARCHIVE | CVAR_LATCH )',
+            read_text("code/win32/win_input.cpp"),
+        )
+        self.assertIn(
+            'Cvar_Get( "in_joystick", "0", CVAR_ARCHIVE|CVAR_LATCH )',
+            read_text("code/sdl/sdl_input.cpp"),
+        )
+        self.assertIn(
+            'Cvar_Get( "in_joystick", "0", CVAR_ARCHIVE_ND | CVAR_LATCH )',
+            read_text("code/unix/linux_glimp.cpp"),
+        )
+
+    def test_win32_startup_does_not_probe_devices_while_disabled(self) -> None:
+        startup = function_body(read_text("code/win32/win_input.cpp"), "IN_StartupJoystick")
+
+        assert_order(
+            self,
+            startup,
+            "IN_ClearWinMMJoystickState( qtrue );",
+            "if (! in_joystick->integer )",
+            "return;",
+            "joyGetNumDevs ()",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

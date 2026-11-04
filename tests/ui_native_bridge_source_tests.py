@@ -815,11 +815,15 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
         self.assertIn("VM_CallGameRegisterCvars( vm )", sv_game)
         self.assertIn("SV_CallGameRegisterCvarsOnce( gvm );", sv_game)
         self.assertGreaterEqual(sv_game.count("SV_ResetGameCvarRegistration();"), 4)
-        self.assertIn("static bool SV_GameForcesSnapshotEntity", sv_snapshot)
-        self.assertIn("GAME_CAN_CLIENT_SEE_CLIENT", sv_snapshot)
-        self.assertIn("GAME_FREEZE_CAN_SEE_THAW_PROGRESS_EVENT", sv_snapshot)
-        self.assertIn("GAME_IS_OBJECTIVE_ENTITY", sv_snapshot)
-        self.assertIn("SV_GameForcesSnapshotEntity( frame->ps.clientNum, es->number )", sv_snapshot)
+        # snapshot visibility goes through the sv_game.cpp query bridge
+        # (tests/qagame_query_export_bridge_tests.py pins its retail order)
+        self.assertIn("static SnapshotGameVisibility SV_GameSnapshotVisibility", sv_snapshot)
+        self.assertIn("SV_GameCanClientSeeClient( viewerClientNum, entityNum )", sv_snapshot)
+        self.assertIn("SV_GameSuppressesThawProgressEvent( viewerClientNum, entityNum )", sv_snapshot)
+        self.assertIn("SV_GameIsObjectiveEntity( entityNum )", sv_snapshot)
+        self.assertIn("VM_Call( gvm, 2, GAME_CAN_CLIENT_SEE_CLIENT", sv_game)
+        self.assertIn("VM_Call( gvm, 2, GAME_FREEZE_CAN_SEE_THAW_PROGRESS_EVENT", sv_game)
+        self.assertIn("VM_Call( gvm, 1, GAME_IS_OBJECTIVE_ENTITY", sv_game)
 
     def test_qagame_rankings_bridge_is_retained_but_disabled(self) -> None:
         server_h = read_repo_file("code/server/server.h")

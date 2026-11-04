@@ -3106,12 +3106,135 @@ void SV_PrintLocations_f( client_t *client ) {
 }
 
 
+/*
+==================
+In-band admin rcon
+
+Retail quakelive_steam.exe registers "rcon" in its client command table
+(0x56bf68 -> 0x4dff80). With at least one argument it asks qagame export 16
+(GAME_IS_CLIENT_ADMIN) about the sender and, for an administrator, executes
+the rest of the command line with the output redirected to the client as
+out-of-band "print" packets (0x4e0018-0x4e007c). No rcon password is involved;
+the game module's admin tier is the authority.
+
+Retail executes the command in the middle of the client's message. FnQL runs
+it from SV_Frame, where the ZMQ rcon path already executes, so a "map",
+"kick" or "killserver" can never free the client or the message being parsed.
+The queue is bounded and cleared on shutdown.
+==================
+*/
+namespace {
+
+constexpr std::size_t SV_PENDING_ADMIN_COMMAND_LIMIT = 8;
+
+struct SV_PendingAdminCommand {
+	netadr_t address;
+	int clientNum;
+	std::array<char, MAX_STRING_CHARS> name;
+	std::array<char, MAX_STRING_CHARS> text;
+};
+
+std::array<SV_PendingAdminCommand, SV_PENDING_ADMIN_COMMAND_LIMIT> svPendingAdminCommands;
+std::size_t svPendingAdminCommandCount;
+netadr_t svAdminRedirectAddress;
+
+// The raw text after the leading command token, so quoting survives as the
+// admin typed it (as SVC_RemoteCommand does for "rcon <password> <command>").
+const char *SV_RawTextAfterCommandToken( const char *text ) {
+	while ( *text && *text <= ' ' ) {
+		++text;
+	}
+	if ( *text == '"' ) {
+		++text;
+		while ( *text && *text != '"' ) {
+			++text;
+		}
+		if ( *text == '"' ) {
+			++text;
+		}
+	} else {
+		while ( *text > ' ' ) {
+			++text;
+		}
+	}
+	while ( *text && *text <= ' ' ) {
+		++text;
+	}
+	return text;
+}
+
+void SV_FlushAdminRedirect( const char *outputbuf ) {
+	if ( *outputbuf ) {
+		NET_OutOfBandPrint( NS_SERVER, &svAdminRedirectAddress, "print\n%s", outputbuf );
+	}
+}
+
+} // namespace
+
+static void SV_AdminRcon_f( client_t *cl ) {
+	if ( Cmd_Argc() < 2 ) {
+		return;
+	}
+
+	const int clientNum = SV_ClientIndex( cl );
+	if ( !SV_GameIsClientAdmin( clientNum ) ) {
+		Com_DPrintf( "Ignored in-band rcon from non-admin client %i\n", clientNum );
+		return;
+	}
+
+	const char *text = SV_RawTextAfterCommandToken( Cmd_Cmd() );
+	if ( !*text ) {
+		return;
+	}
+	if ( svPendingAdminCommandCount >= svPendingAdminCommands.size() ) {
+		Com_Printf( S_COLOR_YELLOW "Dropped in-band rcon from client %i: %i commands already pending\n",
+			clientNum, static_cast<int>( svPendingAdminCommands.size() ) );
+		return;
+	}
+
+	SV_PendingAdminCommand &pending = svPendingAdminCommands[svPendingAdminCommandCount++];
+	pending.address = cl->netchan.remoteAddress;
+	pending.clientNum = clientNum;
+	Q_strncpyz( pending.name.data(), cl->name, static_cast<int>( pending.name.size() ) );
+	Q_strncpyz( pending.text.data(), text, static_cast<int>( pending.text.size() ) );
+}
+
+void SV_ExecutePendingAdminCommands( void ) {
+	if ( !svPendingAdminCommandCount ) {
+		return;
+	}
+
+	// Copy out first: a command may queue nothing, but it may shut the server
+	// down, which clears the queue underneath this loop.
+	std::array<SV_PendingAdminCommand, SV_PENDING_ADMIN_COMMAND_LIMIT> commands = svPendingAdminCommands;
+	const std::size_t count = svPendingAdminCommandCount;
+	svPendingAdminCommandCount = 0;
+
+	for ( std::size_t i = 0; i < count; ++i ) {
+		const SV_PendingAdminCommand &command = commands[i];
+		// TTimo's rcon sizing: accumulate without overflowing an OOB packet
+		std::array<char, 1024 - 16> outputbuf{};
+
+		Com_Printf( "Rcon from admin client %i (%s): %s\n", command.clientNum,
+			command.name.data(), command.text.data() );
+		svAdminRedirectAddress = command.address;
+		Com_BeginRedirect( outputbuf.data(), static_cast<int>( outputbuf.size() ), SV_FlushAdminRedirect );
+		Cmd_ExecuteString( command.text.data() );
+		Com_EndRedirect();
+	}
+}
+
+void SV_ClearPendingAdminCommands( void ) {
+	svPendingAdminCommandCount = 0;
+}
+
+
 struct ucmd_t {
 	const char *name;
 	void (*func)( client_t *cl );
 };
 
-static constexpr std::array<ucmd_t, 9> ucmds = {{
+static constexpr std::array<ucmd_t, 10> ucmds = {{
 	{"userinfo", SV_UpdateUserinfo_f},
 	{"disconnect", SV_Disconnect_f},
 	{"cp", SV_VerifyPaks_f},
@@ -3121,6 +3244,7 @@ static constexpr std::array<ucmd_t, 9> ucmds = {{
 	{"stopdl", SV_StopDownload_f},
 	{"donedl", SV_DoneDownload_f},
 	{"locations", SV_PrintLocations_f},
+	{"rcon", SV_AdminRcon_f},		// retail 0x56bf68: admin-only, see SV_AdminRcon_f
 }};
 
 static const ucmd_t *SV_FindClientCommand( const char *name )

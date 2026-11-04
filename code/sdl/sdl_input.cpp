@@ -1636,7 +1636,7 @@ static void IN_JoyMove( void )
 	/* Time to update axes state based on old vs. new. */
 	if (axes != stick_state.oldaxes)
 	{
-		for( i = 0; i < ARRAY_LEN( joy_keys ); i++ ) {
+		for( i = 0; i < static_cast<int>( ARRAY_LEN( joy_keys ) ); i++ ) {
 			if( ( axes & ( 1u << i ) ) && !( stick_state.oldaxes & ( 1u << i ) ) ) {
 				Com_QueueEvent( in_eventTime, SE_KEY, joy_keys[i], qtrue, 0, NULL );
 			}

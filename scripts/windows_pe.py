@@ -50,8 +50,33 @@ def _read_c_string(data: bytes, offset: int, name: str) -> str:
         raise ValueError(f"{name} has a non-ASCII PE import name") from exc
 
 
+MAX_IMPORT_DESCRIPTORS = 4096
+MAX_IMPORTS_PER_DLL = 65536
+IMPORT_ORDINAL_FLAG_32 = 0x8000_0000
+IMPORT_ORDINAL_FLAG_64 = 0x8000_0000_0000_0000
+
+
 def parse_pe(data: bytes, *, name: str = "binary") -> PeInfo | None:
     """Return bounded PE metadata, or None when data is not a PE image."""
+    parsed = _parse_pe(data, name=name, collect_functions=False)
+    return None if parsed is None else parsed[0]
+
+
+def parse_pe_imported_functions(
+    data: bytes, *, name: str = "binary"
+) -> dict[str, tuple[str, ...]] | None:
+    """Return named imports keyed by case-folded DLL name, or None for non-PE data.
+
+    Ordinal imports carry no name and are omitted. This is separate from
+    parse_pe so runtime-dependency validation never depends on thunk parsing.
+    """
+    parsed = _parse_pe(data, name=name, collect_functions=True)
+    return None if parsed is None else parsed[1]
+
+
+def _parse_pe(
+    data: bytes, *, name: str, collect_functions: bool
+) -> tuple[PeInfo, dict[str, tuple[str, ...]]] | None:
     if len(data) < 2 or data[:2] != b"MZ":
         return None
     if len(data) < 64:
@@ -73,9 +98,13 @@ def parse_pe(data: bytes, *, name: str = "binary") -> PeInfo | None:
     if optional_magic == 0x10B:
         directory_count_offset = optional_offset + 92
         directory_offset = optional_offset + 96
+        thunk_format = "<I"
+        ordinal_flag = IMPORT_ORDINAL_FLAG_32
     elif optional_magic == 0x20B:
         directory_count_offset = optional_offset + 108
         directory_offset = optional_offset + 112
+        thunk_format = "<Q"
+        ordinal_flag = IMPORT_ORDINAL_FLAG_64
     else:
         raise ValueError(f"{name} has unsupported PE optional magic 0x{optional_magic:04x}")
 
@@ -107,15 +136,31 @@ def parse_pe(data: bytes, *, name: str = "binary") -> PeInfo | None:
             return rva
         raise ValueError(f"{name} has an unmapped PE RVA 0x{rva:x}")
 
+    thunk_size = struct.calcsize(thunk_format)
+
+    def read_named_imports(thunk_rva: int) -> tuple[str, ...]:
+        functions: list[str] = []
+        thunk_offset = rva_to_offset(thunk_rva)
+        for _index in range(MAX_IMPORTS_PER_DLL):
+            (thunk,) = _unpack_from(thunk_format, data, thunk_offset, name)
+            if thunk == 0:
+                return tuple(functions)
+            if not thunk & ordinal_flag:
+                # IMAGE_IMPORT_BY_NAME: a 16-bit hint followed by the name.
+                functions.append(_read_c_string(data, rva_to_offset(thunk + 2), name))
+            thunk_offset += thunk_size
+        raise ValueError(f"{name} has an unterminated PE import thunk table")
+
     imports: list[str] = []
+    imported_functions: dict[str, tuple[str, ...]] = {}
     if import_rva:
         descriptor_offset = rva_to_offset(import_rva)
         descriptor_limit = min(
             len(data),
-            descriptor_offset + (import_size if import_size else 20 * 4096),
+            descriptor_offset + (import_size if import_size else 20 * MAX_IMPORT_DESCRIPTORS),
         )
         terminated = False
-        for _index in range(4096):
+        for _index in range(MAX_IMPORT_DESCRIPTORS):
             if descriptor_offset + 20 > descriptor_limit:
                 break
             descriptor = _unpack_from("<IIIII", data, descriptor_offset, name)
@@ -125,16 +170,25 @@ def parse_pe(data: bytes, *, name: str = "binary") -> PeInfo | None:
             import_name_rva = descriptor[3]
             if not import_name_rva:
                 raise ValueError(f"{name} has a PE import descriptor without a name")
-            imports.append(_read_c_string(data, rva_to_offset(import_name_rva), name))
+            dll_name = _read_c_string(data, rva_to_offset(import_name_rva), name)
+            imports.append(dll_name)
+            if collect_functions:
+                # Prefer the unbound lookup table; bound images may only keep
+                # names reachable through it, while FirstThunk is the fallback.
+                thunk_rva = descriptor[0] or descriptor[4]
+                functions = read_named_imports(thunk_rva) if thunk_rva else ()
+                key = dll_name.casefold()
+                imported_functions[key] = imported_functions.get(key, ()) + functions
             descriptor_offset += 20
         if not terminated:
             raise ValueError(f"{name} has an unterminated PE import table")
 
-    return PeInfo(
+    info = PeInfo(
         machine=machine,
         is_dll=bool(characteristics & IMAGE_FILE_DLL),
         imports=tuple(imports),
     )
+    return info, imported_functions
 
 
 def validate_windows_runtime_dependencies(data: bytes, *, name: str) -> PeInfo | None:

@@ -103,7 +103,7 @@ jobs:
 
       - name: Check Windows runtime dependencies
         shell: msys2 {0}
-        run: python scripts/check_windows_runtime_deps.py --require-pe bin
+        run: python scripts/check_windows_runtime_deps.py --require-pe --require-import "fnql.exe=winmm.dll!joyGetPosEx" bin
 
       - name: Verify release layout
         shell: msys2 {0}
@@ -157,7 +157,7 @@ jobs:
         run: python scripts/fetch_steam_provider.py --output bin/fnql_steam.dll
 
       - name: Check Windows runtime dependencies
-        run: python scripts/check_windows_runtime_deps.py --require-pe bin
+        run: python scripts/check_windows_runtime_deps.py --require-pe --require-import "fnql.exe=winmm.dll!joyGetPosEx" bin
 
       - name: Verify release layout
         run: python scripts/verify_release_layout.py bin/FnQL-pkg.fnz

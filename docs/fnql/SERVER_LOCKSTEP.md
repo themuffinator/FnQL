@@ -12,7 +12,7 @@ off. A listen server or client ignores it and prints a warning.
 
 ## Cvars
 
-All five are `CVAR_INIT | CVAR_PROTECTED`: set them with `+set` on the command
+All of them are `CVAR_INIT | CVAR_PROTECTED`: set them with `+set` on the command
 line; they cannot change at runtime.
 
 | Cvar | Default | Meaning |
@@ -22,6 +22,7 @@ line; they cannot change at runtime.
 | `sv_lockstepScript` | empty | Scenario script, read through the game filesystem (for example `lockstep/ffa.txt` from `<fs_homepath>/baseq3/`). Empty runs with no scripted clients. |
 | `sv_lockstepRecord` | empty | Recording path under `fs_homepath` (`FS_SV_FOpenFileWrite` rules). Empty records nothing. |
 | `sv_lockstepFrames` | `0` | Quit after this many recorded frames; `0` runs until the server stops. |
+| `sv_lockstepQueries` | `0` | `1` also records the answers of the qagame query exports (native slots 12-18: client visibility, thaw-tick suppression, objectives, voice suppression, admin, enemies, score) in `G` records, which makes the recording format version 2. A module without the native structured ABI records empty answers. |
 | `sv_lockstepTraceRand` | `0` | Windows only: log every `rand()` the game module takes from a shared C runtime (the retail qagame imports it from `MSVCR100.dll`), with the frame and the caller's offset in the module, to find where two modules' random streams part. Every game init re-arms it, so a `map_restart` that loads a fresh image of the module stays traced and the draw count carries on. A module with a static runtime is not seen; FnQL-game has its own trace (`meson -Dtrace-rand=true`). |
 
 Invalid values, script errors, a rejected scripted client and recording
@@ -205,7 +206,7 @@ at 60  alpha right=127 dyaw=1.5
 at 150 alpha buttons=attack
 ```
 
-## Recording format, version 1
+## Recording format, version 1 (and 2)
 
 Integers are little-endian. `str` is a `u32` byte length followed by that many
 bytes (no terminator). Structure payloads are the engine's raw in-memory
@@ -218,7 +219,7 @@ Header:
 | Field | Type |
 |---|---|
 | magic `FNQLLSTP` | 8 bytes |
-| format version (1) | u32 |
+| format version (1; 2 with `sv_lockstepQueries 1`) | u32 |
 | `sizeof( playerState_t )`, `sizeof( entityState_t )`, `sizeof( usercmd_t )` | 3 x u32 |
 | `MAX_CONFIGSTRINGS`, `MAX_GENTITIES`, `sv_maxclients` | 3 x u32 |
 | `sv_fps` at session start, seed, frame limit | 3 x u32 |
@@ -238,16 +239,33 @@ Then tagged records, one tag byte each:
 | `C` | i32 index, str text | a configstring that changed; frame 0 lists every non-empty one |
 | `S` | i32 target (-1 broadcast, otherwise the client number the game passed), str text | a reliable server command the game issued (`trap_SendServerCommand`) |
 | `O` | u32 count | game server commands dropped (more than 65536 in one frame) |
+| `G` | u32 payload length, then the payload below | version 2 only: the query export answers, written on frame 0 and whenever any answer changes |
 | `X` | u32 frame | closes the frame |
 | `Q` | u32 frames recorded, u32 reason (0 frame limit, 1 server shutdown) | end of the recording |
 
-A frame's records appear in the order `F`, `K`, `U`, `P`, `E`/`R`, `C`, `S`,
-`O`, `X`. Entities and configstrings are deltas against the previous frame, so
+A frame's records appear in the order `F`, `K`, `U`, `P`, `E`/`R`, `G`, `C`,
+`S`, `O`, `X`. Entities and configstrings are deltas against the previous frame, so
 a decoder keeps the current set. Server commands issued while the session
 starts (the scripted clients connecting) belong to frame 0. Engine-generated
 commands (`cs`, `disconnect`, engine prints) are not recorded: configstrings
 are recorded as such, and the rest does not depend on the game module. A
 recording without `Q` was cut short.
+
+The `G` payload asks the loaded module's exports through the same engine
+helpers the snapshot builder, the Steam voice relay, the in-band `rcon`
+command and the Steam player list use (`code/server/sv_game.cpp`). The
+queried clients are the `CS_ACTIVE` slots, bots included, in slot order;
+the queried entities are the linked entities without `SVF_NOCLIENT`, as for
+`E`. The exports are pure predicates, so asking them changes no game state.
+
+| Field | Type |
+|---|---|
+| client count M, then M x slot | i32 + M x i32 |
+| per client: `IsClientAdmin`, `GetClientScore` | M x (u8, i32) |
+| per ordered pair (a, b), a major: bit 0 `CanClientSeeClient(a, b)`, bit 1 `ShouldSuppressVoiceToClient(a, b)`, bit 2 `AreEnemyClients(a, b)` | M x M x u8 |
+| entity count, then per entity: number, `IsObjectiveEntity`, and per client the thaw-tick suppression (slot 13) | i32 + n x (i32, u8, M x u8) |
+
+A decoder keeps the last `G` payload as the current answers.
 
 ## Hooks
 
@@ -267,6 +285,9 @@ Each is a no-op while `sv_lockstep` is off:
 - `code/server/sv_snapshot.cpp`: `SV_SendClientMessages` (no snapshots for
   scripted clients).
 
+The query record adds no hook outside `sv_lockstep.cpp`: it calls the query
+helpers that already exist for the engine's own consumers.
+
 ## Validation
 
 - `tests/server_lockstep_source_tests.py`: default-off cvars, the
@@ -275,4 +296,6 @@ Each is a no-op while `sv_lockstep` is off:
 - FnQL-game `scripts/server_lockstep.py --self-check`: two retail-qagame runs
   of one scenario must not diverge. Without it the differential means nothing.
 - FnQL-game `scripts/server_lockstep.py`: the retail-versus-FnQL-game
-  differential itself (Meson suite `differential`).
+  differential itself (Meson suite `differential`). It sets
+  `sv_lockstepQueries 1` unless given `--no-queries`, so every scenario also
+  compares the query export answers.
