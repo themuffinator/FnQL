@@ -4,6 +4,33 @@
 
 This file is the maintainer-facing companion to [`README.md`](../../README.md). Keep user installation guidance in the README and use this document for repo structure, release flow, and implementation conventions.
 
+## Headless launch policy
+
+`Com_EarlyParseCmdLine` resolves headless mode before platform console creation.
+Dedicated builds always default to headless; client builds infer it from the
+last command-line `+set dedicated` value. `+set com_headless 0|1` overrides
+that default. Config files cannot select this early platform policy. The
+effective `com_headless` cvar is read-only, and headless startup locks
+`dedicated` on so a later config or console command cannot initialize a client.
+Renderer, audio and game-input initialization remain behind the existing
+dedicated boundary. Unix terminal server commands remain available.
+
+Windows skips console window creation, visibility changes and error widgets;
+its diagnostic path writes directly to inherited stdout/stderr handles without
+allocating or attaching a console. Fatal errors exit with status 1 instead of
+waiting in a GUI message loop. Startup choices proceed without a modal prompt
+on both platforms. Unix's SDL console refuses creation before SDL video init.
+
+Static reference observation: QLSRP `src/code/win32/win_main.c` creates loading
+and console windows before `Com_Init`. This change is FnQL's explicit hosting
+policy, not a claim that retail suppresses those windows. The interactive
+client path and retail protocol/module contracts are unchanged.
+
+Validation: `tests/headless_launch_tests.py` guards the platform UI boundaries;
+set `FNQL_HEADLESS_RUNTIME_DIR` to an x86 Windows build and optionally
+`FNQL_RETAIL_QL_PATH` to run its window-enumeration, retail-map and fatal-exit
+probes. These probes never capture the screen or inject input.
+
 ## Project Constraints
 
 FnQL exists to modernize the Quake Live engine without losing retail Steam

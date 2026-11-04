@@ -26,6 +26,7 @@ extern "C" {
 }
 
 #include "client_cpp.h"
+#include "snapshot_history.hpp"
 #include "../qcommon/netchan_safety.hpp"
 
 #include <algorithm>
@@ -443,7 +444,7 @@ static void CL_DeltaEntity( msg_t *msg, clSnapshot_t *frame, int newnum, const e
 	if ( state->number == (MAX_GENTITIES-1) ) {
 		return;		// entity was delta removed
 	}
-	cl.parseEntitiesNum++;
+	cl.parseEntitiesNum = fnql::net::NextCounter( cl.parseEntitiesNum );
 	frame->numEntities++;
 }
 
@@ -457,6 +458,7 @@ static void CL_ParsePacketEntities( msg_t *msg, const clSnapshot_t *oldframe, cl
 	const entityState_t	*oldstate;
 	int	newnum;
 	int	oldindex, oldnum;
+	int previousNumber = -1;
 
 	newframe->parseEntitiesNum = cl.parseEntitiesNum;
 	newframe->numEntities = 0;
@@ -471,7 +473,7 @@ static void CL_ParsePacketEntities( msg_t *msg, const clSnapshot_t *oldframe, cl
 			oldnum = MAX_GENTITIES+1;
 		} else {
 			oldstate = &cl.parseEntities[
-				(oldframe->parseEntitiesNum + oldindex) & (MAX_PARSE_ENTITIES-1)];
+				fnql::snapshot::EntityIndex( oldframe->parseEntitiesNum, oldindex, MAX_PARSE_ENTITIES - 1 )];
 			oldnum = oldstate->number;
 		}
 	}
@@ -487,6 +489,12 @@ static void CL_ParsePacketEntities( msg_t *msg, const clSnapshot_t *oldframe, cl
 		if ( newnum == (MAX_GENTITIES-1) ) {
 			break;
 		}
+		if ( !fnql::snapshot::EntityFollows( previousNumber, newnum, MAX_GENTITIES - 1 ) ) {
+			Com_Error( ERR_DROP, "CL_ParsePacketEntities: out-of-order entity %i after %i",
+				newnum, previousNumber );
+			return;
+		}
+		previousNumber = newnum;
 
 		while ( oldnum < newnum ) {
 			// one or more entities from the old packet are unchanged
@@ -501,7 +509,7 @@ static void CL_ParsePacketEntities( msg_t *msg, const clSnapshot_t *oldframe, cl
 				oldnum = MAX_GENTITIES+1;
 			} else {
 				oldstate = &cl.parseEntities[
-					(oldframe->parseEntitiesNum + oldindex) & (MAX_PARSE_ENTITIES-1)];
+					fnql::snapshot::EntityIndex( oldframe->parseEntitiesNum, oldindex, MAX_PARSE_ENTITIES - 1 )];
 				oldnum = oldstate->number;
 			}
 		}
@@ -518,7 +526,7 @@ static void CL_ParsePacketEntities( msg_t *msg, const clSnapshot_t *oldframe, cl
 				oldnum = MAX_GENTITIES+1;
 			} else {
 				oldstate = &cl.parseEntities[
-					(oldframe->parseEntitiesNum + oldindex) & (MAX_PARSE_ENTITIES-1)];
+					fnql::snapshot::EntityIndex( oldframe->parseEntitiesNum, oldindex, MAX_PARSE_ENTITIES - 1 )];
 				oldnum = oldstate->number;
 			}
 			continue;
@@ -549,7 +557,7 @@ static void CL_ParsePacketEntities( msg_t *msg, const clSnapshot_t *oldframe, cl
 			oldnum = MAX_GENTITIES+1;
 		} else {
 			oldstate = &cl.parseEntities[
-				(oldframe->parseEntitiesNum + oldindex) & (MAX_PARSE_ENTITIES-1)];
+				fnql::snapshot::EntityIndex( oldframe->parseEntitiesNum, oldindex, MAX_PARSE_ENTITIES - 1 )];
 			oldnum = oldstate->number;
 		}
 	}
@@ -688,7 +696,7 @@ static void CL_ParseSnapshot( msg_t *msg ) {
 			// The frame that the server did the delta from
 			// is too old, so we can't reconstruct it properly.
 			Com_Printf ("Delta frame too old.\n");
-		} else if ( cl.parseEntitiesNum - old->parseEntitiesNum > MAX_PARSE_ENTITIES - MAX_SNAPSHOT_ENTITIES ) {
+		} else if ( fnql::net::CounterDistance( cl.parseEntitiesNum, old->parseEntitiesNum ) > MAX_PARSE_ENTITIES - MAX_SNAPSHOT_ENTITIES ) {
 			Com_Printf ("Delta parseEntitiesNum too old.\n");
 		} else {
 			newSnap.valid = qtrue;	// valid delta parse
@@ -698,7 +706,7 @@ static void CL_ParseSnapshot( msg_t *msg ) {
 	// read areamask
 	newSnap.areabytes = MSG_ReadByte( msg );
 
-	if ( newSnap.areabytes > static_cast<int>( sizeof(newSnap.areamask) ) )
+	if ( newSnap.areabytes < 0 || newSnap.areabytes > static_cast<int>( sizeof(newSnap.areamask) ) )
 	{
 		Com_Error( ERR_DROP,"CL_ParseSnapshot: Invalid size %d for areamask", newSnap.areabytes );
 		return;

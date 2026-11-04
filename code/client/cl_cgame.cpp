@@ -30,6 +30,7 @@ extern "C" {
 #include "client_cpp.h"
 #include "client_cvar_compat.hpp"
 #include "ql_font_bridge.hpp"
+#include "snapshot_history.hpp"
 #include "../qcommon/netchan_safety.hpp"
 
 #include <algorithm>
@@ -229,7 +230,7 @@ static void CL_RebuildLiquidEntityKinds( void ) {
 
 	for ( i = 0; i < cl.snap.numEntities; i++ ) {
 		const entityState_t *state = &cl.parseEntities[
-			( cl.snap.parseEntitiesNum + i ) & ( MAX_PARSE_ENTITIES - 1 ) ];
+			fnql::snapshot::EntityIndex( cl.snap.parseEntitiesNum, i, MAX_PARSE_ENTITIES - 1 ) ];
 		clLiquidEntityKind_t *kind;
 
 		if ( state->number < 0 || state->number >= MAX_GENTITIES ) {
@@ -824,7 +825,7 @@ static const entityState_t *CL_FindEnemyHighlightPlayerState( const refEntity_t 
 	CL_GetEnemyHighlightMatchOrigin( ent, matchOrigin );
 
 	for ( i = 0; i < cl.snap.numEntities; i++ ) {
-		const entityState_t *state = &cl.parseEntities[ ( cl.snap.parseEntitiesNum + i ) & ( MAX_PARSE_ENTITIES - 1 ) ];
+		const entityState_t *state = &cl.parseEntities[ fnql::snapshot::EntityIndex( cl.snap.parseEntitiesNum, i, MAX_PARSE_ENTITIES - 1 ) ];
 		float distSq;
 
 		if ( state->eType != ET_PLAYER ) {
@@ -1183,28 +1184,19 @@ static void CL_GetCurrentSnapshotNumber( int *snapshotNumber, int *serverTime ) 
 CL_GetSnapshot
 ====================
 */
-static qboolean CL_GetSnapshot( int snapshotNumber, snapshot_t *snapshot ) {
-	clSnapshot_t	*clSnap;
-	int				i, count;
-
-	if ( cl.snap.messageNum - snapshotNumber < 0 ) {
+static const clSnapshot_t *CL_FindSnapshot( int snapshotNumber ) {
+	const auto result = fnql::snapshot::Lookup( snapshotNumber, cl.snap.messageNum,
+		cl.snapshots, cl.parseEntitiesNum, MAX_PARSE_ENTITIES );
+	if ( result.status == fnql::snapshot::LookupStatus::Future ) {
 		Com_Error( ERR_DROP, "CL_GetSnapshot: snapshotNumber (%i) > cl.snapshot.messageNum (%i)", snapshotNumber, cl.snap.messageNum );
 	}
+	return result.snapshot;
+}
 
-	// if the frame has fallen out of the circular buffer, we can't return it
-	if ( cl.snap.messageNum - snapshotNumber >= PACKET_BACKUP ) {
-		return qfalse;
-	}
-
-	// if the frame is not valid, we can't return it
-	clSnap = &cl.snapshots[snapshotNumber & PACKET_MASK];
-	if ( !clSnap->valid ) {
-		return qfalse;
-	}
-
-	// if the entities in the frame have fallen out of their
-	// circular buffer, we can't return it
-	if ( cl.parseEntitiesNum - clSnap->parseEntitiesNum >= MAX_PARSE_ENTITIES ) {
+static qboolean CL_GetSnapshot( int snapshotNumber, snapshot_t *snapshot ) {
+	const clSnapshot_t *clSnap = CL_FindSnapshot( snapshotNumber );
+	int i, count;
+	if ( !clSnap ) {
 		return qfalse;
 	}
 
@@ -1223,7 +1215,7 @@ static qboolean CL_GetSnapshot( int snapshotNumber, snapshot_t *snapshot ) {
 	snapshot->numEntities = count;
 	for ( i = 0 ; i < count ; i++ ) {
 		snapshot->entities[i] =
-			cl.parseEntities[ ( clSnap->parseEntitiesNum + i ) & (MAX_PARSE_ENTITIES-1) ];
+			cl.parseEntities[ fnql::snapshot::EntityIndex( clSnap->parseEntitiesNum, i, MAX_PARSE_ENTITIES - 1 ) ];
 	}
 
 	// FIXME: configstring changes and server commands!!!
@@ -1269,20 +1261,11 @@ static qboolean CL_GetRetailNativeSnapshot( int snapshotNumber, void *destinatio
 	if ( !destination ) {
 		return qfalse;
 	}
-	if ( snapshotNumber > cl.snap.messageNum ) {
-		Com_Error( ERR_DROP,
-			"CL_GetRetailNativeSnapshot: snapshotNumber (%i) > current snapshot (%i)",
-			snapshotNumber, cl.snap.messageNum );
-	}
-	if ( cl.snap.messageNum - snapshotNumber >= PACKET_BACKUP ) {
+	const clSnapshot_t *stored = CL_FindSnapshot( snapshotNumber );
+	if ( !stored ) {
 		return qfalse;
 	}
-
-	const clSnapshot_t &source = cl.snapshots[snapshotNumber & PACKET_MASK];
-	if ( !source.valid ||
-		cl.parseEntitiesNum - source.parseEntitiesNum >= MAX_PARSE_ENTITIES ) {
-		return qfalse;
-	}
+	const clSnapshot_t &source = *stored;
 
 	auto &snapshot = *static_cast<RetailNativeSnapshot *>( destination );
 	std::memset( &snapshot, 0, sizeof( snapshot ) );
@@ -1301,7 +1284,7 @@ static qboolean CL_GetRetailNativeSnapshot( int snapshotNumber, void *destinatio
 	snapshot.numEntities = entityCount;
 	for ( int i = 0; i < entityCount; ++i ) {
 		snapshot.entities[i] = cl.parseEntities[
-			( source.parseEntitiesNum + i ) & ( MAX_PARSE_ENTITIES - 1 ) ];
+			fnql::snapshot::EntityIndex( source.parseEntitiesNum, i, MAX_PARSE_ENTITIES - 1 ) ];
 	}
 	snapshot.serverCommandSequence = source.serverCommandNum;
 	return qtrue;

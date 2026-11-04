@@ -312,7 +312,7 @@ void NORETURN FORMAT_PRINTF(2, 3) QDECL Com_Error( errorParm_t code, const char 
 
 #if defined(_WIN32) && defined(_DEBUG)
 	if ( code != ERR_DISCONNECT && code != ERR_NEED_CD ) {
-		if ( !com_noErrorInterrupt->integer ) {
+		if ( !Com_IsHeadless() && com_noErrorInterrupt && !com_noErrorInterrupt->integer ) {
 			ShowWindow( g_wv.hWnd, SW_MINIMIZE );
 			DebugBreak();
 		}
@@ -528,6 +528,14 @@ static void Com_ParseCommandLine( char *commandLine ) {
 
 char cl_title[ MAX_CVAR_VALUE_STRING ] = CLIENT_WINDOW_TITLE;
 
+// Fixed before any platform UI is created; configs and runtime commands must
+// not turn an unattended process into an interactive client later.
+static qboolean com_headless;
+
+qboolean Com_IsHeadless( void ) {
+	return com_headless;
+}
+
 /*
 ===================
 Com_EarlyParseCmdLine
@@ -539,12 +547,32 @@ qboolean Com_EarlyParseCmdLine( char *commandLine, char *con_title, int title_si
 {
 	int		flags = 0;
 	int		i;
+	int headless = -1;
+#ifdef DEDICATED
+	int dedicated = 1;
+#else
+	int dedicated = 0;
+#endif
 
 	*con_title = '\0';
 	Com_ParseCommandLine( commandLine );
 
 	for ( i = 0 ; i < com_numConsoleLines ; i++ ) {
 		Cmd_TokenizeString( com_consoleLines[i] );
+		// Match Com_StartupVariable: only +set takes effect before startup.
+		if ( !Q_stricmp( Cmd_Argv(0), "set" ) && Cmd_Argc() >= 3 ) {
+			if ( !Q_stricmp( Cmd_Argv(1), "dedicated" ) ) {
+#ifndef DEDICATED
+				dedicated = atoi( Cmd_Argv(2) ) > 0;
+#endif
+			} else if ( !Q_stricmp( Cmd_Argv(1), "com_headless" ) ) {
+				headless = atoi( Cmd_Argv(2) ) != 0;
+				// Consume this platform option so later +set passes cannot
+				// change the registered, read-only effective value.
+				com_consoleLines[i][0] = '\0';
+				continue;
+			}
+		}
 		if ( !Q_stricmpn( Cmd_Argv(0), "set", 3 ) && !Q_stricmp( Cmd_Argv(1), "cl_title" ) ) {
 			com_consoleLines[i][0] = '\0';
 			Q_strncpyz( cl_title, Cmd_ArgsFrom( 2 ), sizeof(cl_title) );
@@ -592,6 +620,7 @@ qboolean Com_EarlyParseCmdLine( char *commandLine, char *con_title, int title_si
 		}
 	}
 
+	com_headless = ( headless < 0 ? dedicated : headless ) ? qtrue : qfalse;
 	return (flags == 3) ? qtrue : qfalse ;
 }
 
@@ -3915,6 +3944,7 @@ void Com_Init( char *commandLine ) {
 
 	Com_InitSmallZoneMemory();
 	Cvar_Init();
+	Cvar_Get( "com_headless", com_headless ? "1" : "0", CVAR_ROM );
 
 #if defined(_WIN32) && defined(_DEBUG)
 	com_noErrorInterrupt = Cvar_Get( "com_noErrorInterrupt", "0", 0 );
@@ -3999,6 +4029,13 @@ void Com_Init( char *commandLine ) {
 	Cvar_CheckRange( com_dedicated, "0", "2", CV_INTEGER );
 #endif
 	Cvar_SetDescription( com_dedicated, "Enables dedicated server mode.\n 0: Listen server\n 1: Unlisted dedicated server \n 2: Listed dedicated server" );
+	if ( com_headless ) {
+		if ( !com_dedicated->integer ) {
+			Cvar_Set( "dedicated", "1" );
+		}
+		com_dedicated->flags &= ~CVAR_LATCH;
+		com_dedicated->flags |= CVAR_INIT;
+	}
 	// allocate the stack based hunk allocator
 	Com_InitHunkMemory();
 

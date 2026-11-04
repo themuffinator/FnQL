@@ -40,6 +40,9 @@ extern "C" {
 #include <errno.h>
 #include <direct.h>
 #include <io.h>
+#if defined(_MSC_VER) && defined(_DEBUG)
+#include <crtdbg.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -48,6 +51,19 @@ extern "C" {
 #define MEM_THRESHOLD (96*1024*1024)
 
 WinVars_t	g_wv;
+
+static void Sys_WriteHeadlessOutput( DWORD stream, const char *text ) {
+	HANDLE handle = GetStdHandle( stream );
+	DWORD remaining = (DWORD)strlen( text );
+	while ( handle && handle != INVALID_HANDLE_VALUE && remaining ) {
+		DWORD written = 0;
+		if ( !WriteFile( handle, text, remaining, &written, NULL ) || !written ) {
+			break;
+		}
+		text += written;
+		remaining -= written;
+	}
+}
 
 #ifndef DEDICATED
 
@@ -105,6 +121,13 @@ void NORETURN FORMAT_PRINTF(1, 2) QDECL Sys_Error( const char *error, ... ) {
 	Q_vsnprintf( text, sizeof( text ), error, argptr );
 	va_end( argptr );
 
+	if ( Com_IsHeadless() ) {
+		Sys_WriteHeadlessOutput( STD_ERROR_HANDLE, text );
+		Sys_WriteHeadlessOutput( STD_ERROR_HANDLE, "\n" );
+		timeEndPeriod( 1 );
+		exit( 1 );
+	}
+
 #ifndef DEDICATED
 	CL_Shutdown( text, qtrue );
 #endif
@@ -149,7 +172,7 @@ sysStartupChoice_t Sys_PromptStartupChoice( const char *title, const char *messa
 	WCHAR wideTitle[128];
 	WCHAR wideMessage[2048];
 
-	if ( !message || !message[0] ) {
+	if ( Com_IsHeadless() || !message || !message[0] ) {
 		return SYS_STARTUP_PROCEED;
 	}
 
@@ -200,6 +223,10 @@ Sys_Print
 */
 void Sys_Print( const char *msg )
 {
+	if ( Com_IsHeadless() ) {
+		Sys_WriteHeadlessOutput( STD_OUTPUT_HANDLE, msg );
+		return;
+	}
 	Conbuf_AppendText( msg );
 }
 
@@ -776,7 +803,7 @@ Restore gamma and hide fullscreen window in case of crash
 static LONG WINAPI ExceptionFilter( struct _EXCEPTION_POINTERS *ExceptionInfo )
 {
 #ifndef DEDICATED
-	if ( com_dedicated->integer == 0 ) {
+	if ( !Com_IsHeadless() && com_dedicated && com_dedicated->integer == 0 ) {
 		extern cvar_t *com_cl_running;
 
 		// The gamma ramp is desktop-global and outlives the process, so it goes
@@ -877,12 +904,32 @@ int WINAPI WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	Q_strncpyz( sys_cmdline, lpCmdLine, sizeof( sys_cmdline ) );
 
 	useXYpos = Com_EarlyParseCmdLine( sys_cmdline, con_title, sizeof( con_title ), &xpos, &ypos );
+	if ( Com_IsHeadless() ) {
+		// Suppress OS crash/open-file dialogs as well as engine-owned UI.
+		SetErrorMode( SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX );
+#ifdef _MSC_VER
+		_set_error_mode( _OUT_TO_STDERR );
+#if _MSC_VER >= 1400
+		_set_abort_behavior( 0, _CALL_REPORTFAULT );
+#endif
+#ifdef _DEBUG
+		_CrtSetReportMode( _CRT_WARN, _CRTDBG_MODE_FILE );
+		_CrtSetReportFile( _CRT_WARN, _CRTDBG_FILE_STDERR );
+		_CrtSetReportMode( _CRT_ERROR, _CRTDBG_MODE_FILE );
+		_CrtSetReportFile( _CRT_ERROR, _CRTDBG_FILE_STDERR );
+		_CrtSetReportMode( _CRT_ASSERT, _CRTDBG_MODE_FILE );
+		_CrtSetReportFile( _CRT_ASSERT, _CRTDBG_FILE_STDERR );
+#endif
+#endif
+	}
 
 	// done before Com/Sys_Init since we need this for error output
 	Sys_CreateConsole( con_title, xpos, ypos, useXYpos );
 
 	// no abort/retry/fail errors
-	SetErrorMode( SEM_FAILCRITICALERRORS );
+	if ( !Com_IsHeadless() ) {
+		SetErrorMode( SEM_FAILCRITICALERRORS );
+	}
 
 	SetUnhandledExceptionFilter( ExceptionFilter );
 
@@ -906,7 +953,9 @@ int WINAPI WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		Com_Frame( qfalse );
 #else
 		// make sure mouse and joystick are only called once a frame
-		IN_Frame();
+		if ( !com_dedicated->integer ) {
+			IN_Frame();
+		}
 		// run the game
 		Com_Frame( CL_NoDelay() );
 #endif

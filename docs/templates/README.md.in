@@ -92,6 +92,17 @@ profile. Then download the supported Windows or Linux package from the
 3. Leave Steam running and launch `fnql.exe`. The official Windows build is
    Win32/x86 so it can load the retail game modules and WebUI.
 
+### Headless hosting
+
+Dedicated executables and client launches with `+set dedicated 1` or `2`
+start without graphical windows, renderer/audio initialization, or modal
+prompts. Windows writes diagnostics to inherited stdout/stderr; redirect them
+to a file or use `+set logfile 2`. Fatal errors exit with a nonzero status.
+Use `+set com_headless 1` to explicitly select this mode (it also selects
+dedicated mode). Headless processes cannot switch to a graphical client at
+runtime. For the interactive Windows server console, explicitly pass
+`+set com_headless 0`. Ordinary client launches are unchanged.
+
 ### Native Linux dedicated server
 
 1. Install the 32-bit runtime libraries reported by `ldd ./fnql.ded` on your
@@ -101,7 +112,7 @@ profile. Then download the supported Windows or Linux package from the
    `tar -xzf fnql-*-linux-x86.tar.gz -C "<Quake Live folder>"`. The tarball
    preserves the executable bits on the engine and renderer modules.
 3. From that folder, start the server with
-   `./fnql.ded +set fs_steampath "$$PWD" +set dedicated 2 +map campgrounds`.
+   `./fnql.ded +set fs_steampath "$$PWD" +set dedicated 2 +map campgrounds ffa`.
    Keep the two FnQL package sidecars and renderer modules beside the binaries.
 
 Retail Quake Live ships native Linux server modules, but its client and WebUI

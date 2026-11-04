@@ -98,6 +98,57 @@ No retail asset, proprietary runtime, SDK binary, reconstructed game module, or
 credential is stored in the repository. The retail observations above were
 read-only probes against the user's legitimate local Steam installation.
 
+## 2026-11-03 snapshot history audit
+
+The native retail and legacy VM snapshot imports now share one checked history
+lookup. Packet age uses the existing 31-bit netchan sequence contract, entity
+age and indexing use the full 32-bit cursor contract, and a ring slot must name
+the requested message before its contents can reach a module. Demo recording
+and client rendering use the same overflow-safe entity indexing. The snapshot
+structures and the native 384-entity presentation limit are unchanged.
+
+The packet parser rejects duplicate and descending entity records before its
+merge writes, including removal records, and rejects a truncated areamask size.
+It still accepts all non-sentinel wire entity numbers; the local server's
+256-entity budget is not imposed on retail packets.
+
+Evidence and scope:
+
+- **Inherited observed:** `netchan_safety.hpp` already defines separate 31-bit
+  packet sequences and 32-bit counters. The imports previously used signed
+  subtraction/comparison, and the demo writer used signed modulo indexing.
+  Those consumers did not implement the existing rollover contract.
+- **Inherited/QLSRP observed:** FnQL's `SV_SortEntityNumbers` and
+  `SV_EmitPacketEntities` produce strictly increasing entity numbers. QLSRP's
+  `src/code/client/cl_parse.c:CL_ParsePacketEntities` merges sorted lists, and
+  its native snapshot bridge retains the 384-entity retail layout. No QLSRP
+  implementation text was incorporated.
+- **Regression gates:** `fnql_snapshot_history` exercises normal sessions,
+  both counter rollovers, reused/invalid/expired slots, 384-entity frames,
+  invalid entity ranges, and the complete non-sentinel entity-number range.
+  `snapshot_history_source_tests.py` pins the shared import and parser wiring.
+- **Local fixture observed:** the optional read-only scan
+  `fnql_snapshot_history_tests <local.dm_91>` uses production message codecs
+  and accepted 226 snapshots / 3,529 ordered records (495 removals) in
+  `FFA-overkill-2026_07_10-14_49_27.dm_91` from the legitimate Steam install.
+  Its final record is truncated: sequence 260 declares 292 payload bytes but
+  only 245 remain. The probe correctly exits 2 rather than calling the entire
+  demo valid. The original file was not modified or copied. Its SHA-256 is
+  `6297969f96dc8e857ceb1f8a0f57bfa44887a5443a59a619df68941db60dfeee`;
+  this is fixture-prefix evidence, not a claim about which engine recorded it.
+- **Build/source validation:** the strict MSVC Win32 Release build completed
+  for the client, dedicated server, all three renderers, and native tests.
+  PE headers confirm i386 outputs. Full pytest discovery passed 1,237 tests
+  with nine environment-dependent skips and 25,373 subtests; the skips cover
+  opt-in module runtime probes and unavailable Windows symlink privileges.
+  Meson completed with 100 passing tests, no failures, and one skipped OpenAL
+  loopback test because the installed runtime lacks `ALC_SOFT_loopback`.
+  Local logs and binary fingerprints are under `.tmp/implementation-gaps/`.
+- **Remaining evidence:** these are deterministic engine boundary checks, not
+  a new live retail interoperability capture. Live service fault injection,
+  WebUI restart/crash stress, demo seek/timedemo stress, and cross-platform
+  promotion gates listed above remain open.
+
 ## Architecture and execution order
 
 ### 1. Compatibility descriptors and safety rails

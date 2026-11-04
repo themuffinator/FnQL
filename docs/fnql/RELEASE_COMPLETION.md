@@ -23,6 +23,12 @@ only planned.
 
 ## Ready For Changelog
 
+- [x] Share snapshot history validation between retail native and legacy VM
+  imports, preserve packet/entity counter rollover in client and demo paths,
+  and reject malformed entity order and truncated areamask sizes. Native
+  boundary tests and source integration gates cover the change; see the
+  [snapshot history audit](QL_COMPATIBILITY_ROADMAP.md#2026-11-03-snapshot-history-audit).
+
 - [x] Correct the engine's key-activity button to retail Quake Live's `0x1000`,
   preventing scoreboard key presses from emitting the separate `0x0800`
   stop-follow input while retaining Quake III wire-profile behavior.

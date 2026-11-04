@@ -182,7 +182,7 @@ ql_dir="$HOME/.local/share/Steam/steamapps/common/Quake Live"
 tar -xzf fnql-*-linux-x86.tar.gz -C "$ql_dir"
 cd "$ql_dir"
 ldd ./fnql.ded | grep 'not found' || true
-./fnql.ded +set fs_steampath "$ql_dir" +set dedicated 2 +map campgrounds
+./fnql.ded +set fs_steampath "$ql_dir" +set dedicated 2 +map campgrounds ffa
 ```
 
 Steam may instead use `~/.steam/steam/steamapps/common/Quake Live` or a custom

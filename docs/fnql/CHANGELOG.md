@@ -28,7 +28,8 @@ release, CI resets `Unreleased` for the next cycle.
 - _None yet._
 
 ### Fixes
-- _None yet._
+- Keep snapshot history and demo recording safe across sequence-counter rollover,
+  and reject stale snapshot slots and malformed entity ordering.
 
 ### Documentation and Tooling
 - _None yet._
