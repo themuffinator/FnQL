@@ -503,9 +503,13 @@ static void SV_SteamPublishGameServerMetadata( void ) {
 		Cvar_VariableString( "g_redScore" ) );
 	(void)FNQL_Steam_SetGameServerKeyValue( "g_blueScore",
 		Cvar_VariableString( "g_blueScore" ) );
+	// Retail SteamServer_Frame (0x466394-0x466440) publishes every occupied
+	// slot with a SteamID: the userinfo name, "(Bot) " before a bot's, and
+	// the score from qagame export 18. FnQL skips zombies, whose Steam auth
+	// session has already ended.
 	for ( int index = 0; index < sv_maxclients->integer; ++index ) {
 		client_t &client = svs.clients[index];
-		if ( client.state != CS_ACTIVE ) continue;
+		if ( client.state < CS_CONNECTED ) continue;
 		if ( client.netchan.remoteAddress.type == NA_BOT ) ++botCount;
 		if ( client.netchan.remoteAddress.type == NA_BOT
 			&& !client.platformSteamIdValue ) {
@@ -521,8 +525,14 @@ static void SV_SteamPublishGameServerMetadata( void ) {
 		if ( !client.platformSteamIdValue ) continue;
 		const playerState_t *playerState = SV_GameClientNum( index );
 		if ( !playerState ) continue;
+		std::array<char, MAX_STRING_CHARS> playerName{};
+		Com_sprintf( playerName.data(), static_cast<int>( playerName.size() ), "%s%s",
+			client.netchan.remoteAddress.type == NA_BOT ? "(Bot) " : "",
+			Info_ValueForKey( client.userinfo, "name" ) );
+		const int score = SV_GameGetClientScore( index,
+			playerState->persistant[PERS_SCORE] );
 		(void)FNQL_Steam_UpdateGameServerUser( client.platformSteamIdValue,
-			client.name, static_cast<uint32_t>( playerState->persistant[PERS_SCORE] ) );
+			playerName.data(), static_cast<uint32_t>( score ) );
 	}
 	(void)FNQL_Steam_SetGameServerBotCount( botCount );
 }

@@ -46,6 +46,7 @@ class ServerLockstepDefaultsTests(unittest.TestCase):
             "sv_lockstepScript": "",
             "sv_lockstepRecord": "",
             "sv_lockstepFrames": "0",
+            "sv_lockstepQueries": "0",
         }
         for name, default in expected.items():
             self.assertRegex(
@@ -191,10 +192,32 @@ class ServerLockstepIntegrationTests(unittest.TestCase):
         self.assertIn("[`SERVER_LOCKSTEP.md`](./SERVER_LOCKSTEP.md)", read("docs/fnql/TECHNICAL.md"))
         # the documented record tags are the ones the writer emits
         source = read(LOCKSTEP)
-        for tag in "FUKPERCSOXQ":
+        for tag in "FUKPERCSOXQG":
             self.assertIn(f"= '{tag}',", source)
             self.assertIn(f"| `{tag}` |", doc)
         self.assertIn("constexpr std::array<char, 8> RecordMagic = { 'F', 'N', 'Q', 'L', 'L', 'S', 'T', 'P' };", source)
+
+    def test_game_query_record_is_opt_in(self) -> None:
+        source = read(LOCKSTEP)
+        doc = read("docs/fnql/SERVER_LOCKSTEP.md")
+        # version 1 is unchanged unless sv_lockstepQueries asks for 'G' records
+        self.assertIn("constexpr std::uint32_t RecordFormatVersion = 1;", source)
+        self.assertIn("constexpr std::uint32_t RecordFormatVersionQueries = 2;", source)
+        self.assertIn("out.U32( lockstepQueries ? RecordFormatVersionQueries : RecordFormatVersion );", source)
+        self.assertIn("lockstepQueries = sv_lockstepQueries->integer != 0;", source)
+        write = function_body(source, r"void WriteFrame\(\)")
+        self.assertIn("if ( lockstepQueries ) {", write)
+        self.assertIn("BuildGameQueries( queries );", write)
+        self.assertLess(write.index("RecordTag::EntityRemoved"), write.index("RecordTag::GameQueries"))
+        self.assertLess(write.index("RecordTag::GameQueries"), write.index("RecordTag::Configstring"))
+        build = function_body(source, r"void BuildGameQueries\( std::vector<std::uint8_t> &payload \)")
+        self.assertIn("SV_GameQueryExportsAvailable()", build)
+        for query in ("SV_GameIsClientAdmin", "SV_GameGetClientScore", "SV_GameCanClientSeeClient",
+                      "SV_GameShouldSuppressVoiceToClient", "SV_GameAreEnemyClients",
+                      "SV_GameIsObjectiveEntity", "SV_GameSuppressesThawProgressEvent"):
+            self.assertIn(query, build)
+        for term in ("sv_lockstepQueries", "format version 2", "| `G` |"):
+            self.assertIn(term, doc)
 
 
 if __name__ == "__main__":
