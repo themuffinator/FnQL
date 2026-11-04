@@ -63,6 +63,8 @@ namespace {
 
 constexpr int ScriptFormatVersion = 1;
 constexpr std::uint32_t RecordFormatVersion = 1;
+// sv_lockstepQueries 1 writes version 2: the same layout plus 'G' records.
+constexpr std::uint32_t RecordFormatVersionQueries = 2;
 constexpr std::array<char, 8> RecordMagic = { 'F', 'N', 'Q', 'L', 'L', 'S', 'T', 'P' };
 
 // The virtual clock (com_frameTime, trap_Milliseconds) starts here.
@@ -88,6 +90,7 @@ enum class RecordTag : std::uint8_t {
 	Configstring = 'C',
 	ServerCommand = 'S',
 	ServerCommandOverflow = 'O',
+	GameQueries = 'G',
 	FrameEnd = 'X',
 	End = 'Q',
 };
@@ -113,8 +116,10 @@ cvar_t *sv_lockstepTraceRand;
 cvar_t *sv_lockstepScript;
 cvar_t *sv_lockstepRecord;
 cvar_t *sv_lockstepFrames;
+cvar_t *sv_lockstepQueries;
 
 bool lockstepEnabled = false;
+bool lockstepQueries = false;
 std::uint32_t lockstepSeed = 0;
 int lockstepFrameLimit = 0;
 std::uint32_t gameInitCount = 0;
@@ -918,6 +923,7 @@ struct Session {
 	std::vector<PendingServerCommand> serverCommands;
 	std::uint32_t droppedServerCommands = 0;
 	std::vector<ExecutedCommand> executed;
+	std::vector<std::uint8_t> queries;		// the last 'G' payload written
 };
 
 Session session;
@@ -1087,7 +1093,7 @@ void DeliverGamestate( client_t &cl ) {
 void WriteHeader() {
 	RecordWriter &out = session.record;
 	out.Bytes( RecordMagic.data(), RecordMagic.size() );
-	out.U32( RecordFormatVersion );
+	out.U32( lockstepQueries ? RecordFormatVersionQueries : RecordFormatVersion );
 	out.U32( static_cast<std::uint32_t>( sizeof( playerState_t ) ) );
 	out.U32( static_cast<std::uint32_t>( sizeof( entityState_t ) ) );
 	out.U32( static_cast<std::uint32_t>( sizeof( usercmd_t ) ) );
@@ -1267,6 +1273,72 @@ void RunCommands( int frame ) {
 	}
 }
 
+// The answers of the retail qagame query exports for this frame, in the 'G'
+// payload layout of docs/fnql/SERVER_LOCKSTEP.md. The exports are pure
+// predicates in both modules, so asking them changes no game state.
+void BuildGameQueries( std::vector<std::uint8_t> &payload ) {
+	payload.clear();
+	auto u8 = [&payload]( bool value ) { payload.push_back( value ? 1u : 0u ); };
+	auto i32 = [&payload]( int value ) {
+		const std::uint32_t bits = static_cast<std::uint32_t>( value );
+		for ( int shift = 0; shift < 32; shift += 8 ) {
+			payload.push_back( static_cast<std::uint8_t>( bits >> shift ) );
+		}
+	};
+
+	std::array<int, MAX_CLIENTS> slots{};
+	int count = 0;
+	if ( SV_GameQueryExportsAvailable() && svs.clients && sv.gameClients ) {
+		for ( int slot = 0; slot < sv.maxclients && slot < MAX_CLIENTS; ++slot ) {
+			if ( svs.clients[slot].state == CS_ACTIVE ) {
+				slots[static_cast<std::size_t>( count++ )] = slot;
+			}
+		}
+	}
+
+	i32( count );
+	for ( int i = 0; i < count; ++i ) {
+		i32( slots[static_cast<std::size_t>( i )] );
+	}
+	for ( int i = 0; i < count; ++i ) {
+		const int slot = slots[static_cast<std::size_t>( i )];
+		u8( SV_GameIsClientAdmin( slot ) != qfalse );
+		i32( SV_GameGetClientScore( slot, 0 ) );
+	}
+	for ( int i = 0; i < count; ++i ) {
+		const int a = slots[static_cast<std::size_t>( i )];
+		for ( int j = 0; j < count; ++j ) {
+			const int b = slots[static_cast<std::size_t>( j )];
+			const unsigned bits = ( SV_GameCanClientSeeClient( a, b ) ? 1u : 0u )
+				| ( SV_GameShouldSuppressVoiceToClient( a, b ) ? 2u : 0u )
+				| ( SV_GameAreEnemyClients( a, b ) ? 4u : 0u );
+			payload.push_back( static_cast<std::uint8_t>( bits ) );
+		}
+	}
+
+	const std::size_t entityCountAt = payload.size();
+	i32( 0 );
+	int entities = 0;
+	if ( count && sv.gentities ) {
+		for ( int number = 0; number < sv.num_entities && number < MAX_GENTITIES; ++number ) {
+			const sharedEntity_t *ent = SV_GentityNum( number );
+			if ( !ent->r.linked || ( ent->r.svFlags & SVF_NOCLIENT ) ) {
+				continue;
+			}
+			++entities;
+			i32( number );
+			u8( SV_GameIsObjectiveEntity( number ) != qfalse );
+			for ( int i = 0; i < count; ++i ) {
+				u8( SV_GameSuppressesThawProgressEvent( slots[static_cast<std::size_t>( i )], number ) != qfalse );
+			}
+		}
+	}
+	const std::uint32_t entityBits = static_cast<std::uint32_t>( entities );
+	for ( int k = 0; k < 4; ++k ) {
+		payload[entityCountAt + static_cast<std::size_t>( k )] = static_cast<std::uint8_t>( entityBits >> ( 8 * k ) );
+	}
+}
+
 void WriteFrame() {
 	RecordWriter &out = session.record;
 	out.Tag( RecordTag::Frame );
@@ -1321,6 +1393,17 @@ void WriteFrame() {
 			cache.present = false;
 			out.Tag( RecordTag::EntityRemoved );
 			out.I32( number );
+		}
+	}
+
+	if ( lockstepQueries ) {
+		std::vector<std::uint8_t> queries;
+		BuildGameQueries( queries );
+		if ( session.frame == 0 || queries != session.queries ) {
+			session.queries = std::move( queries );
+			out.Tag( RecordTag::GameQueries );
+			out.U32( static_cast<std::uint32_t>( session.queries.size() ) );
+			out.Bytes( session.queries.data(), session.queries.size() );
 		}
 	}
 
@@ -1387,6 +1470,11 @@ void SV_LockstepInit( void ) {
 	Cvar_SetDescription( sv_lockstepRecord, "sv_lockstep: per-frame recording written under fs_homepath." );
 	sv_lockstepFrames = Cvar_Get( "sv_lockstepFrames", "0", CVAR_INIT | CVAR_PROTECTED );
 	Cvar_SetDescription( sv_lockstepFrames, "sv_lockstep: quit after this many recorded frames; 0 runs until stopped." );
+	sv_lockstepQueries = Cvar_Get( "sv_lockstepQueries", "0", CVAR_INIT | CVAR_PROTECTED );
+	Cvar_CheckRange( sv_lockstepQueries, "0", "1", CV_INTEGER );
+	Cvar_SetDescription( sv_lockstepQueries,
+		"sv_lockstep: also record the answers of the qagame query exports (visibility, objectives, voice, "
+		"admin, enemies, score) whenever they change; writes recording format 2." );
 	sv_lockstepTraceRand = Cvar_Get( "sv_lockstepTraceRand", "0", CVAR_INIT | CVAR_PROTECTED );
 	Cvar_CheckRange( sv_lockstepTraceRand, "0", "1", CV_INTEGER );
 	Cvar_SetDescription( sv_lockstepTraceRand,
@@ -1415,6 +1503,7 @@ void SV_LockstepInit( void ) {
 	}
 
 	lockstepEnabled = true;
+	lockstepQueries = sv_lockstepQueries->integer != 0;
 	session.slotOwner.fill( -1 );
 	Com_Printf( "sv_lockstep: enabled: fixed 1000/sv_fps frames run back to back on a virtual clock, "
 		"seed %u\n", lockstepSeed );

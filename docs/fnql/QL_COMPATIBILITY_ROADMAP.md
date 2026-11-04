@@ -149,6 +149,50 @@ Evidence and scope:
   WebUI restart/crash stress, demo seek/timedemo stress, and cross-platform
   promotion gates listed above remain open.
 
+## 2026-11-04 qagame query export bridge
+
+The engine's use of qagame native export slots 12-18 now follows retail, and
+FnQL-game's answers to them are gated against the retail qagame. Contract:
+[`GAME_MODULES.md`](GAME_MODULES.md#query-exports).
+
+- **Retail observed (quakelive_steam.exe disassembly):** the snapshot builder
+  sends broadcast entities, then drops an entity when slot 13 answers true
+  (`0x4e54a0`-`0x4e54a7`), then includes clients on slot 12 or other entities
+  on slot 14, then runs the area/PVS pass. Its viewer argument is the owner's
+  own slot (`0x4e5789`), and `SVF_SINGLECLIENT` uses that slot while
+  `ps.eFlags` has `0x4000` (`0x4e53d2`). Slot 16 gates a `rcon` client command
+  in the engine's command table (`0x56bf68` -> `0x4dff80`), and slot 18 feeds
+  the Steam player list with a `(Bot) ` name prefix (`0x466394`-`0x466440`).
+- **Corrected in FnQL:** FnQL included slot-13 entities instead of dropping
+  them, so Freeze Tag opponents received thaw ticks regardless of PVS. It also
+  asked the visibility exports with the followed `ps.clientNum`, did not offer
+  the admin `rcon` command, and published `PERS_SCORE` and the bare name to
+  Steam. Legacy QVM and classic DLL modules keep the Quake III paths.
+- **Deliberate difference:** retail executes an admin `rcon` inside client
+  message parsing. FnQL queues it (eight entries) and runs it from `SV_Frame`
+  beside the ZMQ rcon, so `map` or `killserver` cannot free the client being
+  parsed. Zombie slots are not published to Steam.
+- **Game side (FnQL-game):** the seven export bodies were rewritten from
+  retail qagame `0x10052dc0`-`0x100530f0` and its team helpers
+  `0x10067ec0`-`0x10067f70`. `g_allTalk`, which only the voice filter reads,
+  is registered.
+- **Regression gates:** `tests/qagame_query_export_bridge_tests.py`; the
+  opt-in `sv_lockstepQueries` record ([`SERVER_LOCKSTEP.md`](SERVER_LOCKSTEP.md)),
+  which FnQL-game's G3 runner now enables for every scenario. All 247
+  differential, self-check, round, objective, factory, stock-map, unit, ABI
+  and contract tests pass with zero divergence. The previous FnQL-game module
+  diverged 305 times on `ctf_match` alone. The FT thaw and `tdm_admin`
+  scenarios record non-zero thaw-suppression and admin answers. A scripted
+  lockstep probe ran an admin's quoted `rcon` and ignored a non-admin's, on
+  both modules.
+- **Build/source validation:** MSVC Win32 builds of `meson/build/win32` and
+  `meson/build-x86-nosdl` completed without warnings. Pytest passed 1,241
+  tests with 24 environment skips; Meson passed 78 with one retail-probe skip;
+  the opt-in provider runtime tests passed 6 of 6.
+- **Remaining evidence:** no retail client has been captured receiving these
+  snapshots or relayed voice, and the Steam player list was not observed on a
+  live server browser.
+
 ## Architecture and execution order
 
 ### 1. Compatibility descriptors and safety rails

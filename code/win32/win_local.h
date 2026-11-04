@@ -25,6 +25,12 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #define FAST_MODE_SWITCH
 
+// Retail Quake Live ships WinMM joystick input in its Win32 client. The
+// backend stays inert until the archived in_joystick cvar is enabled.
+#ifndef USE_JOYSTICK
+#define USE_JOYSTICK
+#endif
+
 #ifdef RAW_INPUT
 
 #ifndef HID_USAGE_GENERIC_MOUSE

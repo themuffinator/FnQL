@@ -112,6 +112,36 @@ peers:
 5. **No synthesized success.** Steam authorization, purity and capability
    answers always reflect what actually ran.
 
+## Query exports
+
+Native export slots 12-18 are predicates the engine asks the game module.
+Retail's engine and qagame define their meaning; FnQL's helpers in
+`code/server/sv_game.cpp` are the only callers, are native-only, and answer
+the neutral value for a missing slot.
+
+| Slot | Export | Retail engine caller | Engine use in FnQL |
+|---|---|---|---|
+| 12 | `CanClientSeeClient( viewer, target )` | snapshot builder `0x4e54c8` | true includes the target player regardless of PVS |
+| 13 | `FreezeCanSeeThawProgressEvent( viewer, ent )` | snapshot builder `0x4e54a0` | true **drops** the entity for that viewer (the name is historical) |
+| 14 | `IsObjectiveEntity( ent )` | snapshot builder `0x4e54eb` | true includes a non-client entity regardless of PVS |
+| 15 | `ShouldSuppressVoiceToClient( sender, recipient )` | Steam voice relay `0x466a07` | true withholds the voice packet |
+| 16 | `IsClientAdmin( client )` | client command `rcon` `0x4dffef` | true lets the client run console commands in-band |
+| 17 | `AreEnemyClients( a, b )` | none | lockstep query record only |
+| 18 | `GetClientScore( client )` | Steam player list `0x466440` | the published score; also `status` |
+
+The snapshot builder follows retail's order (`0x4e5471`-`0x4e54f0`):
+broadcast entities first, then slot 13 for every other entity, then slot 12
+for clients or slot 14 for everything else, then the area and PVS pass. The
+viewer is the snapshot owner's own slot (`0x4e5789`), not the followed
+`ps.clientNum`; an `SVF_SINGLECLIENT` entity is likewise compared with that
+slot while the viewer's playerState carries `EF_SPECTATOR` (`0x4000`,
+`0x4e53d2`). Legacy modules keep the Quake III rules for both.
+
+The in-band `rcon` runs from `SV_Frame` (with ZMQ's rcon) instead of in the
+middle of the client's message as retail does, so a `map` or `kill` cannot
+free state the parser still uses. Output still returns to the admin as
+out-of-band `print` packets.
+
 ## Validation
 
 - `tests/game_module_provider_source_tests.py`: provider selection order,
@@ -130,6 +160,12 @@ peers:
   `FNQL_RETAIL_QL_PATH=<Quake Live install>`.
 - FnQL-game ships its own gates (ABI layout parity, dedicated-server boot
   smoke) and the parity gates its plan adds per milestone.
+- `tests/qagame_query_export_bridge_tests.py`: the query export order,
+  viewer and native-only rules above, the queued admin `rcon`, and the Steam
+  player publication.
+- FnQL-game's G3 differential records every query export answer each frame
+  (`sv_lockstepQueries`, [`SERVER_LOCKSTEP.md`](SERVER_LOCKSTEP.md)) and
+  requires FnQL-game's to match the retail qagame's.
 - `tests/server_lockstep_source_tests.py`: the dedicated-server lockstep mode
   ([`SERVER_LOCKSTEP.md`](SERVER_LOCKSTEP.md)) stays default-off and every
   engine hook stays gated. FnQL-game's `scripts/server_lockstep.py` (gate G3)

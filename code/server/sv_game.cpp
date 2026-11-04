@@ -2484,6 +2484,52 @@ static bool SV_GameNativeExportAvailable( int exportIndex ) {
 	return exports[exportIndex] != nullptr;
 }
 
+/*
+==================
+Retail qagame query exports
+
+Retail quakelive_steam.exe calls slots 12-14 from its snapshot builder
+(0x4e548c-0x4e54eb), slot 15 from the Steam voice relay (0x466a07), slot 16
+from the in-band "rcon" client command (0x4dffef) and slot 18 from the Steam
+GameServer player publication (0x466440). Slot 17 has no retail engine caller;
+FnQL exposes it for diagnostics and the lockstep query record only.
+
+These are native-only: a classic vmMain module or a QVM never sees a QL-only
+export call, and an absent slot answers the neutral value retail's engine would
+reach without the predicate.
+==================
+*/
+qboolean SV_GameQueryExportsAvailable( void ) {
+	return SV_QBool( gvm && gvm->dllExports );
+}
+
+qboolean SV_GameCanClientSeeClient( int viewerClientNum, int targetClientNum ) {
+	if ( !SV_GameNativeExportAvailable( GAME_NATIVE_EXPORT_CAN_CLIENT_SEE_CLIENT ) ) {
+		return qfalse;
+	}
+
+	return SV_QBool( VM_Call( gvm, 2, GAME_CAN_CLIENT_SEE_CLIENT, viewerClientNum, targetClientNum ) != 0 );
+}
+
+// Slot 13 keeps its historical export name, but retail's snapshot builder
+// drops the entity when it answers true (0x4e54a5: jne past every add), and
+// retail qagame 0x10053020 answers true for opponents of the thawing player.
+qboolean SV_GameSuppressesThawProgressEvent( int viewerClientNum, int entityNum ) {
+	if ( !SV_GameNativeExportAvailable( GAME_NATIVE_EXPORT_FREEZE_CAN_SEE_THAW_PROGRESS_EVENT ) ) {
+		return qfalse;
+	}
+
+	return SV_QBool( VM_Call( gvm, 2, GAME_FREEZE_CAN_SEE_THAW_PROGRESS_EVENT, viewerClientNum, entityNum ) != 0 );
+}
+
+qboolean SV_GameIsObjectiveEntity( int entityNum ) {
+	if ( !SV_GameNativeExportAvailable( GAME_NATIVE_EXPORT_IS_OBJECTIVE_ENTITY ) ) {
+		return qfalse;
+	}
+
+	return SV_QBool( VM_Call( gvm, 1, GAME_IS_OBJECTIVE_ENTITY, entityNum ) != 0 );
+}
+
 qboolean SV_GameShouldSuppressVoiceToClient( int senderClientNum, int recipientClientNum ) {
 	if ( !SV_GameNativeExportAvailable( GAME_NATIVE_EXPORT_SHOULD_SUPPRESS_VOICE_TO_CLIENT ) ) {
 		return qfalse;

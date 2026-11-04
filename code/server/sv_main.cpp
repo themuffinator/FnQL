@@ -1477,6 +1477,7 @@ void SV_Frame( int msec, int realMsec ) {
 
 	Zmq_UpdatePasswords();
 	Zmq_PumpRcon();
+	SV_ExecutePendingAdminCommands();
 
 	svs.time += realMsec;
 	SV_SteamP2PFrame();

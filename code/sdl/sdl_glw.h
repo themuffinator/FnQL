@@ -29,7 +29,11 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 #include <SDL3/SDL.h>
 
-//#define USE_JOYSTICK
+// SDL joystick and gamepad input. Device enumeration keeps the UI device list
+// current, but no controller events are produced until in_joystick is enabled.
+#ifndef USE_JOYSTICK
+#define USE_JOYSTICK
+#endif
 
 #ifdef __cplusplus
 extern "C" {

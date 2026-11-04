@@ -455,6 +455,8 @@ void SV_InitChallenger( void );
 void SV_DirectConnect( const netadr_t *from );
 void SV_PrintClientStateChange( const client_t *cl, clientState_t newState );
 
+void SV_ExecutePendingAdminCommands( void );
+void SV_ClearPendingAdminCommands( void );
 void SV_ExecuteClientMessage( client_t *cl, msg_t *msg );
 void SV_UserinfoChanged( client_t *cl, qboolean updateUserinfo, qboolean runFilter );
 
@@ -537,6 +539,12 @@ void		SV_SteamStats_ProcessEvent( unsigned int steamIdLow, unsigned int steamIdH
 void		SV_FlushAllSteamStats( void );
 void		SV_HandleSteamProviderEvent( unsigned int type, int result,
 				uint64_t subjectId );
+// Retail Quake Live qagame query exports (native structured ABI only). Each
+// answers its documented neutral value when the loaded module lacks the slot.
+qboolean	SV_GameQueryExportsAvailable( void );
+qboolean	SV_GameCanClientSeeClient( int viewerClientNum, int targetClientNum );
+qboolean	SV_GameSuppressesThawProgressEvent( int viewerClientNum, int entityNum );
+qboolean	SV_GameIsObjectiveEntity( int entityNum );
 qboolean	SV_GameShouldSuppressVoiceToClient( int senderClientNum, int recipientClientNum );
 qboolean	SV_GameIsClientAdmin( int clientNum );
 qboolean	SV_GameAreEnemyClients( int clientNumA, int clientNumB );
