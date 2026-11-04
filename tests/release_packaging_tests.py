@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import shutil
 import io
 import hashlib
@@ -23,6 +24,7 @@ from scripts import root_archive
 from scripts import stock_ql_maps
 from scripts import verify_release_layout
 from scripts import windows_pe
+from scripts import check_windows_runtime_deps
 
 
 def make_pe(*, dll: bool, imports: tuple[str, ...] = ()) -> bytes:
@@ -63,6 +65,59 @@ def make_pe(*, dll: bool, imports: tuple[str, ...] = ()) -> bytes:
         struct.pack_into("<IIIII", binary, raw_offset + index * 20, 0, 0, 0, name_rva, 0)
         binary[string_offset : string_offset + len(encoded)] = encoded
         string_offset += len(encoded)
+    return bytes(binary)
+
+
+
+def make_pe_with_functions(
+    imports: dict[str, tuple[str | int, ...]], *, lookup_table: bool = True
+) -> bytes:
+    """Build an i386 PE whose import descriptors carry thunk tables.
+
+    String entries are imported by name; integers are imported by ordinal.
+    With lookup_table=False only FirstThunk is populated, as some linkers emit.
+    """
+    binary = bytearray(make_pe(dll=False))
+    raw_offset = 0x200
+    section_rva = 0x1000
+
+    def rva(offset: int) -> int:
+        return section_rva + (offset - raw_offset)
+
+    descriptor_offset = raw_offset
+    cursor = raw_offset + (len(imports) + 1) * 20
+    for dll, functions in imports.items():
+        thunk_offset = cursor
+        cursor += (len(functions) + 1) * 4
+        thunks: list[int] = []
+        for function in functions:
+            if isinstance(function, int):
+                thunks.append(windows_pe.IMPORT_ORDINAL_FLAG_32 | function)
+                continue
+            encoded = function.encode("ascii") + b"\0"
+            thunks.append(rva(cursor))
+            struct.pack_into("<H", binary, cursor, 0)
+            binary[cursor + 2 : cursor + 2 + len(encoded)] = encoded
+            cursor += 2 + len(encoded)
+        for index, thunk in enumerate(thunks + [0]):
+            struct.pack_into("<I", binary, thunk_offset + index * 4, thunk)
+        encoded_dll = dll.encode("ascii") + b"\0"
+        dll_rva = rva(cursor)
+        binary[cursor : cursor + len(encoded_dll)] = encoded_dll
+        cursor += len(encoded_dll)
+        struct.pack_into(
+            "<IIIII",
+            binary,
+            descriptor_offset,
+            rva(thunk_offset) if lookup_table else 0,
+            0,
+            0,
+            dll_rva,
+            0 if lookup_table else rva(thunk_offset),
+        )
+        descriptor_offset += 20
+    assert cursor <= raw_offset + 0x400, "fixture exceeds its section"
+    struct.pack_into("<II", binary, 0x80 + 24 + 104, section_rva, (len(imports) + 1) * 20)
     return bytes(binary)
 
 
@@ -667,6 +722,89 @@ class ReleasePackagingTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "unshipped Windows runtime DLLs"):
                     release.validate_stage_tree(root)
 
+    def test_pe_named_imports_skip_ordinals_and_fold_dll_names(self) -> None:
+        for lookup_table in (True, False):
+            with self.subTest(lookup_table=lookup_table):
+                binary = make_pe_with_functions(
+                    {
+                        "KERNEL32.dll": ("GetTickCount",),
+                        "WINMM.dll": ("joyGetNumDevs", 42, "joyGetPosEx"),
+                    },
+                    lookup_table=lookup_table,
+                )
+
+                functions = windows_pe.parse_pe_imported_functions(binary, name="fixture")
+
+                self.assertEqual(
+                    functions,
+                    {
+                        "kernel32.dll": ("GetTickCount",),
+                        "winmm.dll": ("joyGetNumDevs", "joyGetPosEx"),
+                    },
+                )
+                info = windows_pe.parse_pe(binary, name="fixture")
+                self.assertEqual(info.imports, ("KERNEL32.dll", "WINMM.dll"))
+
+    def test_pe_named_imports_tolerate_descriptors_without_thunks(self) -> None:
+        binary = make_pe(dll=False, imports=("KERNEL32.dll",))
+
+        self.assertEqual(
+            windows_pe.parse_pe_imported_functions(binary, name="fixture"),
+            {"kernel32.dll": ()},
+        )
+        self.assertIsNone(windows_pe.parse_pe_imported_functions(b"not a pe", name="text"))
+
+    def test_pe_named_imports_reject_unterminated_thunk_tables(self) -> None:
+        binary = bytearray(make_pe_with_functions({"WINMM.dll": ("joyGetPosEx",)}))
+        (thunk_rva,) = struct.unpack_from("<I", binary, 0x200)
+        thunk_offset = 0x200 + (thunk_rva - 0x1000)
+        # Replace the terminator and everything after it with ordinal thunks
+        # until the end of the image, so no terminating zero is ever found.
+        for offset in range(thunk_offset, len(binary) - 3, 4):
+            struct.pack_into("<I", binary, offset, windows_pe.IMPORT_ORDINAL_FLAG_32 | 1)
+
+        with self.assertRaises(ValueError):
+            windows_pe.parse_pe_imported_functions(bytes(binary), name="fixture")
+
+    def test_required_import_gate_detects_compiled_out_features(self) -> None:
+        requirement = check_windows_runtime_deps.parse_required_import(
+            "fnql.exe=winmm.dll!joyGetPosEx"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            client = root / "fnql.exe"
+            client.write_bytes(make_pe_with_functions({"WINMM.dll": ("joyGetPosEx",)}))
+            files = [client]
+
+            check_windows_runtime_deps.check_required_imports(root, files, [requirement])
+            check_windows_runtime_deps.check_required_imports(
+                client, files, [requirement]
+            )
+
+            client.write_bytes(make_pe_with_functions({"WINMM.dll": ("timeGetTime",)}))
+            with self.assertRaisesRegex(ValueError, "does not import joyGetPosEx"):
+                check_windows_runtime_deps.check_required_imports(root, files, [requirement])
+
+            with self.assertRaisesRegex(ValueError, "was not found"):
+                check_windows_runtime_deps.check_required_imports(root, [], [requirement])
+
+            client.write_text("not a pe", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "is not a PE image"):
+                check_windows_runtime_deps.check_required_imports(root, files, [requirement])
+
+    def test_required_import_specs_are_validated(self) -> None:
+        parsed = check_windows_runtime_deps.parse_required_import(
+            r"sub\fnql.exe = WINMM.dll!joyGetPosEx"
+        )
+        self.assertEqual(parsed.path, "sub/fnql.exe")
+        self.assertEqual(parsed.dll, "WINMM.dll")
+        self.assertEqual(parsed.function, "joyGetPosEx")
+        for malformed in ("fnql.exe", "fnql.exe=winmm.dll", "=winmm.dll!f", "fnql.exe=!f", "a=b!"):
+            with self.subTest(malformed=malformed), self.assertRaises(
+                argparse.ArgumentTypeError
+            ):
+                check_windows_runtime_deps.parse_required_import(malformed)
+
     def test_pinned_provider_stager_checks_digest_and_i386_dll_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -994,7 +1132,15 @@ class ReleasePackagingTests(unittest.TestCase):
         )
         self.assertEqual(workflow.count("--skip-subprojects"), 2)
         self.assertEqual(workflow.count("fetch_steam_provider.py --output bin/fnql_steam.dll"), 2)
-        self.assertEqual(workflow.count("check_windows_runtime_deps.py --require-pe bin"), 2)
+        # Both Windows jobs also require the WinMM controller backend, so a
+        # build that compiles USE_JOYSTICK out fails before packaging.
+        self.assertEqual(
+            workflow.count(
+                "check_windows_runtime_deps.py --require-pe "
+                '--require-import "fnql.exe=winmm.dll!joyGetPosEx" bin'
+            ),
+            2,
+        )
         self.assertIn("-Dc_link_args=-static", workflow)
         self.assertIn("-Dcpp_link_args=-static", workflow)
         self.assertEqual(workflow.count("-Dzlib:default_library=static"), 2)

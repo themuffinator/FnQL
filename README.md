@@ -57,7 +57,9 @@ Valve's `steam_api.dll` or any retail game content.
 - **Low-latency, configurable controls** — raw mouse input, Quake
   Live-accurate CPI scaling, signed acceleration, sensitivity caps and
   angle-history filtering, while retaining classic Quake3e/ioquake3 mouse
-  styles. Modern gamepads and Unicode text input are also supported.
+  styles. Controllers, including Quake Live's analog gamepad mapping on
+  Windows, and Unicode text input are also supported (enable controllers
+  with `in_joystick 1`).
 - **Modern spatial audio** — OpenAL and HRTF headphone positioning, surround
   output, reverb, geometry-based occlusion, output-device selection, live
   device recovery and automatic fallback to the classic software mixer.

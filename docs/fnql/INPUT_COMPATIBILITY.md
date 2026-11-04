@@ -176,6 +176,49 @@ keeps its historical direction-key/U-V-trackball behavior by default. Set
 movement scaling also expects `in_joyBallScale 1`. The profile is latched so a
 live switch cannot leave direction keys or analog axes stuck.
 
+## Controller backends
+
+Every client backend compiles controller input in. `in_joystick` defaults to
+`0` and is latched on all of them, so no device is opened or polled until a
+player enables it and restarts input.
+
+| Backend | Used by | `USE_JOYSTICK` source | Device input |
+| --- | --- | --- | --- |
+| Win32 WinMM | Native Win32 client (Windows releases) | `code/win32/win_local.h` | First valid WinMM device: up to 16 buttons, POV, axes as direction keys. `in_joystickProfile 1` maps X/Y to analog movement and R/U to view input, as described above. |
+| SDL3 | SDL clients (macOS, SDL builds elsewhere) | `code/sdl/sdl_glw.h` | Device chosen by `in_joystickNo`: named gamepad buttons (`K_PAD0_*`), raw buttons, hats and balls; analog axes with `in_joystickUseAnalog 1` and the `j_*` cvars; hotplug and remapping. |
+| Linux joystick | Native X11 Linux client (Linux releases) | Meson, CMake, and Make | `/dev/input/js*` or `/dev/js*`: up to 16 buttons, axes as direction keys, bounded hotplug retry. No analog axes. |
+
+Observed on 2026-11-04: before this change only the Linux native build
+definitions set `USE_JOYSTICK`. The SDL header carried the define commented
+out, matching the FnQuake3 baseline, and Win32 never set it. Locally built x86
+native and SDL3 clients contained neither the WinMM imports nor the SDL
+joystick cvars, so the Windows release had no controller code and its
+`in_joystick*` settings were inert. Retail Quake Live's Win32 client contains
+the WinMM owner described above, so compiling the backend in brings FnQL closer
+to retail rather than adding new behavior.
+
+The backend headers define `USE_JOYSTICK` behind `#ifndef`, so every build
+system agrees without a redefinition when a build also passes the macro.
+Regression gates:
+
+- `ControllerBackendEnablementTests` in `tests/input_system_source_tests.py`
+  require the header definitions ahead of each backend's first guard, keep the
+  Linux build-system definitions, and keep `in_joystick` and
+  `in_joystickProfile` default-off;
+- both Windows release jobs run `scripts/check_windows_runtime_deps.py` with
+  `--require-import "fnql.exe=winmm.dll!joyGetPosEx"`, so a client that compiles
+  the WinMM backend out fails before packaging.
+
+Known limits:
+
+- WinMM reports an XInput controller's two triggers on one combined axis and
+  has no rumble. WinMM devices are found at input startup only; a disconnect
+  disables the device until `in_restart` or `vid_restart`.
+- `in_joystickProfile` and the `in_joy*View*`/`in_joy*MoveDeadzone` cvars exist
+  only in the Win32 backend. SDL and Linux builds do not register them, although
+  the WebUI Gamepad page lists them.
+- No hardware runtime probe has been run yet for either Windows backend.
+
 ## Absolute pointer coordinate space
 
 Observed in the reconstructed retail UI and cgame modules: both project the
@@ -436,7 +479,8 @@ text/focus/device/window routing, and X11 XIM, minimize-property,
 native-joystick, and fallback behavior.
 
 Strict-warning x86 builds compile and link both the SDL3 and native Win32
-clients plus the focused compatibility executable. Native X11 validation
+clients, each with its controller backend, plus the focused compatibility
+executable. Native X11 validation
 compiles and links an ELF32 i386 client including native joystick input; source
 gates cover XIC lifecycle, bounded minimization-property parsing, joystick
 recovery/build wiring, and the legacy text fallback.
