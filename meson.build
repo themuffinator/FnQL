@@ -1181,6 +1181,15 @@ netchan_safety_tests = executable('fnql_netchan_safety_tests',
 )
 test('fnql_netchan_safety', netchan_safety_tests)
 
+snapshot_history_tests = executable('fnql_snapshot_history_tests',
+  'tests/snapshot_history_tests.cpp',
+  'code/qcommon/msg.cpp',
+  'code/qcommon/huffman_static.c',
+  c_args: common_c_args + ['-DDEDICATED'],
+  cpp_args: common_cpp_args + ['-DDEDICATED'],
+)
+test('fnql_snapshot_history', snapshot_history_tests)
+
 input_compat_tests = executable('fnql_input_compat_tests',
   'tests/input_compat_tests.cpp',
   cpp_args: common_cpp_args,
@@ -1390,6 +1399,10 @@ test('fnql_retail_factory_probe', python,
 )
 test('fnql_steam_provider_source', python,
   args: files('tests/steam_provider_source_tests.py'),
+)
+test('fnql_headless_launch', python,
+  args: files('tests/headless_launch_tests.py'),
+  timeout: 300,
 )
 
 steam_identity_tests = executable('fnql_steam_identity_tests',

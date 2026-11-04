@@ -29,6 +29,7 @@ extern "C" {
 #include "canvas_geometry.hpp"
 #include "client_cvar_compat.hpp"
 #include "demo_stream.hpp"
+#include "snapshot_history.hpp"
 #include "retail_challenge.hpp"
 #include "window_resize.hpp"
 #include "../qcommon/protocol_contract.hpp"
@@ -744,14 +745,13 @@ static void CL_EmitPacketEntities( clSnapshot_t *from, clSnapshot_t *to, msg_t *
 		if ( newindex >= to->numEntities ) {
 			newnum = MAX_GENTITIES+1;
 		} else {
-			newent = &cl.parseEntities[(to->parseEntitiesNum + newindex) % MAX_PARSE_ENTITIES];
+			newent = &cl.parseEntities[fnql::snapshot::EntityIndex( to->parseEntitiesNum, newindex, MAX_PARSE_ENTITIES - 1 )];
 			newnum = newent->number;
 		}
 
 		if ( oldindex >= from_num_entities ) {
 			oldnum = MAX_GENTITIES+1;
 		} else {
-			//oldent = &cl.parseEntities[(from->parseEntitiesNum + oldindex) % MAX_PARSE_ENTITIES];
 			oldent = &oldents[ oldindex ];
 			oldnum = oldent->number;
 		}
@@ -857,7 +857,7 @@ static void CL_WriteSnapshot( void ) {
 		savedEntities = MAX_SNAPSHOT_ENTITIES;
 
 	for ( i = 0; i < savedEntities; i++ )
-		saved_ents[ i ] = cl.parseEntities[ (snap->parseEntitiesNum + i) % MAX_PARSE_ENTITIES ];
+		saved_ents[ i ] = cl.parseEntities[ fnql::snapshot::EntityIndex( snap->parseEntitiesNum, i, MAX_PARSE_ENTITIES - 1 ) ];
 
 	saved_snap = *snap;
 	saved_snap.numEntities = savedEntities;

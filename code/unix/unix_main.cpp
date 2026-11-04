@@ -357,7 +357,7 @@ sysStartupChoice_t Sys_PromptStartupChoice( const char *title, const char *messa
 {
 	char answer[64];
 
-	if ( !message || !message[0] )
+	if ( Com_IsHeadless() || !message || !message[0] )
 	{
 		return SYS_STARTUP_PROCEED;
 	}
@@ -1167,7 +1167,9 @@ int main( int argc, const char* argv[] )
 		Com_Frame( qfalse );
 #else
 		// check for other input devices
-		IN_Frame();
+		if ( !com_dedicated->integer ) {
+			IN_Frame();
+		}
 		// run the game
 		Com_Frame( CL_NoDelay() );
 #endif

@@ -892,6 +892,9 @@ static LRESULT WINAPI InputLineWndProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPA
 */
 void Sys_CreateConsole( const char *title, int xPos, int yPos, qboolean useXYpos )
 {
+	if ( Com_IsHeadless() ) {
+		return;
+	}
 	WNDCLASS wc;
 	RECT rect;
 	const TCHAR *DEDCLASS = T("Q3 WinConsole");
@@ -1096,6 +1099,9 @@ void Sys_DestroyConsole( void )
 */
 void Sys_ShowConsole( int visLevel, qboolean quitOnClose )
 {
+	if ( Com_IsHeadless() ) {
+		return;
+	}
 	s_wcd.quitOnClose = quitOnClose;
 
 	if ( visLevel == s_wcd.visLevel )
@@ -1176,6 +1182,10 @@ char *Sys_ConsoleInput( void )
 */
 void Conbuf_AppendText( const char *msg )
 {
+	if ( Com_IsHeadless() ) {
+		Sys_Print( msg );
+		return;
+	}
 	char buffer[MAXPRINTMSG*2]; // reserve space for CR-LF expansion
 	char *b = buffer;
 	int bufLen, n;
@@ -1311,6 +1321,9 @@ static void AddBufferText( const char *text, int textLength )
 */
 void Sys_SetErrorText( const char *buf )
 {
+	if ( Com_IsHeadless() ) {
+		return;
+	}
 	RECT rect;
 	int sth;
 
