@@ -1033,6 +1033,7 @@ void SV_Shutdown( const char *finalmsg ) {
 
 	// close an sv_lockstep recording before the final messages and the game shutdown
 	SV_LockstepShutdown( finalmsg );
+	SV_ClearPendingAdminCommands();
 
 #ifdef USE_IPV6
 	NET_LeaveMulticast6();

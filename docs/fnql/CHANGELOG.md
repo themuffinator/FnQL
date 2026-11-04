@@ -16,7 +16,14 @@ release, CI resets `Unreleased` for the next cycle.
 - _None yet._
 
 ### Compatibility
-- _None yet._
+- Server snapshots now follow retail Quake Live's game-module visibility rules:
+  Freeze Tag thaw ticks are hidden from opponents instead of being sent to
+  everyone, and spectators following a player keep their own visibility.
+- Server admins (as the game module defines them, for example through
+  `access.txt`) can run console commands in-game with `rcon <command>`, as on
+  retail servers.
+- The Steam server browser's player list shows bots as `(Bot) <name>` and uses
+  the game module's score.
 
 ### Rendering and Display
 - _None yet._
@@ -32,4 +39,5 @@ release, CI resets `Unreleased` for the next cycle.
   and reject stale snapshot slots and malformed entity ordering.
 
 ### Documentation and Tooling
-- _None yet._
+- `sv_lockstepQueries 1` records the game module's query answers in lockstep
+  recordings, so game-module differentials can compare them.
