@@ -106,7 +106,18 @@ only planned.
   the retail qagame record identically apart from the module's own CRT
   wall-clock read (`g_levelStartTime`). Source tests guard the default-off
   hooks. See [server lockstep](SERVER_LOCKSTEP.md).
+- [x] Controller input is compiled into the Win32 native and SDL3 clients.
+  `USE_JOYSTICK` had only been defined for Linux non-SDL builds, so the
+  shipped Windows clients had no controller code and the `in_joystick*`
+  settings did nothing. The Win32 and SDL backend headers now enable it for
+  every build system; `in_joystick` stays off by default, so behavior is
+  unchanged until a player enables it. Strict x86 native and SDL3 builds
+  compile and link, source gates cover the enablement and default-off cvars,
+  and both Windows release jobs fail unless `fnql.exe` imports WinMM's
+  `joyGetPosEx`. See [input compatibility](INPUT_COMPATIBILITY.md#controller-backends).
 
 ## Carry Forward
 
-- [ ] _None yet._
+- [ ] Windowed hardware probe of the Win32 WinMM controller backend in both
+  `in_joystickProfile` modes, and of SDL3 gamepad hotplug, on the retail
+  Steam install.
