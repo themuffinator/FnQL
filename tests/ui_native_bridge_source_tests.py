@@ -329,6 +329,19 @@ def qagame_legacy_import_dispatch_names(g_public_h: str) -> list[str]:
 
 
 class UiNativeBridgeSourceTests(unittest.TestCase):
+    def test_command_bridge_preserves_single_argument_retail_stack(self) -> None:
+        source = read_repo_file("code/client/cl_ui.cpp")
+        start = source.index("static void QDECL QL_UI_trap_Cmd_ExecuteText_QL(")
+        bridge = source[start:source.index("static int QDECL QL_UI_trap_FS_FOpenFile", start)]
+        # A fixed two-argument adapter can tail-call Cbuf_ExecuteText and
+        # overwrite the retail caller's return address in optimized x86 builds.
+        self.assertIn("intptr_t first, ...", bridge)
+        self.assertIn("va_start( args, first )", bridge)
+        self.assertIn("va_arg( args, const char * )", bridge)
+        self.assertIn("reinterpret_cast<const char *>( first )", bridge)
+        self.assertIn("cbufExec_t when = EXEC_APPEND", bridge)
+        self.assertIn("Cbuf_ExecuteText( when, text )", bridge)
+
     def test_ui_public_exposes_recovered_ql_native_abi(self) -> None:
         ui_public = read_repo_file("code/ui/ui_public.h")
 
