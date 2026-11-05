@@ -933,11 +933,39 @@ static void CM_TraceThroughVerticalCylinder( traceWork_t *tw, const vec3_t origi
 
 /*
 ================
-CM_TraceCapsuleThroughCapsule
+CM_TracePointThroughPlayer
 
-capsule vs. capsule collision (not rotated)
+Retail weapon-query profile, separate from the moving-capsule hull.
 ================
 */
+static void CM_TracePointThroughPlayer( traceWork_t *tw, const vec3_t mins,
+	const vec3_t maxs ) {
+	vec3_t center, head;
+	float halfheight, radius, bodyFraction;
+	int axis;
+
+	/* Retail quakelive_steam.exe 0x4c6bd0/0x4c6d6b: hitscan uses a full
+	 * body cylinder and a 70-percent sphere at the upper bound. Only a sphere
+	 * hit preceding the body carries 0x400. Keep this profile confined to
+	 * points: moving capsules retain their established two-cap sweep below. */
+	for ( axis = 0; axis < 3; ++axis ) {
+		center[axis] = ( mins[axis] + maxs[axis] ) * 0.5f;
+	}
+	halfheight = maxs[2] - center[2];
+	radius = MIN( maxs[0] - center[0], halfheight );
+	CM_TraceThroughVerticalCylinder( tw, center, radius, halfheight,
+		tw->start, tw->end );
+	bodyFraction = tw->trace.fraction;
+	VectorCopy( center, head );
+	head[2] = maxs[2];
+	CM_TraceThroughSphere( tw, head, radius * 0.7f, tw->start, tw->end );
+	if ( tw->trace.fraction < bodyFraction &&
+		( tw->trace.contents & CONTENTS_BODY ) ) {
+		tw->trace.contents |= CONTENTS_HEADSHOT;
+	}
+}
+
+/* capsule vs. capsule collision (not rotated) */
 static void CM_TraceCapsuleThroughCapsule( traceWork_t *tw, clipHandle_t model ) {
 	vec3_t mins, maxs;
 	vec3_t starttop, startbottom, endtop, endbottom;
@@ -952,6 +980,11 @@ static void CM_TraceCapsuleThroughCapsule( traceWork_t *tw, clipHandle_t model )
 		|| tw->bounds[1][1] < mins[1] - RADIUS_EPSILON
 		|| tw->bounds[1][2] < mins[2] - RADIUS_EPSILON
 		) {
+		return;
+	}
+
+	if ( tw->isPoint ) {
+		CM_TracePointThroughPlayer( tw, mins, maxs );
 		return;
 	}
 

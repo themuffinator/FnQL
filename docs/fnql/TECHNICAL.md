@@ -99,20 +99,27 @@ exposed the previous FnQL mismatch as `14 < 254 < 256`: the map had 14 inline
 models, and FnQL rejected the reserved capsule handle as though it were an
 invalid inline-model index.
 
-Observed: QL keeps the Quake III moving-capsule sweep. QLSRP's `cm_trace.c`
-reduces the target capsule to a vertical cylinder capped by two spheres,
-expands the target radius by the moving capsule radius, sweeps the cylinder
-only when the sweep moves horizontally and the cylinder still has a positive
-height, and then sweeps each cap sphere against the opposite end of the moving
-capsule. QLSRP's shared `surfaceflags.h` leaves `0x0400` unallocated, so the
-engine adds no head-hit metadata to `trace.contents`. FnQL briefly shipped an
-invented body-cylinder plus 70-percent head-sphere profile with a
-`CONTENTS_HEAD` bit; a scripted sweep against a
-`(-15,-15,-24)..(15,15,32)` capsule showed it let a moving capsule pass
-straight through the target from below, at foot level, and above head level,
-so it was removed. `CM_BuildCapsuleTraceProfile` in
-[`cm_trace_contract.h`](../../code/qcommon/cm_trace_contract.h) now owns that
-geometry for both the engine and the parity tests.
+Observed: QLSRP's reconstructed `cm_trace.c` retains the Quake III cylinder
+and two-cap sweep, but the retail executable differs. Inspection of the
+legitimate Steam `quakelive_steam.exe` at `0x4c6bd0` and `0x4c6d6b` confirms a
+full-height body cylinder and a sphere at the upper bound with 70 percent of
+the radius. An earlier sphere hit sets `trace.contents` bit `0x400` at
+`0x4c6da0`; retail qagame uses it for the railgun headshot bonus and death type.
+The previous conclusion that an unallocated bit in QLSRP's header proved
+the absence of retail head-hit metadata was incorrect.
+
+FnQL applies the independently implemented retail profile to point traces.
+Moving capsules retain `CM_BuildCapsuleTraceProfile` in
+[`cm_trace_contract.h`](../../code/qcommon/cm_trace_contract.h): expanded
+radius, positive-height cylinder, and both opposite cap-sphere sweeps.
+This is an intentional compatibility boundary: replacing the movement hull
+with the retail profile previously allowed approaches from below and at foot
+level to pass through players. The behavioral collision gate retains those
+movement cases and adds standing/ducked point head hits, torso/foot hits,
+misses, and absence of head metadata on box queries. FnQL-game's paired
+`ffa_headshot` recordings exercise the bonus, ordinary damage, ducked hits,
+and restart with both trace settings. This evidence does not claim full
+retail parity for non-point capsule geometry.
 
 Observed: the capsule sweep answers with an analytic radial plane, scaling the
 impact vector by `1/(radius + RADIUS_EPSILON)` in single precision, and it

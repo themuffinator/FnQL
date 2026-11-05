@@ -224,8 +224,7 @@ static void TestCapContactsFaceTheSweep( void )
 }
 
 /*
- * QL reports a capsule contact as CONTENTS_BODY only; the trace layer adds no
- * head-hit metadata of its own, and 0x0400 stays unallocated.
+ * Moving capsule contacts retain CONTENTS_BODY without hitscan metadata.
  */
 static void TestContactContentsStayRetailShaped( void )
 {
@@ -238,6 +237,62 @@ static void TestContactContentsStayRetailShaped( void )
 
 	CHECK( trace.fraction < 1.0f );
 	CHECK( trace.contents == CONTENTS_BODY );
+}
+
+/* The retail point profile has a full-height body and a smaller sphere at
+ * the top. An earlier head hit marks 0x400; torso/feet and misses do not.
+ * Check real traces, including ducked bounds and a normal box-trace query. */
+static void TestPointHitRegions( void )
+{
+	trace_t trace;
+	vec3_t start, end;
+	int capsule;
+
+	VectorSet( start, 0, 0, 100 );
+	VectorSet( end, 0, 0, 0 );
+	CM_BoxTrace( &trace, start, end, vec3_origin, vec3_origin,
+		CAPSULE_MODEL_HANDLE, PLAYER_CLIP_MASK, qtrue );
+	CHECK( NearlyEqual( trace.fraction, 0.565f ) );
+	CHECK( trace.contents == ( CONTENTS_BODY | CONTENTS_HEADSHOT ) );
+	CHECK( trace.plane.normal[2] > 0.99f );
+
+	VectorSet( start, 100, 0, 0 );
+	VectorSet( end, -100, 0, 0 );
+	CM_BoxTrace( &trace, start, end, vec3_origin, vec3_origin,
+		CAPSULE_MODEL_HANDLE, PLAYER_CLIP_MASK, qtrue );
+	CHECK( NearlyEqual( trace.fraction, 0.4125f ) );
+	CHECK( trace.contents == CONTENTS_BODY );
+	start[2] = end[2] = -23;
+	CM_BoxTrace( &trace, start, end, vec3_origin, vec3_origin,
+		CAPSULE_MODEL_HANDLE, PLAYER_CLIP_MASK, qtrue );
+	CHECK( NearlyEqual( trace.fraction, 0.4125f ) );
+	CHECK( trace.contents == CONTENTS_BODY );
+
+	VectorSet( start, 100, 40, 33 );
+	VectorSet( end, -100, 40, 33 );
+	CM_BoxTrace( &trace, start, end, vec3_origin, vec3_origin,
+		CAPSULE_MODEL_HANDLE, PLAYER_CLIP_MASK, qtrue );
+	CHECK( trace.fraction == 1.0f );
+	CHECK( trace.contents == 0 );
+
+	stubModel.maxs[2] = 16;
+	for ( capsule = 0; capsule <= 1; ++capsule ) {
+		VectorSet( start, 0, 0, 100 );
+		VectorClear( end );
+		CM_BoxTrace( &trace, start, end, vec3_origin, vec3_origin,
+			CAPSULE_MODEL_HANDLE, PLAYER_CLIP_MASK, capsule );
+		if ( capsule ) {
+			CHECK( NearlyEqual( trace.fraction, 0.725f ) );
+			CHECK( trace.contents == ( CONTENTS_BODY | CONTENTS_HEADSHOT ) );
+		} else {
+			CHECK( !( trace.contents & CONTENTS_HEADSHOT ) );
+		}
+		/* The box query replaces the temporary model in the test stub. */
+		VectorCopy( playerMins, stubModel.mins );
+		VectorCopy( playerMaxs, stubModel.maxs );
+		stubModel.maxs[2] = 16;
+	}
+	VectorCopy( playerMaxs, stubModel.maxs );
 }
 
 /*
@@ -314,6 +369,7 @@ int main( void )
 	TestEveryApproachIsBlocked();
 	TestCapContactsFaceTheSweep();
 	TestContactContentsStayRetailShaped();
+	TestPointHitRegions();
 	TestOverlapReportsStartSolid();
 	TestPlaneContractHoldsAcrossTheWorld();
 

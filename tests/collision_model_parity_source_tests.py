@@ -74,7 +74,7 @@ class CollisionModelParitySourceTests(unittest.TestCase):
         self.assertNotRegex(combined, r"SV_ClipHandleForEntity\(\s*\w+\s*\)")
 
     def test_capsule_sweep_keeps_both_cap_spheres(self) -> None:
-        """QL sweeps a cylinder capped by a sphere at each end.
+        """Moving capsules keep a cylinder capped by a sphere at each end.
 
         Dropping either cap lets a moving capsule pass through the target
         from below or above, so both sphere sweeps have to stay.
@@ -98,10 +98,9 @@ class CollisionModelParitySourceTests(unittest.TestCase):
             "tw->start[0] != tw->end[0] || tw->start[1] != tw->end[1]",
             capsule_trace,
         )
-        # The engine adds no head-hit metadata; QL leaves 0x0400 unallocated.
-        self.assertNotIn("CONTENTS_HEAD", self.surfaceflags)
-        self.assertNotIn("CONTENTS_HEAD", self.trace)
-        self.assertNotIn("CONTENTS_HEAD", self.contract)
+        # Retail head metadata is confined to point traces; movement keeps
+        # the existing profile even though the retail executable differs.
+        self.assertRegex(capsule_trace, r"if \( tw->isPoint \) \{\s*CM_TracePointThroughPlayer")
 
     def test_retail_cylinder_scale_is_preserved(self) -> None:
         cylinder_trace = function_body(
