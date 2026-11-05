@@ -1366,18 +1366,23 @@ static void QDECL QL_UI_trap_Cmd_ArgsBuffer_QL( char *buffer, int bufferLength )
 	Cmd_ArgsBuffer( buffer, bufferLength );
 }
 
-static void QDECL QL_UI_trap_Cmd_ExecuteText_QL( int maybeExec, const char *maybeText ) {
-	const char *text = maybeText;
-	int execWhen = maybeExec;
-
-	if ( execWhen < EXEC_NOW || execWhen > EXEC_APPEND ) {
-		text = reinterpret_cast<const char *>( static_cast<intptr_t>( maybeExec ) );
-		execWhen = EXEC_APPEND;
+static void QDECL QL_UI_trap_Cmd_ExecuteText_QL( intptr_t first, ... ) {
+	// Retail 0x1000c35b supplies only text. Retain the two-argument source
+	// adapter, but use a variadic boundary: an optimized fixed-arity wrapper
+	// can tail-call Cbuf_ExecuteText and overwrite the retail caller's return
+	// address with its nonexistent second argument on x86.
+	const char *text;
+	cbufExec_t when = EXEC_APPEND;
+	if ( first >= EXEC_NOW && first <= EXEC_APPEND ) {
+		va_list args;
+		va_start( args, first );
+		text = va_arg( args, const char * );
+		va_end( args );
+		when = static_cast<cbufExec_t>( first );
+	} else {
+		text = reinterpret_cast<const char *>( first );
 	}
-
-	if ( text ) {
-		Cbuf_ExecuteText( static_cast<cbufExec_t>( execWhen ), text );
-	}
+	if ( text ) Cbuf_ExecuteText( when, text );
 }
 
 static int QDECL QL_UI_trap_FS_FOpenFile( const char *qpath, fileHandle_t *f, fsMode_t mode ) {
