@@ -17,13 +17,16 @@ version.
 #include "q_shared.h"
 
 /*
- * Observed: QLSRP's reconstructed `cm_trace.c` keeps the Quake III moving
- * capsule sweep unchanged, and its shared `surfaceflags.h` leaves 0x0400
- * unallocated.  The target capsule is reduced to a vertical cylinder capped
+ * FnQL preserves the Quake III moving-capsule sweep used by QLSRP's
+ * reconstructed `cm_trace.c`. The target is a vertical cylinder capped
  * by two spheres, the target radius is expanded by the moving capsule radius,
  * and the cylinder section is only swept when it still has a positive height.
  *
- * Inferred: keeping that geometry in one shared helper lets the engine path
+ * Retail executable evidence (0x4c6bd0) differs from that reconstruction:
+ * it uses a body cylinder and a smaller upper sphere with head-hit metadata.
+ * FnQL applies that profile to point traces in CM_TracePointThroughPlayer,
+ * preserving this movement geometry and its approach-direction guarantees.
+ * Keeping the movement geometry in one shared helper lets the engine path
  * and the parity tests read the same numbers.  A source-shaped test alone
  * cannot tell a wrong capsule profile from a right one, so the behavioral
  * gate in `tests/collision_capsule_trace_tests.c` sweeps the real trace path.
