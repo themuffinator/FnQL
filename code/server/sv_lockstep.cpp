@@ -209,6 +209,7 @@ struct InputValues {
 	int weapon = -1;			// -1 auto (the playerState's current weapon)
 	int weaponPrimary = 0;
 	int fov = 0;
+	int delayMs = 0;		// age of this client's usercmd on the virtual clock
 	std::array<int, 3> moves{};		// forward, right, up
 };
 
@@ -227,6 +228,7 @@ enum InputField : unsigned {
 	FieldForward = 1u << 11,
 	FieldRight = 1u << 12,
 	FieldUp = 1u << 13,
+	FieldDelay = 1u << 14,
 };
 
 struct InputChange {
@@ -617,6 +619,11 @@ bool ScriptParser::ParseField( const std::string &assignment, InputChange &chang
 		ok = byteValue( v.weaponPrimary, FieldWeaponPrimary );
 	} else if ( field == "fov" ) {
 		ok = byteValue( v.fov, FieldFov );
+	} else if ( field == "delay" ) {
+		bit = FieldDelay;
+		ok = ParseSigned( value.c_str(), 0, 1000, integer );
+		if ( !ok ) return Fail( "delay=%s: expected milliseconds from 0 to 1000", value.c_str() );
+		v.delayMs = static_cast<int>( integer );
 	} else if ( field == "forward" ) {
 		ok = move( 0, FieldForward );
 	} else if ( field == "right" ) {
@@ -625,7 +632,7 @@ bool ScriptParser::ParseField( const std::string &assignment, InputChange &chang
 		ok = move( 2, FieldUp );
 	} else {
 		return Fail( "unknown input field '%s' (pitch yaw roll dpitch dyaw droll buttons anykey weapon "
-			"weaponprimary fov forward right up)", field.c_str() );
+			"weaponprimary fov delay forward right up)", field.c_str() );
 	}
 	if ( !ok ) {
 		return false;
@@ -1193,6 +1200,7 @@ void ApplyInputs( int frame ) {
 		if ( mask & FieldWeapon ) state.weapon = v.weapon;
 		if ( mask & FieldWeaponPrimary ) state.weaponPrimary = v.weaponPrimary;
 		if ( mask & FieldFov ) state.fov = v.fov;
+		if ( mask & FieldDelay ) state.delayMs = v.delayMs;
 		if ( mask & FieldForward ) state.moves[0] = v.moves[0];
 		if ( mask & FieldRight ) state.moves[1] = v.moves[1];
 		if ( mask & FieldUp ) state.moves[2] = v.moves[2];
@@ -1203,7 +1211,7 @@ usercmd_t BuildCommand( const ScriptedClient &scripted, const client_t &cl ) {
 	usercmd_t cmd;
 	std::memset( &cmd, 0, sizeof( cmd ) );
 	const InputValues &input = scripted.input;
-	cmd.serverTime = sv.time;
+	cmd.serverTime = sv.time - input.delayMs;
 	for ( int axis = 0; axis < 3; ++axis ) {
 		cmd.angles[axis] = ANGLE2SHORT( input.angles[static_cast<std::size_t>( axis )] );
 	}
