@@ -185,6 +185,7 @@ userinfo <frame> <id> <key> <value>  # change one userinfo key before <frame>
 | `anykey` | `auto` sets `BUTTON_ANY` (4096, retail key activity) while a button or move is held; `0`; `1` | `auto` |
 | `weapon` | 0-255, or `auto` for the playerState's current weapon | `auto` |
 | `weaponprimary`, `fov` | 0-255 | 0 |
+| `delay` | Command age in virtual milliseconds, 0-1000. Applies to this client's timestamp only; the server frame clock is unchanged. Increasing it can repeat or retreat timestamps, exercising the module's normal stale-command handling. | 0 |
 | `forward`, `right`, `up` | -128 to 127 | 0 |
 
 Usercmd angles are what a client sends: the game adds `ps.delta_angles`,
