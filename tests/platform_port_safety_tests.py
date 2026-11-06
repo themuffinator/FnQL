@@ -66,6 +66,41 @@ class PlatformPortSafetyTests(unittest.TestCase):
         self.assertIn("x = (int64_t)*width - modeWidth;", randr)
         self.assertIn("r = (int64_t)*rate - getRefreshRate( mode_info );", randr)
 
+    def test_x11_extension_libraries_outlive_the_display(self) -> None:
+        # Observed: a failed DGA probe on XWayland unloaded libXxf86dga while
+        # its XESetCloseDisplay hook stayed registered, so every quit crashed
+        # inside XCloseDisplay.
+        glw = read("code/unix/unix_glw.h")
+        x11 = read("code/unix/linux_glimp.cpp")
+
+        helper = glw[
+            glw.index("inline void GLW_ReleaseDisplayExtensionLibrary") :
+            glw.index("template <std::size_t SymbolCount>")
+        ]
+        self.assertIn("if ( dpy == NULL )", helper)
+        self.assertIn("library.reset();", helper)
+
+        for path, library in (
+            ("code/unix/x11_dga.cpp", "d_lib"),
+            ("code/unix/x11_randr.cpp", "r_lib"),
+            ("code/unix/x11_vidmode.cpp", "v_lib"),
+        ):
+            with self.subTest(path=path):
+                source = read(path)
+                self.assertIn(
+                    f"GLW_ReleaseDisplayExtensionLibrary( {library} );", source
+                )
+                self.assertNotIn(f"{library}.reset();", source)
+
+        for shutdown in ("void GLimp_Shutdown(", "void VKimp_Shutdown("):
+            with self.subTest(shutdown=shutdown):
+                start = x11.index(shutdown)
+                body = x11[start : x11.index("\n}\n", start)]
+                close = body.index("XCloseDisplay( dpy );")
+                cleared = body.index("dpy = NULL;", close)
+                for done in ("RandR_Done();", "VidMode_Done();", "DGA_Done();"):
+                    self.assertGreater(body.index(done), cleared)
+
     def test_retail_linux_x64_module_alias_is_dedicated_only(self) -> None:
         vm = read("code/qcommon/vm.c")
 

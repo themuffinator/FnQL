@@ -64,7 +64,9 @@ __fail:
 
 void DGA_Done( void )
 {
-	d_lib.reset();
+	// A failed probe may already have registered libXxf86dga's close hook on
+	// the open Display; see GLW_ReleaseDisplayExtensionLibrary().
+	GLW_ReleaseDisplayExtensionLibrary( d_lib );
 	glw_state.dga_ext = qfalse;
 }
 

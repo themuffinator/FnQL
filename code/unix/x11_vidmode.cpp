@@ -167,7 +167,7 @@ __fail:
 
 void VidMode_Done( void )
 {
-	v_lib.reset();
+	GLW_ReleaseDisplayExtensionLibrary( v_lib );
 
 	glw_state.vidmode_ext = qfalse;
 	glw_state.vidmode_gamma = qfalse;
