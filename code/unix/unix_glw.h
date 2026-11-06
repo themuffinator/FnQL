@@ -116,6 +116,24 @@ inline void *GLW_LoadLibraryFallback( const char *preferred, const char *fallbac
 
 using GLW_ScopedLibrary = fnql::posix::ScopedLibrary;
 
+/*
+Xlib extension client libraries (libXrandr, libXxf86vm, libXxf86dga) register
+per-Display hooks through XESetCloseDisplay the first time one of their entry
+points touches a Display, including a QueryExtension call that finds the
+extension missing on the server. XCloseDisplay later calls those hooks, so the
+library must stay mapped for as long as that Display is open. Unloading it
+earlier leaves a dangling hook and crashes the final XCloseDisplay (observed
+with an unavailable DGA extension on XWayland). Release such a library only
+after the Display is closed; while it is open, keep it for a later shutdown.
+*/
+inline void GLW_ReleaseDisplayExtensionLibrary( GLW_ScopedLibrary &library )
+{
+	if ( dpy == NULL )
+	{
+		library.reset();
+	}
+}
+
 template <std::size_t SymbolCount>
 inline qboolean GLW_LoadSymbols( void *library, sym_t ( &symbols )[ SymbolCount ], const char *libraryName )
 {

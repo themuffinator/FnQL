@@ -2646,10 +2646,15 @@ void GLimp_Shutdown( qboolean unloadDLL )
 		}
 	}
 
+	// Extension client libraries are released only after XCloseDisplay has
+	// run their close hooks; see GLW_ReleaseDisplayExtensionLibrary().
 	if ( unloadDLL )
 	{
 		RandR_Done();
 		VidMode_Done();
+#ifdef HAVE_XF86DGA
+		DGA_Done();
+#endif
 	}
 
 	glw_state.desktop_ok = qfalse;
@@ -2718,10 +2723,15 @@ void VKimp_Shutdown( qboolean unloadDLL )
 		}
 	}
 
+	// Extension client libraries are released only after XCloseDisplay has
+	// run their close hooks; see GLW_ReleaseDisplayExtensionLibrary().
 	if ( unloadDLL )
 	{
 		RandR_Done();
 		VidMode_Done();
+#ifdef HAVE_XF86DGA
+		DGA_Done();
+#endif
 	}
 
 	glw_state.desktop_ok = qfalse;

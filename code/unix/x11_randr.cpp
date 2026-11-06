@@ -575,7 +575,7 @@ __fail:
 
 void RandR_Done( void )
 {
-	r_lib.reset();
+	GLW_ReleaseDisplayExtensionLibrary( r_lib );
 	glw_state.randr_ext = qfalse;
 	glw_state.randr_gamma = qfalse;
 }
