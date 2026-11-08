@@ -24,6 +24,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "q_shared.h"
 #include "qcommon.h"
 #include "cvar_integer.h"
+#include "cvar_ui_policy.h"
 
 #ifndef DEDICATED
 void CL_WebView_PublishCvarChange( const char *name, const char *value, qboolean replicate );
@@ -991,6 +992,50 @@ void Cvar_SetValueSafe( const char *var_name, float value )
 	else
 		Com_sprintf( val, sizeof(val), "%f", value );
 	Cvar_SetSafe( var_name, val );
+}
+
+
+/*
+============
+Cvar_SetFromUI
+
+UI cvar imports 7 and 8. Retail settings cvars registered with
+CVAR_PROTECTED stay writable; see cvar_ui_policy.h for the evidence and the
+private, read-only and init-only exclusions.
+============
+*/
+void Cvar_SetFromUI( const char *var_name, const char *value )
+{
+	if ( !var_name ) {
+		return;
+	}
+	if ( !Cvar_UIWriteAllowed( Cvar_Flags( var_name ) ) ) {
+		if ( value )
+			Com_Printf( S_COLOR_YELLOW "Restricted source tried to set "
+				"\"%s\" to \"%s\"\n", var_name, value );
+		else
+			Com_Printf( S_COLOR_YELLOW "Restricted source tried to "
+				"modify \"%s\"\n", var_name );
+		return;
+	}
+	Cvar_Set2( var_name, value, qtrue );
+}
+
+
+/*
+============
+Cvar_SetValueFromUI
+============
+*/
+void Cvar_SetValueFromUI( const char *var_name, float value )
+{
+	char val[32];
+
+	if( Q_isintegral( value ) )
+		Com_sprintf( val, sizeof(val), "%i", (int)value );
+	else
+		Com_sprintf( val, sizeof(val), "%f", value );
+	Cvar_SetFromUI( var_name, val );
 }
 
 

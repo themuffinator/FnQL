@@ -660,6 +660,11 @@ void	Cvar_SetIntegerValue( const char *var_name, int value );
 void	Cvar_SetValueSafe( const char *var_name, float value );
 // expands value to a string and calls Cvar_Set/Cvar_SetSafe
 
+void	Cvar_SetFromUI( const char *var_name, const char *value );
+void	Cvar_SetValueFromUI( const char *var_name, float value );
+// UI cvar writes: like Cvar_SetSafe, but retail settings cvars registered
+// with CVAR_PROTECTED stay writable (private and protected ROM/INIT do not)
+
 qboolean Cvar_SetModified( const char *var_name, qboolean modified );
 
 float	Cvar_VariableValue( const char *var_name );
@@ -1079,6 +1084,7 @@ int			Com_MD5Addr( const netadr_t *addr, int timestamp );
 qboolean	Com_CDKeyValidate( const char *key, const char *checksum );
 qboolean	Com_EarlyParseCmdLine( char *commandLine, char *con_title, int title_size, int *vid_xpos, int *vid_ypos );
 qboolean Com_IsHeadless( void ); // immutable launch policy, available before Com_Init
+qboolean Com_IsWindowless( void ); // headless, or a client that never shows a window (com_headless 2)
 int			Com_Split( char *in, char **out, int outsz, int delim );
 
 int			Com_Filter( const char *filter, const char *name );

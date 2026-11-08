@@ -26,6 +26,17 @@ and console windows before `Com_Init`. This change is FnQL's explicit hosting
 policy, not a claim that retail suppresses those windows. The interactive
 client path and retail protocol/module contracts are unchanged.
 
+Level 2 (`+set com_headless 2`) is the windowless client: `Com_IsWindowless()`
+is true for levels 1 and 2 and guards every console window, prompt and error
+widget, while `Com_IsHeadless()` stays level 1 only, so the dedicated lock and
+the crash handler's desktop-gamma restore are unchanged. The Windows, X11 and
+SDL backends never show, map or raise the client window, never enter fullscreen
+and skip hardware gamma; the renderer draws through its framebuffer objects
+(`r_fbo`, on by default), which also apply gamma, so screenshots match an
+interactive client's. A dedicated launch with level 2 resolves to level 1.
+Every automated or investigative client run (gates, probes, captures) uses
+level 2; dedicated servers already default to level 1.
+
 Validation: `tests/headless_launch_tests.py` guards the platform UI boundaries;
 set `FNQL_HEADLESS_RUNTIME_DIR` to an x86 Windows build and optionally
 `FNQL_RETAIL_QL_PATH` to run its window-enumeration, retail-map and fatal-exit

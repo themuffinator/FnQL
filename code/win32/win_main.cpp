@@ -121,7 +121,7 @@ void NORETURN FORMAT_PRINTF(1, 2) QDECL Sys_Error( const char *error, ... ) {
 	Q_vsnprintf( text, sizeof( text ), error, argptr );
 	va_end( argptr );
 
-	if ( Com_IsHeadless() ) {
+	if ( Com_IsWindowless() ) {
 		Sys_WriteHeadlessOutput( STD_ERROR_HANDLE, text );
 		Sys_WriteHeadlessOutput( STD_ERROR_HANDLE, "\n" );
 		timeEndPeriod( 1 );
@@ -172,7 +172,7 @@ sysStartupChoice_t Sys_PromptStartupChoice( const char *title, const char *messa
 	WCHAR wideTitle[128];
 	WCHAR wideMessage[2048];
 
-	if ( Com_IsHeadless() || !message || !message[0] ) {
+	if ( Com_IsWindowless() || !message || !message[0] ) {
 		return SYS_STARTUP_PROCEED;
 	}
 
@@ -223,7 +223,7 @@ Sys_Print
 */
 void Sys_Print( const char *msg )
 {
-	if ( Com_IsHeadless() ) {
+	if ( Com_IsWindowless() ) {
 		Sys_WriteHeadlessOutput( STD_OUTPUT_HANDLE, msg );
 		return;
 	}
@@ -904,7 +904,7 @@ int WINAPI WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	Q_strncpyz( sys_cmdline, lpCmdLine, sizeof( sys_cmdline ) );
 
 	useXYpos = Com_EarlyParseCmdLine( sys_cmdline, con_title, sizeof( con_title ), &xpos, &ypos );
-	if ( Com_IsHeadless() ) {
+	if ( Com_IsWindowless() ) {
 		// Suppress OS crash/open-file dialogs as well as engine-owned UI.
 		SetErrorMode( SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX );
 #ifdef _MSC_VER
@@ -927,7 +927,7 @@ int WINAPI WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	Sys_CreateConsole( con_title, xpos, ypos, useXYpos );
 
 	// no abort/retry/fail errors
-	if ( !Com_IsHeadless() ) {
+	if ( !Com_IsWindowless() ) {
 		SetErrorMode( SEM_FAILCRITICALERRORS );
 	}
 

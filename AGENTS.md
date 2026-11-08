@@ -101,9 +101,29 @@ Every change should protect these project constraints:
   Rebrand project-owned code, docs, build outputs, packages, and helper names.
 - If a QL feature depends on live online services, keep it explicit and
   default-off until there is a documented open replacement path.
-- Never launch the game in fullscreen during automated or investigative runs.
-  Use `+set r_fullscreen 0`, and choose the cheapest probe that answers the
-  question.
+- Run fully headless. No automated or investigative run, in this repository
+  or in FnQL-game, may show a window, take focus, enter fullscreen or change
+  the display mode or desktop gamma. Clients start with `+set com_headless 2`
+  (the windowless client still renders, so screenshots and captures are
+  real); dedicated servers use `com_headless 1` (their default). Meson's
+  default `headless` test setup sets `FNQL_HEADLESS=2` for every test, and
+  ad hoc runs set it too or pass the flag. Linux runs follow the same rule;
+  use Xvfb where no display exists. The retail Steam client cannot run
+  windowless, so its harness hides each of its windows as they appear
+  (FnQL-game `scripts/headless.py`), and runs that launch it happen only on
+  the user's request (`FNQL_ALLOW_RETAIL_CLIENT=1`). Choose the cheapest
+  probe that answers the question.
+- Always use Steam and the Awesomium WebUI, as retail does. Clients and
+  servers run with `com_steamIntegration` and `cl_webuiEnable` at their
+  defaults (on). Gates, probes and launch profiles must not switch them off,
+  and a check that would need them off is not a retail-equivalent check. The
+  one exception is the deterministic lockstep harness, whose scripted clients
+  are synthetic and hold no Steam ticket (with Steam on, retail qagame rejects
+  them); never synthesize a ticket to avoid it.
+- Menus come only from the retail menu files, parsed as retail parses them.
+  Do not add UI script commands, menu keywords or menu definitions that
+  retail's UI does not have, and do not hard-code menus that retail loads
+  from files.
 
 ## Project Plan
 

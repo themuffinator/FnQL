@@ -889,7 +889,7 @@ static qboolean SysCon_EnsureCreated( void )
 	SDL_WindowFlags flags;
 	int startVideo;
 
-	if ( Com_IsHeadless() ) {
+	if ( Com_IsWindowless() ) {
 		return qfalse;
 	}
 
