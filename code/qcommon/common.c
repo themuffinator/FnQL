@@ -312,7 +312,7 @@ void NORETURN FORMAT_PRINTF(2, 3) QDECL Com_Error( errorParm_t code, const char 
 
 #if defined(_WIN32) && defined(_DEBUG)
 	if ( code != ERR_DISCONNECT && code != ERR_NEED_CD ) {
-		if ( !Com_IsHeadless() && com_noErrorInterrupt && !com_noErrorInterrupt->integer ) {
+		if ( !Com_IsWindowless() && com_noErrorInterrupt && !com_noErrorInterrupt->integer ) {
 			ShowWindow( g_wv.hWnd, SW_MINIMIZE );
 			DebugBreak();
 		}
@@ -530,10 +530,17 @@ char cl_title[ MAX_CVAR_VALUE_STRING ] = CLIENT_WINDOW_TITLE;
 
 // Fixed before any platform UI is created; configs and runtime commands must
 // not turn an unattended process into an interactive client later.
-static qboolean com_headless;
+// 0: interactive; 1: headless dedicated (no client); 2: windowless client,
+// which renders and runs the game but never shows a window or prompt, for
+// unattended captures and gates.
+static int com_headless;
 
 qboolean Com_IsHeadless( void ) {
-	return com_headless;
+	return com_headless == 1 ? qtrue : qfalse;
+}
+
+qboolean Com_IsWindowless( void ) {
+	return com_headless != 0 ? qtrue : qfalse;
 }
 
 /*
@@ -566,7 +573,8 @@ qboolean Com_EarlyParseCmdLine( char *commandLine, char *con_title, int title_si
 				dedicated = atoi( Cmd_Argv(2) ) > 0;
 #endif
 			} else if ( !Q_stricmp( Cmd_Argv(1), "com_headless" ) ) {
-				headless = atoi( Cmd_Argv(2) ) != 0;
+				const int level = atoi( Cmd_Argv(2) );
+				headless = level == 2 ? 2 : level != 0 ? 1 : 0;
 				// Consume this platform option so later +set passes cannot
 				// change the registered, read-only effective value.
 				com_consoleLines[i][0] = '\0';
@@ -620,7 +628,23 @@ qboolean Com_EarlyParseCmdLine( char *commandLine, char *con_title, int title_si
 		}
 	}
 
-	com_headless = ( headless < 0 ? dedicated : headless ) ? qtrue : qfalse;
+	if ( headless < 0 ) {
+		// Automation (test runners, gates, agents) can make every launch
+		// unattended without editing each command line; an explicit
+		// +set com_headless still wins.
+		const char *policy = getenv( "FNQL_HEADLESS" );
+		if ( policy && policy[0] >= '0' && policy[0] <= '9' ) {
+			const int level = atoi( policy );
+			headless = level == 2 ? 2 : level != 0 ? 1 : 0;
+		}
+	}
+	if ( headless < 0 ) {
+		headless = dedicated ? 1 : 0;
+	} else if ( headless == 2 && dedicated ) {
+		// A dedicated launch has no client to keep windowless.
+		headless = 1;
+	}
+	com_headless = headless;
 	return (flags == 3) ? qtrue : qfalse ;
 }
 
@@ -3944,7 +3968,7 @@ void Com_Init( char *commandLine ) {
 
 	Com_InitSmallZoneMemory();
 	Cvar_Init();
-	Cvar_Get( "com_headless", com_headless ? "1" : "0", CVAR_ROM );
+	Cvar_Get( "com_headless", va( "%i", com_headless ), CVAR_ROM );
 
 #if defined(_WIN32) && defined(_DEBUG)
 	com_noErrorInterrupt = Cvar_Get( "com_noErrorInterrupt", "0", 0 );
@@ -4029,7 +4053,7 @@ void Com_Init( char *commandLine ) {
 	Cvar_CheckRange( com_dedicated, "0", "2", CV_INTEGER );
 #endif
 	Cvar_SetDescription( com_dedicated, "Enables dedicated server mode.\n 0: Listen server\n 1: Unlisted dedicated server \n 2: Listed dedicated server" );
-	if ( com_headless ) {
+	if ( com_headless == 1 ) {
 		if ( !com_dedicated->integer ) {
 			Cvar_Set( "dedicated", "1" );
 		}

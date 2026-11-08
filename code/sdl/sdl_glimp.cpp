@@ -1096,7 +1096,8 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, q
 	else
 		SDL_SetWindowHitTest( SDL_window, NULL, NULL );
 
-	if ( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_HIDDEN )
+	// A windowless client keeps the window hidden and renders offscreen.
+	if ( ( SDL_GetWindowFlags( SDL_window ) & SDL_WINDOW_HIDDEN ) && !Com_IsWindowless() )
 	{
 		if ( !SDL_ShowWindow( SDL_window ) ) {
 			Com_DPrintf( "SDL_ShowWindow failed: %s\n", SDL_GetError() );
@@ -1142,6 +1143,12 @@ GLimp_StartDriverAndSetMode
 static rserr_t GLimp_StartDriverAndSetMode( int mode, const char *modeFS, qboolean fullscreen, qboolean vulkan )
 {
 	rserr_t err;
+
+	// A windowless client (com_headless 2) never changes the display mode.
+	if ( Com_IsWindowless() )
+	{
+		fullscreen = qfalse;
+	}
 
 	if ( fullscreen && in_nograb->integer )
 	{

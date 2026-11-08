@@ -3172,7 +3172,10 @@ rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, qboolean
 	XSetWMNormalHints( dpy, win, &sizehints );
 	X11_CreateInputContext();
 
-	XMapWindow( dpy, win );
+	// A windowless client (com_headless 2) never maps its window; it renders
+	// through the renderer's framebuffer objects.
+	if ( !Com_IsWindowless() )
+		XMapWindow( dpy, win );
 
 	wmDeleteEvent = XInternAtom( dpy, "WM_DELETE_WINDOW", True );
 	if ( wmDeleteEvent == BadValue )
@@ -3228,12 +3231,13 @@ rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, qboolean
 	}
 
 //	XSync( dpy, False );
-	while ( window_exposed == qfalse )
+	// An unmapped window is never exposed.
+	while ( window_exposed == qfalse && !Com_IsWindowless() )
 	{
 		HandleEvents();
 	}
 
-	if ( !fullscreen ) {
+	if ( !fullscreen && !Com_IsWindowless() ) {
 		// Mapping is the first point at which every reparenting WM can expose
 		// the real title-bar and border extents. Reapply the persisted client
 		// origin in outer-frame coordinates so restarts do not drift by one
@@ -3252,6 +3256,11 @@ rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, qboolean
 void GLimp_InitGamma( glconfig_t *config )
 {
 	config->deviceSupportsGamma = qfalse;
+
+	// The display's gamma ramp is shared by every client of the X server; an
+	// unattended windowless client leaves it alone (the FBO path applies gamma).
+	if ( Com_IsWindowless() )
+		return;
 
 	if ( glw_state.randr_gamma )
 	{
@@ -3362,7 +3371,8 @@ static qboolean GLW_LoadOpenGL( const char *name )
 	if ( QGL_Init( name ) )
 	{
 		rserr_t err;
-		fullscreen = ( r_fullscreen->integer != 0 ) ? qtrue : qfalse;
+		// A windowless client (com_headless 2) never changes the display mode.
+		fullscreen = ( r_fullscreen->integer != 0 && !Com_IsWindowless() ) ? qtrue : qfalse;
 		const int mode = CL_GetRequestedMode( fullscreen );
 
 		// create the window and set up the context
@@ -3520,7 +3530,7 @@ static qboolean GLW_LoadVulkan( void )
 	if ( QVK_Init() )
 	{
 		rserr_t err;
-		qboolean fullscreen = ( r_fullscreen->integer != 0 ) ? qtrue : qfalse;
+		qboolean fullscreen = ( r_fullscreen->integer != 0 && !Com_IsWindowless() ) ? qtrue : qfalse;
 		const int mode = CL_GetRequestedMode( fullscreen );
 
 		// create the window and set up the context

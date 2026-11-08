@@ -1163,6 +1163,13 @@ cvar_integer_tests = executable('fnql_cvar_integer_tests',
 )
 test('fnql_cvar_integer', cvar_integer_tests)
 
+cvar_ui_policy_tests = executable('fnql_cvar_ui_policy_tests',
+  'tests/cvar_ui_policy_tests.c',
+  include_directories: include_directories('code/qcommon'),
+  c_args: common_c_args,
+)
+test('fnql_cvar_ui_policy', cvar_ui_policy_tests)
+
 png_loader_tests = executable('fnql_png_loader_tests',
   [
     'tests/png_loader_tests.c',
@@ -1529,3 +1536,8 @@ summary({
   'JPEG': jpeg_source,
   'Ogg Vorbis': ogg_vorbis_source,
 }, section: 'FnQL build')
+
+# Every test runs unattended (AGENTS.md headless rule): FnQL clients start
+# windowless (com_headless 2, which still renders and captures) and dedicated
+# servers headless, unless a test passes +set com_headless itself.
+add_test_setup('headless', env: {'FNQL_HEADLESS': '2'}, is_default: true)

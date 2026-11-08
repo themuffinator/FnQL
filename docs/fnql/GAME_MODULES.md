@@ -80,6 +80,14 @@ a product path.
   FnQL-game mirrors them, and its `scripts/check_engine_abi.py` compiles one
   layout probe against both trees and fails on any size, offset or constant
   difference. Change these structures only with a matching FnQL-game change.
+- UI cvar writes (imports 7 and 8) go through `Cvar_SetFromUI`, not
+  `Cvar_SetSafe`. Retail modules register their player settings with
+  `CVAR_PROTECTED` (0x800), and the installed menus edit those cvars, so the
+  UI may change a protected cvar. It may not change a `CVAR_PRIVATE` cvar or
+  a protected cvar that is also `CVAR_ROM` or `CVAR_INIT` (engine identity and
+  startup state such as `version`, `fs_basegame`, `cl_guid`). Servers and game
+  modules keep the `Cvar_SetSafe` rule. `code/qcommon/cvar_ui_policy.h` holds
+  the rule and `tests/cvar_ui_policy_tests.c` gates it.
 
 ## Interoperability rules
 
@@ -183,3 +191,13 @@ out-of-band `print` packets.
   mov [esi+0x2c4], edx`). The value feeds the `st` key of `CS_PLAYERS`. The
   adapter returned 32 bits and left EDX undefined; it now returns the whole
   SteamID.
+- Retail cgame registers its settings with flag 0x800 (QLSRP
+  `cg_main.c` cvar table: `cg_autoswitch`, `cg_bob`, `cg_kickScale` and the
+  rest carry `CVAR_PROTECTED`). The installed menus bind items to those cvars
+  and to engine-protected ones (`r_windowedMode`, `cl_allowConsoleChat`,
+  `cl_demoRecordMessage`). Observed in FnQL before the fix, with both the
+  retail `uix86.dll` and FnQL-game's UI: every such click or edit logged
+  "Restricted source tried to set" and changed nothing, so the options menus
+  and the weapon-config fields were inert. FnQL-game's
+  `fnql-ui-interaction-*` gates now require those writes to land and to match
+  retail's stored values.

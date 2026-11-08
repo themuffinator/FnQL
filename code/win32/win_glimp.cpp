@@ -1534,7 +1534,8 @@ static qboolean GLW_LoadOpenGL( const char *drivername )
 	// 
 	if ( QGL_Init( buffer ) )
 	{
-		cdsFullscreen = r_fullscreen->integer != 0 ? qtrue : qfalse;
+		// A windowless client (com_headless 2) never changes the display mode.
+		cdsFullscreen = r_fullscreen->integer != 0 && !Com_IsWindowless() ? qtrue : qfalse;
 		const int mode = CL_GetRequestedMode( cdsFullscreen );
 
 		// create the window and set up the context
@@ -1668,8 +1669,11 @@ void GLimp_Init( glconfig_t *config )
 		Com_Printf( "...WGL_EXT_swap_control not found\n" );
 	}
 
-	// show main window after all initializations
-	ShowWindow( g_wv.hWnd, SW_SHOW );
+	// show main window after all initializations; a windowless client keeps
+	// it hidden and renders through its framebuffer objects
+	if ( !Com_IsWindowless() ) {
+		ShowWindow( g_wv.hWnd, SW_SHOW );
+	}
 	IN_Init();
 
 	HandleEvents();
@@ -1758,7 +1762,7 @@ static qboolean GLW_LoadVulkan( void )
 	//
 	if ( QVK_Init() )
 	{
-		qboolean cdsFullscreen = r_fullscreen->integer != 0 ? qtrue : qfalse;
+		qboolean cdsFullscreen = r_fullscreen->integer != 0 && !Com_IsWindowless() ? qtrue : qfalse;
 		const int mode = CL_GetRequestedMode( cdsFullscreen );
 
 		// create the window and set up the context
@@ -1813,8 +1817,10 @@ void VKimp_Init( glconfig_t *config )
 	config->driverType = GLDRV_ICD;
 	config->hardwareType = GLHW_GENERIC;
 
-	// show main window after all initializations
-	ShowWindow( g_wv.hWnd, SW_SHOW );
+	// show main window after all initializations (see GLimp_Init)
+	if ( !Com_IsWindowless() ) {
+		ShowWindow( g_wv.hWnd, SW_SHOW );
+	}
 	IN_Init();
 
 	HandleEvents();

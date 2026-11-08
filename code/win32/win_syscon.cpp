@@ -892,7 +892,7 @@ static LRESULT WINAPI InputLineWndProc( HWND hWnd, UINT uMsg, WPARAM wParam, LPA
 */
 void Sys_CreateConsole( const char *title, int xPos, int yPos, qboolean useXYpos )
 {
-	if ( Com_IsHeadless() ) {
+	if ( Com_IsWindowless() ) {
 		return;
 	}
 	WNDCLASS wc;
@@ -1099,7 +1099,7 @@ void Sys_DestroyConsole( void )
 */
 void Sys_ShowConsole( int visLevel, qboolean quitOnClose )
 {
-	if ( Com_IsHeadless() ) {
+	if ( Com_IsWindowless() ) {
 		return;
 	}
 	s_wcd.quitOnClose = quitOnClose;
@@ -1182,7 +1182,7 @@ char *Sys_ConsoleInput( void )
 */
 void Conbuf_AppendText( const char *msg )
 {
-	if ( Com_IsHeadless() ) {
+	if ( Com_IsWindowless() ) {
 		Sys_Print( msg );
 		return;
 	}
@@ -1321,7 +1321,7 @@ static void AddBufferText( const char *text, int textLength )
 */
 void Sys_SetErrorText( const char *buf )
 {
-	if ( Com_IsHeadless() ) {
+	if ( Com_IsWindowless() ) {
 		return;
 	}
 	RECT rect;

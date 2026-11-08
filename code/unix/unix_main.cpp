@@ -357,7 +357,7 @@ sysStartupChoice_t Sys_PromptStartupChoice( const char *title, const char *messa
 {
 	char answer[64];
 
-	if ( Com_IsHeadless() || !message || !message[0] )
+	if ( Com_IsWindowless() || !message || !message[0] )
 	{
 		return SYS_STARTUP_PROCEED;
 	}

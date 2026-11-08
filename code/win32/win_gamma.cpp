@@ -271,6 +271,13 @@ void GLimp_InitGamma( glconfig_t *config )
 		return; // no hardware gamma control via RDP
 	}
 
+	if ( Com_IsWindowless() )
+	{
+		// The display ramp is desktop-global; an unattended client with no
+		// visible window must leave it alone (the FBO path applies gamma).
+		return;
+	}
+
 	if ( !GLW_CaptureBaseline( glw_state.displayName ) )
 	{
 		return;

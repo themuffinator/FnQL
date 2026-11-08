@@ -105,6 +105,13 @@ dedicated mode). Headless processes cannot switch to a graphical client at
 runtime. For the interactive Windows server console, explicitly pass
 `+set com_headless 0`. Ordinary client launches are unchanged.
 
+`+set com_headless 2` starts a windowless client for unattended runs and
+captures: the renderer, audio settings and game run normally, but no window is
+ever shown, the display mode and desktop gamma are left alone (fullscreen
+requests stay windowed), and diagnostics go to stdout/stderr as in headless
+mode. Screenshots and `video` captures come from the renderer's framebuffer
+objects, so they show the real frame.
+
 ### Native Linux dedicated server
 
 1. Install the 32-bit runtime libraries reported by `ldd ./fnql.ded` on your
