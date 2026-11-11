@@ -311,13 +311,21 @@ policy.
 
 Manual release publishing follows the same staged-maintenance model used by
 openQ4: completed work is collected in the release-completion list, promoted to
-the player-facing `Unreleased` queue, then either curated in a tracked release
-note or reduced to compact highlights from the changelog, commits, and changed
-files. A tag-specific curated note wins over a version-specific one. Without a
-curated note, the workflow uses GitHub Copilot with
+the player-facing `Unreleased` queue, then published. A tracked release note
+wins (tag-specific before version-specific). Otherwise
+[`scripts/manual_release.py`](../../scripts/manual_release.py) publishes the
+queue as written: a `## Highlights` section (the queue's Highlights entries, or
+the first entry of each other category when there are none, which is all the
+Discord embed shows) and a `## All changes` section with every remaining entry
+under its category. Entries are read whole, including their wrapped lines.
+Only an empty queue falls back to generated highlights: GitHub Copilot with
 [`.github/release-notes-instructions.md`](../../.github/release-notes-instructions.md)
-when available and otherwise falls back to the repo-local GitHub Models prompt
-in [`scripts/manual_release.py`](../../scripts/manual_release.py). After a
+when available, then the repo-local GitHub Models prompt, then cleaned commit
+subjects. The body has no title (GitHub shows the release title). Its build
+details name the version, date, commit range and bundled FnQL-game commit,
+and the collapsed commit list leaves out merges and the bot's changelog
+resets. The 0.1.0.117 and 0.1.0.134 notes, made by the old fallback, kept only
+the first line of each entry and flattened the categories. After a
 release is created from a branch, CI resets
 `docs/fnql/CHANGELOG.md` to an empty categorized `Unreleased` template and
 commits that reset to the release branch.
