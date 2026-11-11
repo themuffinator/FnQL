@@ -314,6 +314,36 @@ class ServerParityTests(unittest.TestCase):
         self.assertIn("SteamGameDescription", config)
         self.assertIn("SV_FactoryActiveTags( factoryTags, sizeof( factoryTags ) );", config)
 
+    def test_steam_rules_follow_serverinfo_changes(self) -> None:
+        main = read("code/server/sv_main.cpp")
+        block = main[main.index("if ( cvar_modifiedFlags & CVAR_SERVERINFO ) {") :]
+        block = block[: block.index("}")]
+        self.assertIn("SV_SteamPublishServerInfo();", block)
+        self.assertIn("SV_SetConfigstring( CS_SERVERINFO", block)
+        platform = read("code/server/sv_platform.cpp")
+        body = function_body(platform, "void SV_SteamPublishServerInfo( void )")
+        self.assertIn("PublishSteamGameServerInfo();", body)
+
+    def test_status_prints_the_retail_table_for_native_modules(self) -> None:
+        server = read("code/server/sv_ccmds.cpp")
+        table = function_body(server, "static void SV_StatusRetail( void )")
+        self.assertIn(
+            '"num score ping name            lastmsg address               qport rate  steamid\\n"',
+            table,
+        )
+        self.assertIn(
+            '"--- ----- ---- --------------- ------- --------------------- ----- ----- -----------------\\n"',
+            table,
+        )
+        for fragment in ('"CNCT "', '"ZMBI "', '"%7i "', '"%5i"', '" %5i"', '" %llu"', "9999"):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, table)
+        status = function_body(server, "static void SV_Status_f( void )")
+        self.assertIn("if ( SV_GameQueryExportsAvailable() ) {", status)
+        self.assertIn("SV_StatusRetail();", status)
+        # The Quake III table stays for classic modules.
+        self.assertIn('"cl score ping name"', status)
+
     def test_console_say_and_kick_follow_retail(self) -> None:
         server = read("code/server/sv_ccmds.cpp")
         say = function_body(server, "static void SV_ConSay_f( void )")
@@ -324,6 +354,114 @@ class ServerParityTests(unittest.TestCase):
         self.assertIn('"was kicked: %s"', kick)
         self.assertIn("strlen( Cmd_Argv( 2 ) ) < 128", kick)
         self.assertIn("SV_DropClient( cl, kickMessage );", kick)
+
+
+class RetailJoinPathTests(unittest.TestCase):
+    """A retail client joining an FnQL server, and FnQL joining a retail one."""
+
+    def test_message_limit_is_retails_and_legacy_peers_keep_their_own(self) -> None:
+        qcommon = read("code/qcommon/qcommon.h")
+        self.assertRegex(qcommon, r"#define\s+MAX_MSGLEN\s+32768\b")
+        self.assertRegex(qcommon, r"#define\s+MAX_MSGLEN_LEGACY\s+16384\b")
+        contract = read("code/qcommon/protocol_contract.hpp")
+        limits = contract[contract.index("inline constexpr Limits QuakeLiveLimits{") :]
+        self.assertIn("1'400u, 32'768u,", limits[: limits.index("};")])
+        modern = contract[contract.index("inline constexpr Limits ModernizedQ3Limits{") :]
+        self.assertIn("1'400u, 16'384u,", modern[: modern.index("};")])
+
+        client = read("code/server/sv_client.cpp")
+        limit = function_body(client, "int SV_ClientMessageLimit( const client_t *client )")
+        self.assertIn("client->netchan.wireProfile ).limits.messageBytes", limit)
+        gamestate = function_body(client, "static void SV_SendClientGameState( client_t *client )")
+        self.assertIn(
+            "MSG_Init( &msg, msgBuffer.data(), SV_ClientMessageLimit( client ) );", gamestate
+        )
+        snapshot = read("code/server/sv_snapshot.cpp")
+        self.assertIn(
+            "MSG_Init( &msg, msg_buf.data(), SV_ClientMessageLimit( client ) );", snapshot
+        )
+        remaining = function_body(client, "int SV_RemainingGameState( void )")
+        self.assertIn("fnql::protocol::Find( com_protocol->integer )", remaining)
+        self.assertIn("return messageLimit - len;", remaining)
+
+    def test_listen_servers_answer_remote_requests_for_quake_live_modules(self) -> None:
+        main = read("code/server/sv_main.cpp")
+        rule = function_body(main, "qboolean SV_SinglePlayerIgnoresRemote( void )")
+        self.assertLess(
+            rule.index("SV_GameQueryExportsAvailable()"), rule.index('"ui_singlePlayerActive"')
+        )
+        self.assertIn("return qfalse;", rule[: rule.index('"g_gametype"')])
+        client = read("code/server/sv_client.cpp")
+        challenge = function_body(client, "void SV_GetChallenge( const netadr_t *from, const msg_t *msg )")
+        self.assertIn("if ( SV_SinglePlayerIgnoresRemote() ) {", challenge)
+        self.assertNotIn("GT_SINGLE_PLAYER", challenge)
+        # The Quake III test survives only inside the shared rule.
+        self.assertEqual(main.count('"ui_singlePlayerActive"'), 1)
+        self.assertEqual(main.count("SV_SinglePlayerIgnoresRemote() ) {"), 2)
+
+    def test_a_repeated_connect_is_answered_without_tearing_the_slot_down(self) -> None:
+        client = read("code/server/sv_client.cpp")
+        resend = client.index("repeated connect, resent connectResponse")
+        block = client[client.rindex("if ( cl_proto == QL_RETAIL_PROTOCOL_VERSION ) {", 0, resend) : resend]
+        self.assertIn("client.state != CS_CONNECTED || client.challenge != challenge", block)
+        self.assertIn("client.netchan.qport != qport", block)
+        self.assertIn('NET_OutOfBandPrint( NS_SERVER, from, "connectResponse" );', block)
+        self.assertNotIn("GAME_CLIENT_DISCONNECT", block)
+        self.assertNotIn("SV_FreeClient", block)
+        # It runs before the reconnect limit and the slot reuse scan.
+        self.assertLess(resend, client.index("// quick reject"))
+        # ...and only after the challenge itself was verified.
+        self.assertLess(client.index("SV_VerifyChallenge( challenge, from )"), resend)
+
+    def test_loading_clients_receive_only_chat_broadcasts(self) -> None:
+        main = read("code/server/sv_main.cpp")
+        loop = main[main.index("// send the data to all relevant clients") :]
+        loop = loop[: loop.index("MASTER SERVER FUNCTIONS")]
+        self.assertIn("client.state == CS_PRIMED", loop)
+        self.assertIn("client.netchan.wireProfile == NETCHAN_WIRE_QL_RETAIL", loop)
+        self.assertIn('strncmp( message.data(), "chat ", 5 ) != 0', loop)
+        self.assertLess(loop.index("continue;"), loop.index("SV_AddServerCommand( &client"))
+
+    def test_shutdown_and_pure_messages_use_retail_wording(self) -> None:
+        init = read("code/server/sv_init.cpp")
+        final = init[init.index("// send it twice, ignoring rate") :]
+        final = final[: final.index("// force a snapshot to be sent")]
+        retail = final[: final.index("} else {")]
+        self.assertIn("client.netchan.wireProfile == NETCHAN_WIRE_QL_RETAIL", retail)
+        self.assertIn('SV_SendServerCommand( &client, "print \\"%s\\"", message );', retail)
+        self.assertIn('SV_SendServerCommand( &client, "disconnect" );', retail)
+        self.assertIn('"disconnect \\"%s\\""', final[final.index("} else {") :])
+        client = read("code/server/sv_client.cpp")
+        self.assertIn('"Unpure client detected. Invalid .PK3 files referenced!"', client)
+
+    def test_client_does_not_ask_a_retail_server_for_paks(self) -> None:
+        client = read("code/client/cl_main.cpp")
+        downloads = function_body(client, "static void CL_InitLegacyDownloads( void )")
+        retail = downloads[: downloads.index("else if ( !(cl_allowDownload->integer & DLF_ENABLE) )")]
+        self.assertIn("clc.netchan.wireProfile == NETCHAN_WIRE_QL_RETAIL", retail)
+        self.assertIn("!( clc.sv_allowDownload & DLF_ENABLE )", retail)
+        self.assertIn("WARNING: Missing pk3s referenced by the server:", retail)
+        self.assertNotIn("CL_NextDownload", retail)
+        # Either way the join continues.
+        self.assertIn("CL_DownloadsComplete();", downloads)
+
+    def test_client_paces_packets_during_workshop_downloads(self) -> None:
+        source = read("code/client/cl_input.cpp")
+        self.assertIn("|| CL_WorkshopDownloadsActive() != qfalse;", source)
+        self.assertIn("if ( downloading && cls.realtime - clc.lastPacketSentTime < 50 ) {", source)
+        self.assertIn("\t\t!downloading &&\n", source.replace("\r\n", "\n"))
+
+    def test_client_userinfo_uses_retail_colors_and_teamtask(self) -> None:
+        client = read("code/client/cl_main.cpp").replace("\r\n", "\n")
+        for name, default in (("color1", "7"), ("color2", "25")):
+            with self.subTest(cvar=name):
+                self.assertIn(
+                    f'Cvar_CheckRange( Cvar_Get( "{name}", "{default}", '
+                    "CVAR_USERINFO | CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_CLOUD ),\n"
+                    '\t\t"1", "26", CV_INTEGER );',
+                    client,
+                )
+        self.assertIn('Cvar_Get( "teamtask", "0", CVAR_USERINFO );', client)
 
 
 class WebUiBridgeParityTests(unittest.TestCase):

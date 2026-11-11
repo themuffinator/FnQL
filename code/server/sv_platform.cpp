@@ -419,6 +419,15 @@ void SV_SteamGameServerStart( const char *mapName ) {
 	}
 }
 
+/*
+Retail republishes every serverinfo pair as a Steam rule whenever a serverinfo
+cvar changes (SV_Frame, quakelive_steam.exe 0x4e4b32 -> 0x465a60), not only
+when the server starts, so the rules a server browser reads stay current.
+*/
+void SV_SteamPublishServerInfo( void ) {
+	PublishSteamGameServerInfo();
+}
+
 void SV_SteamGameServerStop( void ) {
 	FNQL_Steam_StopGameServer();
 	lastGameServerConfig = {};

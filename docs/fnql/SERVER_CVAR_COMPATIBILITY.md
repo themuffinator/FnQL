@@ -94,6 +94,16 @@ game description (`0x46650b`, table `0x560e50`), the password flag from
 (`0x466744`). FnQL had sent its own version string, the AppID as the product,
 `Quake Live` as the description, and the private-slot password as the flag.
 
+The serverinfo pairs are republished as Steam rules whenever a serverinfo
+cvar changes, as retail does (`0x4e4b32`), not only when the server starts.
+
+### Operator output
+
+`status` prints retail's fixed-column table for Quake Live modules
+(`0x4dec60`): `num score ping name lastmsg address qport rate steamid`, with
+`CNCT` and `ZMBI` in the ping column. Classic modules keep the variable-width
+Quake III table.
+
 Factory/map-pool owners already cover `sv_mapPoolFile`,
 `sv_includeCurrentMapInVote`, and `sv_serverType`. Common/filesystem owners
 already cover the read-only running, pause, checksum, pak, and reference

@@ -314,6 +314,16 @@ void QDECL SV_SendServerCommand( client_t *cl, const char *fmt, ... ) {
 
 	// send the data to all relevant clients
 	for ( client_t &client : SV_Clients() ) {
+		// Retail broadcasts to a client that is still loading (CS_PRIMED) only
+		// commands beginning "chat " (quakelive_steam.exe 0x4e42a2-0x4e430f);
+		// prints, centerprints and the rest reach active clients alone. Queuing
+		// them all filled the 64-command reliable window during a long load on
+		// a busy server and dropped the client with a command overflow.
+		if ( client.state == CS_PRIMED
+			&& client.netchan.wireProfile == NETCHAN_WIRE_QL_RETAIL
+			&& strncmp( message.data(), "chat ", 5 ) != 0 ) {
+			continue;
+		}
 		if ( len <= 1022 || client.longstr ) {
 			SV_AddServerCommand( &client, message.data() );
 		}
@@ -787,11 +797,9 @@ static void SVC_Status( const netadr_t *from ) {
 	std::array<char, MAX_INFO_STRING + 160> infostring{}; // add some space for challenge string
 
 	// ignore if we are in single player
-#ifndef DEDICATED
-	if ( Cvar_VariableIntegerValue( "g_gametype" ) == GT_SINGLE_PLAYER || Cvar_VariableIntegerValue("ui_singlePlayerActive")) {
+	if ( SV_SinglePlayerIgnoresRemote() ) {
 		return;
 	}
-#endif
 
 	// Prevent using getstatus as an amplifier
 	if ( SVC_RateLimitAddress( from, 10, 1000 ) ) {
@@ -856,11 +864,9 @@ static void SVC_Info( const netadr_t *from ) {
 	std::array<char, MAX_INFO_STRING> infostring{};
 
 	// ignore if we are in single player
-#ifndef DEDICATED
-	if ( Cvar_VariableIntegerValue( "g_gametype" ) == GT_SINGLE_PLAYER || Cvar_VariableIntegerValue("ui_singlePlayerActive")) {
+	if ( SV_SinglePlayerIgnoresRemote() ) {
 		return;
 	}
-#endif
 
 	// Prevent using getinfo as an amplifier
 	if ( SVC_RateLimitAddress( from, 10, 1000 ) ) {
@@ -1193,6 +1199,34 @@ void SV_PacketEvent( const netadr_t *from, msg_t *msg ) {
 	if ( !knownSender && !SVC_RateLimitAddress( from, 4, 1000 ) ) {
 		NET_OutOfBandPrint( NS_SERVER, from, "disconnect" );
 	}
+}
+
+
+/*
+===================
+SV_SinglePlayerIgnoresRemote
+
+Quake III's listen server ignored getchallenge, getinfo and getstatus while a
+single-player game ran: gametype 2, or ui_singlePlayerActive. Quake Live has
+no single-player gametype. Its gametype 2 is Race, and its `map` command sets
+ui_singlePlayerActive on every listen server, yet retail answers getchallenge
+regardless (quakelive_steam.exe 0x4df430 tests neither); sv_serverType is what
+keeps a private match private. Applying the Quake III rule to a Quake Live
+module made every listen server unjoinable, so only a classic vmMain module or
+a QVM keeps it.
+===================
+*/
+qboolean SV_SinglePlayerIgnoresRemote( void ) {
+#ifndef DEDICATED
+	if ( SV_GameQueryExportsAvailable() ) {
+		return qfalse;
+	}
+	if ( Cvar_VariableIntegerValue( "g_gametype" ) == GT_SINGLE_PLAYER
+		|| Cvar_VariableIntegerValue( "ui_singlePlayerActive" ) ) {
+		return qtrue;
+	}
+#endif
+	return qfalse;
 }
 
 
@@ -1587,6 +1621,7 @@ void SV_Frame( int msec, int realMsec ) {
 
 	// update infostrings if anything has been changed
 	if ( cvar_modifiedFlags & CVAR_SERVERINFO ) {
+		SV_SteamPublishServerInfo();
 		SV_SetConfigstring( CS_SERVERINFO, Cvar_InfoString( CVAR_SERVERINFO, nullptr ) );
 		cvar_modifiedFlags &= ~CVAR_SERVERINFO;
 	}

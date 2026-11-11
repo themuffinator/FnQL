@@ -126,8 +126,9 @@ inline constexpr Limits ModernizedQ3Limits{
 // QLSRP and the retail-facing download path identify an eight-block window
 // of 2048-byte chunks. Storage may be larger, but the QL sender contract must
 // retain these runtime limits.
+// Retail's message limit is 0x8000 bytes (quakelive_steam.exe 0x4d7505).
 inline constexpr Limits QuakeLiveLimits{
-	1'400u, 16'384u, 8u, 2'048u, 64u, 32u
+	1'400u, 32'768u, 8u, 2'048u, 64u, 32u
 };
 
 inline constexpr Contract LegacyQuake3{

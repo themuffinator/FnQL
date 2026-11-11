@@ -1009,8 +1009,16 @@ static void SV_FinalMessage( const char *message ) {
 			if (client.state >= CS_CONNECTED ) {
 				// don't send a disconnect to a local client
 				if ( client.netchan.remoteAddress.type != NA_LOOPBACK ) {
-					SV_SendServerCommand( &client, "print \"%s\n\"\n", message );
-					SV_SendServerCommand( &client, "disconnect \"%s\"", message );
+					if ( client.netchan.wireProfile == NETCHAN_WIRE_QL_RETAIL ) {
+						// Retail's final message is the print and then a bare
+						// disconnect (quakelive_steam.exe 0x4e3f15); with a
+						// reason the retail client words its notice differently.
+						SV_SendServerCommand( &client, "print \"%s\"", message );
+						SV_SendServerCommand( &client, "disconnect" );
+					} else {
+						SV_SendServerCommand( &client, "print \"%s\n\"\n", message );
+						SV_SendServerCommand( &client, "disconnect \"%s\"", message );
+					}
 				}
 				// force a snapshot to be sent
 				client.lastSnapshotTime = svs.time - 9999; // generate a snapshot immediately

@@ -240,8 +240,15 @@ qboolean	NET_Sleep( int timeout );
 
 #define	MAX_PACKETLEN	1400	// max size of a network packet
 
-#define	MAX_MSGLEN		16384	// max length of a message, which may
-								// be fragmented into multiple packets
+// Storage maximum for one message, which may be fragmented into multiple
+// packets. Retail Quake Live sizes its gamestate, snapshot and netchan
+// fragment buffers at 0x8000 and refuses only longer messages
+// (quakelive_steam.exe 0x4d7505, 0x4d7858, 0x4e5b0d); Quake III used 16384.
+// What may be SENT to a peer is the per-profile limits.messageBytes in
+// protocol_contract.hpp, so a legacy Quake III client is never handed more
+// than its own 16384-byte buffers hold.
+#define	MAX_MSGLEN		32768
+#define	MAX_MSGLEN_LEGACY	16384
 
 #define	MAX_MSGLEN_BUF	(MAX_MSGLEN+8)	// real buffer size that we need to allocate
 										// to safely handle overflows

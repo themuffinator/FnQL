@@ -1336,6 +1336,66 @@ static unsigned long long SV_StatusClientSteamId( int clientNum ) {
 
 /*
 ================
+SV_StatusRetail
+
+Retail's fixed-column `status` table (quakelive_steam.exe 0x4dec60), which
+tools read over rcon. Each occupied slot prints its number, score, ping (CNCT
+while connecting, ZMBI as a zombie, capped at 9999), the name padded to 16
+characters, milliseconds since its last packet, the address padded to 22, then
+qport, rate and SteamID.
+================
+*/
+static void SV_StatusRetail( void ) {
+	Com_Printf( "map: %s\n", sv_mapname->string );
+	Com_Printf( "num score ping name            lastmsg address               qport rate  steamid\n" );
+	Com_Printf( "--- ----- ---- --------------- ------- --------------------- ----- ----- -----------------\n" );
+
+	for ( SV_ClientSlot slot : SV_ClientSlots() ) {
+		const client_t *cl = &slot.client;
+		if ( cl->state == CS_FREE ) {
+			continue;
+		}
+
+		Com_Printf( "%3i ", slot.index );
+		const playerState_t *ps = SV_GameClientNum( slot.index );
+		Com_Printf( "%5i ", SV_GameGetClientScore( slot.index, ps->persistant[PERS_SCORE] ) );
+
+		if ( cl->state == CS_CONNECTED ) {
+			Com_Printf( "CNCT " );
+		} else if ( cl->state == CS_ZOMBIE ) {
+			Com_Printf( "ZMBI " );
+		} else {
+			Com_Printf( "%4i ", cl->ping < 9999 ? cl->ping : 9999 );
+		}
+
+		const int nameLength = static_cast<int>( strlen( cl->name ) );
+		Com_Printf( "%s", cl->name );
+		Com_Printf( S_COLOR_WHITE );
+		if ( nameLength < 16 ) {
+			SV_PrintRepeatedChar( ' ', 16 - nameLength );
+		}
+
+		Com_Printf( "%7i ", svs.time - cl->lastPacketTime );
+
+		const char *address = NET_AdrToString( &cl->netchan.remoteAddress );
+		const int addressLength = static_cast<int>( strlen( address ) );
+		Com_Printf( "%s", address );
+		if ( addressLength < 22 ) {
+			SV_PrintRepeatedChar( ' ', 22 - addressLength );
+		}
+
+		Com_Printf( "%5i", cl->netchan.qport );
+		Com_Printf( " %5i", cl->rate );
+		Com_Printf( " %llu", SV_StatusClientSteamId( slot.index ) );
+		Com_Printf( "\n" );
+	}
+
+	Com_Printf( "\n" );
+}
+
+
+/*
+================
 SV_Status_f
 ================
 */
@@ -1359,6 +1419,13 @@ static void SV_Status_f( void ) {
 	// make sure server is running
 	if ( !com_sv_running->integer ) {
 		Com_Printf( "Server is not running.\n" );
+		return;
+	}
+
+	// A Quake Live module gets retail's table; a classic vmMain module or a
+	// QVM keeps the variable-width Quake III table below.
+	if ( SV_GameQueryExportsAvailable() ) {
+		SV_StatusRetail();
 		return;
 	}
 
