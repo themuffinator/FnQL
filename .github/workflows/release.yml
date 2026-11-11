@@ -569,6 +569,19 @@ jobs:
       - name: Check FnQL-game runtime dependencies
         run: python FnQL/scripts/check_windows_runtime_deps.py --require-pe game-stage
 
+      - name: Build FnQL dedicated server for the hosting gate
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x86 -host_arch=x64 || exit /b
+          meson setup hosting-ded FnQL --buildtype=release -Db_vscrt=static_from_buildtype -Dbuild-client=false -Daudio-tests=false -Dglx-tests=false -Dcurl=disabled -Dogg-vorbis=false -Dsdl=disabled || exit /b
+          meson compile -C hosting-ded || exit /b
+
+      - name: Run FnQL-game module-hosting gate
+        env:
+          FNQL_HEADLESS: "1"
+        run: python FnQL/scripts/synthetic_hosting_gate.py run --engine hosting-ded/fnql.ded.exe --module game-stage/baseq3/fnql_qagamex86.dll
+
       - uses: actions/upload-artifact@v7
         with:
           name: fnql-game-windows-x86
@@ -624,6 +637,19 @@ jobs:
       - name: Check FnQL-game glibc baseline
         run: python3 FnQL/scripts/check_elf_glibc.py --max-glibc "$FNQL_LINUX_GLIBC_MAX" --require-elf game-stage
 
+      - name: Install FnQL dedicated server build tools
+        run: apt-get -y install g++-multilib
+
+      - name: Build FnQL dedicated server for the hosting gate
+        run: |
+          meson setup hosting-ded FnQL --cross-file FnQL/misc/meson/linux-x86.ini --buildtype=release -Dbuild-client=false -Daudio-tests=false -Dglx-tests=false -Dcurl=disabled -Dogg-vorbis=false -Dsdl=disabled
+          meson compile -C hosting-ded
+
+      - name: Run FnQL-game module-hosting gate
+        env:
+          FNQL_HEADLESS: "1"
+        run: python3 FnQL/scripts/synthetic_hosting_gate.py run --engine hosting-ded/fnql.ded --module game-stage/baseq3/fnql_qagamei386.so
+
       - uses: actions/upload-artifact@v7
         with:
           name: fnql-game-linux-x86
@@ -633,8 +659,10 @@ jobs:
 
   # FnQL-game x86_64 modules (fnql_<slot>x86_64.dll / .so). Retail modules
   # exist only for x86, so the suite runs the target's own gates (G0 ABI
-  # parity, G2 wire contract, unit tests); the module-hosting gate needs a
-  # retail install and runs outside CI.
+  # parity, G2 wire contract, unit tests). Every FnQL-game job, x86 included,
+  # also runs the synthetic module-hosting gate (scripts/synthetic_hosting_gate.py):
+  # a freshly built FnQL dedicated server hosts the staged qagame on generated
+  # assets. The retail-map hosting gate with bots still runs outside CI.
   fnql-game-windows-x86_64:
     needs: [prepare]
     name: Build FnQL-game Windows-MSVC x86_64
@@ -675,6 +703,19 @@ jobs:
 
       - name: Check FnQL-game runtime dependencies
         run: python FnQL/scripts/check_windows_runtime_deps.py --require-pe game-stage
+
+      - name: Build FnQL dedicated server for the hosting gate
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 || exit /b
+          meson setup hosting-ded FnQL --buildtype=release -Db_vscrt=static_from_buildtype -Dbuild-client=false -Daudio-tests=false -Dglx-tests=false -Dcurl=disabled -Dogg-vorbis=false -Dsdl=disabled || exit /b
+          meson compile -C hosting-ded || exit /b
+
+      - name: Run FnQL-game module-hosting gate
+        env:
+          FNQL_HEADLESS: "1"
+        run: python FnQL/scripts/synthetic_hosting_gate.py run --engine hosting-ded/fnql.ded.x64.exe --module game-stage/baseq3/fnql_qagamex86_64.dll
 
       - uses: actions/upload-artifact@v7
         with:
@@ -730,6 +771,19 @@ jobs:
 
       - name: Check FnQL-game glibc baseline
         run: python3 FnQL/scripts/check_elf_glibc.py --max-glibc "$FNQL_LINUX_GLIBC_MAX" --require-elf game-stage
+
+      - name: Install FnQL dedicated server build tools
+        run: apt-get -y install g++
+
+      - name: Build FnQL dedicated server for the hosting gate
+        run: |
+          meson setup hosting-ded FnQL --buildtype=release -Dbuild-client=false -Daudio-tests=false -Dglx-tests=false -Dcurl=disabled -Dogg-vorbis=false -Dsdl=disabled
+          meson compile -C hosting-ded
+
+      - name: Run FnQL-game module-hosting gate
+        env:
+          FNQL_HEADLESS: "1"
+        run: python3 FnQL/scripts/synthetic_hosting_gate.py run --engine hosting-ded/fnql.ded.x86_64 --module game-stage/baseq3/fnql_qagamex86_64.so
 
       - uses: actions/upload-artifact@v7
         with:

@@ -418,10 +418,16 @@ Expected behavior:
   retail cgame/UI/Awesomium ABI, while Linux i686 dedicated servers match
   retail `qagamei386.so`. The x86_64 jobs build and test the engine and the
   pinned FnQL-game modules for that target and package them without a Steam
-  provider. The FnQL-game hosting gate (`smoke_dedicated.py`: a dedicated
-  server loading `fnql_qagamex86_64` with `vm_gameProvider fnql` on a retail
-  map) needs a retail install and runs outside CI. ARM, macOS and the other
-  FnQ3 targets are not built, tested, packaged, or used as validation
+  provider. Every FnQL-game job, x86 and x86_64, also builds a server-only
+  FnQL dedicated server for its target and runs
+  `scripts/synthetic_hosting_gate.py`: the server loads the staged
+  `fnql_qagame<ARCH_STRING>` with `vm_gameProvider fnql` on assets the script
+  generates (a `default.cfg`, one FFA factory, and an IBSP v47 box room) in
+  its own game directory, and must keep running frames. It mounts no retail
+  file and no pk3, so it needs no Quake Live install. FnQL-game's full hosting
+  gate (`smoke_dedicated.py`: a retail map with a bot) still needs a retail
+  install and runs outside CI. ARM, macOS and the other FnQ3 targets are not
+  built, tested, packaged, or used as validation
 - both Windows packages fetch the provider version pinned in
   `version/fnql_steam_provider.json`, verify its SHA-256 and PE i386 identity,
   and include only `fnql_steam.dll`; provider source and Valve's
