@@ -4,6 +4,7 @@ import argparse
 import datetime as _dt
 import re
 import sys
+import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,7 +13,11 @@ DEFAULT_CHANGELOG = ROOT / "docs" / "fnql" / "CHANGELOG.md"
 
 SECTION_RE = re.compile(r"^##\s+\[(?P<label>[^\]]+)\](?:\s+-\s+(?P<date>\d{4}-\d{2}-\d{2}))?\s*$")
 CATEGORY_RE = re.compile(r"^###\s+(?P<label>.+?)\s*$")
-BULLET_RE = re.compile(r"^\s*[-*]\s+(?P<text>.+?)\s*$")
+# A changelog entry starts with an unindented "- " or "* " bullet; indented
+# lines after it continue the same entry (the file wraps at about 80 columns).
+BULLET_RE = re.compile(r"^[-*]\s+(?P<text>.+?)\s*$")
+CONTINUATION_RE = re.compile(r"^\s+(?P<text>\S.*?)\s*$")
+WRAP_WIDTH = 80
 RELEASE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 
 CHANGELOG_CATEGORIES = [
@@ -285,37 +290,79 @@ def keyword_matches(text: str, keyword: str) -> bool:
 
 
 def change_items(section_lines: list[str]) -> list[tuple[str, str]]:
+    """Return (category, text) entries, joining each bullet's wrapped lines."""
     items: list[tuple[str, str]] = []
     seen: set[str] = set()
     current_label: str | None = None
+    entry: list[str] = []
+    entry_label: str | None = None
+
+    def finish() -> None:
+        nonlocal entry
+        if not entry:
+            return
+        text = normalize_bullet_text(" ".join(entry))
+        entry = []
+        if not text or is_placeholder_bullet(text):
+            return
+        key = normalized_bullet_key(text)
+        if not key or key in seen:
+            return
+        seen.add(key)
+        items.append((infer_category(text, entry_label), text))
 
     for line in section_lines:
         heading = CATEGORY_RE.match(line)
         if heading:
+            finish()
             current_label = heading.group("label")
             continue
 
         bullet = BULLET_RE.match(line)
-        if not bullet:
+        if bullet:
+            finish()
+            entry = [bullet.group("text")]
+            entry_label = current_label
             continue
 
-        text = normalize_bullet_text(bullet.group("text"))
-        if not text or is_placeholder_bullet(text):
+        continuation = CONTINUATION_RE.match(line)
+        if entry and continuation:
+            entry.append(continuation.group("text"))
             continue
 
-        key = normalized_bullet_key(text)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        items.append((infer_category(text, current_label), text))
+        finish()
 
+    finish()
     return items
 
 
-def render_items(items: list[tuple[str, str]], *, include_empty: bool) -> list[str]:
+def items_by_category(items: list[tuple[str, str]]) -> dict[str, list[str]]:
     by_category: dict[str, list[str]] = {category: [] for category in CHANGELOG_CATEGORIES}
     for category, text in items:
         by_category.setdefault(category, []).append(text)
+    return by_category
+
+
+def bullet_lines(text: str, *, wrap: bool) -> list[str]:
+    if not wrap:
+        return [f"- {text}"]
+    return textwrap.wrap(
+        text,
+        width=WRAP_WIDTH,
+        initial_indent="- ",
+        subsequent_indent="  ",
+        break_long_words=False,
+        break_on_hyphens=False,
+    ) or [f"- {text}"]
+
+
+def render_items(
+    items: list[tuple[str, str]],
+    *,
+    include_empty: bool,
+    wrap: bool = False,
+) -> list[str]:
+    by_category = items_by_category(items)
 
     rendered: list[str] = []
     for category in CHANGELOG_CATEGORIES:
@@ -326,7 +373,8 @@ def render_items(items: list[tuple[str, str]], *, include_empty: bool) -> list[s
             rendered.append("")
         rendered.append(f"### {category}")
         if bullets:
-            rendered.extend(f"- {bullet}" for bullet in bullets)
+            for bullet in bullets:
+                rendered.extend(bullet_lines(bullet, wrap=wrap))
         else:
             rendered.append("- _None yet._")
 
@@ -337,11 +385,23 @@ def empty_unreleased_lines() -> list[str]:
     return ["", *render_items([], include_empty=True)]
 
 
-def clean_section_lines(section_lines: list[str], *, include_empty: bool = False) -> list[str]:
+def clean_section_lines(
+    section_lines: list[str],
+    *,
+    include_empty: bool = False,
+    wrap: bool = False,
+) -> list[str]:
     items = change_items(section_lines)
     if not items and not include_empty:
         return ["- No documented changes."]
-    return render_items(items, include_empty=include_empty)
+    return render_items(items, include_empty=include_empty, wrap=wrap)
+
+
+def section_items(path: Path, target: str) -> list[tuple[str, str]]:
+    for label, _date, lines in read_sections(path):
+        if label.lower() == target.lower():
+            return change_items(lines)
+    raise KeyError(f"Section [{target}] was not found in {path}")
 
 
 def clean_section_text(path: Path, target: str) -> str:
@@ -375,7 +435,9 @@ def rewrite_section(path: Path, target: str, body_lines: list[str]) -> None:
 def cleanup_section(path: Path, target: str) -> None:
     for label, _date, lines in read_sections(path):
         if label.lower() == target.lower():
-            rewrite_section(path, target, ["", *clean_section_lines(lines, include_empty=True)])
+            rewrite_section(
+                path, target, ["", *clean_section_lines(lines, include_empty=True, wrap=True)]
+            )
             return
     raise KeyError(f"Section [{target}] was not found in {path}")
 
@@ -414,7 +476,9 @@ def prepare_release(path: Path, version: str, date_value: str) -> str:
 
     refreshed_unreleased = empty_unreleased_lines()
     release_block = ["", release_header, ""]
-    release_block.extend(clean_section_lines(trimmed_body) if trimmed_body else ["- No documented changes."])
+    release_block.extend(
+        clean_section_lines(trimmed_body, wrap=True) if trimmed_body else ["- No documented changes."]
+    )
     updated_lines = (
         lines[: unreleased_index + 1]
         + refreshed_unreleased

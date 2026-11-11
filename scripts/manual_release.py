@@ -23,7 +23,15 @@ from fnql_meta import (
     normalize_commit,
     normalize_date,
 )
-from changelog import DEFAULT_CHANGELOG, clean_section_text, clear_unreleased
+from changelog import (
+    CHANGELOG_CATEGORIES,
+    DEFAULT_CHANGELOG,
+    clean_section_text,
+    clear_unreleased,
+    items_by_category,
+    section_items,
+)
+import fnql_game
 
 
 GITHUB_MODELS_ENDPOINT = "https://models.github.ai/inference/chat/completions"
@@ -32,6 +40,15 @@ MAX_RELEASE_NOTES_CONTEXT_CHARS = 60000
 DEFAULT_CURATED_RELEASE_NOTES_DIRECTORY = ROOT / "docs" / "fnql" / "releases"
 FIELD_SEPARATOR = "\x1f"
 RECORD_SEPARATOR = "\x1e"
+# Highlights shown when the changelog has no Highlights entries: the first
+# entry of each other category, at most this many.
+MAX_PROMOTED_HIGHLIGHTS = 5
+# Commits that only maintain the release machinery itself.
+BOT_AUTHOR_SUFFIX = "[bot]"
+HOUSEKEEPING_SUBJECTS = (
+    "reset pending changelog after release",
+    "reset unreleased changelog",
+)
 
 
 def non_negative_int(value: str) -> int:
@@ -274,7 +291,7 @@ def release_diff_spec(from_commit: str | None, to_commit: str) -> str:
 
 def commit_entries(from_commit: str | None, to_commit: str) -> list[dict[str, str]]:
     range_spec = release_range_spec(from_commit, to_commit)
-    pretty = f"%H%x1f%h%x1f%an%x1f%ad%x1f%s%x1f%b%x1e"
+    pretty = f"%H%x1f%h%x1f%an%x1f%ad%x1f%P%x1f%s%x1f%b%x1e"
     result = subprocess.run(
         ["git", "log", "--reverse", "--date=short", f"--pretty=format:{pretty}", range_spec],
         cwd=ROOT,
@@ -294,10 +311,10 @@ def commit_entries(from_commit: str | None, to_commit: str) -> list[dict[str, st
         record = record.strip("\n")
         if not record:
             continue
-        fields = record.split(FIELD_SEPARATOR, 5)
-        if len(fields) != 6:
+        fields = record.split(FIELD_SEPARATOR, 6)
+        if len(fields) != 7:
             continue
-        commit_hash, short_hash, author, date, subject, body = fields
+        commit_hash, short_hash, author, date, parents, subject, body = fields
         entries.append(
             {
                 "hash": commit_hash.strip(),
@@ -306,14 +323,31 @@ def commit_entries(from_commit: str | None, to_commit: str) -> list[dict[str, st
                 "date": date.strip(),
                 "subject": subject.strip(),
                 "body": body.strip(),
+                "parents": str(len(parents.split())),
             }
         )
 
     return entries
 
 
+def is_release_housekeeping(entry: dict[str, str]) -> bool:
+    """Merge commits and the bot's changelog resets say nothing about a release."""
+    subject = entry["subject"]
+    if not subject or is_merge_subject(subject):
+        return True
+    if int(entry.get("parents", "1") or "1") > 1:
+        return True
+    if entry.get("author", "").endswith(BOT_AUTHOR_SUFFIX):
+        return True
+    return subject.lower().rstrip(".") in HOUSEKEEPING_SUBJECTS
+
+
 def commit_lines(from_commit: str | None, to_commit: str) -> list[str]:
-    return [f"- {entry['short']} {entry['subject']}" for entry in commit_entries(from_commit, to_commit)]
+    return [
+        f"- {entry['short']} {entry['subject']}"
+        for entry in commit_entries(from_commit, to_commit)
+        if not is_release_housekeeping(entry)
+    ]
 
 
 def truncate_context(value: str, max_chars: int = MAX_RELEASE_NOTES_CONTEXT_CHARS) -> str:
@@ -335,6 +369,53 @@ def meaningful_changelog_section(changelog: Path) -> str:
             has_real_bullet = True
             break
     return text if has_real_bullet else ""
+
+
+def changelog_release_body(changelog: Path) -> str:
+    """Render the Unreleased queue as release notes, every entry in full.
+
+    The queue is written for players as work lands, so it is published as
+    written: a short Highlights section (the Highlights entries, or the first
+    entry of each other category when there are none) followed by every other
+    entry under its category.  Returns "" when the queue has no real entries.
+    """
+    try:
+        items = section_items(changelog, "Unreleased")
+    except (OSError, KeyError):
+        return ""
+    if not items:
+        return ""
+
+    by_category = items_by_category(items)
+    highlights = list(by_category.get("Highlights", []))
+    remaining = {
+        category: list(by_category.get(category, []))
+        for category in CHANGELOG_CATEGORIES
+        if category != "Highlights"
+    }
+    if not highlights:
+        for category, entries in remaining.items():
+            if entries and len(highlights) < MAX_PROMOTED_HIGHLIGHTS:
+                highlights.append(entries.pop(0))
+
+    lines = ["## Highlights", ""]
+    lines.extend(f"- {text}" for text in highlights)
+    other = [(category, entries) for category, entries in remaining.items() if entries]
+    if other:
+        lines.extend(["", "## All changes"])
+        for category, entries in other:
+            lines.extend(["", f"### {category}", ""])
+            lines.extend(f"- {text}" for text in entries)
+    return "\n".join(lines)
+
+
+def fnql_game_detail_line() -> str | None:
+    try:
+        pin = fnql_game.load_pin()
+    except (OSError, ValueError):
+        return None
+    url = f"https://github.com/{pin['repository']}/commit/{pin['commit']}"
+    return f"- FnQL-game modules: [{pin['commit'][:8]}]({url})"
 
 
 def find_curated_release_notes(
@@ -526,27 +607,16 @@ def humanize_subject(subject: str) -> str:
 
 
 def fallback_highlights(commits: list[dict[str, str]], changelog: Path) -> str:
-    manual = meaningful_changelog_section(changelog)
-    if manual:
-        bullets = [
-            line.strip()
-            for line in manual.splitlines()
-            if re.match(r"^[-*]\s+\S", line.strip())
-            and "none yet" not in line.lower()
-            and "no documented changes" not in line.lower()
-        ]
-        if bullets:
-            return "\n".join(bullets[:12])
-
+    """Commit-subject highlights, for a release whose changelog queue is empty."""
     seen: set[str] = set()
     rendered: list[str] = []
 
     for entry in commits:
         subject = entry["subject"]
-        if not subject or is_merge_subject(subject):
+        if is_release_housekeeping(entry):
             continue
         lowered = subject.lower()
-        if lowered.startswith(("docs:", "doc:")) or "reset unreleased changelog" in lowered:
+        if lowered.startswith(("docs:", "doc:")):
             continue
         key = normalized_subject_key(subject)
         if key in seen:
@@ -635,9 +705,17 @@ def render_release_notes(
         release_tag=release_tag,
         version_string=version_string,
     )
+    changelog_body = "" if curated_path is not None else changelog_release_body(changelog)
     if curated_path is not None:
         release_body = read_curated_release_notes(curated_path)
         print(f"Using tracked release notes from {curated_path}")
+    elif changelog_body:
+        # The queue is the reviewed, player-facing text; generated highlights
+        # only stand in when it is empty.
+        release_body = changelog_body
+        print(f"Using the Unreleased queue from {changelog}")
+        if highlights_file is not None:
+            print(f"Ignoring generated highlights in {highlights_file}: the changelog queue is not empty")
     else:
         highlights = generated_highlights(
             build_number=build_number,
@@ -663,20 +741,20 @@ def render_release_notes(
         else:
             previous_line = "- Previous release commit: none"
 
+    # GitHub shows the release title above the body, so the body has none.
     lines = [
-        f"# {meta['project_name']} Release",
-        "",
         release_body,
         "",
         "## Build details",
         "",
-        "- Channel: manual",
-        f"- Base version line: {meta['base_version']}",
-        f"- Build version: {version_string}",
+        f"- Version: {version_string}",
         f"- Build date: {iso_date}",
         f"- Commit: {normalize_commit(target_commit)} ({target_commit})",
         previous_line,
     ]
+    game_line = fnql_game_detail_line()
+    if game_line:
+        lines.append(game_line)
 
     commits = commit_lines(from_commit, target_commit)
     lines.extend(["", "<details>", "<summary>Included commits</summary>", ""])

@@ -11,8 +11,9 @@ Process:
    [`releases/<release-tag>.md`](./releases/README.md) or
    `releases/<version>.md`. The manual release workflow uses that tracked file
    before generated notes.
-4. If no curated file exists, the workflow builds the `Highlights` section
-   from the Unreleased queue, commits, and relevant diffs.
+4. If no curated file exists, the workflow publishes the Unreleased queue as
+   written, Highlights first and then every entry by category. Generated
+   highlights stand in only when the queue is empty.
 5. After publication, remove or move shipped items from this working list and
    keep unfinished work in **Carry Forward**. CI clears the Changelog's
    `Unreleased` queue separately.
