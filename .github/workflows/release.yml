@@ -194,6 +194,125 @@ jobs:
           if-no-files-found: error
           retention-days: 5
 
+  # x86_64 (AGENTS.md Project Plan step 7): no retail modules, no Awesomium
+  # WebUI and no Steam provider exist for it, so these jobs stage no
+  # fnql_steam.dll; FnQL-game is the only game on this target.
+  windows-msys64:
+    needs: [prepare]
+    name: Build Windows-MSYS2 x86_64
+    runs-on: windows-latest
+    steps:
+      - name: Checkout current repo
+        uses: actions/checkout@v6
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: git
+          pacboy: >-
+            toolchain:p
+            meson:p
+            ninja:p
+
+      - name: Stamp release build version
+        shell: msys2 {0}
+        run: |
+          python scripts/manual_release.py stamp-version --build-number ${{ needs.prepare.outputs.build_number }}
+          python scripts/generate_docs.py
+
+      - name: Build
+        shell: msys2 {0}
+        run: |
+          mkdir -p bin
+          meson setup meson/build-x86_64 \
+            --buildtype=release \
+            --wrap-mode=forcefallback \
+            --prefix "$PWD/bin" \
+            -Dc_link_args=-static \
+            -Dcpp_link_args=-static \
+            -Dcurl=enabled \
+            -Dcurl-dlopen=false \
+            -Dsdl=disabled \
+            -Drenderer-dlopen=true \
+            -Drenderers=glx,vk,rtx \
+            -Drenderer-default=glx \
+            -Daudio-tests=true \
+            -Dglx-tests=true \
+            -Dzlib:default_library=static \
+            -Dlibjpeg-turbo:simd=disabled
+          meson compile -C meson/build-x86_64
+          meson install -C meson/build-x86_64 --no-rebuild --skip-subprojects
+
+      - name: Run complete regression suite
+        shell: msys2 {0}
+        run: meson test -C meson/build-x86_64 --print-errorlogs
+
+      - name: Check Windows runtime dependencies
+        shell: msys2 {0}
+        run: python scripts/check_windows_runtime_deps.py --require-pe --require-import "fnql.x64.exe=winmm.dll!joyGetPosEx" bin
+
+      - name: Verify release layout
+        shell: msys2 {0}
+        run: python scripts/verify_release_layout.py bin/FnQL-pkg.fnz
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-mingw-x86_64
+          path: bin
+          if-no-files-found: error
+          retention-days: 5
+
+  windows-msvc-x64:
+    needs: [prepare]
+    name: Build Windows-MSVC x86_64
+    runs-on: windows-2022
+    steps:
+      - uses: microsoft/setup-msbuild@v3
+
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Stamp release build version
+        run: |
+          python scripts/manual_release.py stamp-version --build-number ${{ needs.prepare.outputs.build_number }}
+          python scripts/generate_docs.py
+
+      - name: Install Meson
+        run: python -m pip install meson ninja
+
+      - name: Build
+        shell: cmd
+        run: |
+          if not exist bin mkdir bin
+
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 || exit /b
+          meson setup meson\build-x86_64 --buildtype=release --wrap-mode=forcefallback --prefix "%CD%\bin" -Db_vscrt=static_from_buildtype -Dzlib:default_library=static -Dcurl=enabled -Dcurl-dlopen=false -Dsdl=disabled -Drenderer-dlopen=true -Drenderers=glx,vk,rtx -Drenderer-default=glx -Daudio-tests=true -Dglx-tests=true -Dlibjpeg-turbo:simd=disabled || exit /b
+          meson compile -C meson\build-x86_64 || exit /b
+          meson install -C meson\build-x86_64 --no-rebuild --skip-subprojects || exit /b
+
+      - name: Run complete regression suite
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 || exit /b
+          meson test -C meson\build-x86_64 --print-errorlogs || exit /b
+
+      - name: Check Windows runtime dependencies
+        run: python scripts/check_windows_runtime_deps.py --require-pe --require-import "fnql.x64.exe=winmm.dll!joyGetPosEx" bin
+
+      - name: Verify release layout
+        run: python scripts/verify_release_layout.py bin/FnQL-pkg.fnz
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-msvc-x86_64
+          path: bin
+          if-no-files-found: error
+          retention-days: 5
+
   source-validation:
     needs: [prepare]
     name: Release source validation
@@ -311,6 +430,101 @@ jobs:
           if-no-files-found: error
           retention-days: 5
 
+  linux-x86_64-regression:
+    needs: [prepare]
+    name: Run Linux x86_64 Meson regressions
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Ensure apt mirrors resolve
+        run: printf '%s\n' "$FNQL_APT_DNS_FALLBACK" | sh -e
+
+      - name: Install x86_64 Meson build dependencies
+        run: |
+          sudo apt-get -qq -o Acquire::Retries=3 update
+          sudo apt-get install -y \
+            file \
+            gcc \
+            g++ \
+            glslang-tools \
+            libasound2-dev \
+            libgl-dev \
+            libx11-dev \
+            libxext-dev \
+            libxrandr-dev \
+            libxxf86dga-dev \
+            libxxf86vm-dev \
+            mesa-common-dev \
+            meson \
+            ninja-build \
+            pkg-config \
+            python3
+
+      - name: Build Linux x86_64 regression targets
+        run: |
+          meson setup .tmp/meson-linux-x86_64-release-tests \
+            --buildtype=release \
+            -Daudio-tests=true \
+            -Dbuild-client=true \
+            -Dbuild-server=true \
+            -Dcurl=disabled \
+            -Dglx-tests=true \
+            -Dogg-vorbis=false \
+            -Drenderer-dlopen=true \
+            -Drenderer-default=glx \
+            -Drenderers=glx,vk,rtx \
+            -Dsdl=disabled
+          meson compile -C .tmp/meson-linux-x86_64-release-tests
+
+      - name: Run complete Linux x86_64 regression suite
+        run: meson test -C .tmp/meson-linux-x86_64-release-tests --print-errorlogs
+
+  ubuntu-x86_64:
+    needs: [prepare]
+    name: Build Ubuntu x86_64
+    runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:20.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Ensure apt mirrors resolve
+        run: printf '%s\n' "$FNQL_APT_DNS_FALLBACK" | sh -e
+
+      - name: Install tools
+        run: |
+          apt-get -qq -o Acquire::Retries=3 update
+          apt-get -y install git make python3 python3-pip binutils gcc g++ libcurl4-openssl-dev libjpeg-dev libogg-dev libvorbis-dev mesa-common-dev libxxf86dga-dev libxrandr-dev libxxf86vm-dev libasound2-dev libopenal-dev
+          python3 -m pip install meson==1.9.1
+
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Fetch pinned FontStash source
+        run: meson subprojects download fontstash
+
+      - name: Stamp release build version
+        run: python3 scripts/manual_release.py stamp-version --build-number "${{ needs.prepare.outputs.build_number }}"
+
+      - name: Build
+        run: |
+          make install -j$(nproc) ARCH=x86_64 COMPILE_ARCH=x86_64 CC=gcc DESTDIR=bin USE_SDL=0 USE_RENDERER_DLOPEN=1 USE_GLX=1 USE_VK=1 USE_RTX=1
+
+      - name: Check glibc baseline
+        run: python3 scripts/check_elf_glibc.py --max-glibc "$FNQL_LINUX_GLIBC_MAX" --require-elf bin
+
+      - name: Verify release layout
+        run: python3 scripts/verify_release_layout.py bin/FnQL-pkg.fnz
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-x86_64
+          path: bin
+          if-no-files-found: error
+          retention-days: 5
+
   # FnQL-game: the clean-room game modules, built from the commit pinned in
   # version/fnql_game.json and gated with their own meson test suite, which
   # includes the engine-abi-parity check against this exact FnQL checkout.
@@ -417,9 +631,116 @@ jobs:
           if-no-files-found: error
           retention-days: 5
 
+  # FnQL-game x86_64 modules (fnql_<slot>x86_64.dll / .so). Retail modules
+  # exist only for x86, so the suite runs the target's own gates (G0 ABI
+  # parity, G2 wire contract, unit tests); the module-hosting gate needs a
+  # retail install and runs outside CI.
+  fnql-game-windows-x86_64:
+    needs: [prepare]
+    name: Build FnQL-game Windows-MSVC x86_64
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: FnQL
+
+      - name: Resolve pinned FnQL-game commit
+        id: pin
+        shell: bash
+        run: python FnQL/scripts/fnql_game.py github-output >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ steps.pin.outputs.repository }}
+          ref: ${{ steps.pin.outputs.commit }}
+          path: FnQL-game
+
+      - name: Install Meson
+        run: python -m pip install meson ninja
+
+      - name: Build and test FnQL-game
+        shell: cmd
+        env:
+          FNQL_HEADLESS: "2"
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 || exit /b
+          meson setup game-build FnQL-game --buildtype=release --prefix "%CD%\game-install" "-Dfnql-root=%CD%\FnQL" || exit /b
+          meson compile -C game-build || exit /b
+          meson test -C game-build --print-errorlogs || exit /b
+          meson install -C game-build --no-rebuild || exit /b
+
+      - name: Stage FnQL-game modules
+        run: python FnQL/scripts/fnql_game.py stage --platform windows --arch x86_64 --install-root game-install --source FnQL-game --output game-stage
+
+      - name: Check FnQL-game runtime dependencies
+        run: python FnQL/scripts/check_windows_runtime_deps.py --require-pe game-stage
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fnql-game-windows-x86_64
+          path: game-stage
+          if-no-files-found: error
+          retention-days: 5
+
+  fnql-game-linux-x86_64:
+    needs: [prepare]
+    name: Build FnQL-game Linux x86_64
+    runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:20.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Ensure apt mirrors resolve
+        run: printf '%s\n' "$FNQL_APT_DNS_FALLBACK" | sh -e
+
+      - name: Install tools
+        run: |
+          apt-get -qq -o Acquire::Retries=3 update
+          apt-get -y install git python3 python3-pip binutils gcc ninja-build
+          python3 -m pip install meson==1.9.1
+
+      - uses: actions/checkout@v6
+        with:
+          path: FnQL
+
+      - name: Resolve pinned FnQL-game commit
+        id: pin
+        run: python3 FnQL/scripts/fnql_game.py github-output >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ steps.pin.outputs.repository }}
+          ref: ${{ steps.pin.outputs.commit }}
+          path: FnQL-game
+
+      - name: Build and test FnQL-game
+        env:
+          FNQL_HEADLESS: "2"
+        run: |
+          git config --global --add safe.directory "$PWD/FnQL-game"
+          meson setup game-build FnQL-game --buildtype=release --prefix "$PWD/game-install" "-Dfnql-root=$PWD/FnQL"
+          meson compile -C game-build
+          meson test -C game-build --print-errorlogs
+          meson install -C game-build --no-rebuild --strip
+
+      - name: Stage FnQL-game modules
+        run: python3 FnQL/scripts/fnql_game.py stage --platform linux --arch x86_64 --install-root game-install --source FnQL-game --output game-stage
+
+      - name: Check FnQL-game glibc baseline
+        run: python3 FnQL/scripts/check_elf_glibc.py --max-glibc "$FNQL_LINUX_GLIBC_MAX" --require-elf game-stage
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fnql-game-linux-x86_64
+          path: game-stage
+          if-no-files-found: error
+          retention-days: 5
+
   push-build-validation:
     if: always()
-    needs: [prepare, windows-msys32, windows-msvc, source-validation, linux-x86-regression, ubuntu-x86, fnql-game-windows, fnql-game-linux]
+    needs: [prepare, windows-msys32, windows-msvc, windows-msys64, windows-msvc-x64, source-validation, linux-x86-regression, ubuntu-x86, linux-x86_64-regression, ubuntu-x86_64, fnql-game-windows, fnql-game-linux, fnql-game-windows-x86_64, fnql-game-linux-x86_64]
     runs-on: ubuntu-latest
     steps:
       - name: Check platform build results
@@ -505,6 +826,36 @@ jobs:
         with:
           name: fnql-game-linux-x86
           path: game-artifacts/linux-x86
+
+      - name: Download MinGW x86_64 artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-mingw-x86_64
+          path: artifacts/windows-mingw-x86_64
+
+      - name: Download MSVC x86_64 artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-msvc-x86_64
+          path: artifacts/windows-msvc-x86_64
+
+      - name: Download Linux x86_64 artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: linux-x86_64
+          path: artifacts/linux-x86_64
+
+      - name: Download FnQL-game Windows x86_64 artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: fnql-game-windows-x86_64
+          path: game-artifacts/windows-x86_64
+
+      - name: Download FnQL-game Linux x86_64 artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: fnql-game-linux-x86_64
+          path: game-artifacts/linux-x86_64
 
       - name: Resolve release version metadata
         run: |

@@ -24,17 +24,29 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define __Q_PLATFORM_H
 
 /*
- * Retail Quake Live's native module and WebUI ABIs require a 32-bit x86
- * engine. Keep this assertion in the central platform header so every engine
- * translation unit independently rejects a mismatched or flag-dropping
- * compiler wrapper. QVM bytecode and preprocessed assembly are not host engine
- * objects and cannot evaluate the C sizeof expression.
+ * FnQL engine targets are enabled one at a time (AGENTS.md Project Plan step
+ * 7). Retail Quake Live's native module and WebUI ABIs require a 32-bit x86
+ * engine, so x86 remains the retail-compatible target. x86_64 is enabled on
+ * Windows and Linux, where FnQL-game supplies source-built modules; it has no
+ * retail Windows modules, Awesomium WebUI or Steam provider, and those paths
+ * fail explicitly there. Keep this assertion in the central platform header
+ * so every engine translation unit independently rejects a mismatched or
+ * flag-dropping compiler wrapper (an x32 ABI, for example). QVM bytecode and
+ * preprocessed assembly are not host engine objects and cannot evaluate the C
+ * sizeof expression.
  */
 #if !defined( Q3_VM ) && !defined( __ASSEMBLER__ )
-#if !defined( _M_IX86 ) && !defined( __i386__ )
-#error "FnQL supports only 32-bit x86 engine targets"
+#if defined( _M_IX86 ) || defined( __i386__ )
+#define FNQL_TARGET_POINTER_BYTES 4
+#define FNQL_RETAIL_NATIVE_TARGET 1
+#elif ( defined( _M_AMD64 ) || defined( __x86_64__ ) ) && !defined( _M_ARM64EC ) \
+	&& ( defined( _WIN32 ) || defined( __linux__ ) )
+#define FNQL_TARGET_POINTER_BYTES 8
+#define FNQL_RETAIL_NATIVE_TARGET 0
+#else
+#error "FnQL supports only 32-bit x86 engine targets and x86_64 on Windows and Linux"
 #endif
-typedef char fnql_pointer_width_must_be_32_bits[( sizeof( void * ) == 4 ) ? 1 : -1];
+typedef char fnql_pointer_width_must_match_target[( sizeof( void * ) == FNQL_TARGET_POINTER_BYTES ) ? 1 : -1];
 #endif
 
 #define QDECL

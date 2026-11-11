@@ -15,15 +15,25 @@ to `.vscode/build-release.ps1` to build its strict dynamic-library target and
 stage only the resulting provider beside FnQL. See
 [`docs/fnql/STEAM_PROVIDER.md`](docs/fnql/STEAM_PROVIDER.md).
 
-FnQL is a **32-bit x86-only project**. Build, test, package, and run Win32 on
-Windows or i686 on Linux; x86_64, ARM, and macOS targets are unsupported.
+FnQL enables targets one at a time (`AGENTS.md`, Project Plan step 7). The
+supported targets are **32-bit x86** (Win32 on Windows, i686 on Linux) and
+**x86_64 on Windows and Linux**. ARM, PowerPC, macOS, the BSDs and x86_64 on
+other platforms are rejected by Meson, Make and the central platform header.
+CMake and the direct Visual Studio projects remain Win32-only.
 
 On Windows, use the **Win32/x86 client for retail Quake Live runtime tests**.
-Retail `bin.pk3` ships `qagamex86.dll`, `cgamex86.dll`, and `uix86.dll`; the x64
-ABI cannot load those x86 modules in-process and is not a FnQL target.
+Retail `bin.pk3` ships `qagamex86.dll`, `cgamex86.dll`, and `uix86.dll`; an x64
+process cannot load those x86 modules, and Awesomium and FnQL's Steam provider
+are 32-bit too. An x86_64 build therefore runs FnQL-game's modules
+(`+set vm_gameProvider fnql`), reports Steam as unavailable, and leaves the
+WebUI off. Its binaries carry FnQ3's suffixes (`fnql.x64.exe`,
+`fnql.ded.x64.exe`, `fnql_glx_x86_64.dll`; Linux Meson `fnql.x86_64`, Linux
+Make `fnql.x64`, `fnql_glx_x86_64.so`), so they can share a folder with the x86
+build.
 
-Official release support is limited to the Windows Win32/x86 retail client and
-Linux i686 dedicated server. macOS is disabled and unsupported.
+Official release support is the Windows Win32/x86 retail client, the Linux
+i686 dedicated server, and the Windows and Linux x86_64 builds with the
+bundled FnQL-game modules. macOS is disabled and unsupported.
 
 All maintained build graphs generate `fnql-web.pak` beside the client. Keep
 that sidecar with the executable when copying a build manually. It contains
@@ -161,8 +171,10 @@ Build with `make ARCH=x86`, then either copy the resulting binaries from the `bu
 
 Linux has two distinct compatibility surfaces:
 
-- Native dedicated servers load the retail `qagamei386.so` from
-  `baseq3/bin.pk3`; FnQL does not build or validate the x86_64 alternative.
+- Native i686 dedicated servers load the retail `qagamei386.so` from
+  `baseq3/bin.pk3`. An x86_64 server loads `fnql_qagamex86_64.so` with
+  `vm_gameProvider fnql`, and otherwise falls back to retail's
+  `qagamex64.so` from the same archive.
 - The same retail archive also contains `qagamex64.so` and the Win32
   `qagamex86.dll`, `cgamex86.dll`, and `uix86.dll`. Native Linux i686 uses
   `qagamei386.so`; `dlopen` cannot load PE32 DLLs, so the Linux server does not
@@ -266,6 +278,22 @@ make install ARCH=x86 COMPILE_ARCH=x86 USE_SDL=0 DESTDIR="$PWD/.tmp/linux-x86/"
 python3 scripts/verify_release_layout.py .tmp/linux-x86/FnQL-pkg.fnz
 file .tmp/linux-x86/fnql .tmp/linux-x86/fnql.ded
 ```
+
+#### x86_64 build
+
+A native x86_64 Linux toolchain needs the same packages without the `:i386`
+suffix and without the multilib compilers:
+
+```sh
+meson subprojects download fontstash
+make -j"$(nproc)" release ARCH=x86_64 COMPILE_ARCH=x86_64 USE_SDL=0 \
+  USE_RENDERER_DLOPEN=1 USE_GLX=1 USE_VK=1 USE_RTX=1
+make install ARCH=x86_64 COMPILE_ARCH=x86_64 USE_SDL=0 DESTDIR="$PWD/.tmp/linux-x86_64/"
+```
+
+Meson needs no cross file for it: `meson setup meson/build-linux-x86_64` with a
+native x86_64 compiler. On Windows, configure Meson from a `vcvars64` (x64
+Native Tools) or MSYS2 MINGW64 shell.
 
 The release packager accepts a `linux-x86` artifact directory, restores
 canonical executable modes after CI artifact transfer, writes a deterministic

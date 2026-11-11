@@ -412,11 +412,16 @@ Expected behavior:
 - published GitHub releases upload archives whose names match the release tag identity
 - a successful manual publish ends by announcing the release on Discord when
   `DISCORD_RELEASE_WEBHOOK` is configured
-- every FnQL build, test, runtime proof, and release artifact is 32-bit x86 on
-  Windows (MSYS2 and MSVC) and Linux;
-  Windows matches the retail cgame/UI/Awesomium ABI, while Linux dedicated
-  servers match retail `qagamei386.so`. 64-bit, ARM, and macOS targets are not
-  built, tested, packaged, or used as validation
+- FnQL builds, tests and packages the enabled targets only: 32-bit x86 on
+  Windows (MSYS2 and MSVC) and Linux, and x86_64 on Windows (MSYS2 MINGW64 and
+  MSVC x64) and Linux. The x86 jobs are unchanged; Windows x86 matches the
+  retail cgame/UI/Awesomium ABI, while Linux i686 dedicated servers match
+  retail `qagamei386.so`. The x86_64 jobs build and test the engine and the
+  pinned FnQL-game modules for that target and package them without a Steam
+  provider. The FnQL-game hosting gate (`smoke_dedicated.py`: a dedicated
+  server loading `fnql_qagamex86_64` with `vm_gameProvider fnql` on a retail
+  map) needs a retail install and runs outside CI. ARM, macOS and the other
+  FnQ3 targets are not built, tested, packaged, or used as validation
 - both Windows packages fetch the provider version pinned in
   `version/fnql_steam_provider.json`, verify its SHA-256 and PE i386 identity,
   and include only `fnql_steam.dll`; provider source and Valve's

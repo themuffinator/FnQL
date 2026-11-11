@@ -142,18 +142,30 @@ endif
 # actually produce output.
 override FNQL_REQUIRE_BUILD_INPUTS := $(FNQL_ENFORCE_X86)
 
+# Targets are enabled one at a time (AGENTS.md Project Plan step 7): 32-bit
+# x86 everywhere, and x86_64 on Linux and MinGW Windows only.
+override FNQL_X86_64_PLATFORMS := linux mingw32 mingw64
 ifeq ($(FNQL_ENFORCE_X86),1)
-  ifneq ($(strip $(ARCH)),x86)
-    $(error FnQL supports only 32-bit x86 targets; set ARCH=x86 and select a 32-bit toolchain (got ARCH=$(ARCH)))
+  ifeq ($(strip $(ARCH)),x86)
+  else ifeq ($(strip $(ARCH)),x86_64)
+    ifeq ($(filter $(PLATFORM),$(FNQL_X86_64_PLATFORMS)),)
+      $(error FnQL supports only 32-bit x86 targets and x86_64 on Windows and Linux; ARCH=x86_64 is not enabled for PLATFORM=$(PLATFORM))
+    endif
+  else
+    $(error FnQL supports only 32-bit x86 targets and x86_64 on Windows and Linux; set ARCH=x86 or ARCH=x86_64 and select a matching toolchain (got ARCH=$(ARCH)))
   endif
 endif
 
 # These flags are appended with GNU Make's override directive after platform
 # setup as well as to recursive compile/link variables. Command-line variable
-# assignments therefore cannot silently turn an x86-labelled build into x64.
+# assignments therefore cannot silently turn an x86-labelled build into x64,
+# or an x86_64-labelled build into x86.
 override FNQL_REQUIRED_ARCH_CFLAGS := -m32
 override FNQL_REQUIRED_ARCH_LDFLAGS := -m32
-ifeq ($(COMPILE_PLATFORM),darwin)
+ifeq ($(strip $(ARCH)),x86_64)
+  override FNQL_REQUIRED_ARCH_CFLAGS := -m64
+  override FNQL_REQUIRED_ARCH_LDFLAGS := -m64
+else ifeq ($(COMPILE_PLATFORM),darwin)
   override FNQL_REQUIRED_ARCH_CFLAGS := -arch i386
   override FNQL_REQUIRED_ARCH_LDFLAGS := -arch i386
 endif

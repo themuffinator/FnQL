@@ -337,7 +337,11 @@ qboolean Huff_Decompress(msg_t *mbuf, int offset) {
 	if ( size < 2 ) {
 		return qfalse;
 	}
-	if ( (size_t)size > ((size_t)-1) / 8U ) {
+	/* The bit count must fit in 32 bits on every target.  This is the limit
+	 * the original size_t overflow check enforced on 32-bit x86; spelling it
+	 * out keeps 64-bit builds rejecting the same oversized messages instead of
+	 * accepting a length the int bit cursor could never address. */
+	if ( (uint32_t)size > 0xFFFFFFFFu / 8U ) {
 		return qfalse;
 	}
 	bitCount = (size_t)size * 8;

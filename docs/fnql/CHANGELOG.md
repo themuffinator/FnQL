@@ -29,7 +29,10 @@ successful release, CI resets `Unreleased` for the next cycle.
 - _None yet._
 
 ### Builds and Packaging
-- _None yet._
+- FnQL now also builds for x86_64 on Windows and Linux, with the FnQL-game
+  modules for that target. The x86_64 build has no retail game modules, Steam
+  or WebUI (all 32-bit only), so it runs FnQL-game; play with the retail
+  modules on the x86 build.
 
 ### Fixes
 - _None yet._

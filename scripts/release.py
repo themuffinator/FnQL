@@ -77,11 +77,48 @@ REQUIRED_RELEASE_ARCHIVE_ENTRIES = [
     *(destination.as_posix() for _source, destination in DEFAULT_DOCS),
 ]
 
+# Release targets.  x86 is the retail-compatible 32-bit target and keeps every
+# check it always had.  x86_64 (Windows and Linux, AGENTS.md Project Plan step
+# 7) has no retail modules, no Awesomium WebUI and no Steam provider build, so
+# its packages carry only x86_64 binaries, no fnql_steam.dll, and FnQL-game as
+# the only game.
+RELEASE_ARCHITECTURES = ("x86", "x86_64")
+RELEASE_ARTIFACT_TARGETS = {
+    "linux-x86": ("linux", "x86"),
+    "windows-mingw-x86": ("windows", "x86"),
+    "windows-msvc-x86": ("windows", "x86"),
+    "linux-x86_64": ("linux", "x86_64"),
+    "windows-mingw-x86_64": ("windows", "x86_64"),
+    "windows-msvc-x86_64": ("windows", "x86_64"),
+}
+PE_AMD64 = 0x8664
+ELF_MACHINE_X86_64 = 62
+STEAM_PROVIDER_NAME = "fnql_steam.dll"
+
+# Linux x86 names (unchanged); x86_64 follows FnQ3's ".x64" executable suffix.
 LINUX_RELEASE_EXECUTABLES = ("fnql", "fnql.ded")
 LINUX_RELEASE_RENDERER_MODULES = (
     "fnql_glx_x86.so",
     "fnql_vk_x86.so",
     "fnql_rtx_x86.so",
+)
+LINUX_X86_64_RELEASE_EXECUTABLES = ("fnql.x64", "fnql.ded.x64")
+LINUX_X86_64_RELEASE_RENDERER_MODULES = (
+    "fnql_glx_x86_64.so",
+    "fnql_vk_x86_64.so",
+    "fnql_rtx_x86_64.so",
+)
+LINUX_RELEASE_FILES = {
+    "x86": (LINUX_RELEASE_EXECUTABLES, LINUX_RELEASE_RENDERER_MODULES),
+    "x86_64": (LINUX_X86_64_RELEASE_EXECUTABLES, LINUX_X86_64_RELEASE_RENDERER_MODULES),
+}
+# Windows x86 packages keep their historical policy (fnql_steam.dll required);
+# x86_64 packages must carry the exact Meson x64 output names instead.
+WINDOWS_X86_64_RELEASE_EXECUTABLES = ("fnql.x64.exe", "fnql.ded.x64.exe")
+WINDOWS_X86_64_RELEASE_RENDERER_MODULES = (
+    "fnql_glx_x86_64.dll",
+    "fnql_vk_x86_64.dll",
+    "fnql_rtx_x86_64.dll",
 )
 MACOS_APP_ROOT = "FnQL.app/Contents"
 MACOS_MINIMUM_VERSION = "11.0"
@@ -94,20 +131,26 @@ MACOS_REQUIRED_UNSIGNED_APP_ENTRIES = (
 MACOS_SIGNATURE_ENTRY = f"{MACOS_APP_ROOT}/_CodeSignature/CodeResources"
 MACOS_REQUIRED_APP_ENTRIES = (*MACOS_REQUIRED_UNSIGNED_APP_ENTRIES, MACOS_SIGNATURE_ENTRY)
 MACOS_PREBUILT_PAYLOAD_NAME = "macos-payload.zip"
-PUBLISHED_RELEASE_ARTIFACTS = frozenset(
-    {"linux-x86", "windows-mingw-x86", "windows-msvc-x86"}
-)
+PUBLISHED_RELEASE_ARTIFACTS = frozenset(RELEASE_ARTIFACT_TARGETS)
 # FnQL-game modules are built in CI from the commit pinned in
-# version/fnql_game.json and staged per platform by scripts/fnql_game.py; the
-# packager lays each platform's set over every package of that platform.
+# version/fnql_game.json and staged per platform and architecture by
+# scripts/fnql_game.py; the packager lays each (platform, arch) set over every
+# package of that target.
 FNQL_GAME_ARTIFACT_DIRS = {
-    "windows": "windows-x86",
-    "linux": "linux-x86",
+    target: fnql_game.artifact_dir_name(*target) for target in fnql_game.TARGETS
 }
+FNQL_GAME_MODULE_PATHS = frozenset(
+    name.casefold() for target in fnql_game.TARGETS for name in fnql_game.module_names(*target)
+)
 FNQL_GAME_NOTICE = (
     ROOT / "docs" / "fnql" / "FNQL_GAME_BINARY_NOTICE.txt",
     Path("docs") / "fnql" / "FNQL_GAME_BINARY_NOTICE.txt",
 )
+# Members a GLx runtime proof binds to, per artifact.  Only artifacts that
+# glx_runtime_sweep.GLX_RELEASE_PROOF_VARIANTS lists are proof-bound; today
+# that is the x86 set, so x86_64 packages are published without GLx proof
+# binding until the sweep defines x86_64 variants.  Their members are listed
+# here so the binding is arch-correct as soon as it does.
 RELEASE_PROOF_RUNTIME_MEMBERS = {
     "windows-mingw-x86": {
         "client": "fnql.exe",
@@ -121,6 +164,23 @@ RELEASE_PROOF_RUNTIME_MEMBERS = {
         "client": "fnql",
         "glxModule": "fnql_glx_x86.so",
     },
+    "windows-mingw-x86_64": {
+        "client": "fnql.x64.exe",
+        "glxModule": "fnql_glx_x86_64.dll",
+    },
+    "windows-msvc-x86_64": {
+        "client": "fnql.x64.exe",
+        "glxModule": "fnql_glx_x86_64.dll",
+    },
+    "linux-x86_64": {
+        "client": "fnql.x64",
+        "glxModule": "fnql_glx_x86_64.so",
+    },
+}
+# executable_bytes_identity() fields each architecture's proof members carry.
+RELEASE_PROOF_IDENTITY = {
+    "x86": {"bits": 32, "machine": "x86"},
+    "x86_64": {"bits": 64, "machine": "x86_64"},
 }
 RELEASE_ZIP_SUFFIX = ".zip"
 RELEASE_TAR_GZ_SUFFIX = ".tar.gz"
@@ -137,6 +197,26 @@ RENDERER_MODULE_RE = re.compile(
 FORBIDDEN_RELEASE_ARCH_RE = re.compile(
     r"(?<![a-z0-9])(?:x86[_-]?64|x64|amd64|arm64|aarch64|mingw64)(?![a-z0-9])",
     re.IGNORECASE,
+)
+# x86_64 packages may name x64/x86_64/amd64, but never a 32-bit x86 marker
+# (x86 not followed by 64, i386-i686, win32, mingw32) or an ARM/PowerPC one.
+FORBIDDEN_RELEASE_ARCH_RE_X86_64 = re.compile(
+    r"(?<![a-z0-9])(?:x86(?![_-]?64)|i[3-6]86|win32|mingw32|arm64ec|arm64|aarch64"
+    r"|armv[0-9]+l?|armhf|armel|arm|ppc64le|ppc64|ppc|powerpc)(?![a-z0-9])",
+    re.IGNORECASE,
+)
+FORBIDDEN_RELEASE_ARCH_MARKERS = {
+    "x86": FORBIDDEN_RELEASE_ARCH_RE,
+    "x86_64": FORBIDDEN_RELEASE_ARCH_RE_X86_64,
+}
+# Artifact/archive names that declare a target: x86_64 is supported; the
+# others are rejected so an unexpected target never inherits a policy.
+X86_64_ARCH_DECLARATION_RE = re.compile(
+    r"(?:^|[^a-z0-9])(?:x86-64|x64|amd64)(?:[^a-z0-9]|$)"
+)
+UNSUPPORTED_ARCH_DECLARATION_RE = re.compile(
+    r"(?:^|[^a-z0-9])(arm64ec|arm64|aarch64|armv[0-9]+l?|armhf|armel|arm|ppc64le|ppc64|ppc"
+    r"|powerpc|riscv64|mips64|mips|ia64|universal2|universal)(?:[^a-z0-9]|$)"
 )
 MACOS_X86_64_CPU = 0x01000007
 MACOS_ARM64_CPU = 0x0100000C
@@ -243,6 +323,41 @@ def macos_artifact_arch(name: str) -> str | None:
     return None
 
 
+def release_arch(name: str) -> str:
+    """Resolve the Windows/Linux target architecture an artifact or archive name declares.
+
+    Published artifact names map through RELEASE_ARTIFACT_TARGETS.  Other names
+    (archive file names, ad hoc stage roots) declare x86_64 with an x86_64,
+    x86-64, x64 or amd64 token; a name without one keeps the historical 32-bit
+    x86 policy.  A name declaring any other architecture is rejected rather
+    than validated under a policy that was not written for it.
+    """
+    known = RELEASE_ARTIFACT_TARGETS.get(name)
+    if known is not None:
+        return known[1]
+    lowered = name.replace("_", "-").casefold()
+    unsupported = UNSUPPORTED_ARCH_DECLARATION_RE.search(lowered)
+    if unsupported:
+        raise ValueError(
+            f"{name} declares unsupported architecture {unsupported.group(1)}; "
+            "FnQL Windows/Linux releases are built for "
+            + " and ".join(RELEASE_ARCHITECTURES)
+            + " only"
+        )
+    if X86_64_ARCH_DECLARATION_RE.search(lowered):
+        return "x86_64"
+    return "x86"
+
+
+def check_release_arch(arch: str) -> str:
+    if arch not in RELEASE_ARCHITECTURES:
+        raise ValueError(
+            f"unsupported release architecture {arch!r}; expected one of "
+            + ", ".join(RELEASE_ARCHITECTURES)
+        )
+    return arch
+
+
 def expected_macos_member_arch(name: str, artifact_arch: str | None) -> str | None:
     if artifact_arch != "universal2":
         return artifact_arch
@@ -303,7 +418,8 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help=(
             "Directory holding the FnQL-game artifacts staged by scripts/fnql_game.py "
-            "(windows-x86/ and linux-x86/). Their modules ship in every matching package."
+            "(windows-x86/, linux-x86/, windows-x86_64/ and linux-x86_64/). Each set "
+            "ships in every package of the matching platform and architecture."
         ),
     )
     parser.add_argument(
@@ -540,15 +656,22 @@ def resolve_game_root(args: argparse.Namespace) -> Path | None:
     return game_root
 
 
-def overlay_fnql_game(stage_root: Path, game_root: Path, platform: str) -> list[str]:
-    """Copy one platform's staged FnQL-game set and its notice into a package stage."""
-    subdir = FNQL_GAME_ARTIFACT_DIRS.get(platform)
+def overlay_fnql_game(
+    stage_root: Path,
+    game_root: Path,
+    platform: str,
+    arch: str = "x86",
+) -> list[str]:
+    """Copy one target's staged FnQL-game set and its notice into a package stage."""
+    subdir = FNQL_GAME_ARTIFACT_DIRS.get((platform, arch))
     if subdir is None:
-        raise ValueError(f"FnQL-game modules are not packaged for {platform} releases")
+        raise ValueError(f"FnQL-game modules are not packaged for {platform} {arch} releases")
     source = game_root / subdir
     if not source.is_dir():
-        raise FileNotFoundError(f"FnQL-game artifact is missing for {platform}: {source}")
-    expected = set(fnql_game.member_names(platform))
+        raise FileNotFoundError(
+            f"FnQL-game artifact is missing for {platform} {arch}: {source}"
+        )
+    expected = set(fnql_game.member_names(platform, arch))
     found = {
         item.relative_to(source).as_posix()
         for item in source.rglob("*")
@@ -561,7 +684,7 @@ def overlay_fnql_game(stage_root: Path, game_root: Path, platform: str) -> list[
         if found - expected:
             details.append("unexpected: " + ", ".join(sorted(found - expected)))
         raise ValueError(
-            f"FnQL-game {platform} artifact is incomplete (" + "; ".join(details) + ")"
+            f"FnQL-game {platform} {arch} artifact is incomplete (" + "; ".join(details) + ")"
         )
     notice_source, notice_destination = FNQL_GAME_NOTICE
     collisions = sorted(
@@ -596,7 +719,12 @@ def build_fnql_webpak(stage_root: Path) -> Path:
 def validate_renderer_module_names(names: list[str]) -> None:
     unsupported = []
     for name in names:
-        match = RENDERER_MODULE_RE.search(name.replace("\\", "/"))
+        normalized = name.replace("\\", "/")
+        # x86_64 FnQL-game modules (fnql_cgamex86_64.so) share the renderer
+        # naming shape; only their exact package paths are exempt.
+        if normalized.casefold() in FNQL_GAME_MODULE_PATHS:
+            continue
+        match = RENDERER_MODULE_RE.search(normalized)
         if match and match.group("renderer").lower() not in PUBLIC_RENDERERS:
             unsupported.append(name)
     if unsupported:
@@ -610,18 +738,25 @@ def validate_release_architecture_names(
     names: list[str],
     *,
     platform: str = "retail",
+    arch: str = "x86",
 ) -> None:
     if platform == "macos":
         return
+    pattern = FORBIDDEN_RELEASE_ARCH_MARKERS[check_release_arch(arch)]
     offenders = [
         name
         for name in names
-        if FORBIDDEN_RELEASE_ARCH_RE.search(name.replace("\\", "/"))
+        if pattern.search(name.replace("\\", "/"))
     ]
     if offenders:
+        if arch == "x86":
+            raise ValueError(
+                "release artifacts are 32-bit x86 only; found a 64-bit architecture marker: "
+                + ", ".join(offenders[:12])
+            )
         raise ValueError(
-            "release artifacts are 32-bit x86 only; found a 64-bit architecture marker: "
-            + ", ".join(offenders[:12])
+            f"{arch} release artifacts must contain only {arch} files; found another "
+            "architecture's marker: " + ", ".join(offenders[:12])
         )
 
 
@@ -697,7 +832,11 @@ def validate_release_binary_stream(
     *,
     platform: str = "retail",
     expected_macos_arch: str | None = None,
+    arch: str = "x86",
 ) -> None:
+    if platform != "macos" and check_release_arch(arch) == "x86_64":
+        validate_x86_64_release_binary_stream(name, handle)
+        return
     header = handle.read(4096)
     if header.startswith(b"MZ") and len(header) >= 64:
         pe_offset = int.from_bytes(header[60:64], "little")
@@ -756,12 +895,81 @@ def validate_release_binary_stream(
             )
 
 
-def validate_windows_distribution_files(names: list[str], *, name: str) -> None:
+def validate_x86_64_release_binary_stream(name: str, handle: object) -> None:
+    """Accept only AMD64 PE and little-endian ELF64 x86-64 binaries; reject Mach-O."""
+    prefix = "x86_64 release artifacts must contain only x86_64 binaries"
+    header = handle.read(4096)
+    if header.startswith(b"MZ") and len(header) >= 64:
+        pe_offset = int.from_bytes(header[60:64], "little")
+        handle.seek(pe_offset)
+        pe_header = handle.read(6)
+        if pe_header.startswith(b"PE\0\0"):
+            machine = int.from_bytes(pe_header[4:6], "little")
+            if machine != PE_AMD64:
+                raise ValueError(f"{prefix}; {name} has PE machine 0x{machine:04x}")
+        return
+
+    if header.startswith(b"\x7fELF") and len(header) >= 20:
+        elf_class = header[4]
+        elf_data = header[5]
+        byte_order = "little" if elf_data == 1 else "big"
+        machine = int.from_bytes(header[18:20], byte_order)
+        if elf_class != 2 or elf_data != 1 or machine != ELF_MACHINE_X86_64:
+            raise ValueError(
+                f"{prefix}; {name} has ELF class {elf_class}, data encoding {elf_data} "
+                f"and machine {machine}"
+            )
+        return
+
+    if is_macho_data(header) or header[:4] in (b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xce"):
+        raise ValueError(f"{prefix}; {name} is a Mach-O binary")
+
+
+def validate_windows_distribution_files(
+    names: list[str],
+    *,
+    name: str,
+    arch: str = "x86",
+) -> None:
     normalized = [entry.replace("\\", "/").casefold() for entry in names]
     if any(Path(entry).name.casefold() == "steam_api.dll" for entry in normalized):
         raise ValueError(f"{name} must not redistribute Valve's steam_api.dll")
+    if check_release_arch(arch) == "x86_64":
+        reject_x86_only_release_files(names, name=name, arch=arch)
+        return
     if any(entry.endswith(".exe") for entry in normalized) and "fnql_steam.dll" not in normalized:
         raise ValueError(f"{name} is a Windows release but is missing fnql_steam.dll")
+
+
+def reject_x86_only_release_files(names: list[str], *, name: str, arch: str) -> None:
+    """Fail when a non-x86 package carries a file that exists only for 32-bit x86.
+
+    The pinned Steam provider (version/fnql_steam_provider.json) is a Win32
+    build, so x86_64 packages must not carry it in any directory.
+    """
+    if check_release_arch(arch) == "x86":
+        return
+    providers = sorted(
+        entry
+        for entry in names
+        if entry.replace("\\", "/").rsplit("/", 1)[-1].casefold() == STEAM_PROVIDER_NAME
+    )
+    if providers:
+        raise ValueError(
+            f"{name} is an {arch} release and must not ship {STEAM_PROVIDER_NAME}; "
+            "the Steam provider exists only for 32-bit x86: " + ", ".join(providers)
+        )
+
+
+def validate_windows_x86_64_distribution_files(names: list[str], *, name: str) -> None:
+    present = {entry.replace("\\", "/") for entry in names}
+    required = (*WINDOWS_X86_64_RELEASE_EXECUTABLES, *WINDOWS_X86_64_RELEASE_RENDERER_MODULES)
+    missing = [entry for entry in required if entry not in present]
+    if missing:
+        raise ValueError(
+            f"{name} is missing required Windows x86_64 executables/modules: "
+            + ", ".join(missing)
+        )
 
 
 def validate_steam_provider_identity(name: str, info: PeInfo | None) -> None:
@@ -790,22 +998,30 @@ def validate_fnql_game_members(
     platform: str,
     archive_name: str,
     pin: dict[str, str] | None = None,
+    arch: str = "x86",
 ) -> None:
-    if platform not in FNQL_GAME_ARTIFACT_DIRS:
+    if (platform, arch) not in FNQL_GAME_ARTIFACT_DIRS:
         raise ValueError(
-            f"{archive_name} is a {platform} release and cannot carry FnQL-game modules"
+            f"{archive_name} is a {platform} {arch} release and cannot carry FnQL-game modules"
         )
     by_name = {member.name: member for member in members}
-    required = [*fnql_game.member_names(platform), FNQL_GAME_NOTICE[1].as_posix()]
+    required = [*fnql_game.member_names(platform, arch), FNQL_GAME_NOTICE[1].as_posix()]
     missing = [name for name in required if name not in by_name]
     if missing:
         raise ValueError(f"{archive_name} is missing FnQL-game files: " + ", ".join(missing))
-    for name in fnql_game.module_names(platform):
-        fnql_game.validate_module(name, by_name[name].data, platform)
+    for name in fnql_game.module_names(platform, arch):
+        fnql_game.validate_module(name, by_name[name].data, platform, arch)
     build_info = by_name[f"{fnql_game.DOCS_DIR}/{fnql_game.BUILD_INFO_NAME}"].data
     commit = fnql_game.build_info_commit(build_info.decode("utf-8", errors="replace"))
     if commit is None:
         raise ValueError(f"{archive_name} has FnQL-game build info without a source commit")
+    built_arch = fnql_game.build_info_arch(build_info.decode("utf-8", errors="replace"))
+    # x86 build info predating the arch dimension has no Architecture line.
+    if built_arch != arch and not (built_arch is None and arch == "x86"):
+        raise ValueError(
+            f"{archive_name} is an {arch} release but bundles FnQL-game build info for "
+            f"{built_arch or 'an unnamed architecture'}"
+        )
     if pin is not None and commit != pin["commit"]:
         raise ValueError(
             f"{archive_name} bundles FnQL-game {commit}, but version/fnql_game.json pins "
@@ -882,8 +1098,16 @@ def release_archive_runtime_identities(
     artifact_name: str,
 ) -> dict[str, object]:
     required_members = RELEASE_PROOF_RUNTIME_MEMBERS.get(artifact_name)
-    if required_members is None or artifact_name not in GLX_RELEASE_PROOF_VARIANTS:
+    target = RELEASE_ARTIFACT_TARGETS.get(artifact_name)
+    if (
+        required_members is None
+        or target is None
+        or artifact_name not in GLX_RELEASE_PROOF_VARIANTS
+    ):
         raise ValueError(f"Unsupported GLx proof artifact variant: {artifact_name}")
+    target_platform, target_arch = target
+    expected_format = "pe" if target_platform == "windows" else "elf"
+    expected_identity = RELEASE_PROOF_IDENTITY[target_arch]
     by_name = {member.name: member for member in read_release_archive(archive_path)}
     identities: dict[str, object] = {
         "archive": archive_path.name,
@@ -896,17 +1120,15 @@ def release_archive_runtime_identities(
                 f"{archive_path.name} is missing proof-bound runtime member {member_name}."
             )
         identity = executable_bytes_identity(member.data)
-        expected_format = (
-            "pe" if GLX_RELEASE_PROOF_VARIANTS[artifact_name] == "windows-x86" else "elf"
-        )
         if (
             identity.get("format") != expected_format
-            or identity.get("bits") != 32
-            or identity.get("machine") != "x86"
+            or identity.get("bits") != expected_identity["bits"]
+            or identity.get("machine") != expected_identity["machine"]
         ):
             raise ValueError(
                 f"{archive_path.name} has invalid proof-bound runtime member {member_name}: "
-                f"expected {expected_format} 32-bit x86."
+                f"expected {expected_format} {expected_identity['bits']}-bit "
+                f"{expected_identity['machine']}."
             )
         identity["member"] = member_name
         identities[identity_name] = identity
@@ -917,12 +1139,14 @@ def validate_linux_distribution_files(
     members: list[ReleaseArchiveMember],
     *,
     archive_name: str,
+    arch: str = "x86",
 ) -> None:
+    executables, renderer_modules = LINUX_RELEASE_FILES[check_release_arch(arch)]
     by_name = {member.name: member for member in members}
-    required_elf_names = set(LINUX_RELEASE_EXECUTABLES)
+    required_elf_names = set(executables)
     missing_executables = [
         name
-        for name in LINUX_RELEASE_EXECUTABLES
+        for name in executables
         if name not in by_name
     ]
     if missing_executables:
@@ -933,7 +1157,7 @@ def validate_linux_distribution_files(
 
     missing_renderers = [
         name
-        for name in LINUX_RELEASE_RENDERER_MODULES
+        for name in renderer_modules
         if name not in by_name
     ]
     if missing_renderers:
@@ -941,7 +1165,7 @@ def validate_linux_distribution_files(
             f"{archive_name} is missing required Linux renderer modules: "
             + ", ".join(missing_renderers)
         )
-    required_elf_names.update(LINUX_RELEASE_RENDERER_MODULES)
+    required_elf_names.update(renderer_modules)
 
     for member in members:
         expected_mode = canonical_release_mode(member.data, linux=True)
@@ -1091,9 +1315,11 @@ def validate_release_archive_contents(
     policy_name = artifact_name or archive_path.name
     platform = release_platform(policy_name, archived_names)
     expected_macos_arch = macos_artifact_arch(policy_name) if platform == "macos" else None
+    arch = "x86" if platform == "macos" else release_arch(policy_name)
     validate_archive_member_names(archived_names, archive_name=archive_path.name)
-    validate_release_architecture_names(archived_names, platform=platform)
+    validate_release_architecture_names(archived_names, platform=platform, arch=arch)
     validate_renderer_module_names(archived_names)
+    reject_x86_only_release_files(archived_names, name=archive_path.name, arch=arch)
     for member in members:
         validate_release_binary_stream(
             member.name,
@@ -1102,6 +1328,7 @@ def validate_release_archive_contents(
             expected_macos_arch=expected_macos_member_arch(
                 member.name, expected_macos_arch
             ),
+            arch=arch,
         )
         pe_info = validate_windows_runtime_dependencies(member.data, name=member.name)
         validate_steam_provider_identity(member.name, pe_info)
@@ -1116,9 +1343,11 @@ def validate_release_archive_contents(
             f"{archive_path.name} is missing required release files: "
             + ", ".join(missing_release_entries)
         )
-    validate_windows_distribution_files(archived_names, name=archive_path.name)
+    validate_windows_distribution_files(archived_names, name=archive_path.name, arch=arch)
+    if platform == "windows" and arch == "x86_64":
+        validate_windows_x86_64_distribution_files(archived_names, name=archive_path.name)
     if platform == "linux":
-        validate_linux_distribution_files(members, archive_name=archive_path.name)
+        validate_linux_distribution_files(members, archive_name=archive_path.name, arch=arch)
     elif platform == "macos":
         validate_macos_distribution_files(
             members,
@@ -1131,6 +1360,7 @@ def validate_release_archive_contents(
             platform=platform,
             archive_name=archive_path.name,
             pin=fnql_game_pin,
+            arch=arch,
         )
     root_archive_bytes = next(
         member.data for member in members if member.name == ROOT_ARCHIVE_NAME
@@ -1162,8 +1392,10 @@ def validate_stage_tree(stage_root: Path, *, artifact_name: str | None = None) -
     policy_name = artifact_name or stage_root.name
     platform = release_platform(policy_name, staged_names)
     expected_macos_arch = macos_artifact_arch(policy_name) if platform == "macos" else None
-    validate_release_architecture_names(staged_names, platform=platform)
+    arch = "x86" if platform == "macos" else release_arch(policy_name)
+    validate_release_architecture_names(staged_names, platform=platform, arch=arch)
     validate_renderer_module_names(staged_names)
+    reject_x86_only_release_files(staged_names, name=stage_root.name, arch=arch)
     for relative_name in staged_names:
         member_data = (stage_root / Path(relative_name)).read_bytes()
         validate_release_binary_stream(
@@ -1173,10 +1405,11 @@ def validate_stage_tree(stage_root: Path, *, artifact_name: str | None = None) -
             expected_macos_arch=expected_macos_member_arch(
                 relative_name, expected_macos_arch
             ),
+            arch=arch,
         )
         pe_info = validate_windows_runtime_dependencies(member_data, name=relative_name)
         validate_steam_provider_identity(relative_name, pe_info)
-    validate_windows_distribution_files(staged_names, name=stage_root.name)
+    validate_windows_distribution_files(staged_names, name=stage_root.name, arch=arch)
 
 
 def release_artifact_dirs(artifact_root: Path) -> list[Path]:
@@ -1209,7 +1442,13 @@ def release_artifact_dirs(artifact_root: Path) -> list[Path]:
                 "macOS artifact names must declare x86_64, arm64/aarch64, or universal2: "
                 + path.name
             )
-        validate_release_architecture_names([path.name], platform=platform)
+        expected_platform, expected_arch = RELEASE_ARTIFACT_TARGETS[path.name]
+        if platform != expected_platform:
+            raise ValueError(
+                f"Release artifact {path.name} resolves to platform {platform}, "
+                f"expected {expected_platform}"
+            )
+        validate_release_architecture_names([path.name], platform=platform, arch=expected_arch)
     return artifact_dirs
 
 
@@ -1461,6 +1700,7 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
     packaged_runtime_identities: dict[str, dict[str, object]] = {}
 
     for artifact_dir in artifact_dirs:
+        target_platform, target_arch = RELEASE_ARTIFACT_TARGETS[artifact_dir.name]
         archive_name = package_archive_name(meta, artifact_dir.name)
         archive_suffix = release_archive_suffix(archive_name)
         archive_path = packages_dir / archive_name
@@ -1477,7 +1717,7 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
             stage_root.mkdir(parents=True, exist_ok=True)
             skipped_files = copy_release_artifact_contents(artifact_dir, stage_root)
             if game_root is not None:
-                overlay_fnql_game(stage_root, game_root, release_platform(artifact_dir.name))
+                overlay_fnql_game(stage_root, game_root, target_platform, target_arch)
             copy_docs(stage_root)
             build_fnql_webpak(stage_root)
             build_root_archive(stage_root)
@@ -1489,7 +1729,9 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
             require_fnql_game=game_root is not None,
             fnql_game_pin=game_pin,
         )
-        if args.glx_proof_root is not None:
+        # GLx runtime proof exists only for the variants glx_runtime_sweep
+        # defines (the x86 set); other packages are not proof-bound.
+        if args.glx_proof_root is not None and artifact_dir.name in GLX_RELEASE_PROOF_VARIANTS:
             packaged_runtime_identities[artifact_dir.name] = release_archive_runtime_identities(
                 archive_path,
                 artifact_dir.name,
@@ -1498,6 +1740,8 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         archives.append(
             {
                 "artifact_dir": artifact_dir.name,
+                "platform": target_platform,
+                "arch": target_arch,
                 "archive": archive_path.name,
                 "format": archive_suffix[1:],
                 "path": archive_path.relative_to(ROOT).as_posix(),
