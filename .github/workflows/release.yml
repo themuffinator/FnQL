@@ -6,6 +6,31 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   FNQL_LINUX_GLIBC_MAX: "2.31"
+  # Linux jobs run this before apt-get. It does nothing while the runner's own
+  # resolver can resolve the Ubuntu archive hosts. If it cannot (the runners
+  # lost archive.ubuntu.com and azure.archive.ubuntu.com on 2026-11-11 while
+  # public resolvers still answered), it points the job's resolv.conf at
+  # public resolvers and fails early if the hosts still do not resolve.
+  FNQL_APT_DNS_FALLBACK: |
+    hosts="archive.ubuntu.com security.ubuntu.com"
+    if [ -f /etc/apt/apt-mirrors.txt ]; then hosts="$hosts azure.archive.ubuntu.com"; fi
+    missing=""
+    for host in $hosts; do
+      getent hosts "$host" >/dev/null || missing="$missing $host"
+    done
+    if [ -z "$missing" ]; then
+      echo "Runner DNS resolves the apt mirrors."
+      exit 0
+    fi
+    echo "::warning::Runner DNS cannot resolve$missing; switching this job to public resolvers."
+    sudo=""
+    if [ "$(id -u)" -ne 0 ]; then sudo=sudo; fi
+    if [ -L /etc/resolv.conf ]; then $sudo rm -f /etc/resolv.conf; fi
+    printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\nnameserver 9.9.9.9\noptions timeout:2 attempts:3\n' | $sudo tee /etc/resolv.conf >/dev/null
+    for host in $missing; do
+      getent hosts "$host" >/dev/null || { echo "::error::$host still does not resolve"; exit 1; }
+    done
+    echo "Public resolvers resolve the apt mirrors."
 
 on:
   push:
@@ -193,10 +218,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Ensure apt mirrors resolve
+        run: printf '%s\n' "$FNQL_APT_DNS_FALLBACK" | sh -e
+
       - name: Install i686 Meson build dependencies
         run: |
           sudo dpkg --add-architecture i386
-          sudo apt-get -qq update
+          sudo apt-get -qq -o Acquire::Retries=3 update
           sudo apt-get install -y \
             file \
             gcc-multilib \
@@ -246,10 +274,13 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
     steps:
+      - name: Ensure apt mirrors resolve
+        run: printf '%s\n' "$FNQL_APT_DNS_FALLBACK" | sh -e
+
       - name: Install tools
         run: |
           dpkg --add-architecture i386
-          apt-get -qq update
+          apt-get -qq -o Acquire::Retries=3 update
           apt-get -y install git make python3 python3-pip binutils gcc-multilib g++-multilib libcurl4-openssl-dev:i386 libjpeg-dev:i386 libogg-dev:i386 libvorbis-dev:i386 mesa-common-dev:i386 libxxf86dga-dev:i386 libxrandr-dev:i386 libxxf86vm-dev:i386 libasound2-dev:i386 libopenal-dev:i386
           python3 -m pip install meson==1.9.1
 
@@ -340,9 +371,12 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
     steps:
+      - name: Ensure apt mirrors resolve
+        run: printf '%s\n' "$FNQL_APT_DNS_FALLBACK" | sh -e
+
       - name: Install tools
         run: |
-          apt-get -qq update
+          apt-get -qq -o Acquire::Retries=3 update
           apt-get -y install git python3 python3-pip binutils gcc-multilib ninja-build
           python3 -m pip install meson==1.9.1
 
