@@ -6,6 +6,7 @@ import io
 import hashlib
 import json
 import plistlib
+import re
 import struct
 import sys
 import tempfile
@@ -27,11 +28,22 @@ from scripts import windows_pe
 from scripts import check_windows_runtime_deps
 
 
-def make_pe(*, dll: bool, imports: tuple[str, ...] = ()) -> bytes:
+PE_AMD64 = 0x8664
+
+
+def make_pe(
+    *,
+    dll: bool,
+    imports: tuple[str, ...] = (),
+    machine: int = windows_pe.PE_I386,
+) -> bytes:
+    """Build a minimal PE image: PE32 for i386 (the default), PE32+ for AMD64."""
+    pe32_plus = machine == PE_AMD64
     binary = bytearray(0x600)
     pe_offset = 0x80
     optional_offset = pe_offset + 24
-    optional_size = 224
+    optional_size = 240 if pe32_plus else 224
+    directory_offset = optional_offset + (112 if pe32_plus else 96)
     section_offset = optional_offset + optional_size
     raw_offset = 0x200
     import_rva = 0x1000 if imports else 0
@@ -44,17 +56,17 @@ def make_pe(*, dll: bool, imports: tuple[str, ...] = ()) -> bytes:
         "<HHIIIHH",
         binary,
         pe_offset + 4,
-        windows_pe.PE_I386,
+        machine,
         1,
         0,
         0,
         0,
         optional_size,
-        0x2102 if dll else 0x0102,
+        (0x2022 if dll else 0x0022) if pe32_plus else (0x2102 if dll else 0x0102),
     )
-    struct.pack_into("<H", binary, optional_offset, 0x10B)
-    struct.pack_into("<I", binary, optional_offset + 92, 16)
-    struct.pack_into("<II", binary, optional_offset + 104, import_rva, import_size)
+    struct.pack_into("<H", binary, optional_offset, 0x20B if pe32_plus else 0x10B)
+    struct.pack_into("<I", binary, directory_offset - 4, 16)
+    struct.pack_into("<II", binary, directory_offset + 8, import_rva, import_size)
     binary[section_offset : section_offset + 8] = b".rdata\0\0"
     struct.pack_into("<IIII", binary, section_offset + 8, 0x400, 0x1000, 0x400, raw_offset)
 
@@ -70,14 +82,24 @@ def make_pe(*, dll: bool, imports: tuple[str, ...] = ()) -> bytes:
 
 
 def make_pe_with_functions(
-    imports: dict[str, tuple[str | int, ...]], *, lookup_table: bool = True
+    imports: dict[str, tuple[str | int, ...]],
+    *,
+    lookup_table: bool = True,
+    machine: int = windows_pe.PE_I386,
 ) -> bytes:
-    """Build an i386 PE whose import descriptors carry thunk tables.
+    """Build a PE (i386 by default, AMD64 PE32+ on request) with import thunk tables.
 
     String entries are imported by name; integers are imported by ordinal.
     With lookup_table=False only FirstThunk is populated, as some linkers emit.
     """
-    binary = bytearray(make_pe(dll=False))
+    pe32_plus = machine == PE_AMD64
+    thunk_format = "<Q" if pe32_plus else "<I"
+    thunk_size = struct.calcsize(thunk_format)
+    ordinal_flag = (
+        windows_pe.IMPORT_ORDINAL_FLAG_64 if pe32_plus else windows_pe.IMPORT_ORDINAL_FLAG_32
+    )
+    import_directory = 0x80 + 24 + (120 if pe32_plus else 104)
+    binary = bytearray(make_pe(dll=False, machine=machine))
     raw_offset = 0x200
     section_rva = 0x1000
 
@@ -88,11 +110,11 @@ def make_pe_with_functions(
     cursor = raw_offset + (len(imports) + 1) * 20
     for dll, functions in imports.items():
         thunk_offset = cursor
-        cursor += (len(functions) + 1) * 4
+        cursor += (len(functions) + 1) * thunk_size
         thunks: list[int] = []
         for function in functions:
             if isinstance(function, int):
-                thunks.append(windows_pe.IMPORT_ORDINAL_FLAG_32 | function)
+                thunks.append(ordinal_flag | function)
                 continue
             encoded = function.encode("ascii") + b"\0"
             thunks.append(rva(cursor))
@@ -100,7 +122,7 @@ def make_pe_with_functions(
             binary[cursor + 2 : cursor + 2 + len(encoded)] = encoded
             cursor += 2 + len(encoded)
         for index, thunk in enumerate(thunks + [0]):
-            struct.pack_into("<I", binary, thunk_offset + index * 4, thunk)
+            struct.pack_into(thunk_format, binary, thunk_offset + index * thunk_size, thunk)
         encoded_dll = dll.encode("ascii") + b"\0"
         dll_rva = rva(cursor)
         binary[cursor : cursor + len(encoded_dll)] = encoded_dll
@@ -117,8 +139,12 @@ def make_pe_with_functions(
         )
         descriptor_offset += 20
     assert cursor <= raw_offset + 0x400, "fixture exceeds its section"
-    struct.pack_into("<II", binary, 0x80 + 24 + 104, section_rva, (len(imports) + 1) * 20)
+    struct.pack_into("<II", binary, import_directory, section_rva, (len(imports) + 1) * 20)
     return bytes(binary)
+
+
+def make_pe_x86_64(*, dll: bool, imports: tuple[str, ...] = ()) -> bytes:
+    return make_pe(dll=dll, imports=imports, machine=PE_AMD64)
 
 
 def make_elf_i386() -> bytes:
@@ -129,6 +155,17 @@ def make_elf_i386() -> bytes:
     binary[6] = 1
     struct.pack_into("<H", binary, 16, 3)
     struct.pack_into("<H", binary, 18, 3)
+    return bytes(binary)
+
+
+def make_elf_x86_64() -> bytes:
+    binary = bytearray(64)
+    binary[0:4] = b"\x7fELF"
+    binary[4] = 2
+    binary[5] = 1
+    binary[6] = 1
+    struct.pack_into("<H", binary, 16, 3)
+    struct.pack_into("<H", binary, 18, 62)
     return bytes(binary)
 
 
@@ -187,16 +224,67 @@ def make_macos_release_members(
     return members
 
 
-def populate_linux_release_stage(stage_root: Path, *, include_server: bool = True) -> None:
-    elf = make_elf_i386()
-    (stage_root / "fnql").write_bytes(elf)
+def populate_linux_release_stage(
+    stage_root: Path,
+    *,
+    include_server: bool = True,
+    arch: str = "x86",
+) -> None:
+    if arch == "x86":
+        elf = make_elf_i386()
+        client, server = "fnql", "fnql.ded"
+        renderer_arch = "x86"
+    else:
+        elf = make_elf_x86_64()
+        client, server = release.LINUX_X86_64_RELEASE_EXECUTABLES
+        renderer_arch = "x86_64"
+    (stage_root / client).write_bytes(elf)
     if include_server:
-        (stage_root / "fnql.ded").write_bytes(elf)
+        (stage_root / server).write_bytes(elf)
     for renderer in release.PUBLIC_RENDERERS:
-        (stage_root / f"fnql_{renderer}_x86.so").write_bytes(elf)
+        (stage_root / f"fnql_{renderer}_{renderer_arch}.so").write_bytes(elf)
     release.copy_docs(stage_root)
     release.build_fnql_webpak(stage_root)
     release.build_root_archive(stage_root)
+
+
+def populate_windows_x86_64_release_stage(stage_root: Path) -> None:
+    """Lay out what the Meson x64 install produces: no fnql_steam.dll."""
+    for name in release.WINDOWS_X86_64_RELEASE_EXECUTABLES:
+        (stage_root / name).write_bytes(make_pe_x86_64(dll=False, imports=("KERNEL32.dll",)))
+    (stage_root / "fnql-audiozonesc.exe").write_bytes(make_pe_x86_64(dll=False))
+    for name in release.WINDOWS_X86_64_RELEASE_RENDERER_MODULES:
+        (stage_root / name).write_bytes(make_pe_x86_64(dll=True))
+    release.copy_docs(stage_root)
+    release.build_fnql_webpak(stage_root)
+    release.build_root_archive(stage_root)
+
+
+def workflow_jobs(workflow: str) -> dict[str, str]:
+    """Split a GitHub workflow into its top-level jobs (two-space-indented keys)."""
+    body = workflow.split("\njobs:\n", 1)[1]
+    jobs: dict[str, str] = {}
+    current: str | None = None
+    lines: list[str] = []
+    for line in body.splitlines(keepends=True):
+        match = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
+        if match:
+            if current is not None:
+                jobs[current] = "".join(lines)
+            current = match.group(1)
+            lines = []
+        elif current is not None:
+            lines.append(line)
+    if current is not None:
+        jobs[current] = "".join(lines)
+    return jobs
+
+
+def job_needs(job: str) -> list[str]:
+    match = re.search(r"^    needs: \[([^\]]*)\]", job, re.MULTILINE)
+    if match is None:
+        raise AssertionError("job has no needs list")
+    return [entry.strip() for entry in match.group(1).split(",") if entry.strip()]
 
 
 def populate_macos_release_stage(stage_root: Path) -> None:
@@ -711,7 +799,7 @@ class ReleasePackagingTests(unittest.TestCase):
                 release.validate_stage_tree(root)
 
     def test_windows_release_rejects_unshipped_runtime_imports(self) -> None:
-        for runtime in ("libgcc_s_dw2-1.dll", "z-1.dll"):
+        for runtime in ("libgcc_s_dw2-1.dll", "libgcc_s_seh-1.dll", "z-1.dll"):
             with self.subTest(runtime=runtime), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 (root / "fnql.exe").write_bytes(
@@ -1122,17 +1210,42 @@ class ReleasePackagingTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("name: windows-mingw-x86", workflow)
-        self.assertIn("name: windows-msvc-x86", workflow)
-        self.assertIn("name: linux-x86", workflow)
-        self.assertIn("ARCH=x86 COMPILE_ARCH=x86", workflow)
+        jobs = workflow_jobs(workflow)
+        x86_windows_jobs = ("windows-msys32", "windows-msvc")
+        x86_64_windows_jobs = ("windows-msys64", "windows-msvc-x64")
+        x86_jobs = (*x86_windows_jobs, "ubuntu-x86")
+        x86_64_jobs = (*x86_64_windows_jobs, "ubuntu-x86_64")
+
+        self.assertIn("name: windows-mingw-x86\n", workflow)
+        self.assertIn("name: windows-msvc-x86\n", workflow)
+        self.assertIn("name: linux-x86\n", workflow)
+        self.assertIn("name: windows-mingw-x86_64\n", workflow)
+        self.assertIn("name: windows-msvc-x86_64\n", workflow)
+        self.assertIn("name: linux-x86_64\n", workflow)
+        self.assertIn("ARCH=x86 COMPILE_ARCH=x86 ", jobs["ubuntu-x86"])
+        self.assertIn("ARCH=x86_64 COMPILE_ARCH=x86_64 ", jobs["ubuntu-x86_64"])
+        for job in (*x86_jobs, *x86_64_jobs):
+            with self.subTest(job=job):
+                self.assertEqual(
+                    jobs[job].count("verify_release_layout.py bin/FnQL-pkg.fnz"), 1
+                )
         self.assertEqual(
             workflow.count("verify_release_layout.py bin/FnQL-pkg.fnz"),
-            3,
+            6,
         )
-        self.assertEqual(workflow.count("--skip-subprojects"), 2)
+        for job in (*x86_windows_jobs, *x86_64_windows_jobs):
+            with self.subTest(job=job):
+                self.assertEqual(jobs[job].count("--skip-subprojects"), 1)
+                self.assertEqual(jobs[job].count("-Dzlib:default_library=static"), 1)
+                self.assertEqual(jobs[job].count("--wrap-mode=forcefallback"), 1)
+        # The pinned Steam provider is a Win32 build: only the x86 Windows
+        # jobs stage it, and the x86_64 jobs never fetch it.
         self.assertEqual(workflow.count("fetch_steam_provider.py --output bin/fnql_steam.dll"), 2)
-        # Both Windows jobs also require the WinMM controller backend, so a
+        for job in x86_windows_jobs:
+            self.assertIn("fetch_steam_provider.py --output bin/fnql_steam.dll", jobs[job])
+        for job in x86_64_jobs:
+            self.assertNotIn("fetch_steam_provider", jobs[job])
+        # Every Windows job also requires the WinMM controller backend, so a
         # build that compiles USE_JOYSTICK out fails before packaging.
         self.assertEqual(
             workflow.count(
@@ -1141,11 +1254,22 @@ class ReleasePackagingTests(unittest.TestCase):
             ),
             2,
         )
-        self.assertIn("-Dc_link_args=-static", workflow)
-        self.assertIn("-Dcpp_link_args=-static", workflow)
-        self.assertEqual(workflow.count("-Dzlib:default_library=static"), 2)
-        self.assertIn("-Db_vscrt=static_from_buildtype", workflow)
-        self.assertEqual(workflow.count("--wrap-mode=forcefallback"), 2)
+        for job in x86_windows_jobs:
+            self.assertIn('--require-import "fnql.exe=winmm.dll!joyGetPosEx" bin', jobs[job])
+        for job in x86_64_windows_jobs:
+            self.assertIn(
+                "check_windows_runtime_deps.py --require-pe "
+                '--require-import "fnql.x64.exe=winmm.dll!joyGetPosEx" bin',
+                jobs[job],
+            )
+        self.assertIn("-Dc_link_args=-static", jobs["windows-msys32"])
+        self.assertIn("-Dcpp_link_args=-static", jobs["windows-msys32"])
+        self.assertIn("-Dc_link_args=-static", jobs["windows-msys64"])
+        self.assertIn("-Dcpp_link_args=-static", jobs["windows-msys64"])
+        self.assertEqual(workflow.count("-Dzlib:default_library=static"), 4)
+        self.assertIn("-Db_vscrt=static_from_buildtype", jobs["windows-msvc"])
+        self.assertIn("-Db_vscrt=static_from_buildtype", jobs["windows-msvc-x64"])
+        self.assertEqual(workflow.count("--wrap-mode=forcefallback"), 4)
         meson = (ROOT / "meson.build").read_text(encoding="utf-8")
         self.assertIn("'zstd=disabled'", meson)
         self.assertIn("'brotli=disabled'", meson)
@@ -1160,11 +1284,24 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertNotIn("sign_macos:", workflow)
         self.assertNotIn("  macos:", workflow)
         self.assertNotIn("  macos-release-sign:", workflow)
-        self.assertIn(
-            "needs: [prepare, windows-msys32, windows-msvc, source-validation, "
-            "linux-x86-regression, ubuntu-x86, fnql-game-windows, fnql-game-linux]",
-            workflow,
-        )
+        validation_needs = job_needs(jobs["push-build-validation"])
+        self.assertEqual(validation_needs[0], "prepare")
+        for job in (
+            "windows-msys32",
+            "windows-msvc",
+            "source-validation",
+            "linux-x86-regression",
+            "ubuntu-x86",
+            "fnql-game-windows",
+            "fnql-game-linux",
+            "windows-msys64",
+            "windows-msvc-x64",
+            "ubuntu-x86_64",
+            "fnql-game-windows-x86_64",
+            "fnql-game-linux-x86_64",
+        ):
+            self.assertIn(job, validation_needs)
+        self.assertEqual(len(validation_needs), len(set(validation_needs)))
         self.assertIn(
             "needs: [prepare, push-build-validation]",
             workflow,
@@ -1275,6 +1412,387 @@ class ReleasePackagingTests(unittest.TestCase):
     def test_release_cli_parser_rejects_negative_build_numbers(self) -> None:
         with self.assertRaisesRegex(Exception, "non-negative"):
             release.non_negative_int("-1")
+
+
+class X86_64ReleasePackagingTests(unittest.TestCase):
+    """x86_64 (Windows and Linux) packages: only x86_64 binaries, no Steam provider."""
+
+    def write_stage(self, root: Path, name: str, populate) -> Path:
+        stage_root = root / name
+        stage_root.mkdir()
+        populate(stage_root)
+        return stage_root
+
+    def test_published_set_maps_every_artifact_to_its_platform_and_arch(self) -> None:
+        self.assertEqual(
+            release.PUBLISHED_RELEASE_ARTIFACTS,
+            {
+                "linux-x86",
+                "windows-mingw-x86",
+                "windows-msvc-x86",
+                "linux-x86_64",
+                "windows-mingw-x86_64",
+                "windows-msvc-x86_64",
+            },
+        )
+        meta = {"archive_prefix": "fnql-0.1.0.7-20261111-aaaaaaaa"}
+        archive_names = set()
+        for name, (platform, arch) in release.RELEASE_ARTIFACT_TARGETS.items():
+            with self.subTest(artifact=name):
+                self.assertEqual(release.release_platform(name), platform)
+                self.assertEqual(release.release_arch(name), arch)
+                archive = release.package_archive_name(meta, name)
+                archive_names.add(archive)
+                self.assertTrue(archive.endswith(f"-{name}" + (".tar.gz" if platform == "linux" else ".zip")))
+                self.assertEqual(release.release_platform(archive), platform)
+                self.assertEqual(release.release_arch(archive), arch)
+                release.validate_release_architecture_names([name], platform=platform, arch=arch)
+        self.assertEqual(len(archive_names), 6)
+
+    def test_arch_resolution_rejects_unsupported_targets(self) -> None:
+        self.assertEqual(release.release_arch("fnql-root.zip"), "x86")
+        self.assertEqual(release.release_arch("fnql-windows-x64.zip"), "x86_64")
+        self.assertEqual(release.release_arch("fnql-linux-amd64.tar.gz"), "x86_64")
+        for name in ("linux-arm64", "windows-aarch64", "fnql-linux-armv7l.tar.gz", "linux-ppc64le"):
+            with self.subTest(name=name), self.assertRaisesRegex(
+                ValueError, "unsupported architecture"
+            ):
+                release.release_arch(name)
+        with self.assertRaisesRegex(ValueError, "unsupported release architecture"):
+            release.validate_release_architecture_names(["fnql"], arch="arm64")
+        with self.assertRaisesRegex(ValueError, "unsupported release architecture"):
+            release.validate_release_binary_stream("fnql", io.BytesIO(make_elf_i386()), arch="arm64")
+
+    def test_artifact_root_requires_the_x86_64_set_too(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("linux-x86", "windows-mingw-x86", "windows-msvc-x86"):
+                (root / name).mkdir()
+            with self.assertRaisesRegex(
+                ValueError,
+                "missing: linux-x86_64, windows-mingw-x86_64, windows-msvc-x86_64",
+            ):
+                release.release_artifact_dirs(root)
+
+            for name in ("linux-x86_64", "windows-mingw-x86_64", "windows-msvc-x86_64"):
+                (root / name).mkdir()
+            (root / "linux-arm64").mkdir()
+            with self.assertRaisesRegex(ValueError, "unsupported: linux-arm64"):
+                release.release_artifact_dirs(root)
+
+    def test_architecture_markers_are_checked_per_target(self) -> None:
+        x86_64_names = [
+            "fnql.x64.exe",
+            "fnql.ded.x64.exe",
+            "fnql.x64",
+            "fnql_glx_x86_64.dll",
+            "fnql_vk_x86_64.so",
+            "baseq3/fnql_qagamex86_64.dll",
+            "baseq3/fnql_uix86_64.so",
+            "fnql-amd64-notes.txt",
+            "docs/fnql/STEAM_PROVIDER_BINARY_NOTICE.txt",
+            "fnql-audiozonesc.exe",
+            release.ROOT_ARCHIVE_NAME,
+            release.FNQL_WEBPAK_NAME,
+        ]
+        release.validate_release_architecture_names(x86_64_names, platform="windows", arch="x86_64")
+        for offender in (
+            "fnql_glx_x86.dll",
+            "fnql.x86.exe",
+            "fnql_vk_i386.so",
+            "fnql-i686.so",
+            "fnql-win32.exe",
+            "mingw32/fnql.exe",
+            "fnql_glx_arm64.dll",
+            "fnql_glx_aarch64.so",
+            "fnql_glx_armv7l.so",
+            "fnql_glx_ppc64le.so",
+        ):
+            with self.subTest(offender=offender), self.assertRaisesRegex(
+                ValueError, "x86_64 release artifacts must contain only x86_64 files"
+            ):
+                release.validate_release_architecture_names(
+                    [*x86_64_names, offender], platform="linux", arch="x86_64"
+                )
+        # The x86 policy is unchanged: 64-bit and ARM markers stay forbidden.
+        for offender in (
+            "fnql.x64.exe",
+            "fnql_glx_x86_64.dll",
+            "fnql_glx_x86-64.so",
+            "fnql-amd64.exe",
+            "fnql_glx_arm64.dll",
+            "fnql_glx_aarch64.so",
+            "mingw64/fnql.exe",
+        ):
+            with self.subTest(x86_offender=offender), self.assertRaisesRegex(
+                ValueError, "32-bit x86 only; found a 64-bit architecture marker"
+            ):
+                release.validate_release_architecture_names([offender], platform="windows")
+        release.validate_release_architecture_names(
+            ["fnql.exe", "fnql_glx_x86.dll", "baseq3/fnql_qagamex86.dll", "fnql_steam.dll"],
+            platform="windows",
+            arch="x86",
+        )
+
+    def test_renderer_gate_exempts_only_the_exact_game_module_paths(self) -> None:
+        release.validate_renderer_module_names(
+            [
+                *release.WINDOWS_X86_64_RELEASE_RENDERER_MODULES,
+                *release.LINUX_X86_64_RELEASE_RENDERER_MODULES,
+                "baseq3/fnql_qagamex86_64.dll",
+                "baseq3/fnql_cgamex86_64.so",
+                "baseq3/fnql_uix86_64.so",
+            ]
+        )
+        for offender in (
+            "fnql_cgamex86_64.so",
+            "missionpack/fnql_uix86_64.dll",
+            "fnql_opengl_x86_64.dll",
+            "baseq3/fnql_opengl_x86_64.so",
+        ):
+            with self.subTest(offender=offender), self.assertRaisesRegex(
+                ValueError, "only glx, vk, and rtx"
+            ):
+                release.validate_renderer_module_names([offender])
+
+    def test_x86_64_binary_gate_accepts_only_x86_64(self) -> None:
+        release.validate_release_binary_stream(
+            "fnql.x64.exe", io.BytesIO(make_pe_x86_64(dll=False)), platform="windows", arch="x86_64"
+        )
+        release.validate_release_binary_stream(
+            "fnql.x64", io.BytesIO(make_elf_x86_64()), platform="linux", arch="x86_64"
+        )
+        big_endian = bytearray(make_elf_x86_64())
+        big_endian[5] = 2
+        arm_pe = bytearray(make_pe_x86_64(dll=True))
+        struct.pack_into("<H", arm_pe, 0x84, 0xAA64)
+        arm_elf = bytearray(make_elf_x86_64())
+        struct.pack_into("<H", arm_elf, 18, 183)
+        for name, binary, detail in (
+            ("fnql.exe", make_pe(dll=False), "PE machine 0x014c"),
+            ("fnql_glx_x86_64.dll", bytes(arm_pe), "PE machine 0xaa64"),
+            ("fnql", make_elf_i386(), "ELF class 1"),
+            ("fnql.x64", bytes(arm_elf), "machine 183"),
+            ("fnql.x64", bytes(big_endian), "data encoding 2"),
+            ("fnql.dylib", make_macho64(release.MACOS_X86_64_CPU), "Mach-O"),
+            ("fnql32.dylib", b"\xce\xfa\xed\xfe" + (7).to_bytes(4, "little") + bytes(56), "Mach-O"),
+        ):
+            with self.subTest(name=name, detail=detail), self.assertRaisesRegex(
+                ValueError, f"x86_64 release artifacts must contain only x86_64 binaries.*{detail}"
+            ):
+                release.validate_release_binary_stream(
+                    name, io.BytesIO(binary), platform="linux", arch="x86_64"
+                )
+        # The x86 gate still rejects the x86_64 binaries the x86_64 gate accepts.
+        with self.assertRaisesRegex(ValueError, "32-bit x86 only.*PE machine 0x8664"):
+            release.validate_release_binary_stream("fnql.x64.exe", io.BytesIO(make_pe_x86_64(dll=False)))
+        with self.assertRaisesRegex(ValueError, "32-bit x86 only.*ELF class 2"):
+            release.validate_release_binary_stream("fnql.x64", io.BytesIO(make_elf_x86_64()))
+
+    def test_linux_x86_64_package_is_accepted_and_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stage_root = self.write_stage(
+                root, "linux-x86_64", lambda path: populate_linux_release_stage(path, arch="x86_64")
+            )
+            release.validate_stage_tree(stage_root, artifact_name="linux-x86_64")
+            archive = root / "fnql-0.1.0.7-linux-x86_64.tar.gz"
+            release.write_release_archive(stage_root, archive)
+
+            release.validate_release_archive_contents(archive)
+            release.validate_release_archive_contents(archive, artifact_name="linux-x86_64")
+            verify_release_layout.verify_release_layout(archive)
+            members = {member.name: member for member in release.read_release_archive(archive)}
+
+            for name in (
+                *release.LINUX_X86_64_RELEASE_EXECUTABLES,
+                *release.LINUX_X86_64_RELEASE_RENDERER_MODULES,
+            ):
+                self.assertEqual(members[name].mode, 0o755)
+            self.assertNotIn("fnql", members)
+            # The same package fails the x86 policy it was not built for.
+            with self.assertRaisesRegex(ValueError, "32-bit x86 only"):
+                release.validate_release_archive_contents(archive, artifact_name="linux-x86")
+
+    def test_linux_x86_64_package_requires_its_own_executable_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stage_root = self.write_stage(
+                root,
+                "stage",
+                lambda path: populate_linux_release_stage(path, arch="x86_64", include_server=False),
+            )
+            archive = root / "fnql-linux-x86_64.tar.gz"
+            release.write_release_archive(stage_root, archive)
+            with self.assertRaisesRegex(ValueError, "missing required Linux executables: fnql.ded.x64"):
+                release.validate_release_archive_contents(archive)
+
+            (stage_root / "fnql.ded.x64").write_bytes(make_elf_x86_64())
+            (stage_root / "fnql_vk_x86_64.so").unlink()
+            release.write_release_archive(stage_root, archive)
+            with self.assertRaisesRegex(
+                ValueError, "missing required Linux renderer modules: fnql_vk_x86_64.so"
+            ):
+                release.validate_release_archive_contents(archive)
+
+    def test_x86_64_packages_reject_i386_binaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            linux = self.write_stage(
+                root, "linux-stage", lambda path: populate_linux_release_stage(path, arch="x86_64")
+            )
+            (linux / "fnql_rtx_x86_64.so").write_bytes(make_elf_i386())
+            with self.assertRaisesRegex(ValueError, "fnql_rtx_x86_64.so has ELF class 1"):
+                release.validate_stage_tree(linux, artifact_name="linux-x86_64")
+            archive = root / "fnql-linux-x86_64.tar.gz"
+            release.write_release_archive(linux, archive)
+            with self.assertRaisesRegex(ValueError, "only x86_64 binaries; fnql_rtx_x86_64.so"):
+                release.validate_release_archive_contents(archive)
+
+            windows = self.write_stage(root, "windows-stage", populate_windows_x86_64_release_stage)
+            (windows / "fnql.ded.x64.exe").write_bytes(make_pe(dll=False))
+            with self.assertRaisesRegex(ValueError, "fnql.ded.x64.exe has PE machine 0x014c"):
+                release.validate_stage_tree(windows, artifact_name="windows-msvc-x86_64")
+
+    def test_windows_x86_64_package_ships_without_the_steam_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stage_root = self.write_stage(root, "stage", populate_windows_x86_64_release_stage)
+            for artifact in ("windows-mingw-x86_64", "windows-msvc-x86_64"):
+                release.validate_stage_tree(stage_root, artifact_name=artifact)
+                archive = root / f"fnql-0.1.0.7-{artifact}.zip"
+                release.write_release_archive(stage_root, archive)
+                release.validate_release_archive_contents(archive)
+                release.validate_release_archive_contents(archive, artifact_name=artifact)
+                verify_release_layout.verify_release_layout(archive)
+            # The x86 policy rejects this package outright, and x86 Windows
+            # packages still require the provider.
+            with self.assertRaisesRegex(ValueError, "64-bit architecture marker"):
+                release.validate_stage_tree(stage_root, artifact_name="windows-msvc-x86")
+            with self.assertRaisesRegex(ValueError, "missing fnql_steam.dll"):
+                release.validate_windows_distribution_files(["fnql.exe"], name="w.zip")
+            with self.assertRaisesRegex(ValueError, "missing fnql_steam.dll"):
+                release.validate_windows_distribution_files(
+                    ["fnql.exe"], name="w.zip", arch="x86"
+                )
+
+    def test_windows_x86_64_package_rejects_the_steam_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for location in ("fnql_steam.dll", "nested/FNQL_STEAM.DLL"):
+                with self.subTest(location=location):
+                    stage_root = root / f"stage-{location.count('/')}"
+                    stage_root.mkdir()
+                    populate_windows_x86_64_release_stage(stage_root)
+                    provider = stage_root / location
+                    provider.parent.mkdir(parents=True, exist_ok=True)
+                    # Even an AMD64 build of the provider must not ship.
+                    provider.write_bytes(make_pe_x86_64(dll=True))
+                    with self.assertRaisesRegex(ValueError, "must not ship fnql_steam.dll"):
+                        release.validate_stage_tree(stage_root, artifact_name="windows-mingw-x86_64")
+                    archive = root / f"fnql-windows-mingw-x86_64-{location.count('/')}.zip"
+                    release.write_release_archive(stage_root, archive)
+                    with self.assertRaisesRegex(ValueError, "must not ship fnql_steam.dll"):
+                        release.validate_release_archive_contents(archive)
+                    with self.assertRaisesRegex(ValueError, "must not ship fnql_steam.dll"):
+                        release.validate_windows_distribution_files(
+                            [location], name="w.zip", arch="x86_64"
+                        )
+
+    def test_windows_x86_64_package_requires_the_x64_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stage_root = self.write_stage(root, "stage", populate_windows_x86_64_release_stage)
+            (stage_root / "fnql_rtx_x86_64.dll").unlink()
+            (stage_root / "fnql.x64.exe").unlink()
+            archive = root / "fnql-windows-msvc-x86_64.zip"
+            release.write_release_archive(stage_root, archive)
+            with self.assertRaisesRegex(
+                ValueError,
+                "missing required Windows x86_64 executables/modules: fnql.x64.exe, "
+                "fnql_rtx_x86_64.dll",
+            ):
+                release.validate_release_archive_contents(archive)
+
+    def test_windows_x86_64_package_rejects_unshipped_runtime_imports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stage_root = self.write_stage(root, "stage", populate_windows_x86_64_release_stage)
+            (stage_root / "fnql.x64.exe").write_bytes(
+                make_pe_x86_64(dll=False, imports=("KERNEL32.dll", "vcruntime140.dll"))
+            )
+            with self.assertRaisesRegex(ValueError, "unshipped Windows runtime DLLs"):
+                release.validate_stage_tree(stage_root, artifact_name="windows-msvc-x86_64")
+
+    def test_x86_64_required_import_gate_reads_pe32_plus_thunks(self) -> None:
+        requirement = check_windows_runtime_deps.parse_required_import(
+            "fnql.x64.exe=winmm.dll!joyGetPosEx"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            client = root / "fnql.x64.exe"
+            client.write_bytes(
+                make_pe_with_functions(
+                    {"KERNEL32.dll": ("GetTickCount",), "WINMM.dll": ("joyGetNumDevs", 7, "joyGetPosEx")},
+                    machine=PE_AMD64,
+                )
+            )
+            self.assertEqual(
+                windows_pe.parse_pe_imported_functions(client.read_bytes(), name="fixture"),
+                {"kernel32.dll": ("GetTickCount",), "winmm.dll": ("joyGetNumDevs", "joyGetPosEx")},
+            )
+            self.assertEqual(windows_pe.parse_pe(client.read_bytes()).machine, PE_AMD64)
+            check_windows_runtime_deps.check_required_imports(root, [client], [requirement])
+
+            client.write_bytes(
+                make_pe_with_functions({"WINMM.dll": ("timeGetTime",)}, machine=PE_AMD64)
+            )
+            with self.assertRaisesRegex(ValueError, "does not import joyGetPosEx"):
+                check_windows_runtime_deps.check_required_imports(root, [client], [requirement])
+            # The x86 file name is not present in an x86_64 build directory.
+            with self.assertRaisesRegex(ValueError, "fnql.exe was not found"):
+                check_windows_runtime_deps.check_required_imports(
+                    root,
+                    [client],
+                    [check_windows_runtime_deps.parse_required_import("fnql.exe=winmm.dll!joyGetPosEx")],
+                )
+
+    def test_glx_proof_binding_stays_on_the_x86_variants(self) -> None:
+        for variant, proof_platform in release.GLX_RELEASE_PROOF_VARIANTS.items():
+            with self.subTest(variant=variant):
+                platform, arch = release.RELEASE_ARTIFACT_TARGETS[variant]
+                self.assertEqual(arch, "x86")
+                self.assertEqual(proof_platform, f"{platform}-x86")
+                self.assertIn(variant, release.RELEASE_PROOF_RUNTIME_MEMBERS)
+        self.assertEqual(
+            set(release.RELEASE_PROOF_RUNTIME_MEMBERS), set(release.PUBLISHED_RELEASE_ARTIFACTS)
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stage_root = self.write_stage(
+                root, "stage", lambda path: populate_linux_release_stage(path, arch="x86_64")
+            )
+            archive = root / "fnql-linux-x86_64.tar.gz"
+            release.write_release_archive(stage_root, archive)
+            with self.assertRaisesRegex(ValueError, "Unsupported GLx proof artifact variant"):
+                release.release_archive_runtime_identities(archive, "linux-x86_64")
+
+            # Once the sweep defines an x86_64 variant, the binding checks 64-bit members.
+            with mock.patch.dict(
+                release.GLX_RELEASE_PROOF_VARIANTS, {"linux-x86_64": "linux-x86_64"}
+            ):
+                identities = release.release_archive_runtime_identities(archive, "linux-x86_64")
+                self.assertEqual(identities["client"]["member"], "fnql.x64")
+                self.assertEqual(identities["client"]["bits"], 64)
+                self.assertEqual(identities["glxModule"]["member"], "fnql_glx_x86_64.so")
+                self.assertEqual(identities["glxModule"]["machine"], "x86_64")
+
+            # An x86 variant whose proof members are 64-bit is still rejected.
+            (stage_root / "fnql").write_bytes(make_elf_x86_64())
+            (stage_root / "fnql_glx_x86.so").write_bytes(make_elf_x86_64())
+            release.write_release_archive(stage_root, archive)
+            with self.assertRaisesRegex(ValueError, "expected elf 32-bit x86"):
+                release.release_archive_runtime_identities(archive, "linux-x86")
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ IMAGE_FILE_DLL = 0x2000
 FORBIDDEN_WINDOWS_RUNTIME_DLLS = frozenset(
     {
         "libgcc_s_dw2-1.dll",
+        "libgcc_s_seh-1.dll",
         "libstdc++-6.dll",
         "libwinpthread-1.dll",
         "libz-1.dll",

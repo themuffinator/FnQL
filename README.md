@@ -136,7 +136,10 @@ reconstruct them.
 FnQL discovers conventional Steam
 libraries on each supported OS; for a custom library use
 `+set fs_steampath "<Quake Live folder>"`. Optional Steam and WebUI services
-fail safely when unavailable. FnQL builds are 32-bit x86 only; use the
+fail safely when unavailable. FnQL builds for 32-bit x86 and, on Windows
+and Linux, x86_64. Use the x86 build to play with the retail modules, Steam
+and the WebUI; the x86_64 build has none of those and runs the bundled
+FnQL-game modules (`+set vm_gameProvider fnql`). See the
 [Build Guide](BUILD.md) for supported Windows and Linux instructions.
 
 ### FnQL-game modules

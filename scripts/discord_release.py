@@ -53,8 +53,18 @@ ARTIFACT_LABELS = {
     "windows-msvc-x86": "Windows x86 (MSVC)",
     "windows-mingw-x86": "Windows x86 (MinGW)",
     "linux-x86": "Linux x86",
+    "windows-msvc-x86_64": "Windows x86_64 (MSVC)",
+    "windows-mingw-x86_64": "Windows x86_64 (MinGW)",
+    "linux-x86_64": "Linux x86_64",
 }
-ARTIFACT_ORDER = ("windows-msvc-x86", "windows-mingw-x86", "linux-x86")
+ARTIFACT_ORDER = (
+    "windows-msvc-x86",
+    "windows-mingw-x86",
+    "linux-x86",
+    "windows-msvc-x86_64",
+    "windows-mingw-x86_64",
+    "linux-x86_64",
+)
 
 
 def positive_int(value: str) -> int:

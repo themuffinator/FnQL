@@ -57,6 +57,11 @@ if darwin
   add_languages('objc')
 endif
 cpu_family = host_machine.cpu_family()
+# Targets are enabled one at a time (AGENTS.md Project Plan step 7). 32-bit
+# x86 is the retail-compatible target on every platform; x86_64 is enabled on
+# Windows and Linux only, where FnQL-game supplies the game modules. The
+# compiler probe catches a wrapper whose real target disagrees with the
+# configured CPU family (a dropped -m32, or an x32 ABI).
 fnql_x86_target_probe = '''
 #if !defined(_M_IX86) && !defined(__i386__)
 #error FnQL requires an x86 target
@@ -64,9 +69,23 @@ fnql_x86_target_probe = '''
 typedef char fnql_pointer_width_must_be_32_bits[(sizeof(void *) == 4) ? 1 : -1];
 int main(void) { return 0; }
 '''
-fnql_target_is_32bit_x86 = cc.compiles(fnql_x86_target_probe, name: '32-bit x86 target')
-if cpu_family != 'x86' or not fnql_target_is_32bit_x86
-  error('FnQL supports only 32-bit x86 targets; Meson configured host CPU family "' + cpu_family + '" or the compiler target probe failed. Select Win32 on Windows or use an i686 cross file on other platforms.')
+fnql_x86_64_target_probe = '''
+#if !defined(_M_AMD64) && !defined(__x86_64__)
+#error FnQL requires an x86_64 target
+#endif
+typedef char fnql_pointer_width_must_be_64_bits[(sizeof(void *) == 8) ? 1 : -1];
+int main(void) { return 0; }
+'''
+fnql_x86_64_systems = ['windows', 'linux']
+if cpu_family == 'x86'
+  fnql_target_supported = cc.compiles(fnql_x86_target_probe, name: '32-bit x86 target')
+elif cpu_family == 'x86_64' and fnql_x86_64_systems.contains(host_machine.system())
+  fnql_target_supported = cc.compiles(fnql_x86_64_target_probe, name: 'x86_64 target')
+else
+  fnql_target_supported = false
+endif
+if not fnql_target_supported
+  error('FnQL supports only 32-bit x86 targets and x86_64 on Windows and Linux; Meson configured host CPU family "' + cpu_family + '" on "' + host_machine.system() + '" or the compiler target probe failed. Select Win32 or x64 on Windows, or use an i686 cross file or a native x86_64 compiler on Linux.')
 endif
 
 renderer_prefix = 'fnql'
@@ -88,8 +107,15 @@ elif not renderer_dlopen
   enabled_renderers = [renderer_default]
 endif
 
-renderer_arch = 'x86'
-binary_suffix = ''
+# Output names follow the FnQ3 baseline: x86 keeps the retail-shaped unsuffixed
+# names, and x86_64 binaries carry FnQ3's suffix so both can share a directory.
+if cpu_family == 'x86'
+  renderer_arch = 'x86'
+  binary_suffix = ''
+else
+  renderer_arch = 'x86_64'
+  binary_suffix = win32 ? '.x64' : '.x86_64'
+endif
 
 client_binary_name = 'fnql' + binary_suffix
 server_binary_name = 'fnql.ded' + binary_suffix

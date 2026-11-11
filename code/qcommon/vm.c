@@ -261,8 +261,14 @@ void VM_Debug( int level ) {
 }
 #endif
 
+/*
+ * VM_Call forwards qboolean arguments as int varargs but reads every slot as
+ * intptr_t. On 64-bit ABIs the upper half of an int vararg slot is not
+ * defined, so only the low 32 bits carry the value; on x86 the cast is an
+ * identity.
+ */
 static qboolean VM_NormalizeQbooleanArg( intptr_t value ) {
-	return value ? qtrue : qfalse;
+	return (int)value ? qtrue : qfalse;
 }
 
 static intptr_t VM_NormalizeQbooleanResult( qboolean value ) {
@@ -2136,6 +2142,9 @@ static void * QDECL VM_LoadDll( vmIndex_t index, const char *name,
 		if ( libHandle ) {
 			Com_Printf( "VM_LoadDll: using retail Linux x64 module name '%s'\n",
 				filename );
+			// report the file actually loaded (vminfo, provider diagnostics)
+			Q_strncpyz( vmTable[ index ].moduleFile, filename,
+				sizeof( vmTable[ index ].moduleFile ) );
 		}
 	}
 #endif

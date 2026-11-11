@@ -1996,6 +1996,14 @@ void CL_ShutdownUI( void ) {
 	FS_VM_CloseFiles( H_Q3UI );
 }
 
+#if FNQL_RETAIL_NATIVE_TARGET
+#define CL_UI_CREATE_FAILURE "VM_Create on UI failed; retail Quake Live on Windows requires the Win32 FnQL build"
+#else
+/* Retail ships its UI only as a 32-bit Windows DLL, and FnQL cannot select
+ * FnQL-game's UI yet, so an x86_64 client has no UI module to run. */
+#define CL_UI_CREATE_FAILURE "VM_Create on UI failed; retail Quake Live's UI is 32-bit x86 only and " \
+	"this " ARCH_STRING " build cannot host FnQL-game's UI yet. Use the x86 FnQL build to play"
+#endif
 
 /*
 ====================
@@ -2035,10 +2043,10 @@ void CL_InitUI( void ) {
 			FS_PureServerSetLoadedPaks( "", "" );
 			uivm = VM_CreateNative( VM_UI, CL_UISystemCalls, UI_DllSyscall, interpret, ql_ui_imports, UI_QL_API_VERSION );
 			if ( !uivm ) {
-				Com_Error( ERR_FATAL, "VM_Create on UI failed; retail Quake Live on Windows requires the Win32 FnQL build" );
+				Com_Error( ERR_FATAL, CL_UI_CREATE_FAILURE );
 			}
 		} else {
-			Com_Error( ERR_FATAL, "VM_Create on UI failed; retail Quake Live on Windows requires the Win32 FnQL build" );
+			Com_Error( ERR_FATAL, CL_UI_CREATE_FAILURE );
 		}
 	}
 

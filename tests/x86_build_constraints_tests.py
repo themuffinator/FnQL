@@ -16,18 +16,33 @@ def read(relative: str) -> str:
 
 
 class X86BuildConstraintTests(unittest.TestCase):
-    def test_meson_rejects_every_non_x86_target_before_naming_outputs(self) -> None:
+    def test_meson_enables_only_x86_and_windows_linux_x86_64_before_naming_outputs(self) -> None:
         meson = read("meson.build")
 
-        guard = meson.index("if cpu_family != 'x86'")
+        guard = meson.index("if not fnql_target_supported")
         output_names = meson.index("client_binary_name =")
         self.assertLess(guard, output_names)
-        self.assertIn("cc.compiles(fnql_x86_target_probe", meson[:guard])
-        self.assertIn("sizeof(void *) == 4", meson[:guard])
-        self.assertIn("FnQL supports only 32-bit x86 targets", meson[guard:output_names])
-        self.assertIn("renderer_arch = 'x86'", meson[guard:output_names])
-        self.assertIn("binary_suffix = ''", meson[guard:output_names])
-        self.assertNotIn("elif cpu_family", meson[guard:output_names])
+        prelude = meson[:guard]
+        self.assertIn("cc.compiles(fnql_x86_target_probe", prelude)
+        self.assertIn("cc.compiles(fnql_x86_64_target_probe", prelude)
+        self.assertIn("sizeof(void *) == 4", prelude)
+        self.assertIn("sizeof(void *) == 8", prelude)
+        self.assertIn("fnql_x86_64_systems = ['windows', 'linux']", prelude)
+        self.assertIn(
+            "elif cpu_family == 'x86_64' and fnql_x86_64_systems.contains(host_machine.system())",
+            prelude,
+        )
+        self.assertIn("fnql_target_supported = false", prelude)
+        naming = meson[guard:output_names]
+        self.assertIn(
+            "FnQL supports only 32-bit x86 targets and x86_64 on Windows and Linux", naming
+        )
+        # x86 keeps the retail-shaped unsuffixed names; x86_64 takes FnQ3's.
+        self.assertIn("renderer_arch = 'x86'\n  binary_suffix = ''", naming)
+        self.assertIn("renderer_arch = 'x86_64'", naming)
+        self.assertIn("binary_suffix = win32 ? '.x64' : '.x86_64'", naming)
+        for other in ("aarch64", "arm", "ppc64"):
+            self.assertNotIn(f"cpu_family == '{other}'", prelude)
 
     def test_cmake_compiler_probe_rejects_non_x86_or_non_32_bit_targets(self) -> None:
         cmake = read("CMakeLists.txt")
@@ -119,7 +134,11 @@ class X86BuildConstraintTests(unittest.TestCase):
         self.assertIn("override FNQL_ARCH_SENSITIVE_GOALS :=", makefile)
         self.assertIn("override FNQL_ENFORCE_X86 := 1", makefile)
         self.assertIn("ifeq ($(FNQL_ENFORCE_X86),1)", makefile)
-        self.assertIn("FnQL supports only 32-bit x86 targets", makefile)
+        self.assertIn(
+            "FnQL supports only 32-bit x86 targets and x86_64 on Windows and Linux", makefile
+        )
+        self.assertIn("override FNQL_X86_64_PLATFORMS := linux mingw32 mingw64", makefile)
+        self.assertIn("override FNQL_REQUIRED_ARCH_CFLAGS := -m64", makefile)
         self.assertIn("MAKECMDGOALS is managed by GNU Make", makefile)
         for variable in (
             "BASE_CFLAGS",
@@ -149,23 +168,46 @@ class X86BuildConstraintTests(unittest.TestCase):
         )
         self.assertEqual(cleanup.returncode, 0, cleanup.stdout)
 
-        build = subprocess.run(
-            [
-                make,
-                "-n",
-                "release",
-                "ARCH=x86_64",
-                "FNQL_ENFORCE_X86=",
-                empty_build,
-            ],
-            cwd=ROOT,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
-        self.assertNotEqual(build.returncode, 0, build.stdout)
-        self.assertIn("FnQL supports only 32-bit x86 targets", build.stdout)
+        policy_error = "FnQL supports only 32-bit x86 targets and x86_64 on Windows and Linux"
+        for rejected_args in (
+            ["ARCH=aarch64"],
+            ["ARCH=ppc64le"],
+            ["ARCH=x86_64", "PLATFORM=darwin"],
+            ["ARCH=x86_64", "PLATFORM=freebsd"],
+        ):
+            build = subprocess.run(
+                [make, "-n", "release", *rejected_args, "FNQL_ENFORCE_X86=", empty_build],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+            with self.subTest(args=rejected_args):
+                self.assertNotEqual(build.returncode, 0, build.stdout)
+                self.assertIn(policy_error, build.stdout)
+
+        # Enabled x86_64 platforms pass the architecture policy. They may still
+        # stop later for a missing toolchain or subproject on this host.
+        for accepted_platform in ("linux", "mingw64"):
+            accepted = subprocess.run(
+                [
+                    make,
+                    "-n",
+                    "fnql-arch-policy-probe",
+                    "ARCH=x86_64",
+                    f"PLATFORM={accepted_platform}",
+                    empty_build,
+                    "--eval=fnql-arch-policy-probe: ; @:",
+                ],
+                cwd=ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+            with self.subTest(platform=accepted_platform):
+                self.assertNotIn(policy_error, accepted.stdout)
 
         disguised = subprocess.run(
             [
@@ -254,52 +296,64 @@ class X86BuildConstraintTests(unittest.TestCase):
         required_flag = "-arch i386" if "-arch i386" in probe_line else "-m32"
         self.assertGreaterEqual(probe_line.count(required_flag), 5, probe_line)
 
-    def test_central_platform_header_rejects_a_native_64_bit_compiler(self) -> None:
+    def test_central_platform_header_enables_only_supported_targets(self) -> None:
         platform = read("code/qcommon/q_platform.h")
 
-        self.assertIn("!defined( _M_IX86 ) && !defined( __i386__ )", platform)
-        self.assertIn("sizeof( void * ) == 4", platform)
-        self.assertIn("FnQL supports only 32-bit x86 engine targets", platform)
-        compiler = shutil.which("clang") or shutil.which("gcc")
-        if compiler is None:
-            self.skipTest("a native C compiler is unavailable")
+        self.assertIn("defined( _M_IX86 ) || defined( __i386__ )", platform)
+        self.assertIn("( defined( _WIN32 ) || defined( __linux__ ) )", platform)
+        self.assertIn("sizeof( void * ) == FNQL_TARGET_POINTER_BYTES", platform)
+        self.assertIn("#define FNQL_RETAIL_NATIVE_TARGET 1", platform)
+        self.assertIn("#define FNQL_RETAIL_NATIVE_TARGET 0", platform)
+        guard_error = "FnQL supports only 32-bit x86 engine targets and x86_64 on Windows and Linux"
+        self.assertIn(guard_error, platform)
 
-        with tempfile.TemporaryDirectory(prefix="fnql-x86-guard-") as temp:
-            target_probe = Path(temp) / "target_probe.c"
-            target_probe.write_text(
-                "#if defined(_M_IX86) || defined(__i386__)\n"
-                "#error selected compiler targets 32-bit x86\n"
-                "#endif\n"
-                "typedef char fnql_test_requires_64_bit_pointer"
-                "[(sizeof(void *) == 8) ? 1 : -1];\n"
-            )
-            probed = subprocess.run(
-                [compiler, "-fsyntax-only", str(target_probe)],
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                check=False,
-            )
-            if probed.returncode != 0:
-                self.skipTest("selected compiler does not target a 64-bit ABI")
+        clang = shutil.which("clang")
+        if clang is None and (candidate := Path(r"C:\Program Files\LLVM\bin\clang.exe")).is_file():
+            clang = str(candidate)
+        if clang is None:
+            self.skipTest("clang is unavailable for cross-target header probes")
 
+        # clang targets any architecture for a syntax-only pass. Later system
+        # header lookups may fail on a foreign host, so the probes look only
+        # for the guard diagnostics.
+        pointer_error = "fnql_pointer_width_must_match_target"
+        cases = (
+            ("i686-pc-windows-msvc", None),
+            ("i686-linux-gnu", None),
+            ("x86_64-pc-windows-msvc", None),
+            ("x86_64-linux-gnu", None),
+            ("x86_64-linux-gnux32", pointer_error),
+            ("x86_64-apple-darwin", guard_error),
+            ("x86_64-unknown-freebsd", guard_error),
+            ("aarch64-linux-gnu", guard_error),
+            ("aarch64-pc-windows-msvc", guard_error),
+            ("powerpc64le-linux-gnu", guard_error),
+        )
+        with tempfile.TemporaryDirectory(prefix="fnql-target-guard-") as temp:
             source = Path(temp) / "guard_probe.c"
             source.write_text('#include "q_platform.h"\nint main(void) { return 0; }\n')
-            compiled = subprocess.run(
-                [
-                    compiler,
-                    "-fsyntax-only",
-                    "-I",
-                    str(ROOT / "code/qcommon"),
-                    str(source),
-                ],
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                check=False,
-            )
-        self.assertNotEqual(compiled.returncode, 0, compiled.stdout)
-        self.assertIn("FnQL supports only 32-bit x86 engine targets", compiled.stdout)
+            for target, expected in cases:
+                probed = subprocess.run(
+                    [
+                        clang,
+                        f"--target={target}",
+                        "-fsyntax-only",
+                        "-I",
+                        str(ROOT / "code/qcommon"),
+                        str(source),
+                    ],
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    check=False,
+                )
+                with self.subTest(target=target):
+                    if expected is None:
+                        self.assertNotIn(guard_error, probed.stdout)
+                        self.assertNotIn(pointer_error, probed.stdout)
+                    else:
+                        self.assertNotEqual(probed.returncode, 0, probed.stdout)
+                        self.assertIn(expected, probed.stdout)
 
     def test_visual_studio_direct_targets_reject_unsupported_platforms(self) -> None:
         if os.name != "nt":
@@ -372,7 +426,7 @@ class X86BuildConstraintTests(unittest.TestCase):
             "native x86_64/arm64 CI",
         ):
             self.assertNotIn(stale_claim, roadmap)
-        self.assertIn("x86-only configuration gates", roadmap)
+        self.assertIn("per-target configuration gates", roadmap)
         self.assertIn("macOS is not a current FnQL build or runtime target", roadmap)
 
 

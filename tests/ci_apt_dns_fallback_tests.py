@@ -5,7 +5,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
-APT_JOBS = ("linux-x86-regression", "ubuntu-x86", "fnql-game-linux")
+APT_JOBS = (
+    "linux-x86-regression",
+    "ubuntu-x86",
+    "fnql-game-linux",
+    "linux-x86_64-regression",
+    "ubuntu-x86_64",
+    "fnql-game-linux-x86_64",
+)
 FALLBACK_STEP = "printf '%s\\n' \"$FNQL_APT_DNS_FALLBACK\" | sh -e"
 
 

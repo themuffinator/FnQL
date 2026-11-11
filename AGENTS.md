@@ -37,13 +37,16 @@ Every change should protect these project constraints:
    Quake Live evidence requires intentionally replacing incompatible behavior,
    document the evidence, scope the change narrowly, and add a regression gate
    for both the corrected behavior and unaffected paths.
-9. FnQL is currently a 32-bit-only project. Build, test, package, and launch
-   only x86 artifacts (Win32 on Windows and the corresponding 32-bit target
-   elsewhere). Do not use x86_64 or other non-x86 artifacts as validation and
-   do not ship them. This is the current state, not the end goal: Project Plan
-   step 7 lifts it one target at a time, and a target counts as supported only
-   once that step's gates pass for it. Retail-module compatibility remains
-   x86-only regardless.
+9. FnQL supports the targets Project Plan step 7 has enabled, and no others:
+   32-bit x86 (Win32 on Windows, i686 on Linux) and x86_64 on Windows and
+   Linux (enabled 2026-11-11). Build, test, package, and launch only those
+   artifacts, and validate each target with its own artifacts; do not use one
+   target's artifacts as evidence for another, or any other architecture or
+   platform as validation. Each further target is enabled only once that
+   step's gates pass for it. Retail-module compatibility remains x86-only
+   regardless: on x86_64 there are no retail Windows modules, no Awesomium
+   WebUI and no Steam provider, and FnQL-game is the game (Linux x86_64 can
+   also host retail's `qagamex64.so`).
 
 ## Reference Repositories
 

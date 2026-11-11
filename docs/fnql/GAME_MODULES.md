@@ -16,7 +16,7 @@ A *provider* is whoever supplies a native module for a VM slot.
 | Provider | Files (Win32) | Selected by |
 |---|---|---|
 | retail | `qagamex86.dll`, `cgamex86.dll`, `uix86.dll` from the filesystem (retail `bin.pk3` or loose `baseq3`) | default |
-| fnql | `fnql_qagamex86.dll` (Linux: `fnql_qagamei386.so`) | `vm_gameProvider fnql` |
+| fnql | `fnql_qagamex86.dll` (Linux: `fnql_qagamei386.so`; x86_64: `fnql_qagamex86_64.dll` / `.so`) | `vm_gameProvider fnql` |
 
 FnQL-game modules carry the `fnql_` prefix (`FNQL_GAME_MODULE_PREFIX`) so a
 search path holding both sets can never shadow a retail module by accident.
@@ -166,8 +166,11 @@ out-of-band `print` packets.
 
 FnQL releases bundle the FnQL-game modules built from the commit pinned in
 `version/fnql_game.json`: `baseq3/fnql_qagamex86.dll`, `fnql_cgamex86.dll`
-and `fnql_uix86.dll` in the Windows packages, and the `i386.so` set in the
-Linux package. Extracting a package into the Quake Live folder puts them in
+and `fnql_uix86.dll` in the Windows x86 packages, the `i386.so` set in the
+Linux i686 package, and the `x86_64.dll` / `x86_64.so` sets in the x86_64
+packages. On x86_64 there are no retail Windows modules, so FnQL-game is the
+game there (a Linux x86_64 server can also fall back to retail's
+`qagamex64.so`). Extracting a package into the Quake Live folder puts them in
 `<Quake Live>/baseq3`, which is on the search path, so `vm_gameProvider fnql`
 finds the qagame without further setup. Nothing else changes: the default
 provider stays `retail`, and the cgame and UI modules are inert until

@@ -40,9 +40,17 @@ namespace {
 
 constexpr uint32_t kQuakeLiveAppId = 282440u;
 
-#if defined(_WIN32)
+#if defined(_WIN32) && FNQL_RETAIL_NATIVE_TARGET
 constexpr const char *kDefaultProviderName = "fnql_steam.dll";
 constexpr const char *kSteamApiName = "steam_api.dll";
+using LibraryHandle = HMODULE;
+#elif defined(_WIN32)
+/* Steamworks names its 64-bit Windows library steam_api64.dll.  Retail Quake
+ * Live ships only the 32-bit steam_api.dll and FnQL's pinned provider is a
+ * 32-bit DLL, so a 64-bit build looks for 64-bit names and never tries to
+ * load a 32-bit library that shares its directory. */
+constexpr const char *kDefaultProviderName = "fnql_steam64.dll";
+constexpr const char *kSteamApiName = "steam_api64.dll";
 using LibraryHandle = HMODULE;
 #elif defined(__APPLE__)
 constexpr const char *kDefaultProviderName = "libfnql_steam.dylib";
@@ -783,9 +791,21 @@ SteamSession StartSteamProvider(uint32_t roles, const cvar_t *enabled,
 		state.library = OpenLibrary(state.providerPath);
 	}
 	if (!state.library) {
+#if FNQL_RETAIL_NATIVE_TARGET
 		EnterNonSteamFallback("unavailable", "none", "none",
 			va("Steam provider library was not found or could not be loaded: %s",
 				state.providerPath));
+#else
+		/* FnQL publishes its Steam provider only as a 32-bit Windows DLL, so a
+		 * 64-bit build has none.  Say so rather than implying a broken install:
+		 * this build runs without Steam session tickets, and servers that
+		 * require Steam authentication will refuse it. */
+		EnterNonSteamFallback("unavailable", "none", "none",
+			va("Steam provider library was not found or could not be loaded: %s "
+				"(FnQL's Steam provider is published only for 32-bit Windows; this "
+				ARCH_STRING " build has no Steam session).",
+				state.providerPath));
+#endif
 		return SteamSession::Resolved;
 	}
 
