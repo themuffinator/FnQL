@@ -238,6 +238,18 @@ class FnqlGamePackagingTests(unittest.TestCase):
                 release.resolve_game_root(args)
 
 
+class FnqlGameContainerPythonTests(unittest.TestCase):
+    def test_stage_helper_runs_on_the_release_container_python(self) -> None:
+        # fnql-game-linux runs these with Ubuntu 20.04's Python 3.8.
+        import ast
+
+        for name in ("fnql_game.py", "windows_pe.py", "check_elf_glibc.py"):
+            with self.subTest(script=name):
+                source = (ROOT / "scripts" / name).read_text(encoding="utf-8")
+                ast.parse(source, feature_version=(3, 8))
+                self.assertNotRegex(source, r"write_text\([^)]*newline=")
+
+
 class FnqlGameWorkflowTests(unittest.TestCase):
     def test_release_workflow_builds_gates_and_packages_the_pinned_game(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
