@@ -482,12 +482,15 @@ def copy_release_artifact_contents(source: Path, target: Path) -> list[str]:
     target.mkdir(parents=True, exist_ok=True)
     skipped: list[str] = []
 
-    for item in sorted(source.rglob("*")):
+    # Walk the resolved root so every entry shares its spelling. MSYS2's
+    # Python joins iterdir() results with "\\" but rglob() children with "/",
+    # so relative_to() against the unresolved root can fail for a real child.
+    for item in sorted(resolved_source.rglob("*")):
         if item.is_symlink():
             raise ValueError(f"Release artifact contains unsupported symbolic link: {item}")
         if not path_is_relative_to(item.resolve(), resolved_source):
             raise ValueError(f"Release artifact entry escapes source root: {item}")
-        relative = item.relative_to(source)
+        relative = item.relative_to(resolved_source)
         if should_skip_artifact_path(relative, is_dir=item.is_dir()):
             skipped.append(relative.as_posix())
             if item.is_dir():
@@ -672,9 +675,10 @@ def overlay_fnql_game(
             f"FnQL-game artifact is missing for {platform} {arch}: {source}"
         )
     expected = set(fnql_game.member_names(platform, arch))
+    resolved_source = source.resolve()  # one spelling for root and children (MSYS2)
     found = {
-        item.relative_to(source).as_posix()
-        for item in source.rglob("*")
+        item.relative_to(resolved_source).as_posix()
+        for item in resolved_source.rglob("*")
         if item.is_file() or item.is_symlink()
     }
     if found != expected:
