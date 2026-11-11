@@ -957,7 +957,7 @@ void SV_SendClientSnapshot( client_t *client ) {
 		return;
 	}
 
-	MSG_Init( &msg, msg_buf.data(), MAX_MSGLEN );
+	MSG_Init( &msg, msg_buf.data(), SV_ClientMessageLimit( client ) );
 	msg.allowoverflow = qtrue;
 
 	// NOTE, MRE: all server->client messages now acknowledge

@@ -17,6 +17,10 @@ static_assert( QuakeLive.Has( Capability::WorkshopContent ) );
 static_assert( QuakeLive.Has( Capability::RetailClientsMayJoin ) );
 static_assert( QuakeLive.limits.downloadWindow == 8 );
 static_assert( QuakeLive.limits.downloadBlockBytes == 2048 );
+// Retail's 0x8000-byte message limit; legacy peers keep Quake III's 16384.
+static_assert( QuakeLive.limits.messageBytes == 32768 );
+static_assert( LegacyQuake3.limits.messageBytes == 16384 );
+static_assert( Ioquake3.limits.messageBytes == 16384 );
 
 static_assert( !LegacyQuake3.Has( Capability::WorkshopContent ) );
 static_assert( Ioquake3.Has( Capability::SequenceChecksum ) );

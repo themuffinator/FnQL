@@ -80,6 +80,28 @@ that were only reported by the survey, not re-read, are marked *reported*.
 | No `lobby.error` on a failed join | `{code, id, message}` (`0x464de6`) | Published with one generic message |
 | Browser writes forced cheat-protected cvars | `SetCvar`/`ResetCvar` skip flag `0x200` (`0x432b2b`) | Skipped |
 
+### Join path, both directions (second pass)
+
+A second pass the same day compared the connection path itself: how FnQL's
+server treats a connecting retail client, and how FnQL's client behaves
+against a retail server. Both netfield tables (58 entity fields, 58 player
+fields) were also read out of the retail binary and match FnQL's in name,
+order and bit width.
+
+| Gap | Retail evidence | FnQL now |
+| --- | --- | --- |
+| Listen servers never answered `getchallenge` | Quake III's single-player test (gametype 2, or `ui_singlePlayerActive`) is absent from retail's handler (`0x4df430`). In Quake Live gametype 2 is Race, and `map` sets `ui_singlePlayerActive` on every listen server | The test applies only to classic modules. A match hosted from the client can now be joined |
+| Message limit was 16,384 bytes | Retail's gamestate, snapshot and fragment buffers are `0x8000` and only longer messages are refused (`0x4d7505`, `0x4d7858`, `0x4e5b0d`) | 32,768 for protocol 91 in both directions; a legacy Quake III client is still sent at most 16,384 |
+| A repeated `connect` stalled the join | Retail keeps the ticket with the challenge and re-accepts (`0x4e0b53`-`0x4e0c97`) | A resend with the same challenge for a slot still in `CS_CONNECTED` gets `connectResponse` again; the slot and its consumed ticket are left alone |
+| Client asked retail servers for paks | Retail has no in-band download; its client warns and continues (`0x4bc392`-`0x4bc3c8`) and its server has no `download` command | On protocol 91, when the server does not advertise `sv_allowDownload`, FnQL prints retail's warning and continues. FnQL servers advertise the key and keep the download path |
+| Loading clients were sent every broadcast | Only commands beginning `chat ` reach a `CS_PRIMED` client (`0x4e42a2`-`0x4e430f`) | Same filter for protocol-91 clients, which stops a long load on a busy server ending in a command overflow |
+| Steam rules went stale | Every serverinfo pair is republished when serverinfo changes (`0x4e4b32` -> `0x465a60`) | Republished from the same place |
+| `status` layout | Fixed columns with state, last message, qport and SteamID (`0x4dec60`) | Retail's table for Quake Live modules; classic modules keep the Quake III one |
+| Shutdown message | `print "<msg>"` then a bare `disconnect` (`0x4e3f15`) | Same for protocol-91 clients |
+| Pure failure wording | `Unpure client detected. Invalid .PK3 files referenced!` | Same |
+| Packet pacing while downloading | Keyed on the pending Workshop download (`0x4b5e7e`) | Workshop downloads count as downloading |
+| Rail color defaults, `teamtask` | `color1` "7" and `color2` "25", each bounded to `[1, 26]`; `teamtask` "0" in userinfo (`0x4bcb44`, `0x4bcb62`) | Same defaults and bounds; `teamtask` registered |
+
 ## Deliberate differences
 
 - **Retail post-process pipeline.** `r_enablePostProcess`, `r_enableBloom`,
@@ -109,6 +131,21 @@ that were only reported by the survey, not re-read, are marked *reported*.
 - **Supersets.** The retail server answers only `getchallenge`, `connect` and
   `disconnect` out of band. FnQL's `getinfo`, `getstatus`, `rcon`, download
   commands and legacy master heartbeats stay.
+- **No-Steam challenge.** Retail answers a `getchallenge` without a ticket
+  with `print\nNo Steam auth token.\n` (`0x4df5af`). FnQL issues a challenge,
+  because its no-Steam lane is a supported fallback, and refuses at `connect`
+  only when a provider is present.
+- **Server defaults kept from FnQ3.** `sv_floodProtect` stays a boolean with
+  FnQL's burst limiter, where retail counts commands in a leaky bucket and
+  drops the client past `sv_floodProtect` ("10") with "Flooding the server"
+  (`0x4e020c`). `sv_timeout` stays 200 where retail uses 40 (`0x4e3d3a`), and
+  `sv_maxclientsPerIP` (3) has no retail counterpart. All three are pinned by
+  `server_cvar_compat_source_tests.py` as retained extensions.
+- **Client extras a retail server can see but ignores.** The userinfo carries
+  `snaps`, `team_model`, `team_headmodel`, `cl_guid` and, in the connect
+  packet, `client`; retail sends none of them. `com_maxfps` allows more than
+  retail's 30 to 250, so more usercmds per second can arrive. FnQL's own
+  servers use `snaps`, `cl_guid` and `client`.
 
 ## Open gaps
 
@@ -116,64 +153,114 @@ Ordered by how much a player or operator would notice. None is plugged yet.
 
 ### Would be noticed
 
-1. **Listen-server achievements.** With `sv_serverType 0` retail stores
-   achievements through the local user's stats interface (`0x467ee9`). FnQL
-   requires a game-server ticket session, which the loopback client never
-   has, so offline and listen-server achievements are not stored. *Reported.*
-2. **`vid_restart fast`.** Retail re-modes in place and calls cgame export
-   `EVENT_HANDLING(4)` and UI export 10 (`0x4bb7e0`); FnQL reloads both
-   modules. Costs a reload and cgame state on every fast restart. *Reported.*
-3. **View listener.** The Awesomium adapter wires no view callbacks, so
-   tooltips (`0x434450`), cursor changes (`0x431670`) and JavaScript console
-   output under `web_console` (`0x434520`) never arrive. *Reported.*
-4. **Synchronous `FileExists`.** Retail answers at once; FnQL answers from a
-   cache and then asks, so the first call for a match's screenshot or demo is
-   always false and the page caches it. *Reported.*
-5. **`asset://ql/screenshot/<file>`.** Retail serves the screenshots folder to
-   the page (`0x434620`); FnQL does not, so match screenshot previews are
-   missing. *Reported.*
-6. **Steam rich presence and history.** `game.start` in retail also sets the
-   `status` and `lanIp` rich-presence keys and adds the server to Steam's
-   history (`0x4f38f0`). FnQL only publishes the event. *Reported.*
-7. **Steam rules and heartbeats.** Retail republishes the serverinfo rules
-   whenever serverinfo changes (`0x4e4b3e`) and ties Steam heartbeats to
-   `sv_master` (`0x4e32f7`). FnQL publishes rules on start and on Steam
-   connect, and the provider always heartbeats. *Reported.*
-8. **`status` layout.** Retail prints `map:` and a table with state, last
-   message, qport and SteamID columns (`0x4dec60`). Tools that parse retail
-   rcon output will not parse FnQL's. *Reported.*
+- **Listen-server achievements.** With `sv_serverType 0` retail stores
+  achievements through the local user's stats interface (`0x467ee9`). FnQL
+  requires a game-server ticket session, which the loopback client never
+  has, so offline and listen-server achievements are not stored. *Reported.*
+- **`vid_restart fast`.** Retail re-modes in place and calls cgame export
+  `EVENT_HANDLING(4)` and UI export 10 (`0x4bb7e0`); FnQL reloads both
+  modules. Costs a reload and cgame state on every fast restart. *Reported.*
+- **View listener.** The Awesomium adapter wires no view callbacks, so
+  tooltips (`0x434450`), cursor changes (`0x431670`) and JavaScript console
+  output under `web_console` (`0x434520`) never arrive. *Reported.*
+- **Synchronous `FileExists`.** Retail answers at once; FnQL answers from a
+  cache and then asks, so the first call for a match's screenshot or demo is
+  always false and the page caches it. *Reported.*
+- **`asset://ql/screenshot/<file>`.** Retail serves the screenshots folder to
+  the page (`0x434620`); FnQL does not, so match screenshot previews are
+  missing. *Reported.*
+- **Steam rich presence and history.** `game.start` in retail also sets the
+  `status` and `lanIp` rich-presence keys and adds the server to Steam's
+  history (`0x4f38f0`). FnQL only publishes the event. *Reported.*
+- **Steam heartbeats.** Retail calls `EnableHeartbeats( sv_master == 1 )`
+  when the server starts and `EnableHeartbeats( 0 )` at shutdown
+  (`0x465db0`, called from `0x4e32f7`, `0x4e3aac`, `0x4e402b`), so
+  `sv_master 0` keeps a server off Steam's list. The provider ABI has no
+  heartbeat switch and always advertises; this needs a provider capability.
+
+### Join path leftovers
+
+None of these stops a join. All are *reported* by the second pass and were
+not re-read unless an address is given as verified above.
+
+- **Steam auth failure handling.** Retail drops with
+  `Failed to authenticate with Steam: <reason>` from a nine-entry table
+  (`0x465ceb`, `0x560e28`), ignores one response code, and has no timeout.
+  FnQL says "Platform authentication failed" and drops after ten seconds
+  without an answer. The reason needs a provider field.
+- **Connect-time wording.** A bad challenge is "Incorrect challenge, please
+  reconnect." where retail says `No or bad challenge for address.`; the
+  reconnect limit prints "Reconnecting, please wait" where retail is silent;
+  the protocol mismatch text adds the client's version. Retail's own strings
+  are stored obfuscated in a table at `0x564a68`.
+- **Challenge lifetime.** Retail keeps one challenge per address in 1,024
+  slots and re-sends it while the address is unconnected; FnQL's stateless
+  challenge expires after 16 to 32 seconds.
+- **Snapshot pacing.** Retail sends a non-active client at most one message a
+  second, never reads `snaps`, and clamps `rate` to 4,000-50,000 (`0x4e5a60`,
+  `0x4df369`). FnQL sends loading and zombie clients at `sv_fps`, honours
+  `snaps`, and leaves `rate` unclamped.
+- **Slot choice.** Retail takes the first free slot; FnQL the least recently
+  used, so client numbers differ after churn.
+- **P2P greeting.** Retail sends a reliable `hello` on Steam channel 16 right
+  after starting the auth session (`0x467d2b`); FnQL first contacts the client
+  with its keepalive once it is active, so voice may start later.
+- **Name buffer.** Retail holds 40 bytes for a client name, FnQL 32, so drop
+  and kick notices truncate a long name sooner.
+- **`cp` order.** Retail runs its download step before the filesystem restart
+  and sends `cp` again after a restart, so a fresh join sends two; it also
+  sends `cp` when `sv_pure` is 0. FnQL sends one, and none when `sv_pure` is
+  0. The 2026-07-17 live join passed with FnQL's order.
+- **Local refusals.** Retail refuses locally with "Base game files differ from
+  server." when `pak00` or `bin` is not in the server's pak list, and with
+  "cannot connect to server with unpure binaries". FnQL connects and is
+  dropped as unpure instead.
+- **Client message flag byte.** Its low five bits are, in retail, a count of
+  depth-hacked entities drawn; FnQL sends a leaf count from three renderers
+  and zero from GLx. The server code inside the retail client discards it.
+- **Entity parse ring.** FnQL keeps 8,192 parsed entities where retail keeps
+  2,048, so it accepts deltas retail would discard.
 
 ### Smaller
 
-9. `find <substring>` console search with `con_matchlimit` (`0x4b3630`), and
-   `con_noprint`.
-10. `ListInputDevices` for raw input (`0x4eab90`).
-11. User scripts: retail runs every `js/*.js` from the game filesystem once the
-    page is ready (`0x4317f0`). *Reported.*
-12. `GetDemoList` is bounded to a 4096-byte document; retail's is unbounded.
-    *Reported.*
-13. Mouse 4 and 5 as browser back and forward (`0x4f34f7`). *Reported.*
-14. Lobby join errors use one message; retail picks one of ten by Steam's
-    enter response (table `0x55fb30`), which the provider event does not carry.
-15. cgame `EVENT_HANDLING(5)` when the browser hides (`0x4f255b`). *Reported.*
-16. `winkey_disable`: a low-level keyboard hook that swallows the Windows keys
-    (`0x4ec580`). Nothing in the retail data sets it.
-17. UI imports 5, 97 and 98 have retail shapes (`Cvar_RegisterRange`,
-    `IsClientMuted`, `ToggleClientMute`) that differ from FnQL's. The retail
-    UI never calls them; FnQL-game's UI must be checked before they move.
-    *Reported.*
-18. Small `web_*` differences: `web_showBrowser` without an argument resets the
-    route, `web_showError` does not show the browser, `web_reload` does not
-    clear the cache first, `IsGameRunning` is false while connecting.
-    *Reported.*
-19. The client keeps newlines in a stored out-of-band `print` message; retail
-    zeroes them (`0x4bc0c9`). *Reported.*
+- `find <substring>` console search with `con_matchlimit` (`0x4b3630`), and
+  `con_noprint`.
+- `ListInputDevices` for raw input (`0x4eab90`).
+- User scripts: retail runs every `js/*.js` from the game filesystem once the
+  page is ready (`0x4317f0`). *Reported.*
+- `GetDemoList` is bounded to a 4096-byte document; retail's is unbounded.
+  *Reported.*
+- Mouse 4 and 5 as browser back and forward (`0x4f34f7`). *Reported.*
+- Lobby join errors use one message; retail picks one of ten by Steam's
+  enter response (table `0x55fb30`), which the provider event does not carry.
+- cgame `EVENT_HANDLING(5)` when the browser hides (`0x4f255b`). *Reported.*
+- `winkey_disable`: a low-level keyboard hook that swallows the Windows keys
+  (`0x4ec580`). Nothing in the retail data sets it.
+- UI imports 5, 97 and 98 have retail shapes (`Cvar_RegisterRange`,
+  `IsClientMuted`, `ToggleClientMute`) that differ from FnQL's. The retail
+  UI never calls them; FnQL-game's UI must be checked before they move.
+  *Reported.*
+- Small `web_*` differences: `web_showBrowser` without an argument resets the
+  route, `web_showError` does not show the browser, `web_reload` does not
+  clear the cache first. `IsGameRunning` is false while connecting and during
+  cinematics, where retail's is true whenever the client is not disconnected
+  (`0x43292b`).
+- The client keeps newlines in a stored out-of-band `print` message; retail
+  zeroes them (`0x4bc0c9`). *Reported.*
 
 ### Needs a decision rather than code
 
-20. On a server with no Steam provider, the SteamID query trusts the
-    `steamid`/`steam` userinfo keys. Retail never reads them. With in-band
-    admin `rcon` this is a spoofable identity on a Steam-less server. *Reported.*
+- On a server with no Steam provider, the SteamID query trusts the
+  `steamid`/`steam` userinfo keys. Retail never reads them. With in-band
+  admin `rcon` this is a spoofable identity on a Steam-less server. *Reported.*
+- Whether to send a retail server only retail's userinfo keys (see "Client
+  extras" above). It would hide the fingerprint, at the cost of dropping keys
+  FnQL's own servers use unless the two can be told apart before `connect`.
+- A `%` in a reliable command. Retail's client turns it into `.` when it
+  reads the string back and then hashes that copy for the usercmd key, while
+  the server hashes the raw text (`0x4d5075`, `0x4b618f`, `0x4e03e1`), so
+  retail garbles its own usercmds after such a command. FnQL hashes the raw
+  text and does not. *Reported.*
 
 ### Not behavior
 
@@ -191,15 +278,20 @@ effect worth owning. `g_levelStartTime` is also set by the engine at spawn
   cover the new policies.
 - MSVC Win32 builds of `meson/build/win32` (SDL) and `meson/build-x86-nosdl`
   (native backend) completed without warnings.
-- `python -m pytest`: 1,277 passed, 25 environment skips. Meson: 81 passed,
-  one retail-probe skip.
+- `python -m pytest`: 1,287 passed, 25 environment skips. Meson: 81 passed,
+  one retail-probe skip. (After the first pass: 1,277.)
 - Headless runtime probes against the retail installation passed: the qagame
   provider probe, the headless launch tests, the retail factory probe, the
   retail cgame module probe on a default (offline) listen server, and the
   synthetic cgame ABI probe.
 
 Not run: FnQL-game's lockstep differential suite, a live retail client joining
-an FnQL server, and a Steam server-browser check of the new identity strings.
+an FnQL server, an FnQL client joining a live retail server after these
+changes, and a Steam server-browser check of the new identity strings. The
+join-path fixes are therefore verified by source gates, the unit tests and the
+loopback runtime probes, not by a networked session: on the development
+machine a networked client cannot obtain a Steam ticket, and an FnQL server
+with a Steam identity rightly refuses it.
 The lockstep recordings will change where a scenario uses `ragequit`, console
 `say` or a bot SteamID; both modules run on the same engine, so they move
 together.

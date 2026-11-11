@@ -1328,8 +1328,14 @@ static bool CL_ReadyToSendPacket( void ) {
 		return false;
 	}
 
+	// Retail keys this pacing on its pending Steam Workshop download
+	// (quakelive_steam.exe 0x4b5e7e-0x4b5eb5), which is its only download; the
+	// in-band download keeps the same rule here.
+	const bool downloading = *clc.downloadTempName != '\0'
+		|| CL_WorkshopDownloadsActive() != qfalse;
+
 	// If we are downloading, we send no less than 50ms between packets
-	if ( *clc.downloadTempName && cls.realtime - clc.lastPacketSentTime < 50 ) {
+	if ( downloading && cls.realtime - clc.lastPacketSentTime < 50 ) {
 		return false;
 	}
 
@@ -1337,7 +1343,7 @@ static bool CL_ReadyToSendPacket( void ) {
 	// one packet a second
 	if ( cls.state != CA_ACTIVE &&
 		cls.state != CA_PRIMED &&
-		!*clc.downloadTempName &&
+		!downloading &&
 		cls.realtime - clc.lastPacketSentTime < 1000 ) {
 		return false;
 	}

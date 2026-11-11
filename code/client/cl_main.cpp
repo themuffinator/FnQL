@@ -3163,7 +3163,24 @@ and determine if we need to download them
 */
 static void CL_InitLegacyDownloads( void ) {
 
-	if ( !(cl_allowDownload->integer & DLF_ENABLE) )
+	// Retail Quake Live has no in-band download: its server command table has
+	// no `download`, and its client only warns about missing paks and carries
+	// on (quakelive_steam.exe 0x4bc392-0x4bc3c8). A protocol-91 server that
+	// does not advertise sv_allowDownload is such a server, so asking it for a
+	// pak would leave this client waiting for blocks that never come. An FnQL
+	// server advertises the key and keeps the download path below.
+	if ( clc.netchan.wireProfile == NETCHAN_WIRE_QL_RETAIL && !clc.demoplaying
+		&& !( clc.sv_allowDownload & DLF_ENABLE ) )
+	{
+		std::array<char, MAXPRINTMSG> missingfiles;
+
+		if ( FS_ComparePaks( missingfiles.data(), static_cast<int>( missingfiles.size() ), qfalse ) )
+		{
+			Com_Printf( "WARNING: Missing pk3s referenced by the server:\n%s\n"
+				"The server will most likely refuse the connection.\n", missingfiles.data() );
+		}
+	}
+	else if ( !(cl_allowDownload->integer & DLF_ENABLE) )
 	{
 		std::array<char, MAXPRINTMSG> missingfiles;
 
@@ -5637,10 +5654,16 @@ void CL_Init( void ) {
 	Cvar_Get ("team_headmodel", "sarge", CVAR_USERINFO | CVAR_ARCHIVE_ND );
 //	Cvar_Get ("g_redTeam", "Stroggs", CVAR_SERVERINFO | CVAR_ARCHIVE);
 //	Cvar_Get ("g_blueTeam", "Pagans", CVAR_SERVERINFO | CVAR_ARCHIVE);
-	Cvar_Get ("color1", "4", CVAR_USERINFO | CVAR_ARCHIVE );
-	Cvar_Get ("color2", "5", CVAR_USERINFO | CVAR_ARCHIVE );
+	// Retail registers the two rail colors as "7" and "25", each bounded to
+	// [1, 26] with flags 0x81803 (quakelive_steam.exe 0x4bcb44, 0x4bcb62), and
+	// teamtask "0" as a userinfo key. Quake III's 4 and 5 gave a new FnQL
+	// player different rail colors from a new retail player.
+	Cvar_CheckRange( Cvar_Get( "color1", "7", CVAR_USERINFO | CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_CLOUD ),
+		"1", "26", CV_INTEGER );
+	Cvar_CheckRange( Cvar_Get( "color2", "25", CVAR_USERINFO | CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_CLOUD ),
+		"1", "26", CV_INTEGER );
 	Cvar_Get ("handicap", "100", CVAR_USERINFO | CVAR_ARCHIVE_ND );
-//	Cvar_Get ("teamtask", "0", CVAR_USERINFO );
+	Cvar_Get( "teamtask", "0", CVAR_USERINFO );
 	Cvar_Get ("sex", "male", CVAR_USERINFO | CVAR_ARCHIVE_ND );
 	Cvar_Get ("cl_anonymous", "0", CVAR_USERINFO | CVAR_ARCHIVE_ND );
 

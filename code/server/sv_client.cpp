@@ -200,11 +200,9 @@ void SV_GetChallenge( const netadr_t *from, const msg_t *msg ) {
 	int		clientChallenge;
 
 	// ignore if we are in single player
-#ifndef DEDICATED
-	if ( Cvar_VariableIntegerValue( "g_gametype" ) == GT_SINGLE_PLAYER || Cvar_VariableIntegerValue("ui_singlePlayerActive")) {
+	if ( SV_SinglePlayerIgnoresRemote() ) {
 		return;
 	}
-#endif
 
 	// Prevent using getchallenge as an amplifier
 	if ( SVC_RateLimitAddress( from, 10, 1000 ) ) {
@@ -744,6 +742,21 @@ static void SV_WriteBaselineMessage( msg_t &msg, const entityState_t &nullstate,
 }
 
 
+/*
+==================
+SV_ClientMessageLimit
+
+Largest message this client's protocol can reassemble: 32768 bytes for a
+Quake Live peer, 16384 for a legacy Quake III one.
+==================
+*/
+int SV_ClientMessageLimit( const client_t *client )
+{
+	return static_cast<int>( fnql::protocol::ForWireProfile(
+		client->netchan.wireProfile ).limits.messageBytes );
+}
+
+
 static void SV_WriteDemoGamestate( client_t *client )
 {
 	entityState_t nullstate{};
@@ -754,7 +767,7 @@ static void SV_WriteDemoGamestate( client_t *client )
 		return;
 	}
 
-	MSG_Init( &msg, msgBuffer.data(), MAX_MSGLEN );
+	MSG_Init( &msg, msgBuffer.data(), SV_ClientMessageLimit( client ) );
 
 	MSG_WriteLong( &msg, client->lastClientCommand );
 	SV_UpdateServerCommandsToClient( client, &msg );
@@ -1669,6 +1682,33 @@ void SV_DirectConnect( const netadr_t *from ) {
 	// restore burst capacity
 	SVC_RateRestoreBurstAddress( from, 10, 1000 );
 
+	// A protocol-91 client resends `connect` every few seconds until it sees
+	// connectResponse. When that reply was lost, the slot it asked for is
+	// already accepted and its Steam ticket already consumed, so treating the
+	// resend as a new connection tore the slot down and then refused it for
+	// lack of a ticket, and the client stayed on the connecting screen. Retail
+	// keeps the ticket with the challenge and re-accepts (quakelive_steam.exe
+	// 0x4e0b53-0x4e0c97). A resend with the same challenge for a slot that has
+	// not left CS_CONNECTED is answered with connectResponse and nothing else.
+	if ( cl_proto == QL_RETAIL_PROTOCOL_VERSION ) {
+		for ( client_t &client : SV_Clients() ) {
+			if ( client.state != CS_CONNECTED || client.challenge != challenge
+				|| client.netchan.qport != qport
+				|| !NET_CompareAdr( from, &client.netchan.remoteAddress ) ) {
+				continue;
+			}
+			if ( !SVC_RateLimit( &bucket, 10, 200 ) ) {
+				if ( longstr ) {
+					NET_OutOfBandPrint( NS_SERVER, from, "connectResponse %d %d", challenge, sv_proto );
+				} else {
+					NET_OutOfBandPrint( NS_SERVER, from, "connectResponse" );
+				}
+			}
+			Com_DPrintf( "%s: repeated connect, resent connectResponse\n", NET_AdrToString( from ) );
+			return;
+		}
+	}
+
 	// quick reject
 	newcl = nullptr;
 	for ( client_t &client : SV_Clients() ) {
@@ -2076,7 +2116,14 @@ int SV_RemainingGameState( void )
 	msg_t		msg;
 	std::array<byte, MAX_MSGLEN_BUF> msgBuffer{};
 
-	MSG_Init( &msg, msgBuffer.data(), MAX_MSGLEN );
+	// Size the estimate for the protocol this server speaks by default, so a
+	// legacy-protocol server keeps the 16384-byte budget its clients need.
+	const fnql::protocol::Contract *const contract =
+		fnql::protocol::Find( com_protocol->integer );
+	const int messageLimit = contract
+		? static_cast<int>( contract->limits.messageBytes ) : MAX_MSGLEN_LEGACY;
+
+	MSG_Init( &msg, msgBuffer.data(), messageLimit );
 
 	MSG_WriteLong( &msg, 7 ); // last client command
 
@@ -2129,7 +2176,7 @@ int SV_RemainingGameState( void )
 	// reserve some space for potential userinfo expansion
 	len += 512;
 
-	return MAX_MSGLEN - len;
+	return messageLimit - len;
 }
 
 
@@ -2178,7 +2225,7 @@ static void SV_SendClientGameState( client_t *client ) {
 	client->lastUsercmd.serverTime =
 		fnql::net::CounterSubtract( sv.time, 1u );
 
-	MSG_Init( &msg, msgBuffer.data(), MAX_MSGLEN );
+	MSG_Init( &msg, msgBuffer.data(), SV_ClientMessageLimit( client ) );
 
 	// NOTE, MRE: all server->client messages now acknowledge
 	// let the client know which reliable clientCommands we have received
@@ -2888,7 +2935,8 @@ static void SV_VerifyPaks_f( client_t *cl ) {
 			cl->state = CS_ZOMBIE; // skip delta generation
 			SV_SendClientSnapshot( cl );
 			cl->state = CS_ACTIVE;
-			SV_DropClient( cl, "Unpure client detected. Invalid pack files referenced!" );
+			// Retail's wording, which the dropped client displays.
+			SV_DropClient( cl, "Unpure client detected. Invalid .PK3 files referenced!" );
 		}
 	}
 }

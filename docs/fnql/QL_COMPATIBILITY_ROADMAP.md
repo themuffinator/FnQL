@@ -204,6 +204,13 @@ in [`RETAIL_PARITY_GAPS.md`](RETAIL_PARITY_GAPS.md).
 The behavior change to plan around is that `sv_serverType` is now enforced as
 retail enforces it: at its default of 0 a server ignores every remote packet.
 
+A second pass covered the connection path in both directions. It found that a
+match hosted from the client could not be joined at all (Quake III's
+single-player test), that the message limit was half of retail's, that a
+repeated `connect` stalled a ticketed join, and that the client asked retail
+servers for paks they cannot send. Those are fixed; the same document lists
+what is left.
+
 ## Architecture and execution order
 
 ### 1. Compatibility descriptors and safety rails
