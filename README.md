@@ -139,6 +139,22 @@ libraries on each supported OS; for a custom library use
 fail safely when unavailable. FnQL builds are 32-bit x86 only; use the
 [Build Guide](BUILD.md) for supported Windows and Linux instructions.
 
+### FnQL-game modules
+
+Both packages also put the clean-room game modules of the companion
+[FnQL-game](https://github.com/themuffinator/FnQL-game) project in `baseq3/`.
+FnQL keeps using the retail modules unless a server opts in with
+`+set vm_gameProvider fnql`. `vminfo` shows which module is active, and a
+missing or invalid FnQL-game module falls back to retail. FnQL-game is still in
+development and does not yet claim retail wire parity, so retail clients
+joining such a server may see inconsistent game state. Its cgame and UI
+modules are included, but FnQL cannot select them yet.
+
+The modules contain code under two licenses: FnQL-game's own code is GPLv2 or
+later, and its baseline code from baseq3a is under id Software's Quake III
+Arena game-source license. See `docs/fnql/FNQL_GAME_BINARY_NOTICE.txt` and
+`docs/fnql-game/` in the package for the exact terms and source commit.
+
 ## 4. Documentation
 
 ### Player guides

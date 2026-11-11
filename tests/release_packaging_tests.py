@@ -1162,7 +1162,7 @@ class ReleasePackagingTests(unittest.TestCase):
         self.assertNotIn("  macos-release-sign:", workflow)
         self.assertIn(
             "needs: [prepare, windows-msys32, windows-msvc, source-validation, "
-            "linux-x86-regression, ubuntu-x86]",
+            "linux-x86-regression, ubuntu-x86, fnql-game-windows, fnql-game-linux]",
             workflow,
         )
         self.assertIn(

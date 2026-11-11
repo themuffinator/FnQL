@@ -280,9 +280,112 @@ jobs:
           if-no-files-found: error
           retention-days: 5
 
+  # FnQL-game: the clean-room game modules, built from the commit pinned in
+  # version/fnql_game.json and gated with their own meson test suite, which
+  # includes the engine-abi-parity check against this exact FnQL checkout.
+  fnql-game-windows:
+    needs: [prepare]
+    name: Build FnQL-game Windows-MSVC x86
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: FnQL
+
+      - name: Resolve pinned FnQL-game commit
+        id: pin
+        shell: bash
+        run: python FnQL/scripts/fnql_game.py github-output >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ steps.pin.outputs.repository }}
+          ref: ${{ steps.pin.outputs.commit }}
+          path: FnQL-game
+
+      - name: Install Meson
+        run: python -m pip install meson ninja
+
+      - name: Build and test FnQL-game
+        shell: cmd
+        env:
+          FNQL_HEADLESS: "2"
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set VSINSTALL=%%i
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x86 -host_arch=x64 || exit /b
+          meson setup game-build FnQL-game --buildtype=release --prefix "%CD%\game-install" "-Dfnql-root=%CD%\FnQL" || exit /b
+          meson compile -C game-build || exit /b
+          meson test -C game-build --print-errorlogs || exit /b
+          meson install -C game-build --no-rebuild || exit /b
+
+      - name: Stage FnQL-game modules
+        run: python FnQL/scripts/fnql_game.py stage --platform windows --install-root game-install --source FnQL-game --output game-stage
+
+      - name: Check FnQL-game runtime dependencies
+        run: python FnQL/scripts/check_windows_runtime_deps.py --require-pe game-stage
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fnql-game-windows-x86
+          path: game-stage
+          if-no-files-found: error
+          retention-days: 5
+
+  fnql-game-linux:
+    needs: [prepare]
+    name: Build FnQL-game Linux i686
+    runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:20.04
+      env:
+        DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install tools
+        run: |
+          apt-get -qq update
+          apt-get -y install git python3 python3-pip binutils gcc-multilib ninja-build
+          python3 -m pip install meson==1.9.1
+
+      - uses: actions/checkout@v6
+        with:
+          path: FnQL
+
+      - name: Resolve pinned FnQL-game commit
+        id: pin
+        run: python3 FnQL/scripts/fnql_game.py github-output >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v6
+        with:
+          repository: ${{ steps.pin.outputs.repository }}
+          ref: ${{ steps.pin.outputs.commit }}
+          path: FnQL-game
+
+      - name: Build and test FnQL-game
+        env:
+          FNQL_HEADLESS: "2"
+        run: |
+          git config --global --add safe.directory "$PWD/FnQL-game"
+          meson setup game-build FnQL-game --cross-file FnQL-game/meson/linux-i686.ini --buildtype=release --prefix "$PWD/game-install" "-Dfnql-root=$PWD/FnQL"
+          meson compile -C game-build
+          meson test -C game-build --print-errorlogs
+          meson install -C game-build --no-rebuild --strip
+
+      - name: Stage FnQL-game modules
+        run: python3 FnQL/scripts/fnql_game.py stage --platform linux --install-root game-install --source FnQL-game --output game-stage
+
+      - name: Check FnQL-game glibc baseline
+        run: python3 FnQL/scripts/check_elf_glibc.py --max-glibc "$FNQL_LINUX_GLIBC_MAX" --require-elf game-stage
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fnql-game-linux-x86
+          path: game-stage
+          if-no-files-found: error
+          retention-days: 5
+
   push-build-validation:
     if: always()
-    needs: [prepare, windows-msys32, windows-msvc, source-validation, linux-x86-regression, ubuntu-x86]
+    needs: [prepare, windows-msys32, windows-msvc, source-validation, linux-x86-regression, ubuntu-x86, fnql-game-windows, fnql-game-linux]
     runs-on: ubuntu-latest
     steps:
       - name: Check platform build results
@@ -357,13 +460,25 @@ jobs:
           name: linux-x86
           path: artifacts/linux-x86
 
+      - name: Download FnQL-game Windows artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: fnql-game-windows-x86
+          path: game-artifacts/windows-x86
+
+      - name: Download FnQL-game Linux artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: fnql-game-linux-x86
+          path: game-artifacts/linux-x86
+
       - name: Resolve release version metadata
         run: |
           python scripts/version.py github-env --channel manual --build-number "${{ needs.prepare.outputs.build_number }}" --build-date "${{ needs.prepare.outputs.build_date }}" --commit "${{ needs.prepare.outputs.head_commit }}" >> "$GITHUB_ENV"
 
       - name: Package release archives
         run: |
-          python scripts/release.py --channel manual --artifact-root artifacts --build-number "${{ needs.prepare.outputs.build_number }}" --build-date "${{ needs.prepare.outputs.build_date }}" --commit "${{ needs.prepare.outputs.head_commit }}"
+          python scripts/release.py --channel manual --artifact-root artifacts --build-number "${{ needs.prepare.outputs.build_number }}" --build-date "${{ needs.prepare.outputs.build_date }}" --commit "${{ needs.prepare.outputs.head_commit }}" --game-root game-artifacts --require-game
 
       - name: Build Copilot changelog cleanup
         id: copilot_notes

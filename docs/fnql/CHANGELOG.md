@@ -13,7 +13,11 @@ release, CI resets `Unreleased` for the next cycle.
 ## [Unreleased]
 
 ### Highlights
-- _None yet._
+- Releases now include the clean-room
+  [FnQL-game](https://github.com/themuffinator/FnQL-game) modules in
+  `baseq3/`. Servers can opt in with `+set vm_gameProvider fnql`; the retail
+  modules stay the default. FnQL-game is still in development and does not
+  yet claim retail wire parity.
 
 ### Compatibility
 - Server snapshots now follow retail Quake Live's game-module visibility rules:
@@ -34,6 +38,10 @@ release, CI resets `Unreleased` for the next cycle.
 ### Builds and Packaging
 - Windows release builds now fail if the client is built without controller
   support.
+- The release workflow builds FnQL-game from a pinned commit for Win32 and
+  Linux i686, runs its test suite, and packages its modules with a notice
+  describing their two licenses (GPLv2 or later, and id Software's Quake III
+  Arena game-source license).
 
 ### Fixes
 - Controllers work in the Windows client. Controller support had been left out

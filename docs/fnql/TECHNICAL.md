@@ -288,6 +288,23 @@ executable bits. Windows ZIP members use fixed timestamps and modes as well, so
 identical staged bytes produce identical archives on repeated packaging runs.
 Public packaging accepts exactly `windows-mingw-x86`, `windows-msvc-x86`, and
 `linux-x86`; missing or additional artifact directories fail packaging.
+
+Every package also carries the FnQL-game modules. The `fnql-game-windows`
+(MSVC Win32) and `fnql-game-linux` (Ubuntu 20.04 i686 container) jobs check
+out the commit pinned in [`version/fnql_game.json`](../../version/fnql_game.json),
+run its complete `meson test` suite against this FnQL checkout (including the
+`engine-abi-parity` gate), and stage the modules with
+[`scripts/fnql_game.py`](../../scripts/fnql_game.py): `baseq3/fnql_{qagame,cgame,ui}`
+plus FnQL-game's licensing documents and a `docs/fnql-game/BUILD-INFO.txt`
+naming the source commit. The publish job passes `--game-root game-artifacts
+--require-game`; tagged releases require the game too. The packager lays the
+platform's set over each package, adds
+[`FNQL_GAME_BINARY_NOTICE.txt`](./FNQL_GAME_BINARY_NOTICE.txt), and rejects a
+package whose modules are missing, are not i386, lack the `dllEntry` or
+`FnQL_GetModuleInfo` export, or name a commit other than the pin. To ship a
+newer FnQL-game, push it to FnQL-game `main` and update the pin. The MinGW
+and MSVC Windows packages share the MSVC-built modules, the build FnQL-game
+validates its movement parity with.
 macOS release jobs are absent because retail Quake Live has no macOS game
 modules or QVMs. Windows and Linux remain under the strict i386 retail-facing
 policy.

@@ -43,6 +43,7 @@ from root_archive import (
     write_root_archive,
 )
 from windows_pe import PE_I386, PeInfo, validate_windows_runtime_dependencies
+import fnql_game
 
 
 DEFAULT_DOCS = [
@@ -95,6 +96,17 @@ MACOS_REQUIRED_APP_ENTRIES = (*MACOS_REQUIRED_UNSIGNED_APP_ENTRIES, MACOS_SIGNAT
 MACOS_PREBUILT_PAYLOAD_NAME = "macos-payload.zip"
 PUBLISHED_RELEASE_ARTIFACTS = frozenset(
     {"linux-x86", "windows-mingw-x86", "windows-msvc-x86"}
+)
+# FnQL-game modules are built in CI from the commit pinned in
+# version/fnql_game.json and staged per platform by scripts/fnql_game.py; the
+# packager lays each platform's set over every package of that platform.
+FNQL_GAME_ARTIFACT_DIRS = {
+    "windows": "windows-x86",
+    "linux": "linux-x86",
+}
+FNQL_GAME_NOTICE = (
+    ROOT / "docs" / "fnql" / "FNQL_GAME_BINARY_NOTICE.txt",
+    Path("docs") / "fnql" / "FNQL_GAME_BINARY_NOTICE.txt",
 )
 RELEASE_PROOF_RUNTIME_MEMBERS = {
     "windows-mingw-x86": {
@@ -285,6 +297,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--glx-proof-build-run-attempt",
         help="Workflow run attempt that built the exact release artifacts under GLx proof.",
+    )
+    parser.add_argument(
+        "--game-root",
+        type=Path,
+        help=(
+            "Directory holding the FnQL-game artifacts staged by scripts/fnql_game.py "
+            "(windows-x86/ and linux-x86/). Their modules ship in every matching package."
+        ),
+    )
+    parser.add_argument(
+        "--require-game",
+        action="store_true",
+        help=(
+            "Require --game-root even for the manual channel. Public release automation "
+            "uses this; tagged releases always require it."
+        ),
     )
     parser.add_argument(
         "--glx-rollback-metadata",
@@ -498,6 +526,60 @@ def copy_docs(stage_root: Path) -> None:
         shutil.copy2(source, destination)
 
 
+def resolve_game_root(args: argparse.Namespace) -> Path | None:
+    game_root = getattr(args, "game_root", None)
+    if game_root is None:
+        if getattr(args, "require_game", False) or args.channel == "release":
+            raise ValueError(
+                "public and tagged releases must bundle the FnQL-game modules; pass --game-root"
+            )
+        return None
+    game_root = game_root.resolve()
+    if not game_root.is_dir():
+        raise NotADirectoryError(f"FnQL-game artifact root is not a directory: {game_root}")
+    return game_root
+
+
+def overlay_fnql_game(stage_root: Path, game_root: Path, platform: str) -> list[str]:
+    """Copy one platform's staged FnQL-game set and its notice into a package stage."""
+    subdir = FNQL_GAME_ARTIFACT_DIRS.get(platform)
+    if subdir is None:
+        raise ValueError(f"FnQL-game modules are not packaged for {platform} releases")
+    source = game_root / subdir
+    if not source.is_dir():
+        raise FileNotFoundError(f"FnQL-game artifact is missing for {platform}: {source}")
+    expected = set(fnql_game.member_names(platform))
+    found = {
+        item.relative_to(source).as_posix()
+        for item in source.rglob("*")
+        if item.is_file() or item.is_symlink()
+    }
+    if found != expected:
+        details = []
+        if expected - found:
+            details.append("missing: " + ", ".join(sorted(expected - found)))
+        if found - expected:
+            details.append("unexpected: " + ", ".join(sorted(found - expected)))
+        raise ValueError(
+            f"FnQL-game {platform} artifact is incomplete (" + "; ".join(details) + ")"
+        )
+    notice_source, notice_destination = FNQL_GAME_NOTICE
+    collisions = sorted(
+        name
+        for name in (*expected, notice_destination.as_posix())
+        if (stage_root / name).exists()
+    )
+    if collisions:
+        raise ValueError(
+            "engine artifact already contains FnQL-game package paths: " + ", ".join(collisions)
+        )
+    copy_release_artifact_contents(source, stage_root)
+    destination = stage_root / notice_destination
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(notice_source, destination)
+    return sorted((*expected, notice_destination.as_posix()))
+
+
 def build_root_archive(stage_root: Path) -> Path:
     archive_path = stage_root / ROOT_ARCHIVE_NAME
     write_root_archive(archive_path)
@@ -687,6 +769,48 @@ def validate_steam_provider_identity(name: str, info: PeInfo | None) -> None:
         return
     if info is None or info.machine != PE_I386 or not info.is_dll:
         raise ValueError("fnql_steam.dll must be a 32-bit i386 PE DLL")
+
+
+def has_fnql_game_members(names: list[str]) -> bool:
+    notice = FNQL_GAME_NOTICE[1].as_posix()
+    for name in names:
+        normalized = name.replace("\\", "/")
+        if (
+            normalized == notice
+            or normalized.startswith(fnql_game.DOCS_DIR + "/")
+            or normalized.casefold().startswith(f"{fnql_game.GAME_DIR}/fnql_")
+        ):
+            return True
+    return False
+
+
+def validate_fnql_game_members(
+    members: list[ReleaseArchiveMember],
+    *,
+    platform: str,
+    archive_name: str,
+    pin: dict[str, str] | None = None,
+) -> None:
+    if platform not in FNQL_GAME_ARTIFACT_DIRS:
+        raise ValueError(
+            f"{archive_name} is a {platform} release and cannot carry FnQL-game modules"
+        )
+    by_name = {member.name: member for member in members}
+    required = [*fnql_game.member_names(platform), FNQL_GAME_NOTICE[1].as_posix()]
+    missing = [name for name in required if name not in by_name]
+    if missing:
+        raise ValueError(f"{archive_name} is missing FnQL-game files: " + ", ".join(missing))
+    for name in fnql_game.module_names(platform):
+        fnql_game.validate_module(name, by_name[name].data, platform)
+    build_info = by_name[f"{fnql_game.DOCS_DIR}/{fnql_game.BUILD_INFO_NAME}"].data
+    commit = fnql_game.build_info_commit(build_info.decode("utf-8", errors="replace"))
+    if commit is None:
+        raise ValueError(f"{archive_name} has FnQL-game build info without a source commit")
+    if pin is not None and commit != pin["commit"]:
+        raise ValueError(
+            f"{archive_name} bundles FnQL-game {commit}, but version/fnql_game.json pins "
+            f"{pin['commit']}"
+        )
 
 
 def read_release_zip(archive_path: Path) -> list[ReleaseArchiveMember]:
@@ -959,6 +1083,8 @@ def validate_release_archive_contents(
     *,
     artifact_name: str | None = None,
     require_macos_signature: bool = True,
+    require_fnql_game: bool = False,
+    fnql_game_pin: dict[str, str] | None = None,
 ) -> None:
     members = read_release_archive(archive_path)
     archived_names = [member.name for member in members]
@@ -998,6 +1124,13 @@ def validate_release_archive_contents(
             members,
             archive_name=archive_path.name,
             require_signature=require_macos_signature,
+        )
+    if require_fnql_game or has_fnql_game_members(archived_names):
+        validate_fnql_game_members(
+            members,
+            platform=platform,
+            archive_name=archive_path.name,
+            pin=fnql_game_pin,
         )
     root_archive_bytes = next(
         member.data for member in members if member.name == ROOT_ARCHIVE_NAME
@@ -1314,6 +1447,8 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
 
     artifact_root = args.artifact_root.resolve()
     artifact_dirs = release_artifact_dirs(artifact_root)
+    game_root = resolve_game_root(args)
+    game_pin = fnql_game.load_pin() if game_root is not None else None
 
     output_dir = args.output_dir.resolve()
     packages_dir = output_dir / "packages"
@@ -1341,6 +1476,8 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         else:
             stage_root.mkdir(parents=True, exist_ok=True)
             skipped_files = copy_release_artifact_contents(artifact_dir, stage_root)
+            if game_root is not None:
+                overlay_fnql_game(stage_root, game_root, release_platform(artifact_dir.name))
             copy_docs(stage_root)
             build_fnql_webpak(stage_root)
             build_root_archive(stage_root)
@@ -1349,6 +1486,8 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         validate_release_archive_contents(
             archive_path,
             artifact_name=artifact_dir.name,
+            require_fnql_game=game_root is not None,
+            fnql_game_pin=game_pin,
         )
         if args.glx_proof_root is not None:
             packaged_runtime_identities[artifact_dir.name] = release_archive_runtime_identities(
@@ -1391,6 +1530,9 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
         "glx_runtime_proof": glx_runtime_proof,
         "glx_promotion": glx_promotion,
         "glx_rollback_package": glx_rollback_package,
+        "fnql_game": (
+            {"included": True, **game_pin} if game_pin is not None else {"included": False}
+        ),
         "archives": archives,
     }
 

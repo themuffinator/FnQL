@@ -1,0 +1,31 @@
+FnQL-game module binary distribution notice
+
+This FnQL package includes game modules built from the companion FnQL-game
+project (https://github.com/themuffinator/FnQL-game):
+
+  Windows: baseq3/fnql_qagamex86.dll, fnql_cgamex86.dll, fnql_uix86.dll
+  Linux:   baseq3/fnql_qagamei386.so, fnql_cgamei386.so, fnql_uii386.so
+
+docs/fnql-game/BUILD-INFO.txt records the exact FnQL-game commit they were
+built from. That commit is their complete corresponding source.
+
+The modules contain code under two licenses:
+
+- Code written for FnQL-game: GNU General Public License, version 2 or (at
+  your option) any later version. The GPLv2 text is LICENSE in this package.
+- Baseline game code imported from baseq3a (an improved Quake III Arena 1.32
+  game code): id Software's Limited Use Software License Agreement, included
+  as docs/fnql-game/QIIIA-Game-Source-License.txt. id Software also released
+  its own Quake III Arena game code under GPLv2 in 2005. baseq3a's changes
+  carry no license statement other than id's agreement, and whether they may
+  be relicensed under the GPL has not been confirmed upstream.
+
+Because that question is open, the modules are not offered as purely GPL
+works. They are distributed free of charge, for non-commercial use, by
+electronic download only, with id's agreement accompanying every copy.
+docs/fnql-game/LICENSING.md explains the details. This notice is not legal
+advice.
+
+The modules contain no Quake Live or Quake III assets, binaries or data.
+FnQL loads the FnQL-game qagame only when vm_gameProvider is set to fnql and
+otherwise uses the retail modules from the user's legitimate Steam install.

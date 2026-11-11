@@ -184,6 +184,8 @@ Every change should protect these project constraints:
 - `docs/fnql/GAME_MODULES.md`: module providers, module identity, and the
   interoperability rules shared with FnQL-game.
 - `version/fnql_version.h`: single source of truth for project version metadata.
+- `version/fnql_game.json`: the FnQL-game commit that releases build and
+  bundle; `scripts/fnql_game.py` stages and checks those modules.
 - `scripts/version.py`: version/channel helper for humans and CI.
 - `scripts/generate_docs.py`: refreshes `README.md` and `.install/README.html`
   from templates.
