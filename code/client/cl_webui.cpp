@@ -227,6 +227,7 @@ static qboolean CL_WebUI_RuntimeAvailable( void );
 static void CL_WebView_ReplayRetainedEvents( void );
 static void CL_AdvertisementBridge_UpdateCvars( void );
 static void CL_Steam_OverlayCommand_f( void );
+static void CL_Steam_ConnectLobby_f( void );
 static void CL_Steam_OnProviderEvent( const fnqlSteamEvent_t *event, void *context );
 static qboolean CL_Steam_ResultAccepted( fnqlSteamResult_t result );
 static qboolean CL_Steam_ParseIdentity( const char *text, uint64_t *identity );
@@ -1330,6 +1331,11 @@ static void CL_WebUI_RegisterCvars( void ) {
 	cvar_t *steamMaxLobbyClients = Cvar_Get( "steam_maxLobbyClients", "16", CVAR_ARCHIVE );
 	Cvar_CheckRange( steamMaxLobbyClients, "1", "64", CV_INTEGER );
 	Cvar_SetDescription( steamMaxLobbyClients, "Maximum members requested for a Steam friends lobby." );
+	// Retail registers lobby_autoconnect "" (flags 0x100) beside the lobby size
+	// (quakelive_steam.exe 0x465867). The retail menu reads it once at start-up
+	// to join that lobby instead of creating its own.
+	Cvar_SetDescription( Cvar_Get( "lobby_autoconnect", "", CVAR_TEMP ),
+		"Steam lobby the Quake Live menu joins at start-up; set by connect_lobby." );
 
 	Cvar_SetDescription( Cvar_Get( "ui_browserAwesomium", "0", CVAR_ROM ), "Read-only state for Quake Live WebUI availability." );
 	Cvar_SetDescription( Cvar_Get( "ui_browserAwesomiumPending", "0", CVAR_ROM ), "Read-only state for a WebUI browser waiting on a drawable surface." );
@@ -1938,6 +1944,7 @@ void QLWebHost_RegisterCommands( void ) {
 	Cmd_AddCommand( "steam_voice_stop", CL_Steam_VoiceStop_f );
 	Cmd_AddCommand( "clientviewprofile", CL_Steam_OverlayCommand_f );
 	Cmd_AddCommand( "clientfriendinvite", CL_Steam_OverlayCommand_f );
+	Cmd_AddCommand( "connect_lobby", CL_Steam_ConnectLobby_f );
 	cl_webui.commandsRegistered = qtrue;
 }
 
@@ -1968,6 +1975,7 @@ void QLWebHost_UnregisterCommands( void ) {
 	CL_ResetVoiceInputState();
 	Cmd_RemoveCommand( "clientviewprofile" );
 	Cmd_RemoveCommand( "clientfriendinvite" );
+	Cmd_RemoveCommand( "connect_lobby" );
 	cl_webui.commandsRegistered = qfalse;
 }
 
@@ -3316,6 +3324,17 @@ static const clWebConfigCvarDefault_t cl_webStartMatchCvars[] = {
 	{ NULL, NULL }
 };
 
+// Retail cgame owns these sound settings (its cvar table registers
+// s_killBeepVolume "1" bounded to [0, 4] and s_ambient "1") and applies them
+// itself: the kill beep through the volume of import 40, ambient loops by not
+// adding them. The retail Sound page edits them before any cgame has loaded,
+// so the snapshot carries the retail defaults until the module registers them.
+static const clWebConfigCvarDefault_t cl_webModuleSettingCvars[] = {
+	{ "s_killBeepVolume", "1" },
+	{ "s_ambient", "1" },
+	{ NULL, NULL }
+};
+
 static void CL_WebHost_BuildStartMatchCvarJson(
 		char *buffer, size_t bufferSize ) {
 	qboolean first = qtrue;
@@ -3335,6 +3354,12 @@ static void CL_WebHost_BuildStartMatchCvarJson(
 
 static void CL_WebHost_BuildConfigCvarJson( char *buffer, size_t bufferSize ) {
 	static const char *const configCvars[] = {
+		// Read synchronously by the retail page while it mounts: the lobby to
+		// join, and two player-created cvars (skip the legal screens, menu
+		// background color). Absent cvars are simply left out.
+		"lobby_autoconnect",
+		"web_skipLegals",
+		"ui_bgcolor",
 		"name",
 		"version",
 		"com_protocol",
@@ -3554,6 +3579,7 @@ static void CL_WebHost_BuildConfigCvarJson( char *buffer, size_t bufferSize ) {
 		"con_autoClear",
 		"con_autoSay",
 		"con_sayRaw",
+		"com_allowConsole",
 		"cl_allowConsoleChat",
 
 		// Capture.
@@ -3612,6 +3638,8 @@ static void CL_WebHost_BuildConfigCvarJson( char *buffer, size_t bufferSize ) {
 		"s_pvs",
 		"s_muteWhenUnfocused",
 		"s_muteWhenMinimized",
+		"s_muteBackground",
+		"s_announcerVolume",
 		"s_backend",
 		"s_alDevice",
 		"s_alHrtf",
@@ -3783,6 +3811,16 @@ static void CL_WebHost_BuildConfigCvarJson( char *buffer, size_t bufferSize ) {
 			Com_DPrintf( "WebUI settings snapshot truncated at '%s'; "
 				"raise CL_WEB_CONFIG_CVAR_JSON_LENGTH.\n",
 				cl_webStartMatchCvars[i].name );
+			return;
+		}
+	}
+	for ( int i = 0; cl_webModuleSettingCvars[i].name; ++i ) {
+		if ( !CL_WebHost_AppendConfigCvar( buffer, bufferSize,
+			cl_webModuleSettingCvars[i].name,
+			cl_webModuleSettingCvars[i].value, &first ) ) {
+			Com_DPrintf( "WebUI settings snapshot truncated at '%s'; "
+				"raise CL_WEB_CONFIG_CVAR_JSON_LENGTH.\n",
+				cl_webModuleSettingCvars[i].name );
 			return;
 		}
 	}
@@ -6202,12 +6240,36 @@ static void CL_Steam_OnProviderEvent( const fnqlSteamEvent_t *event, void *conte
 			CL_WebView_PublishEvent( "steam.lobby.entered", payload );
 			if ( event->result == FNQL_STEAM_RESULT_OK ) {
 				CL_Steam_PublishLobbyEnter( event->subject_id );
+			} else {
+				// Retail reports a failed join on the shared lobby.error topic as
+				// {code, id, message} (quakelive_steam.exe 0x464de6) and the page
+				// shows the message. Retail's text is chosen by Steam's enter
+				// response, which the provider event does not carry, so FnQL
+				// reports the provider result with one generic message.
+				Com_sprintf( payload, sizeof( payload ),
+					"{\"code\":%d,\"id\":\"%llu\",\"message\":\"Unable to join lobby\"}",
+					event->result, (unsigned long long)event->subject_id );
+				CL_WebView_PublishEvent( "lobby.error", payload );
 			}
 			break;
-		case FNQL_STEAM_EVENT_LOBBY_LEFT:
+		case FNQL_STEAM_EVENT_LOBBY_LEFT: {
+			// Retail publishes lobby.<id>.left with {id} when it leaves a lobby
+			// (quakelive_steam.exe 0x464a5f); the page resets its lobby state
+			// from it. steam.lobby.left stays as FnQL's own notification.
+			const uint64_t leftLobbyId = event->subject_id
+				? event->subject_id : cl_webui.activeLobbyId;
 			cl_webui.activeLobbyId = 0;
+			if ( leftLobbyId ) {
+				char eventName[96];
+				Com_sprintf( eventName, sizeof( eventName ), "lobby.%llu.left",
+					(unsigned long long)leftLobbyId );
+				Com_sprintf( payload, sizeof( payload ), "{\"id\":\"%llu\"}",
+					(unsigned long long)leftLobbyId );
+				CL_WebView_PublishEvent( eventName, payload );
+			}
 			CL_WebView_PublishEvent( "steam.lobby.left", NULL );
 			break;
+		}
 		case FNQL_STEAM_EVENT_LOBBY_CHAT_MESSAGE: {
 			char escapedMessage[FNQL_STEAM_TEXT_CAPACITY * 2];
 			char escapedName[FNQL_STEAM_NAME_CAPACITY * 2];
@@ -6241,9 +6303,18 @@ static void CL_Steam_OnProviderEvent( const fnqlSteamEvent_t *event, void *conte
 				CL_WebUI_JsonEscape( changedUser.persona_name, escapedName,
 					sizeof( escapedName ) );
 			}
+			// Retail's member-change document is {id, name, num_players,
+			// max_players} (quakelive_steam.exe 0x4652e0); the page copies both
+			// counts into its lobby header. state and changedBy are FnQL extras.
+			uint32_t lobbyMemberCount = 0;
+			uint32_t lobbyMemberLimit = 0;
+			uint64_t lobbyOwnerId = 0;
+			(void)FNQL_Steam_GetLobbyMembers( event->subject_id, NULL, 0,
+				&lobbyMemberCount, &lobbyOwnerId, &lobbyMemberLimit );
 			Com_sprintf( payload, sizeof( payload ),
-				"{\"id\":\"%llu\",\"name\":\"%s\",\"state\":%u,\"changedBy\":\"%s\"}",
-				(unsigned long long)event->value, escapedName, event->flags,
+				"{\"id\":\"%llu\",\"name\":\"%s\",\"num_players\":%u,\"max_players\":%u,\"state\":%u,\"changedBy\":\"%s\"}",
+				(unsigned long long)event->value, escapedName,
+				lobbyMemberCount, lobbyMemberLimit, event->flags,
 				event->detail );
 			Com_sprintf( eventName, sizeof( eventName ), "lobby.%llu.user.%s",
 				(unsigned long long)event->subject_id,
@@ -6651,6 +6722,16 @@ qboolean CL_Steam_GetItemDownloadInfo( unsigned int itemIdLow, unsigned int item
 	return qtrue;
 }
 
+/*
+Retail `connect_lobby <lobby id>` stores its argument in lobby_autoconnect and
+does nothing else (quakelive_steam.exe 0x464aa0). Steam passes it on the
+command line when a player accepts a lobby invitation while the game is not
+running.
+*/
+static void CL_Steam_ConnectLobby_f( void ) {
+	Cvar_Set( "lobby_autoconnect", Cmd_Argv( 1 ) );
+}
+
 static void CL_Steam_OverlayCommand_f( void ) {
 	const char *commandName;
 	const char *dialog;
@@ -6832,6 +6913,14 @@ static qboolean CL_WebHost_BrowserMayWriteCvar( const char *name ) {
 	flags = Cvar_Flags( name );
 	if ( flags == CVAR_NONEXISTENT ) {
 		return qtrue;
+	}
+
+	// Retail's SetCvar and ResetCvar skip a cheat-protected cvar (flag 0x200)
+	// and force every other write (quakelive_steam.exe 0x432b2b, 0x432bfb).
+	// The write below is forced as well, so without this a page could change
+	// cheat-protected state on a server that has cheats off.
+	if ( flags & CVAR_CHEAT ) {
+		return qfalse;
 	}
 
 	return ( flags & ( CVAR_PRIVATE | CVAR_ROM ) ) ? qfalse : qtrue;

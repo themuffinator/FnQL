@@ -216,6 +216,7 @@ typedef struct client_s {
 	int				snapshotMsec;		// requests a snapshot every snapshotMsec unless rate choked
 	qboolean		pureAuthentic;
 	qboolean		gotCP;				// TTimo - additional flag to distinguish between a bad pure checksum, and no cp command at all
+	qboolean		rageQuit;			// retail qagame import 192: announce the coming drop as a ragequit
 	netchan_t		netchan;
 	// TTimo
 	// queuing outgoing fragmented messages to send them properly, without udp packet bursts
@@ -333,6 +334,7 @@ extern	cvar_t	*sv_floodProtect;
 extern	cvar_t	*sv_enableRankings;
 extern	cvar_t	*sv_rankingsActive;
 extern	cvar_t	*sv_lanForceRate;
+extern	cvar_t	*sv_serverType;
 extern	cvar_t	*sv_autoRecordDemos;
 extern	cvar_t	*sv_cheats;
 extern	cvar_t	*sv_gtid;
@@ -434,6 +436,7 @@ void SV_MapPoolReload_f( void );
 void SV_StartRandomMap_f( void );
 qboolean SV_FactoryExists( const char *factoryName );
 qboolean SV_FactoryHasActive( void );
+void SV_FactoryActiveTags( char *buffer, int bufferSize );
 qboolean SV_FactoryPrepareMap( const char *mapName, const char *factoryName,
 	qboolean factoryArgumentPresent, qboolean developerMap );
 void SV_FactoryPrintMapUsage( const char *commandName );

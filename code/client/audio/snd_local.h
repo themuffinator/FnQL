@@ -214,6 +214,11 @@ extern cvar_t *s_doppler;
 extern cvar_t *s_pvs;
 extern cvar_t *s_muteWhenUnfocused;
 extern cvar_t *s_muteWhenMinimized;
+extern cvar_t *s_muteBackground;
+extern cvar_t *s_announcerVolume;
+
+// True while the window focus/minimize settings silence the mix.
+qboolean S_MutedByWindowState( void );
 extern cvar_t *s_khz;
 extern cvar_t *s_backend;
 extern cvar_t *s_backendActive;

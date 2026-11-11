@@ -161,6 +161,8 @@ and the preserved FnQ3/SDL3 input paths are recorded in
 The binary-observed retail client cvar inventory, exceptional ownership cases,
 behavioral parity decisions, and non-regression gates are recorded in
 [`CLIENT_CVAR_COMPATIBILITY.md`](./CLIENT_CVAR_COMPATIBILITY.md).
+The whole-engine retail parity audit, with the gaps still open, is in
+[`RETAIL_PARITY_GAPS.md`](./RETAIL_PARITY_GAPS.md).
 The binary-observed retail server cvar inventory, engine/module ownership,
 lifecycle and entity contracts, provider boundaries, and non-regression gates
 are recorded in

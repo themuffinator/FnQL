@@ -911,6 +911,10 @@ static qboolean CL_HandleDemoPlaybackKeyEvent( int key ) {
 }
 
 
+// Set while a console key that com_allowConsole refused is held, so its
+// release reaches the same '`' binding its press did.
+static bool consoleKeyPassedThrough = false;
+
 /*
 ===================
 CL_KeyDownEvent
@@ -937,11 +941,26 @@ static void CL_KeyDownEvent( int key, unsigned time )
 	}
 #endif
 
-	// console key is hardcoded, so the user can never unbind it
+	// console key is hardcoded, so the user can never unbind it, but retail
+	// com_allowConsole may refuse to open the console with it
 	if ( key == K_CONSOLE || ( keys[K_SHIFT].down && key == K_ESCAPE ) ) {
-		Con_ToggleConsole_f();
-		Key_ClearStates();
-		return;
+		if ( Con_HotkeyMayToggle() ) {
+			consoleKeyPassedThrough = false;
+			Con_ToggleConsole_f();
+			Key_ClearStates();
+			return;
+		}
+
+		if ( key == K_CONSOLE ) {
+			// Retail treats a refused console key as the ordinary '`' key, so
+			// its binding still runs. K_CONSOLE itself has no binding slot.
+			if ( cls.state != CA_DISCONNECTED && Key_GetCatcher() == 0 ) {
+				consoleKeyPassedThrough = true;
+				Key_ParseBinding( '`', qtrue, time );
+			}
+			return;
+		}
+		// A refused Shift+Escape is an ordinary Escape.
 	}
 
 	// keys can still be used for bound actions
@@ -1017,8 +1036,18 @@ static void CL_KeyUpEvent( int key, unsigned time )
 		return;
 	}
 
-	// don't process key-up events for the console key
-	if ( key == K_CONSOLE || ( key == K_ESCAPE && keys[K_SHIFT].down ) ) {
+	// don't process key-up events for the console key, except to release a
+	// binding that a refused console key started (see CL_KeyDownEvent)
+	if ( key == K_CONSOLE ) {
+		if ( consoleKeyPassedThrough ) {
+			consoleKeyPassedThrough = false;
+			if ( cls.state != CA_DISCONNECTED ) {
+				Key_ParseBinding( '`', qfalse, time );
+			}
+		}
+		return;
+	}
+	if ( key == K_ESCAPE && keys[K_SHIFT].down ) {
 		return;
 	}
 

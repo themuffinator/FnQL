@@ -41,6 +41,8 @@ cvar_t *s_musicVolume;
 cvar_t *s_voiceVolume;
 cvar_t *s_voiceStep;
 cvar_t *s_doppler;
+cvar_t *s_muteBackground;
+cvar_t *s_announcerVolume;
 cvar_t *s_pvs;
 cvar_t *s_muteWhenMinimized;
 cvar_t *s_muteWhenUnfocused;
@@ -119,6 +121,29 @@ extern "C" void S_StartSoundVolume( vec3_t origin, int entnum, int entchannel, s
 	if( si.StartSound ) {
 		si.StartSound( origin, entnum, entchannel, sfx, volume );
 	}
+}
+
+
+/*
+=================
+S_MutedByWindowState
+
+One owner for the focus/minimize mute decision shared by every backend.
+Retail s_muteBackground 0 keeps audio playing in the background outright.
+=================
+*/
+extern "C" qboolean S_MutedByWindowState( void )
+{
+	if ( s_muteBackground != nullptr && !s_muteBackground->integer ) {
+		return qfalse;
+	}
+	if ( gw_minimized ) {
+		return ( s_muteWhenMinimized != nullptr && s_muteWhenMinimized->integer ) ? qtrue : qfalse;
+	}
+	if ( !gw_active ) {
+		return ( s_muteWhenUnfocused != nullptr && s_muteWhenUnfocused->integer ) ? qtrue : qfalse;
+	}
+	return qfalse;
 }
 
 
@@ -632,6 +657,22 @@ extern "C" void S_Init( void )
 	s_muteWhenMinimized = Cvar_Get( "s_muteWhenMinimized", "1", CVAR_ARCHIVE );
 	Cvar_CheckRange( s_muteWhenMinimized, "0", "1", CV_INTEGER );
 	Cvar_SetDescription( s_muteWhenMinimized, "Mutes all audio while game is minimized." );
+	// Retail registers s_muteBackground "1" (flags 0x21) when it creates its
+	// DirectSound buffer and requests DSBCAPS_GLOBALFOCUS only while it is 0
+	// (quakelive_steam.exe 0x4efd99, 0x4efed2), so 0 keeps audio playing in
+	// the background. FnQL applies it live instead of latching it to a
+	// snd_restart, as the master switch above the two finer controls.
+	s_muteBackground = Cvar_Get( "s_muteBackground", "1", CVAR_ARCHIVE );
+	Cvar_CheckRange( s_muteBackground, "0", "1", CV_INTEGER );
+	Cvar_SetDescription( s_muteBackground, "Quake Live background mute switch. 0 keeps audio playing while the game window is unfocused or minimized; 1 defers to s_muteWhenUnfocused and s_muteWhenMinimized." );
+	// Retail registers s_announcerVolume "1.0" bounded to [0, 2] with flags
+	// 0x81801 during sound init (0x4db8a9) so the settings UI can edit it
+	// before cgame loads. cgame owns its use: it passes the value as the
+	// volume of import 40 (S_StartLocalSoundVolume) on the announcer channel.
+	s_announcerVolume = Cvar_Get( "s_announcerVolume", "1.0",
+		CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_CLOUD );
+	Cvar_CheckRange( s_announcerVolume, "0", "2", CV_FLOAT );
+	Cvar_SetDescription( s_announcerVolume, "Quake Live announcer volume, applied by cgame to announcer sounds." );
 	s_backend = Cvar_Get( "s_backend", "openal", CVAR_ARCHIVE_ND | CVAR_LATCH );
 	Cvar_SetDescription( s_backend, "Selects the sound backend to initialize.\n"
 		"Available backends:\n"
@@ -723,8 +764,7 @@ extern "C" void S_Init( void )
 			if ( s_volume != nullptr && s_volume->value <= 0.0f ) {
 				Com_Printf( S_COLOR_YELLOW "WARNING: s_volume is 0; the backend is active but all game audio is silent.\n" );
 			}
-			if ( ( !gw_active && !gw_minimized && s_muteWhenUnfocused->integer ) ||
-				( gw_minimized && s_muteWhenMinimized->integer ) ) {
+			if ( S_MutedByWindowState() ) {
 				Com_Printf( S_COLOR_YELLOW "WARNING: audio is currently muted by the window focus/minimize settings.\n" );
 			}
 			Com_Printf( "Sound initialization successful.\n" );

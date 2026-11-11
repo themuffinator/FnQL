@@ -64,8 +64,6 @@ void ApplyRetailDefaultHostname()
 fnqlSteamGameServerConfig_t BuildSteamGameServerConfig( const char *mapName )
 {
 	fnqlSteamGameServerConfig_t config{};
-	char version[MAX_CVAR_VALUE_STRING];
-	char password[MAX_CVAR_VALUE_STRING];
 	char account[MAX_CVAR_VALUE_STRING];
 	const int gamePort = Cvar_VariableIntegerValue( "net_port" );
 	const bool secure = Cvar_VariableIntegerValue( "sv_steamSecure" ) != 0
@@ -79,13 +77,19 @@ fnqlSteamGameServerConfig_t BuildSteamGameServerConfig( const char *mapName )
 	config.dedicated = com_dedicated->integer ? 1u : 0u;
 	config.max_players = sv_maxclients ? static_cast<uint32_t>(
 		sv_maxclients->integer ) : 0u;
-	Cvar_VariableStringBuffer( "version", version, sizeof( version ) );
-	Cvar_VariableStringBuffer( "sv_privatePassword", password, sizeof( password ) );
 	Cvar_VariableStringBuffer( "sv_setSteamAccount", account, sizeof( account ) );
-	config.password_protected = password[0] ? 1u : 0u;
-	Q_strncpyz( config.version, version, sizeof( config.version ) );
-	Q_strncpyz( config.product, STEAMPATH_APPID, sizeof( config.product ) );
-	Q_strncpyz( config.game_description, "Quake Live", sizeof( config.game_description ) );
+	// Retail identity; see server_cvar_compat.hpp for the observations.
+	config.password_protected =
+		Cvar_VariableIntegerValue( "g_needpass" ) != 0 ? 1u : 0u;
+	Q_strncpyz( config.version, fnql::server::cvars::kRetailSteamServerVersion,
+		sizeof( config.version ) );
+	Q_strncpyz( config.product, fnql::server::cvars::kRetailSteamServerProduct,
+		sizeof( config.product ) );
+	const std::string_view description =
+		fnql::server::cvars::SteamGameDescription(
+			Cvar_VariableIntegerValue( "g_gametype" ) );
+	Q_strncpyz( config.game_description, std::string( description ).c_str(),
+		sizeof( config.game_description ) );
 	Q_strncpyz( config.mod_directory, BASEGAME, sizeof( config.mod_directory ) );
 	Q_strncpyz( config.server_name, sv_hostname ? sv_hostname->string : "FnQL Server",
 		sizeof( config.server_name ) );
@@ -103,6 +107,9 @@ fnqlSteamGameServerConfig_t BuildSteamGameServerConfig( const char *mapName )
 	tagInputs.quadhog = Cvar_VariableIntegerValue( "g_quadhog" ) != 0;
 	tagInputs.fnqlKeywords = Cvar_VariableString( "sv_keywords" );
 	tagInputs.retailTags = sv_tags ? sv_tags->string : "";
+	char factoryTags[MAX_CVAR_VALUE_STRING];
+	SV_FactoryActiveTags( factoryTags, sizeof( factoryTags ) );
+	tagInputs.factoryTags = factoryTags;
 	const std::string tags = fnql::server::cvars::BuildSteamGameTags(
 		tagInputs, sizeof( config.game_tags ) );
 	Q_strncpyz( config.game_tags, tags.c_str(), sizeof( config.game_tags ) );

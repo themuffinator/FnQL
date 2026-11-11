@@ -21,6 +21,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 */
 
 #include "server.h"
+#include "arena_script.hpp"
 #include "../qcommon/netchan_safety.hpp"
 
 #include <array>
@@ -269,6 +270,99 @@ static void SV_Map_f( void ) {
 
 
 /*
+==================
+SV_Arena_f
+
+Retail `arena <name>` starts the training match described by
+scripts/<name>.sp_arena (quakelive_steam.exe 0x4de050): free-for-all on the
+script's map with its frag limit, time limit, bot skill and bot list, cheats
+off. arena_script.hpp holds the file contract. Retail leaves factory state
+alone; FnQL drops the active factory first, as its single-player map aliases
+do, so a previous factory's overrides cannot leak into the training match.
+==================
+*/
+static void SV_Arena_f( void ) {
+	namespace arena = fnql::server::arena;
+
+	const char *name = Cmd_Argv( 1 );
+	if ( !name || !name[0] ) {
+		Com_Printf( "No arena name passed\n" );
+		return;
+	}
+	if ( !arena::IsSafeName( name ) ) {
+		Com_Printf( "Invalid arena name: %s\n", name );
+		return;
+	}
+
+	std::array<char, MAX_QPATH> path{};
+	Com_sprintf( path.data(), SV_ArraySize(path), "scripts/%s.sp_arena", name );
+
+	void *contents = nullptr;
+	const int length = FS_ReadFile( path.data(), &contents );
+	if ( length <= 0 || !contents ) {
+		if ( contents ) {
+			FS_FreeFile( contents );
+		}
+		Com_Printf( S_COLOR_RED "file not found: %s\n", path.data() );
+		return;
+	}
+	if ( static_cast<std::size_t>( length ) >= arena::kScriptByteLimit ) {
+		FS_FreeFile( contents );
+		Com_Printf( S_COLOR_RED "file too large: %s is %i, max allowed is %i\n",
+			path.data(), length, static_cast<int>( arena::kScriptByteLimit ) );
+		return;
+	}
+
+	const arena::ParseResult parsed = arena::ParseScript( std::string_view(
+		static_cast<const char *>( contents ), static_cast<std::size_t>( length ) ) );
+	FS_FreeFile( contents );
+
+	for ( const std::string &notice : parsed.notices ) {
+		Com_Printf( "%s\n", notice.c_str() );
+	}
+	if ( !parsed.script ) {
+		Com_Printf( "%s: %s\n", path.data(), parsed.error.c_str() );
+		return;
+	}
+
+	const arena::Script &script = *parsed.script;
+	if ( !arena::IsSafeName( script.map ) ) {
+		Com_Printf( "%s: invalid map name\n", path.data() );
+		return;
+	}
+
+	std::array<char, MAX_QPATH> mapPath{};
+	Com_sprintf( mapPath.data(), SV_ArraySize(mapPath), "maps/%s.bsp", script.map.c_str() );
+	{
+		// bypass pure check so we can open a downloaded map, as SV_Map_f does
+		FS_BypassPure();
+		const auto restorePure = SV_MakeScopeExit( []() { FS_RestorePure(); } );
+		if ( FS_FOpenFileRead( mapPath.data(), nullptr, qfalse ) == -1 ) {
+			Com_Printf( "Can't find map %s!\n", mapPath.data() );
+			return;
+		}
+	}
+
+	const int botSkill = script.botSkill
+		? *script.botSkill : Cvar_VariableIntegerValue( "g_spSkill" );
+
+	// force latched values to get set
+	Cvar_Get( "g_gametype", "0", CVAR_SERVERINFO | CVAR_USERINFO | CVAR_LATCH );
+	SV_FactoryDeactivate();
+	Cvar_SetIntegerValue( "g_gametype", GT_FFA );
+	Cvar_SetIntegerValue( "g_spSkill", botSkill );
+	Cvar_SetIntegerValue( "fraglimit", script.fragLimit );
+	Cvar_SetIntegerValue( "timelimit", script.timeLimit );
+	if ( !script.bots.empty() ) {
+		Cvar_Set( "g_botSpawnList", script.bots.c_str() );
+	}
+
+	SV_SpawnServer( script.map.c_str(), qtrue );
+	Cvar_Set( "sv_cheats", "0" );
+}
+
+
+/*
 ================
 SV_MapRestart_f
 
@@ -449,9 +543,17 @@ static void SV_Kick_f( void ) {
 		return;
 	}
 
-	if ( Cmd_Argc() != 2 ) {
-		Com_Printf ("Usage: kick <player name>\nkick all = kick everyone\nkick allbots = kick all bots\n");
+	if ( Cmd_Argc() < 2 ) {
+		Com_Printf ("Usage: kick <player name> [reason]\nkick all = kick everyone\nkick allbots = kick all bots\n");
 		return;
+	}
+
+	// Retail accepts an optional reason shorter than 128 characters and drops
+	// the player with "was kicked: <reason>" (quakelive_steam.exe 0x4dea7a).
+	char kickMessage[160];
+	Q_strncpyz( kickMessage, "was kicked", sizeof( kickMessage ) );
+	if ( Cmd_Argc() > 2 && strlen( Cmd_Argv( 2 ) ) < 128 ) {
+		Com_sprintf( kickMessage, sizeof( kickMessage ), "was kicked: %s", Cmd_Argv( 2 ) );
 	}
 
 	cl = SV_GetPlayerByHandle();
@@ -487,7 +589,7 @@ static void SV_Kick_f( void ) {
 		return;
 	}
 
-	SV_DropClient( cl, "was kicked" );
+	SV_DropClient( cl, kickMessage );
 	cl->lastPacketTime = svs.time;	// in case there is a funny zombie
 }
 
@@ -1382,6 +1484,16 @@ static void SV_ConSay_f( void ) {
 		p++;
 	}
 
+	// Retail's chat command leads with the sender's client number, which
+	// cgame parses first; the console speaks as slot 63 under the name
+	// "Server" (quakelive_steam.exe 0x4def24: chat "%i Server: %s\n").
+	// A classic vmMain module or a QVM keeps the Quake III form.
+	if ( SV_GameQueryExportsAvailable() ) {
+		Com_sprintf( text.data(), SV_ArraySize(text), "%i Server: %s", MAX_CLIENTS - 1, p );
+		SV_SendServerCommand( nullptr, "chat \"%s\n\"", text.data() );
+		return;
+	}
+
 	Com_sprintf( text.data(), SV_ArraySize(text), "console: %s", p );
 
 	SV_SendServerCommand( nullptr, "chat \"%s\"", text.data() );
@@ -1689,7 +1801,8 @@ void SV_AddOperatorCommands( void ) {
 	static constexpr std::array<operatorCommand_t, 1> mapCommands = {{
 		{ "map", SV_Map_f },
 	}};
-	static constexpr std::array<operatorCommand_t, 4> qlFactoryCommands = {{
+	static constexpr std::array<operatorCommand_t, 5> qlFactoryCommands = {{
+		{ "arena", SV_Arena_f },
 		{ "reload_arenas", SV_ArenaReload_f },
 		{ "reload_factories", SV_FactoryReload_f },
 		{ "reload_mappool", SV_MapPoolReload_f },

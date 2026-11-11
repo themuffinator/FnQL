@@ -370,8 +370,7 @@ void AudioSystem::Shutdown() {
 }
 
 qboolean AudioSystem::IsSoftMuted() const {
-	return ( ( !gw_active && !gw_minimized && s_muteWhenUnfocused != nullptr && s_muteWhenUnfocused->integer ) ||
-		( gw_minimized && s_muteWhenMinimized != nullptr && s_muteWhenMinimized->integer ) ) ? qtrue : qfalse;
+	return S_MutedByWindowState();
 }
 
 bool AudioSystem::UpdateDeviceState( int msec ) {

@@ -273,9 +273,7 @@ static void S_Base_SoundInfo( void ) {
 	if ( !s_soundStarted ) {
 		Com_Printf( "sound system not started\n" );
 	} else {
-		const bool focusMuted =
-			( !gw_active && !gw_minimized && s_muteWhenUnfocused != nullptr && s_muteWhenUnfocused->integer ) ||
-			( gw_minimized && s_muteWhenMinimized != nullptr && s_muteWhenMinimized->integer );
+		const bool focusMuted = S_MutedByWindowState() != qfalse;
 		Com_Printf( "Backend: legacy\n" );
 		Com_Printf( "Master volume: %.2f\n", s_volume != nullptr ? s_volume->value : 1.0f );
 		Com_Printf( "Mute state: %s%s\n",

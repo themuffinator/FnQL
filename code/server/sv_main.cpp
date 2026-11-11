@@ -66,6 +66,7 @@ cvar_t	*sv_floodProtect;
 cvar_t	*sv_enableRankings;
 cvar_t	*sv_rankingsActive;
 cvar_t	*sv_lanForceRate; // dedicated 1 (LAN) server forces local client rates to 99999 (bug #491)
+cvar_t	*sv_serverType;	// retail visibility: 0 offline, 1 LAN, 2 Internet
 cvar_t	*sv_autoRecordDemos;
 cvar_t	*sv_cheats;
 cvar_t	*sv_gtid;
@@ -1114,6 +1115,15 @@ SV_PacketEvent
 */
 void SV_PacketEvent( const netadr_t *from, msg_t *msg ) {
 	int			qport;
+
+	// Retail ignores every packet but the in-process loopback client's while
+	// sv_serverType is 0 (quakelive_steam.exe 0x4e4518).
+	if ( !fnql::server::cvars::ServerTypeAcceptsPacket(
+		sv_serverType ? sv_serverType->integer : 2,
+		from->type == NA_LOOPBACK ) ) {
+		return;
+	}
+
 	SV_SteamHandleIncomingPacket( from, msg );
 
 	if ( msg->cursize < 6 ) // too short for anything
@@ -1138,6 +1148,7 @@ void SV_PacketEvent( const netadr_t *from, msg_t *msg ) {
 	qport = MSG_ReadShort( msg ) & 0xffff;
 
 	// find which client the message is from
+	bool knownSender = false;
 	for ( client_t &client : SV_Clients() ) {
 		if ( client.state == CS_FREE ) {
 			continue;
@@ -1169,6 +1180,18 @@ void SV_PacketEvent( const netadr_t *from, msg_t *msg ) {
 			}
 			return;
 		}
+
+		// A known client whose packet was stale or malformed keeps its slot.
+		knownSender = true;
+	}
+
+	// Retail answers a sequenced packet from an address and qport that match
+	// no client slot with an out-of-band "disconnect" (quakelive_steam.exe
+	// 0x4e463f), so a client left over from before a restart stops at once
+	// instead of timing out. The reply is no larger than the packet that
+	// triggered it; the limiter keeps a spoofed flood from being relayed.
+	if ( !knownSender && !SVC_RateLimitAddress( from, 4, 1000 ) ) {
+		NET_OutOfBandPrint( NS_SERVER, from, "disconnect" );
 	}
 }
 

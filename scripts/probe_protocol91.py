@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Read-only UDP probe for a running FnQL protocol-91 server."""
+"""Read-only UDP probe for a running FnQL protocol-91 server.
+
+The server must run with sv_serverType 1 (LAN) or 2 (Internet). At the retail
+default of 0 it ignores every remote packet, so every request here times out.
+"""
 
 from __future__ import annotations
 

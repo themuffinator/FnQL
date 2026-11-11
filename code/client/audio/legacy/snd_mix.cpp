@@ -690,7 +690,7 @@ extern "C" void S_PaintChannels( int endtime ) {
 
 	snd_vol = s_volume->value * 255;
 
-	if ( (!gw_active && !gw_minimized && s_muteWhenUnfocused->integer) || (gw_minimized && s_muteWhenMinimized->integer) ) {
+	if ( S_MutedByWindowState() ) {
 		buffer = dma_buffer2;
 		if ( !muted ) {
 			// switching to muted, clear hardware buffer

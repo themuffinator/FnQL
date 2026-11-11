@@ -64,6 +64,36 @@ the live `sv_altEntDir` path against the retail module.
 | Identity/defaults | A provider persona replaces the inherited `noname` default with retail's `<persona>'s Match` form. Explicit non-default hostnames remain unchanged. `sv_gtid` remains a read-only empty engine publication until a compatible owner supplies evidence for a value. |
 | Diagnostic compatibility | `sv_showloss` retains the retail registration. No packet behavior is invented because neither the shipped binary probe nor the reference evidence established a consumer. |
 
+### `sv_serverType` is enforced
+
+Retail's Start Match page labels the values Offline (0), LAN (1) and Internet
+(2), and the retail `server.cfg` sets 2. Observed in `quakelive_steam.exe`:
+`SV_PacketEvent` ignores every packet that does not come from the in-process
+loopback client while the cvar is 0 (`0x4e4518`), and `getchallenge` from a
+non-LAN address is answered with `print\nServer is for LAN clients only.\n`
+while it is 1 (`0x4df440`). FnQL registered the cvar with retail's default of
+0 but did not act on it, so a match started as Offline still accepted remote
+players. Both gates are now in place; the first sits ahead of the Steam packet
+bridge and FnQL's own `getinfo`, `getstatus` and `rcon` replies.
+
+This changes what a default configuration does: a dedicated server started
+without `sv_serverType 1` or `2` ignores every remote packet, exactly as a
+retail one does, and prints a warning when a map starts. Probes and gates that
+reach a server over UDP set `sv_serverType 1`.
+
+Retail also answers a sequenced packet from an address and qport that match no
+client with an out-of-band `disconnect` (`0x4e463f`), so a client left over from
+before a restart stops at once. FnQL sends it under a per-address rate limit.
+
+### Steam game-server identity
+
+Observed retail values: build string `1069` to `SteamGameServer_Init`
+(`0x466fc1`), product `Quake Live` (`0x467090`), the long gametype name as the
+game description (`0x46650b`, table `0x560e50`), the password flag from
+`g_needpass` (`0x4662a7`), and the active factory's tags after `sv_tags`
+(`0x466744`). FnQL had sent its own version string, the AppID as the product,
+`Quake Live` as the description, and the private-slot password as the flag.
+
 Factory/map-pool owners already cover `sv_mapPoolFile`,
 `sv_includeCurrentMapInVote`, and `sv_serverType`. Common/filesystem owners
 already cover the read-only running, pause, checksum, pak, and reference
