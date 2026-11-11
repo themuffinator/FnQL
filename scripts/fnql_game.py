@@ -183,8 +183,8 @@ def stage(
             raise FileNotFoundError(f"FnQL-game checkout is missing {source_name}")
         shutil.copyfile(document, docs / destination_name)
         staged.append(f"{DOCS_DIR}/{destination_name}")
-    # write_bytes keeps LF endings on every host; Path.write_text(newline=)
-    # needs Python 3.10 and the Ubuntu 20.04 release container has 3.8.
+    # write_bytes keeps LF endings on every host. The text API's newline
+    # argument needs Python 3.10; the Ubuntu 20.04 release container has 3.8.
     (docs / BUILD_INFO_NAME).write_bytes(build_info_text(pin, platform).encode("utf-8"))
     staged.append(f"{DOCS_DIR}/{BUILD_INFO_NAME}")
     return staged
