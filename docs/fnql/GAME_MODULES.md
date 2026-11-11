@@ -162,8 +162,29 @@ middle of the client's message as retail does, so a `map` or `kill` cannot
 free state the parser still uses. Output still returns to the admin as
 out-of-band `print` packets.
 
+## Release packaging
+
+FnQL releases bundle the FnQL-game modules built from the commit pinned in
+`version/fnql_game.json`: `baseq3/fnql_qagamex86.dll`, `fnql_cgamex86.dll`
+and `fnql_uix86.dll` in the Windows packages, and the `i386.so` set in the
+Linux package. Extracting a package into the Quake Live folder puts them in
+`<Quake Live>/baseq3`, which is on the search path, so `vm_gameProvider fnql`
+finds the qagame without further setup. Nothing else changes: the default
+provider stays `retail`, and the cgame and UI modules are inert until
+`vm_cgameProvider` and `vm_uiProvider` exist (milestone 10).
+
+The modules contain code under two licenses. FnQL-game's own code is GPLv2 or
+later; its baseline from baseq3a is under id Software's Limited Use agreement,
+and whether baseq3a's changes may be relicensed under the GPL is still open.
+Each package therefore carries `docs/fnql/FNQL_GAME_BINARY_NOTICE.txt`,
+FnQL-game's `LICENSING.md`, id's agreement and a `BUILD-INFO.txt` naming the
+source commit, all under `docs/fnql-game/` except the notice.
+[`TECHNICAL.md`](TECHNICAL.md) describes the CI jobs and package checks.
+
 ## Validation
 
+- `tests/fnql_game_release_tests.py`: the pin, staging, and package checks for
+  the bundled modules, and the release workflow jobs that build and gate them.
 - `tests/game_module_provider_source_tests.py`: provider selection order,
   identity checks, the server-module reference exemption, and the
   `BotPredictVisiblePosition` import arity.

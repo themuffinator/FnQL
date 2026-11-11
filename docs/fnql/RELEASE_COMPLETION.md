@@ -23,6 +23,16 @@ only planned.
 
 ## Ready For Changelog
 
+- [x] Bundle the FnQL-game modules (qagame, cgame, ui) in every Windows and
+  Linux package under `baseq3/`. The release workflow builds the commit pinned
+  in `version/fnql_game.json` with MSVC Win32 and in an Ubuntu 20.04 i686
+  container, runs FnQL-game's full `meson test` suite (locally 54 pass on
+  each target; the retail-only gates skip without an install), and packages the
+  modules with their dual-licence documents. Local probes: an x86
+  `fnql.ded.exe` and an i686 Linux `fnql.ded` both loaded the staged qagame
+  through `vm_gameProvider fnql` on `campgrounds` and hosted a bot.
+  `tests/fnql_game_release_tests.py` gates the pin, staging and package
+  checks.
 - [x] Share snapshot history validation between retail native and legacy VM
   imports, preserve packet/entity counter rollover in client and demo paths,
   and reject malformed entity order and truncated areamask sizes. Native
