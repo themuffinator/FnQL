@@ -193,6 +193,15 @@ cvar_t	*in_joyVertMoveDeadzone;
 cvar_t	*joy_threshold;
 #endif
 
+/*
+Retail publishes the active Windows mouse path in the read-only status cvar
+in_mouseMode: "undefined" until the mouse starts, then "win32", "DirectInput"
+or "win32(Raw)" (quakelive_steam.exe 0x4ec179, 0x4ea588, 0x4ea67c, 0x4ebb88).
+*/
+static void IN_PublishMouseMode( const char *mode ) {
+	Cvar_Set( "in_mouseMode", mode );
+}
+
 // forward-referenced functions
 #ifdef USE_JOYSTICK
 void IN_StartupJoystick (void);
@@ -1167,6 +1176,7 @@ static qboolean IN_ActivateDIMouse( void ) {
 			IN_ShutdownDIMouse();
 			Com_Printf ("Falling back to Win32 mouse support...\n");
 			Cvar_Set( "in_mouse", "-1" );
+			IN_PublishMouseMode( "win32" );
 			return IN_ActivateWin32Mouse();
 		}
 	}
@@ -1428,18 +1438,21 @@ static void IN_StartupMouse( void )
 
 		if ( in_mouse->integer == 2 && IN_InitRawMouse() ) {
 			s_wmv.mouseInitialized = qtrue;
+			IN_PublishMouseMode( "win32(Raw)" );
 			Com_DPrintf( "Raw mouse input initialized.\n" );
 			return;
 		}
 
 		if ( in_mouse->integer >= 1 && IN_InitDIMouse() ) {
 			s_wmv.mouseInitialized = qtrue;
+			IN_PublishMouseMode( "DirectInput" );
 			return;
 		}
 		Com_DPrintf( "Falling back to Win32 mouse support...\n" );
 	}
 
 	s_wmv.mouseInitialized = qtrue;
+	IN_PublishMouseMode( "win32" );
 }
 
 
@@ -1921,6 +1934,8 @@ void IN_Init( void ) {
 #endif
 
 	// mouse variables
+	Cvar_SetDescription( Cvar_Get( "in_mouseMode", "undefined", CVAR_ROM | CVAR_TEMP ),
+		"Read-only Quake Live status: the Windows mouse path in use (win32, DirectInput or win32(Raw))." );
 	in_mouse = Cvar_Get ("in_mouse", "2", CVAR_ARCHIVE | CVAR_LATCH | CVAR_CLOUD );
 	Cvar_CheckRange( in_mouse, "-1", "2", CV_INTEGER );
 	Cvar_SetDescription( in_mouse,

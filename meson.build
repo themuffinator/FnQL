@@ -1220,6 +1220,15 @@ test('fnql_server_cvar_compat', server_cvar_compat_tests)
 test('fnql_server_cvar_compat_source', python,
   args: files('tests/server_cvar_compat_source_tests.py'),
 )
+
+arena_script_tests = executable('fnql_arena_script_tests',
+  'tests/arena_script_tests.cpp',
+  cpp_args: common_cpp_args,
+)
+test('fnql_arena_script', arena_script_tests)
+test('fnql_retail_parity_gap_source', python,
+  args: files('tests/retail_parity_gap_source_tests.py'),
+)
 test('fnql_spawn_view_angle_source', python,
   args: files('tests/spawn_view_angle_source_tests.py'),
 )

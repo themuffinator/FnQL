@@ -17,11 +17,13 @@ General Public License version 2 or (at your option) any later version.
  * (cg_railStyle, cg_autoswitch, cg_kickScale, cg_weaponConfig,
  * r_windowedMode). Both the retail uix86.dll and FnQL-game's UI write them
  * through UI imports 7 and 8 when such an item is clicked or edited.
- * Inference: the retail engine lets the UI change protected cvars, or those
- * menus would be inert.
+ * Observed: retail UI import 7 and cgame import 7 are one thunk onto the
+ * engine's forcing Cvar_Set (quakelive_steam.exe 0x4ea2a0 -> 0x4cd250), which
+ * has no 0x800 check, and retail cgame writes its own protected cvars through
+ * it (cg_viewsize from sizeup/sizedown, cg_announcer).
  *
- * The UI may therefore change protected cvars, unlike servers and game
- * modules (Cvar_SetSafe). It may never change a private cvar, nor a
+ * The UI and the native cgame may therefore change protected cvars, unlike
+ * servers, qagame and legacy VM cgames (Cvar_SetSafe). It may never change a private cvar, nor a
  * protected one that is also read-only or init-only: those hold engine
  * identity and startup state such as version, fs_basegame, cl_guid and
  * vm_rtChecks. */

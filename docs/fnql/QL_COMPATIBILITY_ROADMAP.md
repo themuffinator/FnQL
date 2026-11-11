@@ -193,6 +193,17 @@ FnQL-game's answers to them are gated against the retail qagame. Contract:
   snapshots or relayed voice, and the Steam player list was not observed on a
   live server browser.
 
+## 2026-11-11 retail functional parity audit
+
+A whole-engine comparison against the retail executable, covering the console
+command and cvar inventories, the three native import tables, the WebUI bridge,
+and the network and operator surfaces. The findings, the gaps plugged in this
+slice, the deliberate differences, and the ranked list of gaps still open are
+in [`RETAIL_PARITY_GAPS.md`](RETAIL_PARITY_GAPS.md).
+
+The behavior change to plan around is that `sv_serverType` is now enforced as
+retail enforces it: at its default of 0 a server ignores every remote packet.
+
 ## Architecture and execution order
 
 ### 1. Compatibility descriptors and safety rails

@@ -121,6 +121,9 @@ def main() -> int:
             "+set", "fs_homepath", str(server_home),
             "+set", "net_port", str(args.port),
             "+set", "sv_pure", "1",
+            # Retail's default sv_serverType 0 ignores every remote packet; 1
+            # (LAN) admits the probe client on 127.0.0.1.
+            "+set", "sv_serverType", "1",
             "+set", "sv_autoRecordDemos", "1",
             "+set", "logfile", "2",
             "+set", "developer", "1",

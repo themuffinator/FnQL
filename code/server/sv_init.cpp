@@ -741,6 +741,12 @@ void SV_SpawnServer( const char *mapname, qboolean killBots ) {
 
 	Hunk_SetMark();
 
+	if ( com_dedicated->integer && sv_serverType && sv_serverType->integer == 0 ) {
+		// Retail ships server.cfg with sv_serverType 2 for the same reason.
+		Com_Printf( S_COLOR_YELLOW "sv_serverType is 0 (offline): this server ignores every remote packet.\n"
+			S_COLOR_YELLOW "Set sv_serverType 1 for LAN or 2 for Internet play.\n" );
+	}
+
 	Com_Printf ("-----------------------------------\n");
 
 	Sys_SetStatus( "Running map %s", mapname );
@@ -932,6 +938,8 @@ void SV_Init( void )
 	Cvar_SetDescription( sv_killserver, "Internal flag to manage server state." );
 	sv_mapChecksum = Cvar_Get( "sv_mapChecksum", "", CVAR_ROM );
 	Cvar_SetDescription( sv_mapChecksum, "Allows check for client server map to match." );
+	// Same registration as the factory runtime; the packet gates read it here.
+	sv_serverType = Cvar_Get( "sv_serverType", "0", CVAR_ARCHIVE );
 	sv_lanForceRate = Cvar_Get( "sv_lanForceRate", "1", CVAR_ARCHIVE_ND );
 	Cvar_SetDescription( sv_lanForceRate, "Forces LAN clients to the maximum rate instead of accepting client setting." );
 	sv_autoRecordDemos = Cvar_Get( "sv_autoRecordDemos", "0", CVAR_ARCHIVE_ND );

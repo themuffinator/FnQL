@@ -27,6 +27,36 @@ constexpr int kRetailMaximumTimeNudge = 0;
 		: value > kRetailMaximumTimeNudge ? kRetailMaximumTimeNudge : value;
 }
 
+/*
+Retail com_allowConsole (quakelive_steam.exe 0.1.0.739). Observed:
+- the `toggleconsole` command toggles only while the cvar is exactly 1 and
+  otherwise leaves a developer print (0x4b49d0);
+- with the console closed, the hard-wired console key is refused while the
+  cvar is 2, and while it is 0 unless Ctrl and Alt are both held; every other
+  value keeps the key live (0x4b7b5e, 0x4b8121);
+- an open console can always be closed with the key.
+The retail options menu and WebUI settings page both write this cvar.
+*/
+[[nodiscard]] constexpr bool ConsoleCommandMayToggle( int allowConsole ) noexcept
+{
+	return allowConsole == 1;
+}
+
+[[nodiscard]] constexpr bool ConsoleHotkeyMayToggle( int allowConsole,
+	bool consoleOpen, bool ctrlDown, bool altDown ) noexcept
+{
+	if ( consoleOpen ) {
+		return true;
+	}
+	if ( allowConsole == 2 ) {
+		return false;
+	}
+	if ( allowConsole == 0 ) {
+		return ctrlDown && altDown;
+	}
+	return true;
+}
+
 struct TimeNudgeInputs {
 	bool spectating = false;
 	bool localServer = false;

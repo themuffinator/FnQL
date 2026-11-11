@@ -26,6 +26,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "../qcommon/netchan_safety.hpp"
 #include "../platform/fnql_steam.h"
 #include "retail_auth_challenge.hpp"
+#include "server_cvar_compat.hpp"
 #include "stats_contract.hpp"
 #include "stats_event.hpp"
 #include "stats_report.hpp"
@@ -211,6 +212,16 @@ void SV_GetChallenge( const netadr_t *from, const msg_t *msg ) {
 			Com_Printf( "SV_GetChallenge: rate limit from %s exceeded, dropping request\n",
 				NET_AdrToString( from ) );
 		}
+		return;
+	}
+
+	// Retail refuses a non-LAN challenge while sv_serverType is 1
+	// (quakelive_steam.exe 0x4df440).
+	if ( !fnql::server::cvars::ServerTypeAcceptsChallenge(
+		sv_serverType ? sv_serverType->integer : 2,
+		Sys_IsLANAddress( from ) != qfalse ) ) {
+		NET_OutOfBandPrint( NS_SERVER, from, "%s",
+			fnql::server::cvars::kLanOnlyChallengeReply );
 		return;
 	}
 
@@ -1989,10 +2000,17 @@ void SV_DropClient( client_t *drop, const char *reason ) {
 	// Free all allocated data on the client structure
 	SV_FreeClient( drop );
 
-	// tell everyone why they got dropped
+	// tell everyone why they got dropped; retail replaces the reason with a
+	// ragequit notice when qagame flagged the client through import 192
+	// (quakelive_steam.exe 0x4df726)
 	if ( reason ) {
-		SV_SendServerCommand( nullptr, "print \"%s" S_COLOR_WHITE " %s\n\"", name.data(), reason );
+		if ( drop->rageQuit ) {
+			SV_SendServerCommand( nullptr, "print \"%s " S_COLOR_RED "rage" S_COLOR_WHITE "quits\n\"", name.data() );
+		} else {
+			SV_SendServerCommand( nullptr, "print \"%s" S_COLOR_WHITE " %s\n\"", name.data(), reason );
+		}
 	}
+	drop->rageQuit = qfalse;
 
 	// call the prog function for removing a client
 	// this will remove the body, among other things

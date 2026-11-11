@@ -28,6 +28,29 @@ namespace fnql::server::cvars {
 		|| character == '\r' || character == '\f' || character == '\v';
 }
 
+/*
+Retail sv_serverType ("0", archived; the Start Match page labels the values
+Offline, LAN and Internet). Observed in quakelive_steam.exe 0.1.0.739:
+- SV_PacketEvent processes a packet only when the cvar is nonzero or the
+  sender is the in-process loopback address (0x4e4518);
+- getchallenge from a non-LAN address is answered with a refusal print while
+  the cvar is exactly 1 (0x4df440).
+*/
+inline constexpr char kLanOnlyChallengeReply[] =
+	"print\nServer is for LAN clients only.\n";
+
+[[nodiscard]] constexpr bool ServerTypeAcceptsPacket(
+	int serverType, bool loopbackSender ) noexcept
+{
+	return serverType != 0 || loopbackSender;
+}
+
+[[nodiscard]] constexpr bool ServerTypeAcceptsChallenge(
+	int serverType, bool lanSender ) noexcept
+{
+	return serverType != 1 || lanSender;
+}
+
 enum class ExitLevelAction {
 	Continue,
 	Shutdown,
@@ -157,6 +180,31 @@ cannot escape its configured game directory on any supported platform.
 	return path;
 }
 
+/*
+Retail Steam game-server identity (quakelive_steam.exe 0.1.0.739). Observed:
+- SteamGameServer_Init receives the build string "1069" (0x466fc1);
+- SetProduct("Quake Live") and SetModDir("baseq3") (0x467090, 0x4670a0);
+- SetGameDescription is the long name of g_gametype from the table at
+  0x560e50, or "Unknown Gametype" beyond it (0x46650b);
+- SetPasswordProtected follows g_needpass, the flag qagame raises when a join
+  password is set, not the private-slot password (0x4662a7).
+The Steam server browser shows the description in its Game column.
+*/
+inline constexpr char kRetailSteamServerVersion[] = "1069";
+inline constexpr char kRetailSteamServerProduct[] = "Quake Live";
+
+[[nodiscard]] constexpr std::string_view SteamGameDescription(
+	int gametype ) noexcept
+{
+	constexpr std::string_view names[] = {
+		"Free For All", "Duel", "Race", "Team Deathmatch", "Clan Arena",
+		"Capture the Flag", "One Flag CTF", "Overload", "Harvester",
+		"Freeze Tag", "Domination", "Attack and Defend", "Red Rover"
+	};
+	return gametype >= 0 && gametype < static_cast<int>( std::size( names ) )
+		? names[gametype] : std::string_view( "Unknown Gametype" );
+}
+
 struct SteamTagInputs {
 	int gametype = 0;
 	bool cheats = false;
@@ -167,6 +215,7 @@ struct SteamTagInputs {
 	bool quadhog = false;
 	std::string_view fnqlKeywords;
 	std::string_view retailTags;
+	std::string_view factoryTags;
 };
 
 [[nodiscard]] inline std::string BuildSteamGameTags(
@@ -221,6 +270,8 @@ struct SteamTagInputs {
 	if ( inputs.gametype == 0 && inputs.quadhog ) append( "quadhog" );
 	append( inputs.fnqlKeywords );
 	append( inputs.retailTags );
+	// Retail order: sv_tags, then the active factory's tags (0x466744).
+	append( inputs.factoryTags );
 	return tags;
 }
 

@@ -1241,7 +1241,7 @@ typedef void (QDECL *ql_import_f)( void );
 static ql_import_f ql_game_imports[GAME_NATIVE_IMPORT_COUNT];
 static_assert( G_QL_IMPORT_SUBMIT_MATCH_REPORT == 185, "QL qagame direct import slot 185 must remain MATCH_REPORT" );
 static_assert( G_QL_IMPORT_REPORT_PLAYER_EVENT == 186, "QL qagame direct import slot 186 must remain PLAYER_EVENT" );
-static_assert( G_QL_IMPORT_MARK_CLIENT_GOT_CP == 192, "QL qagame direct import slot 192 must remain MARK_CLIENT_GOT_CP" );
+static_assert( G_QL_IMPORT_MARK_CLIENT_RAGEQUIT == 192, "QL qagame direct import slot 192 must remain MARK_CLIENT_RAGEQUIT" );
 static_assert( G_QL_IMPORT_RETURN_ZERO_198 == 198, "QL qagame direct import slot 198 must remain an explicit zero stub" );
 static_assert( G_QL_IMPORT_RETURN_ZERO_199 == 199, "QL qagame direct import slot 199 must remain an explicit zero stub" );
 static_assert( G_QL_IMPORT_STEAMID_QUERY == 200, "QL qagame direct import slot 200 must remain STEAMID_QUERY" );
@@ -1648,13 +1648,20 @@ static void QDECL QL_G_trap_ResendConfigstring( int index ) {
 	SV_GameResendConfigstring( index );
 }
 
-static void *QDECL QL_G_trap_MarkClientGotCP( int clientNum ) {
+/*
+Retail import 192 (quakelive_steam.exe 0x4e26e0 -> 0x4df830) sets a per-client
+flag whose only reader is SV_DropClient (0x4df726), which then announces the
+drop as a ragequit. Retail qagame calls it from its `ragequit` client command.
+It is unrelated to the pure-check `cp` flag, which retail keeps elsewhere in
+the client record; an out-of-range slot returns the argument unchanged.
+*/
+static void *QDECL QL_G_trap_MarkClientRageQuit( int clientNum ) {
 	if ( !SV_IsClientIndex( clientNum ) ) {
 		return reinterpret_cast<void *>( static_cast<intptr_t>( clientNum ) );
 	}
 
 	client_t &client = SV_ClientForIndex( clientNum );
-	client.gotCP = qtrue;
+	client.rageQuit = qtrue;
 	return &client;
 }
 
@@ -1762,9 +1769,20 @@ static qboolean QDECL QL_G_trap_GetSteamId( int clientNum, unsigned int *steamId
 // the "st" key of CS_PLAYERS.  A 32-bit return left EDX undefined.  The older
 // compatibility syscall uses the three-argument output-pointer shape above;
 // sharing one function between those ABIs corrupts the caller stack.
+//
+// Retail answers 0 for a slot whose userinfo carries a "characterfile" key,
+// which is how it recognises a bot (quakelive_steam.exe 0x4e2710), even though
+// the engine holds an anonymous SteamID for the bot so Steam can list it.
 static std::uint64_t QDECL QL_G_trap_GetSteamId64( int clientNum ) {
 	unsigned int low = 0;
 	unsigned int high = 0;
+	if ( SV_IsClientIndex( clientNum ) ) {
+		const client_t &client = SV_ClientForIndex( clientNum );
+		if ( client.netchan.remoteAddress.type == NA_BOT ||
+			Info_ValueForKey( client.userinfo, "characterfile" )[0] != '\0' ) {
+			return 0;
+		}
+	}
 	if ( !SV_ClientSteamId( clientNum, &low, &high ) ) {
 		return 0;
 	}
@@ -2226,7 +2244,7 @@ static void SV_InitGameImports( void ) {
 	QL_BIND( G_QL_IMPORT_BOTLIB_AI_GENETIC_PARENTS_AND_CHILD_SELECTION, QL_G_trap_GeneticParentsAndChildSelection );
 	QL_BIND( G_QL_IMPORT_SUBMIT_MATCH_REPORT, QL_G_trap_SubmitMatchReport );
 	QL_BIND( G_QL_IMPORT_REPORT_PLAYER_EVENT, QL_G_trap_ReportPlayerEvent );
-	QL_BIND( G_QL_IMPORT_MARK_CLIENT_GOT_CP, QL_G_trap_MarkClientGotCP );
+	QL_BIND( G_QL_IMPORT_MARK_CLIENT_RAGEQUIT, QL_G_trap_MarkClientRageQuit );
 	QL_BIND( G_QL_IMPORT_RETURN_ZERO_198, QL_G_trap_ReturnZero );
 	QL_BIND( G_QL_IMPORT_RETURN_ZERO_199, QL_G_trap_ReturnZero );
 	QL_BIND( G_QL_IMPORT_STEAMID_QUERY, QL_G_trap_GetSteamId64 );

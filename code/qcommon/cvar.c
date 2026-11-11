@@ -1240,6 +1240,54 @@ static void Cvar_Add_f( void ) {
 
 /*
 ============
+Cvar_Mult_f
+
+Retail `cvarMult <variable> <amount>` (quakelive_steam.exe 0x4cd560): the
+multiplying twin of cvarAdd, with a missing cvar read as 0.
+============
+*/
+static void Cvar_Mult_f( void ) {
+	cvar_t	*var;
+	float	currentValue;
+	float	amount;
+
+	if ( Cmd_Argc() != 3 ) {
+		Com_Printf( "usage: cvarMult <variable> <amount>\n" );
+		return;
+	}
+
+	var = Cvar_FindVar( Cmd_Argv( 1 ) );
+	currentValue = var ? var->value : 0.0f;
+	amount = Q_atof( Cmd_Argv( 2 ) );
+
+	Cvar_Set2( Cmd_Argv( 1 ), va( "%0.3f", currentValue * amount ), qfalse );
+}
+
+
+/*
+============
+Cvar_Clear_f
+
+Retail `clearcvar <variable>` sets the cvar to the empty string
+(quakelive_steam.exe 0x4cd860); the retail options menu runs it from the
+"clear" buttons beside each cg_weaponConfig row. Retail forces the write.
+FnQL sends it down the ordinary user path instead, so a config or a remote
+server's stuffed command cannot blank read-only, init-only or cheat-protected
+engine state; the cvars the retail menu clears are plain archived settings.
+============
+*/
+static void Cvar_Clear_f( void ) {
+	if ( Cmd_Argc() != 2 ) {
+		Com_Printf( "usage: clearcvar <variable>\n" );
+		return;
+	}
+
+	Cvar_Set2( Cmd_Argv( 1 ), "", qfalse );
+}
+
+
+/*
+============
 Cvar_Set_f
 
 Allows setting and defining of arbitrary cvars from console, even if they
@@ -2494,6 +2542,10 @@ void Cvar_Init (void)
 	Cmd_SetCommandCompletionFunc( "toggle", Cvar_CompleteCvarName );
 	Cmd_AddCommand( "cvarAdd", Cvar_Add_f );
 	Cmd_SetCommandCompletionFunc( "cvarAdd", Cvar_CompleteCvarName );
+	Cmd_AddCommand( "cvarMult", Cvar_Mult_f );
+	Cmd_SetCommandCompletionFunc( "cvarMult", Cvar_CompleteCvarName );
+	Cmd_AddCommand( "clearcvar", Cvar_Clear_f );
+	Cmd_SetCommandCompletionFunc( "clearcvar", Cvar_CompleteCvarName );
 	Cmd_AddCommand ("set", Cvar_Set_f);
 	Cmd_SetCommandCompletionFunc( "set", Cvar_CompleteCvarName );
 	Cmd_AddCommand ("sets", Cvar_Set_f);
@@ -2510,6 +2562,7 @@ void Cvar_Init (void)
 	Cmd_AddCommand( "varfunc", Cvar_Func_f );
 
 	Cmd_AddCommand ("cvarlist", Cvar_List_f);
+	Cmd_AddCommand( "listcvars", Cvar_List_f );	// retail alias, same handler (0x4ce578)
 	Cmd_AddCommand ("cvar_modified", Cvar_ListModified_f);
 	Cmd_AddCommand ("cvar_restart", Cvar_Restart_f);
 	Cmd_AddCommand ("cvar_trim", Cvar_Trim_f);

@@ -1686,7 +1686,17 @@ static intptr_t CL_CgameSystemCalls( intptr_t *args ) {
 		}
 		return 0;
 	case CG_CVAR_SET:
-		Cvar_SetSafe( VMA(1), VMA(2) );
+		// Retail cgame import 7 is the engine's plain Cvar_Set (quakelive_steam.exe
+		// table 0x565958 slot 7 -> 0x4ea2a0 -> 0x4cd250), the same thunk as UI
+		// import 7, and retail cgame writes cvars it registered with 0x800
+		// through it (cg_viewsize from sizeup/sizedown, cg_announcer). The native
+		// module therefore gets the UI write policy; a legacy VM cgame keeps the
+		// stricter Cvar_SetSafe rule.
+		if ( cgvm->dllExports ) {
+			Cvar_SetFromUI( VMA(1), VMA(2) );
+		} else {
+			Cvar_SetSafe( VMA(1), VMA(2) );
+		}
 		return 0;
 	case CG_CVAR_VARIABLESTRINGBUFFER:
 		VM_CHECKBOUNDS( cgvm, args[2], args[3] );
@@ -2285,7 +2295,8 @@ static void QDECL QL_CG_trap_Cvar_RegisterRange( vmCvar_t *vmCvar, const char *v
 }
 
 static void QDECL QL_CG_trap_Cvar_SetValue( const char *varName, float value ) {
-	Cvar_SetValueSafe( varName, value );
+	// Native-only import 8; same write policy as import 7 above.
+	Cvar_SetValueFromUI( varName, value );
 }
 
 static float QDECL QL_CG_trap_Cvar_VariableValue( const char *varName ) {

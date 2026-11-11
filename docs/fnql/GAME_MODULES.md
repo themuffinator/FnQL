@@ -80,14 +80,26 @@ a product path.
   FnQL-game mirrors them, and its `scripts/check_engine_abi.py` compiles one
   layout probe against both trees and fails on any size, offset or constant
   difference. Change these structures only with a matching FnQL-game change.
-- UI cvar writes (imports 7 and 8) go through `Cvar_SetFromUI`, not
-  `Cvar_SetSafe`. Retail modules register their player settings with
-  `CVAR_PROTECTED` (0x800), and the installed menus edit those cvars, so the
-  UI may change a protected cvar. It may not change a `CVAR_PRIVATE` cvar or
-  a protected cvar that is also `CVAR_ROM` or `CVAR_INIT` (engine identity and
-  startup state such as `version`, `fs_basegame`, `cl_guid`). Servers and game
-  modules keep the `Cvar_SetSafe` rule. `code/qcommon/cvar_ui_policy.h` holds
-  the rule and `tests/cvar_ui_policy_tests.c` gates it.
+- UI and native cgame cvar writes (imports 7 and 8) go through
+  `Cvar_SetFromUI`, not `Cvar_SetSafe`. Retail modules register their player
+  settings with `CVAR_PROTECTED` (0x800), the installed menus edit those
+  cvars, and retail cgame writes its own (`cg_viewsize` from
+  `sizeup`/`sizedown`, `cg_announcer`). Retail UI import 7 and cgame import 7
+  are one thunk onto the engine's forcing `Cvar_Set` (`0x4ea2a0` ->
+  `0x4cd250`). Such a write may not change a `CVAR_PRIVATE` cvar or a
+  protected cvar that is also `CVAR_ROM` or `CVAR_INIT` (engine identity and
+  startup state such as `version`, `fs_basegame`, `cl_guid`). Servers, qagame
+  and legacy VM cgames keep the `Cvar_SetSafe` rule.
+  `code/qcommon/cvar_ui_policy.h` holds the rule and
+  `tests/cvar_ui_policy_tests.c` gates it.
+- qagame import 192 marks a client as a ragequit: `SV_DropClient` then
+  announces `<name> ^1rage^7quits` instead of the drop reason (retail
+  `0x4e26e0` -> `0x4df830`, read at `0x4df726`). Retail qagame calls it from
+  its `ragequit` client command. FnQL had bound it to the pure-check `cp`
+  flag until the 2026-11-11 audit.
+- qagame import 200 (SteamID query) answers 0 for a bot. Retail recognises a
+  bot by the `characterfile` userinfo key (`0x4e2710`); the anonymous SteamID
+  the engine gives a bot for the Steam player list is never handed to qagame.
 
 ## Interoperability rules
 

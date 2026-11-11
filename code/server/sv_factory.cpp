@@ -633,6 +633,38 @@ qboolean SV_FactoryPrepareMap( const char *mapName, const char *factoryName,
 	return qtrue;
 }
 
+/*
+Writes the active factory's tags as a comma-separated list. Retail appends up
+to eight of them to the Steam game tags after sv_tags (quakelive_steam.exe
+0x466744); its factory record has eight tag slots.
+*/
+void SV_FactoryActiveTags( char *buffer, int bufferSize ) {
+	constexpr std::size_t retailTagSlots = 8;
+
+	if ( !buffer || bufferSize < 1 ) {
+		return;
+	}
+	buffer[0] = '\0';
+	if ( !activeFactory ) {
+		return;
+	}
+
+	std::size_t written = 0;
+	for ( const std::string &tag : activeFactory->definition.tags ) {
+		if ( written == retailTagSlots ) {
+			break;
+		}
+		if ( tag.empty() ) {
+			continue;
+		}
+		if ( written ) {
+			Q_strcat( buffer, bufferSize, "," );
+		}
+		Q_strcat( buffer, bufferSize, tag.c_str() );
+		++written;
+	}
+}
+
 qboolean SV_FactoryBuildWebCatalogJson( char *buffer, int bufferSize ) {
 	if ( !buffer || bufferSize < 3 ) {
 		return qfalse;

@@ -26,6 +26,7 @@ extern "C" {
 }
 
 #include "client_cpp.h"
+#include "client_cvar_compat.hpp"
 #include "input_compat.hpp"
 #include "ql_font_bridge.hpp"
 
@@ -175,6 +176,8 @@ cvar_t		*con_scaleUniform;
 cvar_t		*con_screenExtents;
 static cvar_t	*con_timestamps;
 static cvar_t	*con_backgroundStyle;
+static cvar_t	*com_allowConsole;
+static cvar_t	*con_height;
 static cvar_t	*con_backgroundColor;
 static cvar_t	*con_backgroundOpacity;
 static cvar_t	*con_scrollSmooth;
@@ -4014,6 +4017,22 @@ static void Con_SyncSpeedCvars( void ) {
 
 /*
 ================
+Con_HotkeyMayToggle
+
+Retail com_allowConsole gate for the hard-wired console key.
+================
+*/
+qboolean Con_HotkeyMayToggle( void ) {
+	return fnql::client::cvars::ConsoleHotkeyMayToggle(
+		com_allowConsole ? com_allowConsole->integer : 1,
+		( Key_GetCatcher() & KEYCATCH_CONSOLE ) != 0,
+		keys[K_CTRL].down != qfalse,
+		keys[K_ALT].down != qfalse ) ? qtrue : qfalse;
+}
+
+
+/*
+================
 Con_ToggleConsole_f
 ================
 */
@@ -4049,6 +4068,26 @@ void Con_ToggleConsole_f( void ) {
 		con.inputSelecting = false;
 		con.logSelecting = false;
 	}
+}
+
+
+/*
+================
+Con_ToggleConsoleCommand_f
+
+The `toggleconsole` command. Retail honors it only while com_allowConsole is
+1 and leaves a developer print otherwise (quakelive_steam.exe 0x4b49d0).
+Engine-internal toggles keep calling Con_ToggleConsole_f directly.
+================
+*/
+static void Con_ToggleConsoleCommand_f( void ) {
+	if ( com_allowConsole &&
+		!fnql::client::cvars::ConsoleCommandMayToggle( com_allowConsole->integer ) ) {
+		Com_DPrintf( "com_allowConsole won't allow toggleconsole command\n" );
+		return;
+	}
+
+	Con_ToggleConsole_f();
 }
 
 
@@ -4554,6 +4593,19 @@ void Con_Init( void )
 		"Console display extents:\n"
 		" 0 - use the full screen width\n"
 		" 1 - keep the console display in centered 4:3 space" );
+	// Retail registers com_allowConsole "1" with flags 0x80801 and con_height
+	// "0.5" bounded to [0.1, 1] with flags 0x81800 (quakelive_steam.exe
+	// 0x4cc4cc, 0x4b4a7e). Both are driven by the retail settings UI.
+	com_allowConsole = Cvar_Get( "com_allowConsole", "1",
+		CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_CLOUD );
+	Cvar_SetDescription( com_allowConsole,
+		"Quake Live console access:\n"
+		" 0 - the console key needs Ctrl+Alt held, toggleconsole is refused\n"
+		" 1 - the console key and toggleconsole both work\n"
+		" 2 - the console key is an ordinary key, toggleconsole is refused" );
+	con_height = Cvar_Get( "con_height", "0.5", CVAR_PROTECTED | CVAR_CLOUD );
+	Cvar_CheckRange( con_height, "0.1", "1", CV_FLOAT );
+	Cvar_SetDescription( con_height, "Fraction of the screen height the open console covers." );
 	con_timestamps = Cvar_Get( "con_timestamps", "0", CVAR_ARCHIVE_ND | CVAR_PROTECTED );
 	Cvar_SetDescription( con_timestamps, "Show Quake Live style elapsed-time prefixes on console lines." );
 	con_scrollLines = Cvar_Get( "con_scrollLines", "8", CVAR_ARCHIVE_ND );
@@ -4617,7 +4669,7 @@ void Con_Init( void )
 	Cmd_AddCommand( "clear", Con_Clear_f );
 	Cmd_AddCommand( "condump", Con_Dump_f );
 	Cmd_SetCommandCompletionFunc( "condump", Cmd_CompleteTxtName );
-	Cmd_AddCommand( "toggleconsole", Con_ToggleConsole_f );
+	Cmd_AddCommand( "toggleconsole", Con_ToggleConsoleCommand_f );
 	Cmd_AddCommand( "messagemode", Con_MessageMode_f );
 	Cmd_AddCommand( "messagemode2", Con_MessageMode2_f );
 	Cmd_AddCommand( "messagemode3", Con_MessageMode3_f );
@@ -5279,7 +5331,7 @@ void Con_RunConsole( void )
 
 	// decide on the destination height of the console
 	if ( Key_GetCatcher( ) & KEYCATCH_CONSOLE )
-		con.finalFrac = 0.5;	// half screen
+		con.finalFrac = con_height ? con_height->value : 0.5f;	// retail con_height
 	else
 		con.finalFrac = 0.0;	// none visible
 	

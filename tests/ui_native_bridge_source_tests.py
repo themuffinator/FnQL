@@ -967,7 +967,7 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
         import_values = qagame_native_import_values(g_public_h)
         self.assertEqual(185, import_values["G_QL_IMPORT_SUBMIT_MATCH_REPORT"])
         self.assertEqual(186, import_values["G_QL_IMPORT_REPORT_PLAYER_EVENT"])
-        self.assertEqual(192, import_values["G_QL_IMPORT_MARK_CLIENT_GOT_CP"])
+        self.assertEqual(192, import_values["G_QL_IMPORT_MARK_CLIENT_RAGEQUIT"])
         self.assertEqual(198, import_values["G_QL_IMPORT_RETURN_ZERO_198"])
         self.assertEqual(199, import_values["G_QL_IMPORT_RETURN_ZERO_199"])
         self.assertEqual(200, import_values["G_QL_IMPORT_STEAMID_QUERY"])
@@ -984,7 +984,7 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
         self.assertEqual(set(range(187, 192)) | set(range(193, 198)), set(range(direct_slot_count)) - named_direct_slots)
 
         self.assertIn("static_assert( G_QL_IMPORT_SUBMIT_MATCH_REPORT == 185", sv_game)
-        self.assertIn("static_assert( G_QL_IMPORT_MARK_CLIENT_GOT_CP == 192", sv_game)
+        self.assertIn("static_assert( G_QL_IMPORT_MARK_CLIENT_RAGEQUIT == 192", sv_game)
         self.assertIn("static_assert( G_QL_IMPORT_RETURN_ZERO_198 == 198", sv_game)
         self.assertIn("static_assert( G_QL_IMPORT_RETURN_ZERO_199 == 199", sv_game)
         self.assertIn("static_assert( G_QL_IMPORT_FACTORY_EXISTS == 206", sv_game)

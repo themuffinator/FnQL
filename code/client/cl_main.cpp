@@ -2720,6 +2720,22 @@ static void CL_Vid_Restart( refShutdownCode_t shutdownCode ) {
 
 /*
 =================
+CL_PostProcessRestart_f
+
+The retail options menu runs `postprocess_restart` after each of its
+post-process toggles (ui/ingame_options_advanced.menu); retail hands it to a
+renderer export (quakelive_steam.exe 0x4b9060). FnQL does not implement that
+retail pipeline (docs/fnql/RENDERER_CVAR_COMPATIBILITY.md), so the command is
+owned and deliberately does nothing. Left unowned it was reported as unknown
+and, in a match, forwarded to the server as a client command.
+=================
+*/
+static void CL_PostProcessRestart_f( void ) {
+}
+
+
+/*
+=================
 CL_Vid_Restart_f
 
 Wrapper for CL_Vid_Restart
@@ -5630,6 +5646,11 @@ void CL_Init( void ) {
 
 	Cvar_Get ("password", "", CVAR_USERINFO | CVAR_NORESTART);
 	Cvar_Get ("cg_predictItems", "1", CVAR_USERINFO | CVAR_ARCHIVE );
+	// Retail registers these two beside cg_predictItems with flags 0x80803
+	// (quakelive_steam.exe 0x4bcbac, 0x4bcbc0), so the first userinfo a server
+	// sees already carries them; cgame only registers them once it has loaded.
+	Cvar_Get( "cg_autoAction", "", CVAR_USERINFO | CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_CLOUD );
+	Cvar_Get( "cg_autoHop", "1", CVAR_USERINFO | CVAR_ARCHIVE | CVAR_PROTECTED | CVAR_CLOUD );
 
 	// FNQL_Steam_Init() already ran, so a signed-in persona takes ownership of
 	// the identity keys before any archived value can reach a server.
@@ -5651,6 +5672,7 @@ void CL_Init( void ) {
 	Cmd_AddCommand ("clientinfo", CL_Clientinfo_f);
 	Cmd_AddCommand ("snd_restart", CL_Snd_Restart_f);
 	Cmd_AddCommand ("vid_restart", CL_Vid_Restart_f);
+	Cmd_AddCommand( "postprocess_restart", CL_PostProcessRestart_f );
 #ifdef USE_RENDERER_DLOPEN
 	Cmd_AddCommand ("renderer_switch", CL_RendererSwitch_f);
 #endif
@@ -5748,6 +5770,7 @@ void CL_Shutdown( const char *finalmsg, qboolean quit ) {
 	Cmd_RemoveCommand ("clientinfo");
 	Cmd_RemoveCommand ("snd_restart");
 	Cmd_RemoveCommand ("vid_restart");
+	Cmd_RemoveCommand( "postprocess_restart" );
 #ifdef USE_RENDERER_DLOPEN
 	Cmd_RemoveCommand ("renderer_switch");
 #endif

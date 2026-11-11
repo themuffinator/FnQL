@@ -108,11 +108,43 @@ void TestRetailAvidemo()
 	CHECK( !plan.captureScreenshot );
 }
 
+void TestRetailConsoleAccess()
+{
+	using fnql::client::cvars::ConsoleCommandMayToggle;
+	using fnql::client::cvars::ConsoleHotkeyMayToggle;
+
+	// toggleconsole works only at exactly 1.
+	CHECK( ConsoleCommandMayToggle( 1 ) );
+	CHECK( !ConsoleCommandMayToggle( 0 ) );
+	CHECK( !ConsoleCommandMayToggle( 2 ) );
+	CHECK( !ConsoleCommandMayToggle( -1 ) );
+	CHECK( !ConsoleCommandMayToggle( 3 ) );
+
+	// An open console always closes with the key.
+	for ( int value = -1; value <= 3; ++value ) {
+		CHECK( ConsoleHotkeyMayToggle( value, true, false, false ) );
+	}
+
+	// Closed console: 1 opens, 2 never does, 0 needs Ctrl and Alt together.
+	CHECK( ConsoleHotkeyMayToggle( 1, false, false, false ) );
+	CHECK( !ConsoleHotkeyMayToggle( 2, false, false, false ) );
+	CHECK( !ConsoleHotkeyMayToggle( 2, false, true, true ) );
+	CHECK( !ConsoleHotkeyMayToggle( 0, false, false, false ) );
+	CHECK( !ConsoleHotkeyMayToggle( 0, false, true, false ) );
+	CHECK( !ConsoleHotkeyMayToggle( 0, false, false, true ) );
+	CHECK( ConsoleHotkeyMayToggle( 0, false, true, true ) );
+
+	// Retail tests only for 0 and 2; any other value leaves the key live.
+	CHECK( ConsoleHotkeyMayToggle( 3, false, false, false ) );
+	CHECK( ConsoleHotkeyMayToggle( -1, false, false, false ) );
+}
+
 } // namespace
 
 int main()
 {
 	TestRetailTimeNudge();
 	TestRetailAvidemo();
+	TestRetailConsoleAccess();
 	return failures == 0 ? 0 : 1;
 }

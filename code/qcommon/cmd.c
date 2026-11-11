@@ -1296,6 +1296,7 @@ Cmd_Init
 void Cmd_Init( void ) {
 	Com_Memset( cmd_aliases, 0, sizeof( cmd_aliases ) );
 	Cmd_AddCommand ("cmdlist",Cmd_List_f);
+	Cmd_AddCommand( "listcmds", Cmd_List_f );	// retail alias, same handler (0x4c88b3)
 	Cmd_AddCommand ("exec",Cmd_Exec_f);
 	Cmd_AddCommand ("execq",Cmd_Exec_f);
 	Cmd_SetCommandCompletionFunc( "exec", Cmd_CompleteCfgName );

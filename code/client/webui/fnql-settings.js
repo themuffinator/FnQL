@@ -65,15 +65,6 @@
       ['r_lightmap', 'enable lightmaps'],
       ['r_fullbright', 'enable full bright'],
       ['r_ambientscale', 'ambient light scale']
-    ],
-    game: [
-      ['com_allowconsole', 'enable console']
-    ],
-    sound: [
-      ['s_announcervolume', 'announcer volume'],
-      ['s_killbeepvolume', 'kill beep volume'],
-      ['s_mutebackground', 'mute in background'],
-      ['s_ambient', 'ambient sound']
     ]
   };
 
@@ -82,9 +73,9 @@
     video: 'FnQL replaces the retail resolution rows with its own video mode ' +
       'table and does not implement the retail post-processing pipeline. The ' +
       'supported framebuffer, lighting, and effect controls are below.',
-    sound: 'FnQL routes background muting through separate unfocused and ' +
-      'minimized controls, and has no separate announcer or kill-beep volume ' +
-      'lane.'
+    sound: 'Mute in Background is the master switch: turned off, audio keeps ' +
+      'playing in the background; turned on, the unfocused and minimized ' +
+      'controls decide.'
   };
 
   // Rows appended to the tail of a retail two-column layout row. Column 0 is

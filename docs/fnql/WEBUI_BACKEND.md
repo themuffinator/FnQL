@@ -316,11 +316,27 @@ stale rows behind.
 Retail rows FnQL cannot honor are hidden rather than left inert: the entire
 legacy post-processing column on Video, its `r_mode`/`r_windowedmode` rows
 because FnQL's video mode table uses different indices, the `r_lightmap`,
-`r_fullbright` and `r_ambientscale` debug/cheat rows, `com_allowconsole`, and
-the `s_announcervolume`, `s_killbeepvolume`, `s_mutebackground` and `s_ambient`
-rows that have no engine lane. Video and Sound carry a short note explaining the
-removal, and take over the retail Apply button so it stays at the end of the
-page.
+`r_fullbright` and `r_ambientscale` debug/cheat rows. Video carries a short
+note explaining the removal, and Video and Sound take over the retail Apply
+button so it stays at the end of the page.
+
+The retail `com_allowconsole`, `s_announcervolume`, `s_killbeepvolume`,
+`s_mutebackground` and `s_ambient` rows are shown and work. They were hidden
+until the 2026-11-11 parity audit
+([`RETAIL_PARITY_GAPS.md`](RETAIL_PARITY_GAPS.md)) found that three of them
+already had a lane and gave the other two an owner:
+
+- `s_announcervolume`, `s_killbeepvolume` and `s_ambient` are retail cgame
+  settings. cgame passes the first two as the volume of import 40
+  (`S_StartLocalSoundVolume`) and gates ambient loops on the third. The engine
+  registers `s_announcerVolume` as retail does; the other two travel in the
+  snapshot with their retail defaults until cgame registers them.
+- `com_allowconsole` and `s_mutebackground` are engine cvars with retail
+  behavior. `s_muteBackground 0` keeps audio playing in the background;
+  `1` defers to `s_muteWhenUnfocused` and `s_muteWhenMinimized`, and the
+  Sound page's note says so.
+
+Browser writes skip cheat-protected cvars, as retail's `SetCvar` does.
 
 #### Injection rules
 
