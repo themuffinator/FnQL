@@ -441,6 +441,20 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def display_path(path: Path) -> str:
+    """How an output file is named in the manifest and on stdout.
+
+    Repository-relative when the file is inside the repository.  An
+    --output-dir outside it used to raise ValueError here, after the first
+    archive had already been built; such a file is named by its file name,
+    so a published manifest never carries a path from the build machine.
+    """
+    try:
+        return path.resolve().relative_to(ROOT.resolve()).as_posix()
+    except ValueError:
+        return path.name
+
+
 def sha256sum(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -1748,13 +1762,13 @@ def build_archives(args: argparse.Namespace) -> dict[str, object]:
                 "arch": target_arch,
                 "archive": archive_path.name,
                 "format": archive_suffix[1:],
-                "path": archive_path.relative_to(ROOT).as_posix(),
+                "path": display_path(archive_path),
                 "sha256": checksum,
                 "skipped_artifact_file_count": len(skipped_files),
                 "skipped_artifact_file_examples": skipped_files[:12],
             }
         )
-        print(archive_path.relative_to(ROOT).as_posix())
+        print(display_path(archive_path))
 
     glx_runtime_proof = resolve_glx_runtime_proof(
         args,

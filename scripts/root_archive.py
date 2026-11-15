@@ -213,6 +213,10 @@ def write_root_archive(
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.date_time = (1980, 1, 1, 0, 0, 0)
                 info.external_attr = 0o644 << 16
+                # zipfile stamps the host system (0 on Windows, 3 elsewhere) into
+                # every entry; pin it so the archive is the same bytes on any host
+                # and the Unix mode above is read as one.
+                info.create_system = 3
                 archive.writestr(info, source.read_bytes())
 
         os.replace(temp_path, archive_path)

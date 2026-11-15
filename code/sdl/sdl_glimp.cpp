@@ -1123,7 +1123,11 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, qboolean fullscreen, q
 		config->vidHeight = glw_state.window_height;
 	}
 
-	SDL_WarpMouseInWindow( SDL_window, glw_state.window_width / 2, glw_state.window_height / 2 );
+	// SDL warps for a hidden window too, which would move the user's real
+	// pointer every time a windowless client sets a mode.
+	if ( !Com_IsWindowless() ) {
+		SDL_WarpMouseInWindow( SDL_window, glw_state.window_width / 2, glw_state.window_height / 2 );
+	}
 
 	return RSERR_OK;
 }

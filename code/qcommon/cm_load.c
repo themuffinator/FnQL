@@ -86,6 +86,19 @@ void	CM_FloodAreaConnections (void);
 
 /*
 =================
+CMod_RangeFits
+
+Tests a first/count pair read from the map against the size of the lump it
+indexes, without forming a sum that could wrap.
+=================
+*/
+static qboolean CMod_RangeFits( int first, int count, int total ) {
+	return ( first >= 0 && count >= 0 && first <= total && count <= total - first ) ? qtrue : qfalse;
+}
+
+
+/*
+=================
 CMod_LoadShaders
 =================
 */
@@ -120,11 +133,12 @@ static void CMod_LoadShaders( const lump_t *l ) {
 CMod_LoadSubmodels
 =================
 */
-static void CMod_LoadSubmodels( const lump_t *l ) {
+static void CMod_LoadSubmodels( const lump_t *l, int numSurfaces ) {
 	dmodel_t	*in;
 	cmodel_t	*out;
 	int			i, j, count;
 	int			*indexes;
+	int			first;
 
 	in = (void *)(cmod_base + l->fileofs);
 	if (l->filelen % sizeof(*in))
@@ -154,19 +168,31 @@ static void CMod_LoadSubmodels( const lump_t *l ) {
 			continue;	// world model doesn't need other info
 		}
 
-		// make a "leaf" just to hold the model's brushes and surfaces
+		// make a "leaf" just to hold the model's brushes and surfaces.
+		// Every index written here is followed by the trace code without a
+		// further check, so the ranges have to lie inside their lumps.
 		out->leaf.numLeafBrushes = LittleLong( in->numBrushes );
+		first = LittleLong( in->firstBrush );
+		if ( out->leaf.numLeafBrushes < 0
+			|| ( out->leaf.numLeafBrushes > 0 && !CMod_RangeFits( first, out->leaf.numLeafBrushes, cm.numBrushes ) ) ) {
+			Com_Error( ERR_DROP, "%s: submodel %i has a bad brush range", __func__, i );
+		}
 		indexes = Hunk_Alloc( out->leaf.numLeafBrushes * 4, h_high );
 		out->leaf.firstLeafBrush = indexes - cm.leafbrushes;
 		for ( j = 0 ; j < out->leaf.numLeafBrushes ; j++ ) {
-			indexes[j] = LittleLong( in->firstBrush ) + j;
+			indexes[j] = first + j;
 		}
 
 		out->leaf.numLeafSurfaces = LittleLong( in->numSurfaces );
+		first = LittleLong( in->firstSurface );
+		if ( out->leaf.numLeafSurfaces < 0
+			|| ( out->leaf.numLeafSurfaces > 0 && !CMod_RangeFits( first, out->leaf.numLeafSurfaces, numSurfaces ) ) ) {
+			Com_Error( ERR_DROP, "%s: submodel %i has a bad surface range", __func__, i );
+		}
 		indexes = Hunk_Alloc( out->leaf.numLeafSurfaces * 4, h_high );
 		out->leaf.firstLeafSurface = indexes - cm.leafsurfaces;
 		for ( j = 0 ; j < out->leaf.numLeafSurfaces ; j++ ) {
-			indexes[j] = LittleLong( in->firstSurface ) + j;
+			indexes[j] = first + j;
 		}
 	}
 }
@@ -199,10 +225,19 @@ static void CMod_LoadNodes( const lump_t *l ) {
 
 	for ( i = 0; i < count; i++, out++, in++ )
 	{
-		out->plane = cm.planes + LittleLong( in->planeNum );
+		const int planeNum = LittleLong( in->planeNum );
+
+		if ( planeNum < 0 || planeNum >= cm.numPlanes ) {
+			Com_Error( ERR_DROP, "%s: node %i has a bad plane", __func__, i );
+		}
+		out->plane = cm.planes + planeNum;
 		for ( j = 0; j < 2; j++ )
 		{
 			child = LittleLong( in->children[j] );
+			// a negative child is leaf -1 - child
+			if ( child >= count || ( child < 0 && -1 - child >= cm.numLeafs ) ) {
+				Com_Error( ERR_DROP, "%s: node %i has a bad child", __func__, i );
+			}
 			out->children[j] = child;
 		}
 	}
@@ -250,8 +285,17 @@ static void CMod_LoadBrushes( const lump_t *l ) {
 	out = cm.brushes;
 
 	for ( i = 0; i < count; i++, out++, in++ ) {
-		out->sides = cm.brushsides + LittleLong( in->firstSide );
-		out->numsides = LittleLong( in->numSides );
+		const int firstSide = LittleLong( in->firstSide );
+		const int numSides = LittleLong( in->numSides );
+
+		// CM_BoundBrush() reads the six axial sides whatever numSides says,
+		// and the traces walk numSides of them
+		if ( firstSide < 0 || firstSide > cm.numBrushSides - 6
+			|| ( numSides > 0 && numSides > cm.numBrushSides - firstSide ) ) {
+			Com_Error( ERR_DROP, "%s: brush %i has a bad side range", __func__, i );
+		}
+		out->sides = cm.brushsides + firstSide;
+		out->numsides = numSides;
 
 		out->shaderNum = LittleLong( in->shaderNum );
 		if ( out->shaderNum < 0 || out->shaderNum >= cm.numShaders ) {
@@ -297,6 +341,16 @@ static void CMod_LoadLeafs( const lump_t *l )
 		out->numLeafBrushes = LittleLong( in->numLeafBrushes );
 		out->firstLeafSurface = LittleLong( in->firstLeafSurface );
 		out->numLeafSurfaces = LittleLong( in->numLeafSurfaces );
+
+		// CM_WriteAreaBits() fills a MAX_MAP_AREA_BYTES buffer from numAreas,
+		// and the portal table below is numAreas squared
+		if ( out->area >= MAX_MAP_AREAS ) {
+			Com_Error( ERR_DROP, "%s: leaf %i is in area %i, the limit is %i",
+				__func__, i, out->area, MAX_MAP_AREAS - 1 );
+		}
+		if ( out->cluster == INT_MAX ) {
+			Com_Error( ERR_DROP, "%s: leaf %i has a bad cluster", __func__, i );
+		}
 
 		if ( out->cluster >= cm.numClusters )
 			cm.numClusters = out->cluster + 1;
@@ -430,6 +484,40 @@ static void CMod_CheckLeafBrushes( void )
 
 /*
 =================
+CMod_CheckLeafReferences
+
+Leafs are loaded before the lumps they index, so their ranges are checked once
+everything is in.  A leaf with no brushes or surfaces references nothing, and
+its first index is not looked at.
+=================
+*/
+static void CMod_CheckLeafReferences( void )
+{
+	int	i;
+
+	for ( i = 0; i < cm.numLeafs; i++ ) {
+		const cLeaf_t *leaf = &cm.leafs[i];
+
+		if ( leaf->numLeafBrushes > 0
+			&& !CMod_RangeFits( leaf->firstLeafBrush, leaf->numLeafBrushes, cm.numLeafBrushes ) ) {
+			Com_Error( ERR_DROP, "%s: leaf %i has a bad brush range", __func__, i );
+		}
+		if ( leaf->numLeafSurfaces > 0
+			&& !CMod_RangeFits( leaf->firstLeafSurface, leaf->numLeafSurfaces, cm.numLeafSurfaces ) ) {
+			Com_Error( ERR_DROP, "%s: leaf %i has a bad surface range", __func__, i );
+		}
+	}
+
+	for ( i = 0; i < cm.numLeafSurfaces; i++ ) {
+		if ( cm.leafsurfaces[i] < 0 || cm.leafsurfaces[i] >= cm.numSurfaces ) {
+			Com_Error( ERR_DROP, "%s: leaf surface %i is out of range", __func__, i );
+		}
+	}
+}
+
+
+/*
+=================
 CMod_LoadBrushSides
 =================
 */
@@ -454,6 +542,9 @@ static void CMod_LoadBrushSides( const lump_t *l )
 
 	for ( i= 0; i < count; i++, in++, out++ ) {
 		num = LittleLong( in->planeNum );
+		if ( num < 0 || num >= cm.numPlanes ) {
+			Com_Error( ERR_DROP, "%s: brush side %i has a bad plane", __func__, i );
+		}
 		out->plane = &cm.planes[num];
 		out->shaderNum = LittleLong( in->shaderNum );
 		if ( out->shaderNum < 0 || out->shaderNum >= cm.numShaders ) {
@@ -647,6 +738,21 @@ static void CM_BSP43Free( void *ptr ) {
 	Z_Free( ptr );
 }
 
+/*
+A translated IBSP v43 image lives in the zone while the loaders below read it.
+Any of them can leave through Com_Error( ERR_DROP ), which unwinds past the
+release at the end of CM_LoadMap, so the image is tracked here and a stale one
+is released by the next load.
+*/
+static void *cm_translatedMap;
+
+static void CM_FreeTranslatedMap( void ) {
+	if ( cm_translatedMap ) {
+		Z_Free( cm_translatedMap );
+		cm_translatedMap = NULL;
+	}
+}
+
 
 /*
 ==================
@@ -685,6 +791,7 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 
 	// free old stuff
 	CM_ClearMap();
+	CM_FreeTranslatedMap();
 
 #if 0
 	if ( !name[0] ) {
@@ -720,6 +827,7 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 			}
 
 			FS_FreeFile( buf );
+			cm_translatedMap = translated.data;
 			buf = translated.data;
 			length = translated.length;
 		}
@@ -759,13 +867,15 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 	CMod_LoadPlanes (&header.lumps[LUMP_PLANES]);
 	CMod_LoadBrushSides (&header.lumps[LUMP_BRUSHSIDES]);
 	CMod_LoadBrushes (&header.lumps[LUMP_BRUSHES]);
-	CMod_LoadSubmodels (&header.lumps[LUMP_MODELS]);
+	CMod_LoadSubmodels( &header.lumps[LUMP_MODELS],
+		header.lumps[LUMP_SURFACES].filelen / (int)sizeof( dsurface_t ) );
 	CMod_LoadNodes (&header.lumps[LUMP_NODES]);
 	CMod_LoadEntityString (&header.lumps[LUMP_ENTITIES]);
 	CMod_LoadVisibility( &header.lumps[LUMP_VISIBILITY] );
 	CMod_LoadPatches( &header.lumps[LUMP_SURFACES], &header.lumps[LUMP_DRAWVERTS] );
 
 	CMod_CheckLeafBrushes();
+	CMod_CheckLeafReferences();
 
 	// must run while buf is still mapped: both branches below release it
 	if ( header.version == BSP_VERSION_QL ) {
@@ -781,6 +891,8 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 	}
 
 	if ( translated.data ) {
+		// released here on success; cm_translatedMap covers the error exits
+		cm_translatedMap = NULL;
 		Z_Free( translated.data );
 	} else {
 		// we are NOT freeing the file, because it is cached for the ref

@@ -684,12 +684,16 @@ void Sys_Sleep( int msec ) {
 				timeout.tv_sec = msec / 1000;
 				timeout.tv_usec = (msec % 1000) * 1000;
 				res = select( STDIN_FILENO + 1, &fdset, NULL, NULL, &timeout );
-			} while ( res == 0 && NET_Sleep( 10 * 1000 ) );
+			} while ( res == 0 && !Sys_ShutdownSignalPending() && NET_Sleep( 10 * 1000 ) );
 		} else {
 			// can happen only if no map loaded
 			// which means we totally stuck as stdin is also disabled :P
 			//usleep( 300 * 1000 );
-			while ( NET_Sleep( 3000 * 1000 ) )
+			// NET_Sleep() reports an interrupted wait as "keep waiting", so
+			// SIGTERM/SIGINT has to end the loop here: without the check an
+			// idle server under systemd or nohup (no stdin, sv_idleExit 0)
+			// ignored a stop request until it was killed.
+			while ( !Sys_ShutdownSignalPending() && NET_Sleep( 3000 * 1000 ) )
 				;
 		}
 		return;

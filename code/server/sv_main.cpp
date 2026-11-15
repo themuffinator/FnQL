@@ -1536,6 +1536,14 @@ void SV_Frame( int msec, int realMsec ) {
 	Zmq_PumpRcon();
 	SV_ExecutePendingAdminCommands();
 
+	// Both rcon paths execute commands inside this frame.  One of them can
+	// shut the server down (killserver, or a map change that fails), after
+	// which there are no configstrings, clients or game module left for the
+	// rest of the frame to work on.
+	if ( !com_sv_running->integer ) {
+		return;
+	}
+
 	svs.time += realMsec;
 	SV_SteamP2PFrame();
 

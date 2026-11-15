@@ -468,20 +468,7 @@ static void WIN_ApplyMinimumTrackSize( HWND hWnd, MINMAXINFO *info )
 WinKeyHook
 ==================
 */
-static LRESULT CALLBACK WinKeyHook( int code, WPARAM wParam, LPARAM lParam )
-{
-	PKBDLLHOOKSTRUCT key = (PKBDLLHOOKSTRUCT)lParam;
-
-	if ( code != HC_ACTION ) {
-		return CallNextHookEx( NULL, code, wParam, lParam );
-	}
-
-	if ( key->vkCode == VK_SNAPSHOT || key->vkCode == VK_LWIN || key->vkCode == VK_RWIN ) {
-		return CallNextHookEx( NULL, code, wParam, lParam );
-	}
-
-	return CallNextHookEx( NULL, code, wParam, lParam );
-}
+// Removed: the hook procedure passed every key straight on; see WIN_EnableHook.
 
 
 /*
@@ -502,15 +489,18 @@ void WIN_DisableHook( void  )
 ==================
 WIN_EnableHook
 
-Capture PrintScreen and Win* keys
+Kept as the pairing point for WIN_DisableHook; installs nothing.
 ==================
 */
 void WIN_EnableHook( void  ) 
 {
-	if ( !WinHook )
-	{
-		WinHook = SetWindowsHookEx( WH_KEYBOARD_LL, WinKeyHook, g_wv.hInstance, 0 );
-	}
+	// FnQL leaves PrintScreen and the Windows keys to the operating system,
+	// so there is nothing for a low-level keyboard hook to do, and one is
+	// deliberately not installed.  A WH_KEYBOARD_LL hook routes every
+	// keystroke on the desktop through this thread's message pump: even a
+	// hook that only passes keys on makes typing in other applications wait
+	// whenever this thread is busy (a map load), and a windowless client,
+	// which never loses focus, would keep it for its whole life.
 }
 
 

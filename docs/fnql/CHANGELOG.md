@@ -36,9 +36,43 @@ successful release, CI resets `Unreleased` for the next cycle.
   modules for that target. The x86_64 build has no retail game modules, Steam
   or WebUI (all 32-bit only), so it runs FnQL-game; play with the retail
   modules on the x86 build.
+- Windows release builds are no longer assertion-enabled debug builds: the
+  `version` string loses its `-debug` suffix, as on Linux, and an internal
+  consistency check can no longer stop the game with an assertion dialog.
 
 ### Fixes
-- _None yet._
+- A game server can no longer run script in the menu browser through the
+  match statistics it sends; that text is now handled strictly as data.
+- Damaged or hostile maps, models, TGA images, RoQ videos and Ogg or WAV
+  sounds in a downloaded package are refused when they load instead of
+  corrupting memory.
+- A dedicated server no longer crashes when `killserver`, or a map change
+  that fails, arrives through rcon.
+- A reconnect that is refused for want of a valid Steam ticket no longer
+  leaves a ghost player occupying the slot.
+- Steam player listings and voice keepalives no longer go quiet after a
+  server restarts inside the same process, such as after `sv_idleRestart`.
+- A bot no longer appears in the Steam player list under the SteamID of the
+  player who held its slot before it.
+- Changing `sv_maxclients` on a running server no longer makes the Steam
+  integration read past the player list.
+- Monitoring tools that poll ZMQ rcon over short-lived connections no longer
+  use up the peer table and lock later connections out.
+- An idle Linux dedicated server started with `sv_idleExit 0` now shuts down
+  cleanly on SIGTERM or SIGINT instead of waiting to be killed.
+- Steam integration now loads when FnQL is installed in a folder whose name
+  contains non-ASCII characters.
+- FnQL no longer installs a system-wide keyboard hook on Windows, which could
+  make typing in other applications stutter while a map loaded.
+- The game module copies FnQL writes under `.tmp/native` in the profile
+  folder are removed when the modules unload instead of piling up with every
+  launch.
+- 5.1 and 6.1 WAV music no longer plays with its channels rotated.
+- Colour codes in right-aligned or centred menu text no longer tint the start
+  of the line.
 
 ### Documentation and Tooling
-- _None yet._
+- The renderer sweep, smoke and protocol probe scripts start their clients
+  windowless unless `FNQL_HEADLESS` says otherwise, and a windowless client
+  now stays hidden through `vid_restart`, renderer start-up failures and SDL
+  mode changes.

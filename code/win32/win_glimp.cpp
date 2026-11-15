@@ -1004,9 +1004,18 @@ static qboolean GLW_CreateWindow( int width, int height, int colorbits, qboolean
 		glw_state.cdsFullscreen = cdsFullscreen;
 
 		if ( !CL_IsWindowResizeRestart() ) {
+			// a windowless client's window stays hidden and inactive
+			const qboolean windowless = Com_IsWindowless();
+			if ( windowless ) {
+				stylebits &= ~WS_VISIBLE;
+			}
 			SetWindowLong( g_wv.hWnd, GWL_EXSTYLE, exstyle );
 			SetWindowLong( g_wv.hWnd, GWL_STYLE, stylebits );
-			SetWindowPos( g_wv.hWnd, NULL, x, y, w, h, SWP_FRAMECHANGED | SWP_NOZORDER | SWP_SHOWWINDOW );
+			if ( windowless ) {
+				SetWindowPos( g_wv.hWnd, NULL, x, y, w, h, SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE );
+			} else {
+				SetWindowPos( g_wv.hWnd, NULL, x, y, w, h, SWP_FRAMECHANGED | SWP_NOZORDER | SWP_SHOWWINDOW );
+			}
 		} else {
 			GetWindowRect( g_wv.hWnd, &r );
 			x = r.left;
@@ -1299,7 +1308,13 @@ static rserr_t GLW_SetMode( int mode, const char *modeFS, int colorbits, qboolea
 	{
 		if ( colorbits == 0 || ( !cdsFullscreen && colorbits >= 15 ) )
 		{
-			if ( MessageBox( NULL,
+			if ( Com_IsWindowless() )
+			{
+				// nobody can answer a dialog; try the mode as "OK" would
+				Com_Printf( S_COLOR_YELLOW "...low desktop color depth (%d bits), trying anyway\n",
+					glw_state.desktopBitsPixel );
+			}
+			else if ( MessageBox( NULL,
 						T("It is highly unlikely that a correct\n") \
 						T("windowed display can be initialized with\n") \
 						T("the current desktop display depth.  Select\n") \
@@ -1541,10 +1556,13 @@ static qboolean GLW_LoadOpenGL( const char *drivername )
 		// create the window and set up the context
 		if ( GLW_StartDriverAndSetMode( mode, r_modeFullscreen->string, r_colorbits->integer, cdsFullscreen, qfalse ) != RSERR_OK )
 		{
-			// if we're on a 24/32-bit desktop try it again but with a 16-bit desktop
-			if ( r_colorbits->integer != 16 || cdsFullscreen != qtrue || mode != 3 )
+			// if we're on a 24/32-bit desktop try it again but with a 16-bit desktop.
+			// The retry is fullscreen, which changes the desktop display mode, so
+			// a windowless client retries in a window instead.
+			const qboolean retryFullscreen = Com_IsWindowless() ? qfalse : qtrue;
+			if ( r_colorbits->integer != 16 || cdsFullscreen != retryFullscreen || mode != 3 )
 			{
-				if ( GLW_StartDriverAndSetMode( 3, "", 16, qtrue, qfalse ) != RSERR_OK )
+				if ( GLW_StartDriverAndSetMode( 3, "", 16, retryFullscreen, qfalse ) != RSERR_OK )
 				{
 					goto fail;
 				}

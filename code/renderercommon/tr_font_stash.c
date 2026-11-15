@@ -463,7 +463,10 @@ static float QL_FonsTextBounds( float x, float y, const char *text,
 		int colorIndex;
 		const int colorBytes = QL_FontColorEscape( cursor, end, &colorIndex );
 		if ( colorBytes ) {
-			RE_SetColor( g_color_table[colorIndex] );
+			// Measuring only steps over a colour escape.  Setting the colour
+			// here queued a render command per escape for every measurement
+			// and left the last one as the current colour, so text measured
+			// for alignment drew its leading run in its own final colour.
 			cursor += colorBytes;
 			continue;
 		}
@@ -618,7 +621,9 @@ void R_DoneHostFonts( void ) {
 	int i;
 
 	if ( qlHostFonts.stash ) fonsDeleteInternal( qlHostFonts.stash );
-	for ( i = 0; i < QL_HOST_FACE_COUNT; ++i ) {
+	// newest first: file buffers sit on the hunk's temp stack, which only
+	// gives memory back when the most recent block is freed
+	for ( i = QL_HOST_FACE_COUNT - 1; i >= 0; --i ) {
 		if ( qlHostFonts.faceData[i].data ) {
 			if ( qlHostFonts.faceData[i].dataFromFileSystem ) {
 				ri.FS_FreeFile( qlHostFonts.faceData[i].data );

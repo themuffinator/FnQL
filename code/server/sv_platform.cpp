@@ -143,7 +143,7 @@ bool SteamGameServerConfigsEqual( const fnqlSteamGameServerConfig_t &left,
 
 int SteamAuthenticatedClient( uint64_t steamId ) {
 	if ( !steamId || !svs.clients || !sv_maxclients ) return -1;
-	for ( int index = 0; index < sv_maxclients->integer; ++index ) {
+	for ( int index = 0; index < sv.maxclients; ++index ) {
 		const client_t &client = svs.clients[index];
 		if ( client.state == CS_ACTIVE && client.platformAuthSession
 			&& client.platformAuthTicketSession
@@ -513,7 +513,12 @@ static void SV_SteamPublishGameServerMetadata( void ) {
 	uint32_t botCount = 0;
 	if ( !FNQL_Steam_Available( FNQL_STEAM_CAP_GAME_SERVER_METADATA )
 		|| !com_sv_running || !com_sv_running->integer || !svs.clients
-		|| !sv_maxclients || svs.time - lastPublished < 1000 ) return;
+		|| !sv_maxclients ) return;
+	// svs.time restarts at zero when the server is shut down and started
+	// again in this process, so a stamp from the previous run lies in the
+	// future.  A negative interval is due, not "wait out the last session".
+	const int sincePublished = svs.time - lastPublished;
+	if ( sincePublished >= 0 && sincePublished < 1000 ) return;
 	lastPublished = svs.time;
 	(void)FNQL_Steam_SetGameServerKeyValue( "g_redScore",
 		Cvar_VariableString( "g_redScore" ) );
@@ -523,7 +528,7 @@ static void SV_SteamPublishGameServerMetadata( void ) {
 	// slot with a SteamID: the userinfo name, "(Bot) " before a bot's, and
 	// the score from qagame export 18. FnQL skips zombies, whose Steam auth
 	// session has already ended.
-	for ( int index = 0; index < sv_maxclients->integer; ++index ) {
+	for ( int index = 0; index < sv.maxclients; ++index ) {
 		client_t &client = svs.clients[index];
 		if ( client.state < CS_CONNECTED ) continue;
 		if ( client.netchan.remoteAddress.type == NA_BOT ) ++botCount;
@@ -562,9 +567,11 @@ void SV_SteamP2PFrame( void ) {
 		|| !com_sv_running || !com_sv_running->integer || !svs.clients
 		|| !sv_maxclients ) return;
 
-	if ( svs.time - lastKeepalive >= QL_STEAM_KEEPALIVE_MSEC ) {
+	// as above: a stamp left by an earlier server run must not stall this one
+	const int sinceKeepalive = svs.time - lastKeepalive;
+	if ( sinceKeepalive < 0 || sinceKeepalive >= QL_STEAM_KEEPALIVE_MSEC ) {
 		lastKeepalive = svs.time;
-		for ( int index = 0; index < sv_maxclients->integer; ++index ) {
+		for ( int index = 0; index < sv.maxclients; ++index ) {
 			const client_t &client = svs.clients[index];
 			if ( client.state != CS_ACTIVE || !client.platformAuthSession
 				|| !client.platformAuthTicketSession
@@ -586,8 +593,10 @@ void SV_SteamP2PFrame( void ) {
 				"Rejected oversized Steam voice packet (%u bytes).\n", packetSize );
 			break;
 		}
-		byte *packet = static_cast<byte *>( Z_Malloc( packetSize + 1u ) );
-		if ( !packet ) break;
+		// One relay buffer for the whole drain: a zone block per packet was
+		// allocated, zero-filled and freed up to 64 times a frame.
+		static std::array<byte, QL_STEAM_MAX_VOICE_PACKET + 1> relayBuffer;
+		byte *const packet = relayBuffer.data();
 		uint32_t bytesRead = 0;
 		uint64_t remoteId = 0;
 		const fnqlSteamResult_t readResult = FNQL_Steam_ReadP2PPacket(
@@ -595,17 +604,15 @@ void SV_SteamP2PFrame( void ) {
 			packetSize, &bytesRead, &remoteId );
 		if ( readResult != FNQL_STEAM_RESULT_OK || bytesRead == 0
 			|| bytesRead > packetSize ) {
-			Z_Free( packet );
 			continue;
 		}
 		const int sender = SteamAuthenticatedClient( remoteId );
 		if ( sender < 0 || sender > 255 ) {
 			SV_SteamP2PCloseClient( remoteId );
-			Z_Free( packet );
 			continue;
 		}
 		packet[0] = static_cast<byte>( sender );
-		for ( int recipient = 0; recipient < sv_maxclients->integer; ++recipient ) {
+		for ( int recipient = 0; recipient < sv.maxclients; ++recipient ) {
 			const client_t &client = svs.clients[recipient];
 			if ( client.state != CS_ACTIVE || !client.platformAuthSession
 				|| !client.platformAuthTicketSession
@@ -615,6 +622,5 @@ void SV_SteamP2PFrame( void ) {
 				client.platformSteamIdValue, packet, bytesRead + 1u, 1u,
 				QL_STEAM_VOICE_CHANNEL );
 		}
-		Z_Free( packet );
 	}
 }

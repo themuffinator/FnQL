@@ -46,6 +46,17 @@ static void shutdown_signal_handler( int sig )
 }
 
 
+/*
+The handler only records the signal; main() acts on it between frames.  A
+blocking wait has to look here too, or an idle dedicated server that is
+sleeping until the next packet never gets back to main() to shut down.
+*/
+qboolean Sys_ShutdownSignalPending( void )
+{
+	return pendingShutdownSignal != 0 ? qtrue : qfalse;
+}
+
+
 static void fatal_signal_handler( int sig )
 {
 	char msg[32];

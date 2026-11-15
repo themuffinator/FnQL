@@ -1637,6 +1637,9 @@ void SV_DirectConnect( const netadr_t *from ) {
 	bool		platformAuthSession = false;
 	bool		platformAuthTicketSession = false;
 	bool		platformAuthValidated = false;
+	// set once a reconnecting client's live slot has been torn down, so a
+	// refusal after that point releases the slot instead of leaving it active
+	bool		reconnectTornDown = false;
 
 	Com_DPrintf( "SVC_DirectConnect()\n" );
 
@@ -1859,6 +1862,7 @@ void SV_DirectConnect( const netadr_t *from ) {
 
 				// don't leak memory or file handles due to e.g. downloads in progress
 				SV_FreeClient( newcl );
+				reconnectTornDown = true;
 			}
 
 			goto gotnewcl;
@@ -1958,6 +1962,9 @@ gotnewcl:
 				fnql::server::auth::SecureErase( &auth, sizeof( auth ) );
 				NET_OutOfBandPrint( NS_SERVER, from,
 					"print\nA signed-in Steam identity is required for local play.\n" );
+				if ( reconnectTornDown ) {
+					*newcl = {};
+				}
 				return;
 			}
 			retailSteamId = localStatus.local_steam_id;
@@ -1969,6 +1976,12 @@ gotnewcl:
 			if ( providerAvailable && !hasRetailAuth ) {
 				NET_OutOfBandPrint( NS_SERVER, from,
 					"print\nA valid platform authentication ticket is required.\n" );
+				// The game was already told this client left and its
+				// resources are released; the slot must not stay active
+				// for a connection that is being refused.
+				if ( reconnectTornDown ) {
+					*newcl = {};
+				}
 				return;
 			}
 			if ( hasRetailAuth ) {
@@ -1981,6 +1994,9 @@ gotnewcl:
 						fnql::server::auth::SecureErase( &auth, sizeof( auth ) );
 						NET_OutOfBandPrint( NS_SERVER, from,
 							"print\nPlatform authentication rejected the connection.\n" );
+						if ( reconnectTornDown ) {
+							*newcl = {};
+						}
 						return;
 					}
 					platformAuthSession = true;
@@ -2179,6 +2195,12 @@ void SV_DropClient( client_t *drop, const char *reason ) {
 	// nuke user info
 	SV_SetUserinfo( SV_ClientIndex( drop ), "" );
 	drop->platformSteamId[0] = '\0';
+	// A bot that later takes this slot is not zeroed the way a connecting
+	// player is, and would be published to Steam under the departed player's
+	// SteamID.  A bot's own anonymous id is kept so the next bot reuses it.
+	if ( !isBot ) {
+		drop->platformSteamIdValue = 0;
+	}
 
 	drop->justConnected = qfalse;
 

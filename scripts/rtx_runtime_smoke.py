@@ -893,6 +893,9 @@ def planned_manifest(args: argparse.Namespace, retail_root: Path) -> dict[str, o
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # Automated runs never show a window: a client started from here is
+    # windowless unless the caller has chosen otherwise (AGENTS.md).
+    os.environ.setdefault("FNQL_HEADLESS", "2")
     parser = create_parser()
     args = parser.parse_args(argv)
     try:

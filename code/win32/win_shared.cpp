@@ -198,7 +198,13 @@ static qboolean Sys_QueryRegistryString( HKEY root, const char *keyPath, REGSAM 
 		return qfalse;
 	}
 
-	buffer[sizeof( buffer ) - 1] = '\0';
+	// The registry does not promise a terminator.  End the string at the
+	// length that was actually read, so a value stored without one does not
+	// pick up whatever the stack held after it.
+	if ( dataSize >= sizeof( buffer ) ) {
+		dataSize = sizeof( buffer ) - 1;
+	}
+	buffer[dataSize] = '\0';
 	if ( type == REG_EXPAND_SZ ) {
 		char expanded[MAX_OSPATH];
 		DWORD expandedSize;

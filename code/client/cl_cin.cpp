@@ -1080,13 +1080,41 @@ static void setupQuad( long xOff, long yOff )
 *
 ******************************************************************************/
 
-static void readQuadInfo( byte *qData )
+/*
+The decoder's storage is fixed: cin.linbuf holds two frames of at most
+DEFAULT_CIN_WIDTH x DEFAULT_CIN_HEIGHT at four bytes per sample, and each
+cin.qStatus row holds one pointer per 8x8 and 4x4 cell plus the 64-entry
+end-of-quad run setupQuad() appends.  A RoQ file names its own frame size, and
+a pk3 a server sent can carry one, so a frame that does not fit is refused
+before any cell pointer or pixel is written for it.
+*/
+static bool RoQ_QuadInfoFits( unsigned int payloadBytes, unsigned int width, unsigned int height )
+{
+	if ( payloadBytes < 8 || width == 0 || height == 0
+		|| width > static_cast<unsigned int>( DEFAULT_CIN_WIDTH )
+		|| height > static_cast<unsigned int>( DEFAULT_CIN_HEIGHT ) ) {
+		return false;
+	}
+	const unsigned int cells = ( width * height ) / 16;
+	return cells + cells / 4 + 64 <= ARRAY_LEN( cin.qStatus[0] );
+}
+
+static bool readQuadInfo( byte *qData )
 {
 	const glconfig_t *config;
-	if (currentHandle < 0) return;
+	if (currentHandle < 0) return false;
 
-	cinTable[currentHandle].xsize    = qData[0]+qData[1]*256;
-	cinTable[currentHandle].ysize    = qData[2]+qData[3]*256;
+	const unsigned int width  = qData[0]+qData[1]*256;
+	const unsigned int height = qData[2]+qData[3]*256;
+	if ( !RoQ_QuadInfoFits( cinTable[currentHandle].RoQFrameSize, width, height ) ) {
+		Com_Printf( S_COLOR_YELLOW "RoQ: refusing %s, frame size %ux%u is outside 1..%dx%d\n",
+			cinTable[currentHandle].fileName.data(), width, height,
+			DEFAULT_CIN_WIDTH, DEFAULT_CIN_HEIGHT );
+		return false;
+	}
+
+	cinTable[currentHandle].xsize    = width;
+	cinTable[currentHandle].ysize    = height;
 	cinTable[currentHandle].maxsize  = qData[4]+qData[5]*256;
 	cinTable[currentHandle].minsize  = qData[6]+qData[7]*256;
 	
@@ -1121,6 +1149,7 @@ static void readQuadInfo( byte *qData )
 			Com_Printf( "HACK: approxmimating cinematic for Rage Pro or Voodoo\n" );
 		}
 	}
+	return true;
 }
 
 
@@ -1247,6 +1276,14 @@ static void RoQInterrupt()
 		switch(cinTable[currentHandle].roq_id)
 		{
 			case	ROQ_QUAD_VQ:
+				if ( cinTable[currentHandle].numQuads < 0 ) {
+					// no ROQ_QUAD_INFO yet: there is no frame size, cell table
+					// or decoder to run this chunk through
+					Com_DPrintf( "RoQInterrupt: video chunk before quad info\n" );
+					cinTable[currentHandle].looping = false;
+					cinTable[currentHandle].status = FMV_EOF;
+					return;
+				}
 				if ((cinTable[currentHandle].numQuads&1)) {
 					cinTable[currentHandle].normalBuffer0 = cinTable[currentHandle].t[1];
 					RoQPrepMcomp( cinTable[currentHandle].roqF0, cinTable[currentHandle].roqF1 );
@@ -1295,7 +1332,12 @@ static void RoQInterrupt()
 				break;
 			case	ROQ_QUAD_INFO:
 				if (cinTable[currentHandle].numQuads == -1) {
-					readQuadInfo( framedata );
+					if ( !readQuadInfo( framedata ) ) {
+						// a looping reset would only reach this chunk again
+						cinTable[currentHandle].looping = false;
+						cinTable[currentHandle].status = FMV_EOF;
+						return;
+					}
 					setupQuad( 0, 0 );
 					cinTable[currentHandle].startTime = cinTable[currentHandle].lastTime = CL_ScaledMilliseconds();
 				}

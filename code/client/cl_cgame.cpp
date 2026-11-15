@@ -2535,14 +2535,14 @@ static bool CL_ValidateRetailCGameImportTable( void ) {
 		const bool expectedNull = CL_IsExpectedRetailCGameNullImport( slot );
 
 		if ( isNull != expectedNull ) {
-			Com_Printf( "CL_InitCGameImports: retail cgame import slot %i is %s; expected %s\\n",
+			Com_Printf( "CL_InitCGameImports: retail cgame import slot %i is %s; expected %s\n",
 				slot, isNull ? "null" : "callable", expectedNull ? "null" : "callable" );
 			return false;
 		}
 
 		if ( !isNull && CL_IsExpectedRetailCGameReservedFallbackImport( slot ) &&
 			ql_cgame_imports[slot] != (ql_import_f)QL_CG_trap_RetailReservedImport ) {
-			Com_Printf( "CL_InitCGameImports: retail cgame reserved import slot %i has no fallback\\n", slot );
+			Com_Printf( "CL_InitCGameImports: retail cgame reserved import slot %i has no fallback\n", slot );
 			return false;
 		}
 	}
@@ -2742,7 +2742,7 @@ static vm_t *CL_LoadCGameVM( vmInterpret_t interpret ) {
 	vm_t	*vm;
 
 	if ( !CL_InitCGameImports() ) {
-		Com_Printf( S_COLOR_RED "Native cgame import table validation failed.\\n" );
+		Com_Printf( S_COLOR_RED "Native cgame import table validation failed.\n" );
 		return nullptr;
 	}
 

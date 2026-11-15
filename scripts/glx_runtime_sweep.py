@@ -17693,6 +17693,9 @@ def markdown_summary(manifest: dict[str, object], manifest_path: Path) -> str:
 
 
 def main() -> int:
+    # Automated runs never show a window: a client started from here is
+    # windowless unless the caller has chosen otherwise (AGENTS.md).
+    os.environ.setdefault("FNQL_HEADLESS", "2")
     args = parse_args()
     if args.list_gates:
         print_gate_list()

@@ -10,6 +10,8 @@ the existing retail Quake III collision and renderer loaders.
 #ifndef __BSP_V43_H__
 #define __BSP_V43_H__
 
+#include <limits.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -30,6 +32,27 @@ typedef struct {
 
 static int BSP43_Align4( const int value ) {
 	return ( value + 3 ) & ~3;
+}
+
+/*
+Every first/count pair below comes straight from the map file.  The sum of
+two file values can wrap, so a range is tested without forming it.
+*/
+static qboolean BSP43_RangeFits( const int first, const int count, const int total ) {
+	return ( first >= 0 && count >= 0 && first <= total && count <= total - first ) ? qtrue : qfalse;
+}
+
+/*
+The size of one translated lump.  The v46 records are larger than some of the
+v43 records they are built from, so a count that fitted the input file does
+not have to fit an int once it is multiplied out.
+*/
+static qboolean BSP43_LumpBytes( const int count, const size_t elementSize, int *bytes ) {
+	if ( count < 0 || (uint64_t)count * elementSize > (uint64_t)INT_MAX ) {
+		return qfalse;
+	}
+	*bytes = (int)( (size_t)count * elementSize );
+	return qtrue;
 }
 
 static void BSP43_SetError( char *error, const size_t errorSize, const char *message ) {
@@ -271,11 +294,12 @@ static qboolean BSP43_TranslateToV46(
 			BSP43_SetError( error, errorSize, "IBSP v43 node references an invalid child node" );
 			goto cleanup;
 		}
-		if ( child0 < 0 && ( -child0 - 1 < 0 || -child0 - 1 >= leafCount ) ) {
+		// -1 - child cannot overflow for a negative child; -child - 1 can
+		if ( child0 < 0 && -1 - child0 >= leafCount ) {
 			BSP43_SetError( error, errorSize, "IBSP v43 node references an invalid child leaf" );
 			goto cleanup;
 		}
-		if ( child1 < 0 && ( -child1 - 1 < 0 || -child1 - 1 >= leafCount ) ) {
+		if ( child1 < 0 && -1 - child1 >= leafCount ) {
 			BSP43_SetError( error, errorSize, "IBSP v43 node references an invalid child leaf" );
 			goto cleanup;
 		}
@@ -292,11 +316,11 @@ static qboolean BSP43_TranslateToV46(
 		firstLeafBrush = LittleLong( leafs43[i].firstLeafBrush );
 		numLeafBrushes = LittleLong( leafs43[i].numLeafBrushes );
 
-		if ( firstLeafSurface < 0 || numLeafSurfaces < 0 || firstLeafSurface + numLeafSurfaces > leafSurfaceCount ) {
+		if ( !BSP43_RangeFits( firstLeafSurface, numLeafSurfaces, leafSurfaceCount ) ) {
 			BSP43_SetError( error, errorSize, "IBSP v43 leaf surface list is out of bounds" );
 			goto cleanup;
 		}
-		if ( firstLeafBrush < 0 || numLeafBrushes < 0 || firstLeafBrush + numLeafBrushes > leafBrushCount ) {
+		if ( !BSP43_RangeFits( firstLeafBrush, numLeafBrushes, leafBrushCount ) ) {
 			BSP43_SetError( error, errorSize, "IBSP v43 leaf brush list is out of bounds" );
 			goto cleanup;
 		}
@@ -331,7 +355,7 @@ static qboolean BSP43_TranslateToV46(
 		numSides = LittleLong( brushes43[i].numSides );
 		contents = LittleLong( brushes43[i].contentFlags );
 
-		if ( firstSide < 0 || numSides < 0 || firstSide + numSides > brushSideCount ) {
+		if ( !BSP43_RangeFits( firstSide, numSides, brushSideCount ) ) {
 			BSP43_SetError( error, errorSize, "IBSP v43 brush side range is out of bounds" );
 			goto cleanup;
 		}
@@ -369,7 +393,7 @@ static qboolean BSP43_TranslateToV46(
 		fogNum = LittleLong( surfaces43[i].fogNum );
 		lightmapNum = LittleLong( surfaces43[i].lightmapNum );
 
-		if ( firstVert < 0 || numVerts < 0 || firstVert + numVerts > drawVertCount ) {
+		if ( !BSP43_RangeFits( firstVert, numVerts, drawVertCount ) ) {
 			BSP43_SetError( error, errorSize, "IBSP v43 surface vertex range is out of bounds" );
 			goto cleanup;
 		}
@@ -392,7 +416,13 @@ static qboolean BSP43_TranslateToV46(
 		if ( patchWidth > 0 && patchHeight > 0 ) {
 			surfaceNumIndexes[i] = 0;
 		} else if ( numVerts >= 3 ) {
+			// numVerts is bounded by the vertex lump, so the product fits;
+			// the running total across every surface has to be checked
 			surfaceNumIndexes[i] = ( numVerts - 2 ) * 3;
+			if ( surfaceNumIndexes[i] > INT_MAX / (int)sizeof( int32_t ) - totalIndexes ) {
+				BSP43_SetError( error, errorSize, "IBSP v43 surfaces need too many indexes" );
+				goto cleanup;
+			}
 			totalIndexes += surfaceNumIndexes[i];
 		} else {
 			surfaceNumIndexes[i] = 0;
@@ -410,7 +440,7 @@ static qboolean BSP43_TranslateToV46(
 		nodeNum = LittleLong( models43[i].headnode );
 		leafNum = -1 - nodeNum;
 
-		if ( firstFace < 0 || numFaces < 0 || firstFace + numFaces > surfaceCount ) {
+		if ( !BSP43_RangeFits( firstFace, numFaces, surfaceCount ) ) {
 			BSP43_SetError( error, errorSize, "IBSP v43 model surface range is out of bounds" );
 			goto cleanup;
 		}
@@ -493,25 +523,33 @@ static qboolean BSP43_TranslateToV46(
 	totalShaders = surfaceShaderBase + surfaceCount;
 
 	lengths[LUMP_ENTITIES] = LittleLong( lumps43[LUMP43_ENTITIES].filelen );
-	lengths[LUMP_SHADERS] = totalShaders * (int)sizeof( dshader_t );
-	lengths[LUMP_PLANES] = planeCount * (int)sizeof( dplane_t );
 	lengths[LUMP_NODES] = LittleLong( lumps43[LUMP43_NODES].filelen );
 	lengths[LUMP_LEAFS] = LittleLong( lumps43[LUMP43_LEAFS].filelen );
 	lengths[LUMP_LEAFSURFACES] = LittleLong( lumps43[LUMP43_LEAFSURFACES].filelen );
 	lengths[LUMP_LEAFBRUSHES] = LittleLong( lumps43[LUMP43_LEAFBRUSHES].filelen );
-	lengths[LUMP_MODELS] = modelCount * (int)sizeof( dmodel_t );
-	lengths[LUMP_BRUSHES] = brushCount * (int)sizeof( dbrush_t );
-	lengths[LUMP_BRUSHSIDES] = brushSideCount * (int)sizeof( dbrushside_t );
 	lengths[LUMP_DRAWVERTS] = LittleLong( lumps43[LUMP43_DRAWVERTS].filelen );
-	lengths[LUMP_DRAWINDEXES] = totalIndexes * (int)sizeof( int32_t );
-	lengths[LUMP_FOGS] = fogCount * (int)sizeof( dfog_t );
-	lengths[LUMP_SURFACES] = surfaceCount * (int)sizeof( dsurface_t );
 	lengths[LUMP_LIGHTMAPS] = LittleLong( lumps43[LUMP43_LIGHTMAPS].filelen );
 	lengths[LUMP_LIGHTGRID] = 0;
 	lengths[LUMP_VISIBILITY] = LittleLong( lumps43[LUMP43_VISIBILITY].filelen );
+	if ( !BSP43_LumpBytes( totalShaders, sizeof( dshader_t ), &lengths[LUMP_SHADERS] )
+		|| !BSP43_LumpBytes( planeCount, sizeof( dplane_t ), &lengths[LUMP_PLANES] )
+		|| !BSP43_LumpBytes( modelCount, sizeof( dmodel_t ), &lengths[LUMP_MODELS] )
+		|| !BSP43_LumpBytes( brushCount, sizeof( dbrush_t ), &lengths[LUMP_BRUSHES] )
+		|| !BSP43_LumpBytes( brushSideCount, sizeof( dbrushside_t ), &lengths[LUMP_BRUSHSIDES] )
+		|| !BSP43_LumpBytes( totalIndexes, sizeof( int32_t ), &lengths[LUMP_DRAWINDEXES] )
+		|| !BSP43_LumpBytes( fogCount, sizeof( dfog_t ), &lengths[LUMP_FOGS] )
+		|| !BSP43_LumpBytes( surfaceCount, sizeof( dsurface_t ), &lengths[LUMP_SURFACES] ) ) {
+		BSP43_SetError( error, errorSize, "IBSP v43 map is too large to translate" );
+		goto cleanup;
+	}
 
 	outputLength = sizeof( dheader_t );
 	for ( i = 0; i < HEADER_LUMPS; i++ ) {
+		// leave room for this lump and for the alignment of the next one
+		if ( lengths[i] > INT_MAX - 3 - BSP43_Align4( outputLength ) ) {
+			BSP43_SetError( error, errorSize, "IBSP v43 map is too large to translate" );
+			goto cleanup;
+		}
 		outputLength = BSP43_Align4( outputLength );
 		offsets[i] = outputLength;
 		outputLength += lengths[i];

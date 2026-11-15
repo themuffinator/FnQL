@@ -20,7 +20,9 @@ def request(sock: socket.socket, address: tuple[str, int], payload: bytes) -> by
     sock.sendto(OOB + payload, address)
     try:
         packet, _ = sock.recvfrom(65_535)
-    except TimeoutError:
+    # socket.timeout is TimeoutError only from Python 3.10 on, and Windows
+    # reports a closed port as a reset rather than as silence.
+    except (socket.timeout, ConnectionResetError):
         return None
     return packet
 

@@ -763,9 +763,19 @@ foreach runtime_file : copy_runtime_files
   )
 endforeach
 
+# A release build of the engine defines NDEBUG, as the Makefile's release
+# builds do.  Without it every shipped Meson binary named itself "-debug" in
+# its version string (PLATFORM_STRING in q_platform.h), kept assert() live and
+# ran the collision trace validator on every trace.  It is given to the engine
+# targets only: the test executables below use assert() as their check and
+# must keep it in a release build tree, which is what CI builds and tests.
+engine_ndebug_args = get_option('buildtype') == 'release' ? ['-DNDEBUG'] : []
+engine_c_args = common_c_args + engine_ndebug_args
+engine_cpp_args = common_cpp_args + engine_ndebug_args
+
 botlib = static_library('botlib', botlib_src,
   include_directories: include_dirs,
-  cpp_args: common_cpp_args + ['-DBOTLIB'],
+  cpp_args: engine_cpp_args + ['-DBOTLIB'],
   install: false,
 )
 botlib_objects = [botlib.extract_all_objects(recursive: false)]
@@ -775,8 +785,8 @@ renderer_targets = []
 renderer_module_type = darwin ? 'shared_module' : 'shared_library'
 
 if build_client and renderer_dlopen
-  renderer_c_args = common_c_args + ['-DUSE_RENDERER_DLOPEN']
-  renderer_cpp_args = common_cpp_args + ['-DUSE_RENDERER_DLOPEN']
+  renderer_c_args = engine_c_args + ['-DUSE_RENDERER_DLOPEN']
+  renderer_cpp_args = engine_cpp_args + ['-DUSE_RENDERER_DLOPEN']
 
   if 'glx' in enabled_renderers
     renderer_targets += build_target(renderer_prefix + '_glx_' + renderer_arch,
@@ -831,7 +841,7 @@ endif
 static_renderer_objects = []
 if build_client and not renderer_dlopen
   if renderer_default == 'glx'
-    renderer_glx_static_c_args = common_c_args + [
+    renderer_glx_static_c_args = engine_c_args + [
       '-DRENDERER_CLASSIC',
       '-DRENDERER_GLX',
       '-DRE_DrawScaledText=R_GLX_DrawScaledText',
@@ -842,12 +852,12 @@ if build_client and not renderer_dlopen
       include_directories: include_dirs,
       dependencies: renderer_deps,
       c_args: renderer_glx_static_c_args,
-      cpp_args: common_cpp_args + ['-DRENDERER_GLX'],
+      cpp_args: engine_cpp_args + ['-DRENDERER_GLX'],
       install: false,
     )
     static_renderer_objects = [static_renderer.extract_all_objects(recursive: false)]
   elif renderer_default == 'vk'
-    renderer_vk_static_c_args = common_c_args + [
+    renderer_vk_static_c_args = engine_c_args + [
       '-DRENDERER_VULKAN',
       '-DRE_DrawScaledText=R_VK_DrawScaledText',
       '-DRE_MeasureScaledText=R_VK_MeasureScaledText',
@@ -857,12 +867,12 @@ if build_client and not renderer_dlopen
       include_directories: include_dirs,
       dependencies: renderer_deps,
       c_args: renderer_vk_static_c_args,
-      cpp_args: common_cpp_args,
+      cpp_args: engine_cpp_args,
       install: false,
     )
     static_renderer_objects = [static_renderer.extract_all_objects(recursive: false)]
   elif renderer_default == 'rtx'
-    renderer_rtx_static_c_args = common_c_args + [
+    renderer_rtx_static_c_args = engine_c_args + [
       '-DRENDERER_RTX',
       '-DRE_DrawScaledText=R_RTX_DrawScaledText',
       '-DRE_MeasureScaledText=R_RTX_MeasureScaledText',
@@ -872,15 +882,15 @@ if build_client and not renderer_dlopen
       include_directories: include_dirs,
       dependencies: renderer_deps,
       c_args: renderer_rtx_static_c_args,
-      cpp_args: common_cpp_args,
+      cpp_args: engine_cpp_args,
       install: false,
     )
     static_renderer_objects = [static_renderer.extract_all_objects(recursive: false)]
   endif
 endif
 
-client_c_args = common_c_args
-client_cpp_args = common_cpp_args
+client_c_args = engine_c_args
+client_cpp_args = engine_cpp_args
 if linux and build_client and not use_sdl
   client_cpp_args += ['-DUSE_JOYSTICK']
 endif
@@ -912,8 +922,8 @@ if build_server
     include_directories: include_dirs,
     dependencies: server_deps,
     objects: botlib_objects,
-    c_args: common_c_args + ['-DDEDICATED'],
-    cpp_args: common_cpp_args + ['-DDEDICATED'],
+    c_args: engine_c_args + ['-DDEDICATED'],
+    cpp_args: engine_cpp_args + ['-DDEDICATED'],
     link_args: link_args,
     win_subsystem: win32 ? 'windows' : 'console',
     install: true,
@@ -1140,6 +1150,9 @@ levelshot_validation_tests = executable('fnql_levelshot_validation_tests',
 test('fnql_levelshot_validation', levelshot_validation_tests)
 test('fnql_renderer_port_safety_source', python,
   args: files('tests/renderer_port_safety_tests.py'),
+)
+test('fnql_engine_audit_hardening_source', python,
+  args: files('tests/engine_audit_hardening_source_tests.py'),
 )
 test('fnql_untrusted_asset_bounds_source', python,
   args: files('tests/untrusted_asset_bounds_tests.py'),
@@ -1538,6 +1551,18 @@ if get_option('glx-tests')
   )
 endif
 
+# These two are plain scripts with a main() and no TestCase, so neither the
+# discovery run below nor pytest collects them; without an entry of their own
+# they ran nowhere.
+test('fnql_shadow_projection_source', python,
+  args: files('tests/shadow_projection_source_tests.py'),
+  workdir: meson.current_source_dir(),
+)
+test('fnql_surfacelight_validation_docs', python,
+  args: files('tests/surfacelight_validation_docs_tests.py'),
+  workdir: meson.current_source_dir(),
+)
+
 # Keep the recursive unittest-compatible source suite visible to the default
 # Meson test workflow. Individual self-running modules above remain part of the
 # complete Meson gate, while discovery catches compatibility tests that are
@@ -1549,7 +1574,9 @@ test('fnql_python_source_regressions', python,
     '-p', '*_tests.py',
   ],
   workdir: meson.current_source_dir(),
-  timeout: 300,
+  # The suite has grown to about 1,400 cases: it takes over 200 seconds on
+  # its own and runs beside every other test, so 300 was being exceeded.
+  timeout: 900,
 )
 
 curl_summary = 'disabled'

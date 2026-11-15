@@ -95,6 +95,8 @@ struct Api {
 struct RconPeer {
 	std::string identity;
 	bool requestDelimiter = false;
+	// value of Runtime::peerClock when this peer last sent a message
+	std::uint64_t lastSeen = 0;
 };
 
 struct Runtime {
@@ -104,16 +106,17 @@ struct Runtime {
 	void *rconSocket = nullptr;
 	void *statsSocket = nullptr;
 	std::vector<RconPeer> peers;
+	std::uint64_t peerClock = 0;
 	std::thread::id ownerThread;
 	bool broadcasting = false;
 	bool loadAttempted = false;
 	bool shutdownFailed = false;
 	bool rconAttempted = false;
 	bool statsAttempted = false;
+	bool journalFailureReported = false;
 	int rconPasswordRevision = -1;
 	int statsPasswordRevision = -1;
 	std::string rconPassword;
-	bool journalFailureReported = false;
 	std::string statsPassword;
 	std::string rconEndpoint;
 	std::string statsEndpoint;
@@ -137,10 +140,10 @@ cvar_t *zmqAllowInsecureRemote = nullptr;
 cvar_t *zmqStatus = nullptr;
 cvar_t *zmqRconEndpointStatus = nullptr;
 cvar_t *zmqStatsEndpointStatus = nullptr;
+cvar_t *svStatsJournal = nullptr;
 
 void ScrubString( std::string &value ) {
 	if ( !value.empty() ) {
-cvar_t *svStatsJournal = nullptr;
 		volatile char *bytes = &value[0];
 		for ( std::size_t i = 0; i < value.size(); ++i ) {
 			bytes[i] = '\0';
@@ -679,9 +682,6 @@ std::string EscapeJsonString( const char *text ) {
 	return result;
 }
 
-void Publish( const char *type, const char *json ) {
-	if ( !type || !*type ) {
-		return;
 /*
 The stats journal: sv_statsJournal names a file in the home game directory
 that receives every stats publication, one envelope per line, exactly as the
@@ -721,6 +721,9 @@ void AppendStatsJournal( const std::string &message ) {
 	FS_FCloseFile( file );
 }
 
+void Publish( const char *type, const char *json ) {
+	if ( !type || !*type ) {
+		return;
 	}
 	std::string_view jsonDocument;
 	if ( json && *json ) {
@@ -802,12 +805,12 @@ void Zmq_RegisterCvarsAndInitRcon( void ) {
 	zmqStatus = Cvar_Get( "zmq_status", "disabled", CVAR_ROM );
 	zmqRconEndpointStatus = Cvar_Get( "zmq_rcon_endpoint", "", CVAR_ROM );
 	zmqStatsEndpointStatus = Cvar_Get( "zmq_stats_endpoint", "", CVAR_ROM );
-	Cvar_SetDescription( Cvar_Get( "zmq_stats_payload_policy", "validated-provider-json", CVAR_ROM ),
-		"Retail Json::Value payloads are accepted only through the bounded provider serializer ABI, then strictly validated before publication." );
-
 	svStatsJournal = Cvar_Get( "sv_statsJournal", "", CVAR_INIT );
 	Cvar_SetDescription( svStatsJournal,
 		"Append every stats publication (match report, player and round events) to this *.jsonl file in the home game directory, one JSON envelope per line. Works without libzmq. Default off." );
+	Cvar_SetDescription( Cvar_Get( "zmq_stats_payload_policy", "validated-provider-json", CVAR_ROM ),
+		"Retail Json::Value payloads are accepted only through the bounded provider serializer ABI, then strictly validated before publication." );
+
 	Cvar_CheckRange( zmqRconEnable, "0", "1", CV_INTEGER );
 	Cvar_CheckRange( zmqStatsEnable, "0", "1", CV_INTEGER );
 	Cvar_CheckRange( zmqAllowInsecureRemote, "0", "1", CV_INTEGER );
@@ -965,14 +968,32 @@ void Zmq_PumpRcon( void ) {
 		auto peer = FindPeer( identity );
 		if ( peer == runtime.peers.end() ) {
 			if ( runtime.peers.size() >= MAX_RCON_PEERS ) {
-				SendToPeer( identity, "RCON peer limit reached\n", requestDelimiter );
-				continue;
+				// A request-reply peer is never sent anything unprompted, so
+				// one that has gone away is never found out by a failed send
+				// and would hold its entry until the passwords change.  Every
+				// REQ socket has a fresh identity, so a tool that polls with
+				// short-lived connections would fill the table for good.
+				// Give the newcomer the entry of the request-reply peer that
+				// has been silent longest; streaming peers are left alone.
+				auto stalest = runtime.peers.end();
+				for ( auto candidate = runtime.peers.begin(); candidate != runtime.peers.end(); ++candidate ) {
+					if ( candidate->requestDelimiter &&
+						( stalest == runtime.peers.end() || candidate->lastSeen < stalest->lastSeen ) ) {
+						stalest = candidate;
+					}
+				}
+				if ( stalest == runtime.peers.end() ) {
+					SendToPeer( identity, "RCON peer limit reached\n", requestDelimiter );
+					continue;
+				}
+				runtime.peers.erase( stalest );
 			}
-			runtime.peers.push_back( { identity, requestDelimiter } );
+			runtime.peers.push_back( { identity, requestDelimiter, ++runtime.peerClock } );
 			SendToPeer( identity, "FnQL ZMQ RCON ready\n", requestDelimiter );
 			continue;
 		}
 		peer->requestDelimiter = requestDelimiter;
+		peer->lastSeen = ++runtime.peerClock;
 		Com_DPrintf( "ZMQ RCON command received from authenticated peer\n" );
 		std::array<char, MAX_STRING_CHARS> redirectBuffer{};
 		runtime.commandOutput.clear();
@@ -985,7 +1006,11 @@ void Zmq_PumpRcon( void ) {
 			runtime.commandOutput = "\n";
 		}
 		if ( !SendToPeer( identity, runtime.commandOutput.c_str(), requestDelimiter ) ) {
-			runtime.peers.erase( FindPeer( identity ) );
+			// the command may itself have emptied the table
+			const auto failed = FindPeer( identity );
+			if ( failed != runtime.peers.end() ) {
+				runtime.peers.erase( failed );
+			}
 		}
 		ScrubString( runtime.commandOutput );
 		runtime.commandOutputTruncated = false;

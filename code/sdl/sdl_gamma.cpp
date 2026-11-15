@@ -403,6 +403,12 @@ void GLimp_InitGamma( glconfig_t *config )
 		return;
 	}
 
+	// The display ramp is desktop-global, and probing it writes it.  A
+	// windowless client leaves it alone, as the native backend does.
+	if ( Com_IsWindowless() ) {
+		return;
+	}
+
 	if ( SDLGamma_TrackWindowMonitor( qfalse ) ) {
 		config->deviceSupportsGamma = s_deviceSupportsGamma;
 	}

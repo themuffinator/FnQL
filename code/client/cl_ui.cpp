@@ -145,7 +145,13 @@ static void LAN_LoadCachedServers( void ) {
 	FileReadObject( file.get(), cls.numfavoriteservers );
 	FileReadObject( file.get(), size );
 
-	if ( size == sizeof(cls.globalServers) + sizeof(cls.favoriteServers) ) {
+	// The counts index fixed arrays; a truncated or damaged cache must not
+	// carry them past the storage the same file is about to fill.
+	const bool countsFit =
+		cls.numglobalservers >= 0 && cls.numglobalservers <= MAX_GLOBAL_SERVERS &&
+		cls.numfavoriteservers >= 0 && cls.numfavoriteservers <= MAX_OTHER_SERVERS;
+
+	if ( countsFit && size == sizeof(cls.globalServers) + sizeof(cls.favoriteServers) ) {
 		FileReadObject( file.get(), cls.globalServers );
 		FileReadObject( file.get(), cls.favoriteServers );
 	} else {
@@ -762,7 +768,7 @@ static void CL_ScreenshotBuildQPath( const char *requestedName, char *qpath, int
 }
 
 static int CL_MenuReadScreenshot( const char *requestedName, byte *buffer, int bufferSize ) {
-	fileHandle_t file;
+	fileHandle_t file = FS_INVALID_HANDLE;
 	char qpath[MAX_QPATH];
 	int fileSize;
 	int bytesToRead;
@@ -779,6 +785,10 @@ static int CL_MenuReadScreenshot( const char *requestedName, byte *buffer, int b
 
 	fileSize = FS_FOpenFileRead( qpath, &file, qtrue );
 	if ( fileSize <= 0 ) {
+		// an empty file still opens: release the handle it was given
+		if ( file != FS_INVALID_HANDLE ) {
+			FS_FCloseFile( file );
+		}
 		return fileSize;
 	}
 

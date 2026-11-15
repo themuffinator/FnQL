@@ -126,8 +126,61 @@ only planned.
   compile and link, source gates cover the enablement and default-off cvars,
   and both Windows release jobs fail unless `fnql.exe` imports WinMM's
   `joyGetPosEx`. See [input compatibility](INPUT_COMPATIBILITY.md#controller-backends).
+- [x] Whole-engine defect audit (2026-11-15): six read-only subsystem reviews,
+  each finding re-verified in the source before it was changed.
+  - Remote content: a server's Steam P2P stats report is published to the
+    WebUI through `JSON.parse` instead of being written into script source,
+    and the FnQL settings overlay script is no longer resolved through the
+    game filesystem (QLSRP's `CL_Steam_PublishStatsReport` passes the report
+    as an escaped string too). RoQ frame sizes, IBSP v43 ranges, collision
+    and draw-surface indices, the renderer's visibility header, MD3/MDR
+    headers, TGA and Ogg sizes are checked before use, and the hunk
+    allocators refuse negative sizes. Observed: the new checks accept every
+    map (149), MD3 (462) and TGA (497) in the retail `pak00.pk3`.
+  - Server: `SV_Frame` stops after an rcon command shuts the server down; a
+    refused reconnect releases the slot it tore down; the Steam loops are
+    bounded by `sv.maxclients`; publication and keepalive timers survive a
+    restart; a resized client array re-points an empty transmit queue; a
+    departed player's SteamID is not left for a bot; the ZMQ rcon peer table
+    recycles silent request-reply peers.
+  - Platform: a windowless client stays hidden through a kept-window restart,
+    the OpenGL fallback paths and SDL mode setting; no low-level keyboard
+    hook is installed; the Steam provider loads from a non-ASCII path; an
+    idle Linux server's blocking wait ends on SIGTERM/SIGINT.
+  - Filesystem and modules: a cached XOR-encrypted pk3 keeps its decrypted
+    copy, and native module copies under `.tmp/native` are removed on unload.
+  - Build: Meson release builds now define `NDEBUG` for the engine targets
+    (botlib, renderers, client, dedicated server), as the Makefile's release
+    builds always have. Observed before the change: no compile command in a
+    `--buildtype=release` tree carried it, so the Windows packages named
+    themselves `-debug` in `version`, kept `assert()` live (two sites,
+    `q_math.c` and `tr_light.c`, are commented as reachable in normal play)
+    and ran the collision trace validator on every trace. The `version`
+    string of a Meson release build therefore loses its `-debug` suffix. On
+    Linux the macro also selects `_exit()` in `Sys_Exit` and leaves
+    floating-point exceptions masked on i386, as in the Make builds that are
+    packaged. Test executables keep assertions.
+  - Evidence: MSVC x86 and x86_64 no-SDL release builds are warning-free and
+    each passes its whole Meson suite (107 pass, 2 environment skips), which
+    includes the Python discovery run; pytest passes 1,406 with 24
+    environment skips. The Linux i686 GCC build compiles and passes 105 with
+    2 skips (its one error is a CMake probe that times out on the WSL
+    filesystem and does so on an unchanged tree too). On x86 the hosting
+    gate, a retail dedicated-server run over three maps, the windowless
+    client tests and the retail cgame probes pass. A Linux i686 release
+    build passes the hosting gate, and an idle server started without stdin
+    and with `sv_idleExit 0` exited within 10 ms of SIGTERM.
+    `tests/engine_audit_hardening_source_tests.py` pins each fix.
 
 ## Carry Forward
+
+- [ ] Audit findings left open: a latched cvar set back to its current value
+  keeps the pending change (retail does the same); a reassembled message
+  within four bytes of `MAX_MSGLEN` is unreadable; a failed ZMQ bind is not
+  retried; WebUI demo lists stop at about 1 KB of names; each draw-surfs
+  render command carries the whole shadow manager; `release.py`,
+  `generate_docs.py` and `changelog.py` use Python 3.10 APIs; the Windows
+  release jobs do not pin Meson.
 
 - [ ] Windowed hardware probe of the Win32 WinMM controller backend in both
   `in_joystickProfile` modes, and of SDL3 gamepad hotplug, on the retail

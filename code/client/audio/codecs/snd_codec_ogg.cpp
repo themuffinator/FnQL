@@ -35,6 +35,7 @@ extern "C" {
 
 // includes for the OGG codec
 #include <cerrno>
+#include <climits>
 #include <memory>
 #define OV_EXCLUDE_STATIC_CALLBACKS
 #include <vorbis/vorbisfile.h>
@@ -322,6 +323,20 @@ snd_stream_t *S_OGG_CodecOpenStream(const char *filename)
 
 	// get the number of sample-frames in the OGG
 	numSamples = ov_pcm_total(vf, 0);
+
+	// The frame count comes from the granule position of the last page,
+	// which a small forged file can set to anything, and the byte size below
+	// is an int that the loaders allocate from.  Refuse a stream whose
+	// decoded size does not fit, or that has no usable format.
+	if ( OGGInfo->channels < 1 || OGGInfo->rate <= 0 || numSamples < 0 ||
+		numSamples > INT_MAX / ( (ogg_int64_t)OGGInfo->channels * OGG_SAMPLEWIDTH ) )
+	{
+		ov_clear(vf);
+
+		S_CodecUtilClose(&stream);
+
+		return nullptr;
+	}
 
 	// fill in the info-structure in the stream
 	stream->info.rate = OGGInfo->rate;

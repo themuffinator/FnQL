@@ -311,6 +311,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str]) -> int:
+    # Automated runs never show a window: a client started from here is
+    # windowless unless the caller has chosen otherwise (AGENTS.md).
+    os.environ.setdefault("FNQL_HEADLESS", "2")
     args = parse_args(argv)
     search_roots = [
         *(path for path in args.search_root if path is not None),

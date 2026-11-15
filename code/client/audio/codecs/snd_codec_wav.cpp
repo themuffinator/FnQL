@@ -321,7 +321,15 @@ extern "C" void *S_WAV_CodecLoad( const char *filename, snd_info_t *info ) {
 	}
 
 	if ( !source.needsConversion ) {
-		FileRead( file.get(), buffer, info->size );
+		// The data chunk states its own size.  A file cut short of it leaves
+		// the tail of this temp buffer holding whatever was loaded before,
+		// which would be played as sound; make the missing part silence.
+		const int bytesRead = FileRead( file.get(), buffer, info->size );
+		const int filled = bytesRead > 0 ? bytesRead : 0;
+		if ( filled < info->size ) {
+			// 8-bit PCM is unsigned, so its silence is the midpoint
+			memset( buffer + filled, info->width == 1 ? 0x80 : 0, static_cast<size_t>( info->size - filled ) );
+		}
 		S_ByteSwapRawSamples( info->samples, info->width, info->channels, buffer );
 		return bufferStorage.release();
 	}

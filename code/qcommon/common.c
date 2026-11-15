@@ -2442,6 +2442,18 @@ void *Hunk_Alloc( int size, ha_pref preference ) {
 		}
 	}
 
+	// Sizes reach here from file contents (model, map, sound and image
+	// headers).  A negative one would pass the capacity test below and move
+	// the allocation pointer backwards over live data, and one near INT_MAX
+	// turns negative in the rounding.
+	if ( size < 0 || size > s_hunkTotal ) {
+#ifdef HUNK_DEBUG
+		Com_Error( ERR_DROP, "Hunk_Alloc: bad size %i: %s, line: %d (%s)", size, file, line, label );
+#else
+		Com_Error( ERR_DROP, "Hunk_Alloc: bad size %i", size );
+#endif
+	}
+
 #ifdef HUNK_DEBUG
 	size += sizeof(hunkblock_t);
 #endif
@@ -2513,6 +2525,12 @@ void *Hunk_AllocateTempMemory( int size ) {
 	}
 
 	Hunk_SwapBanks();
+
+	// see Hunk_Alloc: a negative size would walk the temp pointer backwards
+	// and put this block's header outside the hunk
+	if ( size < 0 || size > s_hunkTotal ) {
+		Com_Error( ERR_DROP, "Hunk_AllocateTempMemory: bad size %i", size );
+	}
 
 	size = PAD(size, sizeof(intptr_t)) + sizeof( hunkHeader_t );
 

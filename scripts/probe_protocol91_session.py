@@ -60,6 +60,9 @@ def reject(log: str, marker: str, lane: str) -> None:
 
 
 def main() -> int:
+    # Automated runs never show a window: a client started from here is
+    # windowless unless the caller has chosen otherwise (AGENTS.md).
+    os.environ.setdefault("FNQL_HEADLESS", "2")
     parser = argparse.ArgumentParser()
     parser.add_argument("--client", type=pathlib.Path, required=True)
     parser.add_argument("--server", type=pathlib.Path, required=True)

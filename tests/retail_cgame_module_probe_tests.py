@@ -97,6 +97,8 @@ class RetailCGameModuleProbeTests(unittest.TestCase):
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=creationflags,
+                # never a visible window: windowless unless the caller chose otherwise
+                env=dict(os.environ, FNQL_HEADLESS=os.environ.get("FNQL_HEADLESS", "2")),
             )
 
             log_text = ""

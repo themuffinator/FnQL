@@ -467,8 +467,16 @@ bool Utf8ToWide(const char *source, wchar_t *target, size_t capacity) {
 	if (!source || !target || capacity == 0) {
 		return false;
 	}
-	const int converted = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+	int converted = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
 		source, -1, target, static_cast<int>(capacity));
+	if (converted <= 0) {
+		// The engine's paths come from the ANSI Win32 calls, so an install
+		// directory with a non-ASCII character arrives in the active code
+		// page and is not valid UTF-8.  Without this the provider could not
+		// be loaded from such a path at all.
+		converted = MultiByteToWideChar(CP_ACP, 0,
+			source, -1, target, static_cast<int>(capacity));
+	}
 	if (converted <= 0) {
 		target[0] = L'\0';
 		return false;

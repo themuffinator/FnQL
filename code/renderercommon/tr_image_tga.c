@@ -124,8 +124,6 @@ void R_LoadTGA ( const char *name, byte **pic, int *width, int *height)
 	}
 
 
-	targa_rgba = ri.Malloc (numPixels);
-
 	if (targa_header.id_length != 0)
 	{
 		if (buf_p + targa_header.id_length > end)
@@ -134,12 +132,31 @@ void R_LoadTGA ( const char *name, byte **pic, int *width, int *height)
 		buf_p += targa_header.id_length;  // skip TARGA image comment
 	}
 
-	if ( targa_header.image_type == 2 || targa_header.image_type == 3 )
+	// The pixel data has to be there before the image is allocated: the
+	// header alone can ask for two gigabytes.  The byte count is formed in
+	// 64 bits; in 32 it wraps for a large image and a file holding only a
+	// header passed as complete, after which the copy ran off its end.
 	{
-		if ( buf_p + columns * rows * targa_header.pixel_size / 8 > end )
-		{
+		const uint64_t pixels = (uint64_t)columns * rows;
+		const uint64_t available = (uint64_t)( end - buf_p );
+		uint64_t needed;
+
+		if ( targa_header.image_type == 10 ) {
+			// run-length data: a packet of 1 + pixel bytes yields at most 128 pixels
+			needed = ( ( pixels + 127 ) / 128 ) * ( 1 + targa_header.pixel_size / 8 );
+		} else {
+			needed = pixels * ( targa_header.pixel_size / 8 );
+		}
+		if ( needed > available ) {
+			ri.FS_FreeFile( buffer.v );
 			ri.Error( ERR_DROP, "LoadTGA: file truncated (%s)", name );
 		}
+	}
+
+	targa_rgba = ri.Malloc (numPixels);
+
+	if ( targa_header.image_type == 2 || targa_header.image_type == 3 )
+	{
 		// Uncompressed RGB or gray scale image
 		switch ( targa_header.pixel_size ) {
 			case 8:

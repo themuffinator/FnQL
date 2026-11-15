@@ -153,6 +153,10 @@ jobs:
           submodules: recursive
 
       - name: Stamp release build version
+        # bash stops at the first failing command. The default PowerShell
+        # wrapper reports only the last exit code, so a failed stamp followed
+        # by a successful docs run built an unstamped version and stayed green.
+        shell: bash
         run: |
           python scripts/manual_release.py stamp-version --build-number ${{ needs.prepare.outputs.build_number }}
           python scripts/generate_docs.py
@@ -275,6 +279,10 @@ jobs:
           submodules: recursive
 
       - name: Stamp release build version
+        # bash stops at the first failing command. The default PowerShell
+        # wrapper reports only the last exit code, so a failed stamp followed
+        # by a successful docs run built an unstamped version and stayed green.
+        shell: bash
         run: |
           python scripts/manual_release.py stamp-version --build-number ${{ needs.prepare.outputs.build_number }}
           python scripts/generate_docs.py

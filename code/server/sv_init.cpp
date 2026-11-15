@@ -420,6 +420,13 @@ void SV_ChangeMaxClients( void ) {
 		}
 		if ( oldClients[slot.index].state >= CS_CONNECTED ) {
 			slot.client = oldClients[slot.index];
+			// An empty transmit queue's tail points at the head field inside
+			// the client itself, so the copied pointer still aims into the
+			// array that was just freed.  A non-empty queue's tail lives in
+			// its last heap buffer and stays valid.
+			if ( !slot.client.netchan_start_queue ) {
+				slot.client.netchan_end_queue = &slot.client.netchan_start_queue;
+			}
 		}
 	}
 }

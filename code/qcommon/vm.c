@@ -35,6 +35,11 @@ and one exported function: Perform
 */
 
 #include "vm_local.h"
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <unistd.h>
+#endif
 #include "vm_header_bounds.h"
 #include "fnql_module.h"
 #include "../game/g_public.h"
@@ -1954,6 +1959,53 @@ static const char *VM_NativeCachePath( const char *filename, char *path, size_t 
 	return path;
 }
 
+/*
+The module copies this process wrote under <home>/.tmp/native/<nonce>/, one
+per VM slot.  The nonce is new for every process, so a copy that is not removed
+when its module is unloaded stays in the profile folder for good; a few
+megabytes were stranded there by every launch.
+*/
+static char vmNativeCacheFiles[VM_COUNT][MAX_OSPATH * 3 + 1];
+
+static void VM_RemoveDirectoryIfEmpty( const char *path ) {
+#ifdef _WIN32
+	(void)_rmdir( path );
+#else
+	(void)rmdir( path );
+#endif
+}
+
+/*
+Best effort throughout: on Windows the file cannot be removed while another
+slot still has the same library mapped, and a directory is only removed once
+it is empty.  Nothing here may fail a load or an unload.
+*/
+static void VM_DiscardNativeCacheFile( const char *cachePath ) {
+	char	directory[MAX_OSPATH * 3 + 1];
+	char	*separator;
+
+	if ( !cachePath || !cachePath[0] ) {
+		return;
+	}
+
+	(void)remove( cachePath );
+
+	Q_strncpyz( directory, cachePath, sizeof( directory ) );
+	separator = strrchr( directory, PATH_SEP );
+	if ( separator && separator != directory ) {
+		*separator = '\0';
+		VM_RemoveDirectoryIfEmpty( directory );
+	}
+}
+
+static void VM_ReleaseNativeCacheFile( vmIndex_t index ) {
+	if ( (int)index < 0 || (int)index >= VM_COUNT || !vmNativeCacheFiles[index][0] ) {
+		return;
+	}
+	VM_DiscardNativeCacheFile( vmNativeCacheFiles[index] );
+	vmNativeCacheFiles[index][0] = '\0';
+}
+
 static void VM_PinNativeModule( vmIndex_t index, const char *filename,
 	const void *buffer, int length ) {
 	vmPinnedNative_t	*pinned;
@@ -2049,7 +2101,10 @@ static void *VM_LoadDllFromPakCache( vmIndex_t index, const char *filename ) {
 	libHandle = Sys_LoadLibrary( cachePath );
 	if ( libHandle ) {
 		VM_PinNativeModule( index, filename, buffer, length );
+		Q_strncpyz( vmNativeCacheFiles[index], cachePath, sizeof( vmNativeCacheFiles[index] ) );
 		Com_Printf( "VM_LoadDll: loaded native module cache '%s'\n", cachePath );
+	} else {
+		VM_DiscardNativeCacheFile( cachePath );
 	}
 	FS_FreeFile( buffer );
 
@@ -2076,7 +2131,10 @@ static void *VM_LoadPinnedDll( vmIndex_t index, const char *filename ) {
 
 	libHandle = Sys_LoadLibrary( cachePath );
 	if ( libHandle ) {
+		Q_strncpyz( vmNativeCacheFiles[index], cachePath, sizeof( vmNativeCacheFiles[index] ) );
 		Com_Printf( "VM_LoadDll: reloaded pinned native module '%s'\n", cachePath );
+	} else {
+		VM_DiscardNativeCacheFile( cachePath );
 	}
 	return libHandle;
 }
@@ -2166,6 +2224,7 @@ static void * QDECL VM_LoadDll( vmIndex_t index, const char *name,
 		 !VM_AssignDllFunction( &dllEntryNative, sizeof( dllEntryNative ), dllEntrySymbol, "dllEntry" ) ||
 		 !VM_AssignDllFunction( entryPoint, sizeof( *entryPoint ), vmMainSymbol, "vmMain" ) ) {
 		Sys_UnloadLibrary( libHandle );
+		VM_ReleaseNativeCacheFile( index );
 		return NULL;
 	}
 	if ( dllExports ) {
@@ -2181,6 +2240,7 @@ static void * QDECL VM_LoadDll( vmIndex_t index, const char *name,
 		if ( !*dllExports ) {
 			Com_Printf( "VM_LoadDll(%s) did not publish native exports\n", name );
 			Sys_UnloadLibrary( libHandle );
+			VM_ReleaseNativeCacheFile( index );
 			return NULL;
 		}
 
@@ -2197,6 +2257,7 @@ static void * QDECL VM_LoadDll( vmIndex_t index, const char *name,
 	}
 
 	Sys_UnloadLibrary( libHandle );
+	VM_ReleaseNativeCacheFile( index );
 	return NULL;
 }
 
@@ -2333,6 +2394,7 @@ static qboolean VM_LoadNativeModule( vm_t *vm, const char *moduleName,
 
 reject:
 	Sys_UnloadLibrary( vm->dllHandle );
+	VM_ReleaseNativeCacheFile( vm->index );
 	vm->dllHandle = NULL;
 	vm->dllExports = NULL;
 	vm->entryPoint = NULL;
@@ -2506,8 +2568,10 @@ void VM_Free( vm_t *vm ) {
 	if ( vm->destroy )
 		vm->destroy( vm );
 
-	if ( vm->dllHandle )
+	if ( vm->dllHandle ) {
 		Sys_UnloadLibrary( vm->dllHandle );
+		VM_ReleaseNativeCacheFile( vm->index );
+	}
 
 #if 0	// now automatically freed by hunk
 	if ( vm->codeBase.ptr ) {

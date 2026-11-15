@@ -3358,6 +3358,10 @@ int FS_ReadProfileFile( const char *qpath, void **buffer ) {
 
 	length = FS_FOpenProfileFileRead( qpath, &handle );
 	if ( handle == FS_INVALID_HANDLE || length < 0 ) {
+		// an opened file whose length could not be read still holds a handle
+		if ( handle != FS_INVALID_HANDLE ) {
+			FS_FCloseFile( handle );
+		}
 		if ( buffer ) {
 			*buffer = NULL;
 		}
@@ -3547,7 +3551,7 @@ static char *FS_CreateQuakeLiveDecryptedZipFile( const char *zipfile )
 	char tempName[ MAX_OSPATH ];
 	char *outPath;
 	size_t readLen;
-	int streamPos;
+	unsigned int keyPos;
 	int i;
 
 	basePath = ( fs_homepath && fs_homepath->string[ 0 ] ) ? fs_homepath->string : Sys_Pwd();
@@ -3579,10 +3583,12 @@ static char *FS_CreateQuakeLiveDecryptedZipFile( const char *zipfile )
 		return NULL;
 	}
 
-	streamPos = 0;
+	// The key position is kept reduced: a running int byte count goes
+	// negative past 2 GiB and would index in front of the key table.
+	keyPos = 0;
 	while ( ( readLen = fread( buffer, 1, bufferSize, in ) ) > 0 ) {
 		for ( i = 0; i < (int)readLen; i++ ) {
-			buffer[ i ] ^= (byte)fs_quakeLivePk3Xor[ ( streamPos + i ) % FS_QUAKELIVE_PK3_XOR_LEN ];
+			buffer[ i ] ^= (byte)fs_quakeLivePk3Xor[ ( keyPos + (unsigned int)i ) % FS_QUAKELIVE_PK3_XOR_LEN ];
 		}
 
 		if ( fwrite( buffer, 1, readLen, out ) != readLen ) {
@@ -3593,7 +3599,7 @@ static char *FS_CreateQuakeLiveDecryptedZipFile( const char *zipfile )
 			return NULL;
 		}
 
-		streamPos += (int)readLen;
+		keyPos = ( keyPos + (unsigned int)readLen ) % FS_QUAKELIVE_PK3_XOR_LEN;
 	}
 
 	fclose( out );
@@ -3760,7 +3766,13 @@ static pack_t *FS_LoadCachedPK3( const char *zipfile )
 		return NULL;
 	}
 
-	pak->readFilename = pak->pakFilename;
+	// A pack loaded from an XOR-encrypted pk3 reads from a decrypted
+	// temporary copy.  Keep that path: pointing readFilename back at the
+	// encrypted original would make every later open fail, and FS_FreePak
+	// would no longer find the temporary file to remove.
+	if ( pak->readFilename == NULL ) {
+		pak->readFilename = pak->pakFilename;
+	}
 	return pak;
 }
 
@@ -4284,6 +4296,17 @@ static pack_t *FS_LoadZipFile( const char *zipfile )
 			pack->pure_checksum = Com_BlockChecksum( pack->headerLongs, sizeof( pack->headerLongs[0] ) * pack->numHeaderLongs );
 			pack->pure_checksum = LittleLong( pack->pure_checksum );
 			pack->checksumFeed = fs_checksumFeed;
+		}
+
+		// a pack restored from the cache file has no decrypted copy yet
+		if ( encrypted && pack->readFilename == pack->pakFilename ) {
+			readFilename = FS_CreateQuakeLiveDecryptedZipFile( zipfile );
+			if ( readFilename == NULL ) {
+				FS_RemoveFromCache( pack );
+				FS_FreePak( pack );
+				return NULL;
+			}
+			pack->readFilename = readFilename;
 		}
 
 		pack->touched = qtrue;
@@ -5037,7 +5060,10 @@ char **FS_ListFiles( const char *path, const char *extension, int *numfiles )
 	}
 	expanded[count] = CopyString( "fnql.shader" );
 	expanded[count + 1] = NULL;
-	Z_Free( files );
+	// no mounted match at all leaves the list NULL, which Z_Free rejects
+	if ( files ) {
+		Z_Free( files );
+	}
 	*numfiles = count + 1;
 	return expanded;
 }

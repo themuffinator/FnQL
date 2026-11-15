@@ -681,6 +681,21 @@ static void CL_WebUI_JsonEscape( const char *value, char *buffer, size_t bufferS
 			continue;
 		}
 
+		// U+2028 and U+2029 end a line inside a script string literal on the
+		// script engine Awesomium embeds, so one in a persona or host name
+		// would break every script the escaped text is written into.  Three
+		// bytes become six, which the callers' 2n buffers already allow for.
+		if ( ch == 0xe2u && (unsigned char)cursor[1] == 0x80u
+			&& ( (unsigned char)cursor[2] == 0xa8u || (unsigned char)cursor[2] == 0xa9u ) ) {
+			if ( out + 6 > limit ) {
+				break;
+			}
+			memcpy( out, (unsigned char)cursor[2] == 0xa8u ? "\\u2028" : "\\u2029", 6 );
+			out += 6;
+			cursor += 2;
+			continue;
+		}
+
 		*out++ = (char)ch;
 	}
 
@@ -2721,9 +2736,14 @@ static qboolean CL_WebHost_InjectFnqlOverlayAssets( void ) {
 	qboolean result = qfalse;
 	int styleInjected = 0;
 
-	if ( !CL_LauncherRequestData( "asset://ql/fnql-settings.js",
+	// The overlay script runs in the page that owns the native bridge, so it is
+	// taken only from the web paks and the loose install-directory fallback.
+	// CL_LauncherRequestData would also search the game filesystem, where a
+	// pk3 a server sent could supply a file of the same name whenever the
+	// FnQL sidecar is missing.
+	if ( !CL_WebPak_Fetch( "asset://ql/fnql-settings.js",
 		&settingsBuffer, &settingsLength ) || !settingsBuffer || settingsLength <= 0
-		|| !CL_LauncherRequestData( "asset://ql/css/fnql-settings.css",
+		|| !CL_WebPak_Fetch( "asset://ql/css/fnql-settings.css",
 			&styleBuffer, &styleLength ) || !styleBuffer || styleLength <= 0
 		|| styleLength > ( ( std::numeric_limits<int>::max )() - 512 ) / 2 ) {
 		goto cleanup;
@@ -2932,24 +2952,39 @@ static void CL_WebHost_UpdateBrowserUGCList( const char *ugcListJson ) {
 	Z_Free( script );
 }
 
+/*
+=============
+CL_WebHost_PublishDynamicJsonEvent
+
+The document may come from outside the engine: game.stats.report is the body
+of a Steam P2P packet the connected server sent.  It is therefore never
+spliced into script source.  It travels as a quoted string through
+JSON.parse, so a document that is not JSON publishes nothing instead of
+running in the page that owns the native bridge.
+=============
+*/
 static void CL_WebHost_PublishDynamicJsonEvent( const char *eventName,
 		const char *json ) {
-	char *script;
-	int scriptSize;
 	if ( !eventName || !eventName[0] || !json || !json[0]
 		|| !CL_WebHost_HasLiveView() || !CL_WebHost_HasBoundWindowObject() ) {
 		return;
 	}
-	if ( strlen( eventName ) + strlen( json )
-		> (size_t)( ( std::numeric_limits<int>::max )() - 160 ) ) return;
-	scriptSize = (int)( strlen( eventName ) + strlen( json ) ) + 160;
-	script = static_cast<char *>( Z_Malloc( scriptSize ) );
-	if ( !script ) return;
-	Com_sprintf( script, scriptSize,
-		"(function(){if(window.EnginePublish){window.EnginePublish('%s',%s);}})();",
-		eventName, json );
-	CL_Awesomium_ExecuteJavascript( script, "" );
-	Z_Free( script );
+	// Event names are engine-built topics; refuse anything that could leave
+	// the single-quoted literal it is written into.
+	for ( const char *c = eventName; *c; ++c ) {
+		const unsigned char ch = static_cast<unsigned char>( *c );
+		if ( !( ( ch >= 'a' && ch <= 'z' ) || ( ch >= 'A' && ch <= 'Z' )
+			|| ( ch >= '0' && ch <= '9' ) || ch == '.' || ch == '_' || ch == '-' ) ) {
+			return;
+		}
+	}
+	std::string script =
+		"(function(){if(!window.EnginePublish){return;}var d;try{d=";
+	script += CL_WebHost_JsonParseExpression( json );
+	script += ";}catch(e){return;}window.EnginePublish('";
+	script += eventName;
+	script += "',d);})();";
+	CL_Awesomium_ExecuteJavascript( script.c_str(), "" );
 }
 
 static qboolean CL_WebHost_UpdateBrowserCatalogCache( const char *setterName, const char *catalogJson ) {

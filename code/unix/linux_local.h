@@ -58,6 +58,7 @@ char *strlwr (char *s);
 // signals.c
 void InitSig(void);
 void Sys_HandlePendingSignals(void);
+qboolean Sys_ShutdownSignalPending(void);
 
 #ifdef __cplusplus
 }

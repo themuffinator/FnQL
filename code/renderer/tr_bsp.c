@@ -588,19 +588,42 @@ R_LoadVisibility
 static void R_LoadVisibility( const lump_t *l ) {
 	int		len;
 	byte	*buf;
+	int		numClusters, clusterBytes;
+	const int	leafClusters = s_worldData.numClusters;
 
 	len = PAD( s_worldData.numClusters, 64 );
 	s_worldData.novis = ri.Hunk_Alloc( len, h_low );
 	Com_Memset( s_worldData.novis, 0xff, len );
 
 	len = l->filelen;
-	if ( !len ) {
+	if ( len < 8 ) {
+		// no table, or not even a whole header: everything is visible
 		return;
 	}
 	buf = fileBase + l->fileofs;
 
-	s_worldData.numClusters = LittleLong( ((int *)buf)[0] );
-	s_worldData.clusterBytes = LittleLong( ((int *)buf)[1] );
+	numClusters = LittleLong( ((int *)buf)[0] );
+	clusterBytes = LittleLong( ((int *)buf)[1] );
+
+	// R_ClusterPVS() hands out vis + cluster * clusterBytes, and the leaf
+	// walk tests bit "cluster" of that row, without looking at how much was
+	// loaded.  The table the header describes therefore has to fit in the
+	// lump, and a row has to be wide enough for every cluster a leaf names.
+	// The collision loader falls back to "everything visible" for the same
+	// lump instead of refusing the map, so the renderer cannot assume the
+	// header was already vetted; it does the same and keeps the cluster
+	// count it derived from the leafs.  Compare by division: the product
+	// overflows on the 32-bit target.
+	if ( numClusters < 0 || clusterBytes <= 0
+		|| numClusters > ( len - 8 ) / clusterBytes
+		|| (int64_t)leafClusters > (int64_t)clusterBytes * 8 ) {
+		ri.Printf( PRINT_WARNING, "WARNING: %s has an inconsistent visibility lump, ignoring it\n",
+			s_worldData.name );
+		return;
+	}
+
+	s_worldData.numClusters = numClusters;
+	s_worldData.clusterBytes = clusterBytes;
 
 	// CM_Load should have given us the vis data to share, so
 	// we don't need to allocate another copy
@@ -2051,9 +2074,17 @@ static void ParseFace( const dsurface_t *ds, const drawVert_t *verts, msurface_t
 		}
 	}
 
+	// ofsIndexes is kept in a local: the copy must not steer itself through
+	// a field of the block it is filling.  An index is drawn straight out of
+	// cv->points, so one outside this face (a face cut to MAX_FACE_POINTS
+	// above keeps its original indexes) is pointed at the first vertex.
 	indexes += LittleLong( ds->firstIndex );
 	for ( i = 0 ; i < numIndexes ; i++ ) {
-		((int *)((byte *)cv + cv->ofsIndices ))[i] = LittleLong( indexes[ i ] );
+		int index = LittleLong( indexes[ i ] );
+		if ( index < 0 || index >= numPoints ) {
+			index = 0;
+		}
+		((int *)((byte *)cv + ofsIndexes ))[i] = index;
 	}
 
 	// take the plane information from the lightmap vector
@@ -2986,12 +3017,35 @@ static void R_MovePatchSurfacesToHunk( void ) {
 R_LoadSurfaces
 ===============
 */
+/*
+===============
+R_SurfaceRangeFits
+
+A draw surface names its vertices and indexes as a first/count pair read from
+the map.  The parsers below size allocations from the counts and copy that many
+records, so a pair has to lie inside its lump; a negative count is refused
+outright, because it shrinks the allocation the copy then runs past.  A count
+of zero references nothing and its first value is not looked at.
+===============
+*/
+static qboolean R_SurfaceRangeFits( int first, int count, int total ) {
+	if ( count < 0 ) {
+		return qfalse;
+	}
+	if ( count == 0 ) {
+		return qtrue;
+	}
+	return ( first >= 0 && first <= total && count <= total - first ) ? qtrue : qfalse;
+}
+
+
 static void R_LoadSurfaces( const lump_t *surfs, const lump_t *verts, const lump_t *indexLump ) {
 	const dsurface_t *in;
 	msurface_t	*out;
 	const drawVert_t *dv;
 	int			*indexes;
 	int			count;
+	int			numDrawVerts, numDrawIndexes;
 	int			numFaces, numMeshes, numTriSurfs, numFlares;
 	int			i;
 
@@ -3013,6 +3067,9 @@ static void R_LoadSurfaces( const lump_t *surfs, const lump_t *verts, const lump
 	if ( indexLump->filelen % sizeof(*indexes))
 		ri.Error( ERR_DROP, "%s(): funny lump size in %s", __func__, s_worldData.name );
 
+	numDrawVerts = verts->filelen / (int)sizeof(*dv);
+	numDrawIndexes = indexLump->filelen / (int)sizeof(*indexes);
+
 	out = ri.Hunk_Alloc( count * sizeof(*out), h_low );
 
 	s_worldData.surfaces = out;
@@ -3021,16 +3078,35 @@ static void R_LoadSurfaces( const lump_t *surfs, const lump_t *verts, const lump
 	for ( i = 0 ; i < count ; i++, in++, out++ ) {
 		switch ( LittleLong( in->surfaceType ) ) {
 		case MST_PATCH:
+		{
+			// ParseMesh() copies width * height vertices into a stack array of
+			// MAX_PATCH_SIZE * MAX_PATCH_SIZE
+			const int width = LittleLong( in->patchWidth );
+			const int height = LittleLong( in->patchHeight );
+			if ( width < 0 || height < 0
+				|| (int64_t)width * height > MAX_PATCH_SIZE * MAX_PATCH_SIZE
+				|| !R_SurfaceRangeFits( LittleLong( in->firstVert ), width * height, numDrawVerts ) ) {
+				ri.Error( ERR_DROP, "%s(): patch surface %i has a bad size or vertex range in %s",
+					__func__, i, s_worldData.name );
+			}
 			ParseMesh( in, dv, out );
 			numMeshes++;
 			break;
+		}
 		case MST_TRIANGLE_SOUP:
-			ParseTriSurf( in, dv, out, indexes );
-			numTriSurfs++;
-			break;
 		case MST_PLANAR:
-			ParseFace( in, dv, out, indexes );
-			numFaces++;
+			if ( !R_SurfaceRangeFits( LittleLong( in->firstVert ), LittleLong( in->numVerts ), numDrawVerts )
+				|| !R_SurfaceRangeFits( LittleLong( in->firstIndex ), LittleLong( in->numIndexes ), numDrawIndexes ) ) {
+				ri.Error( ERR_DROP, "%s(): surface %i has a bad vertex or index range in %s",
+					__func__, i, s_worldData.name );
+			}
+			if ( LittleLong( in->surfaceType ) == MST_TRIANGLE_SOUP ) {
+				ParseTriSurf( in, dv, out, indexes );
+				numTriSurfs++;
+			} else {
+				ParseFace( in, dv, out, indexes );
+				numFaces++;
+			}
 			break;
 		case MST_FLARE:
 			ParseFlare( in, dv, out, indexes );

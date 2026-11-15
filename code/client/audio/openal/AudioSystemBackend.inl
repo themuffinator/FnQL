@@ -561,7 +561,22 @@ void AudioSystem::ServiceBackgroundTrack() {
 	int chunksQueuedThisCall = 0;
 	while ( musicPlayer_.QueuedBufferCount() < kQueuedStreamChunks && chunksQueuedThisCall < kMaxStreamChunksPerService ) {
 		std::array<byte, 32768> raw;
-		const int bytesRead = S_CodecReadStream( backgroundStream_, static_cast<int>( raw.size() ), raw.data() );
+
+		// Ask the codec for whole sample frames only.  The WAV reader hands
+		// back raw bytes, and 32768 is not a multiple of every frame size (a
+		// 5.1 16-bit frame is 12 bytes): the bytes of the cut frame were
+		// dropped below, so every later chunk started mid-frame and the
+		// channels rotated.
+		int readBytes = static_cast<int>( raw.size() );
+		{
+			size_t wholeFrameBytes = 0;
+			if ( PCMFrameByteCount( 1, backgroundStream_->info.channels, backgroundStream_->info.width, wholeFrameBytes ) &&
+				wholeFrameBytes > 0 && wholeFrameBytes <= raw.size() ) {
+				readBytes -= readBytes % static_cast<int>( wholeFrameBytes );
+			}
+		}
+
+		const int bytesRead = S_CodecReadStream( backgroundStream_, readBytes, raw.data() );
 		if ( bytesRead <= 0 ) {
 			if ( !backgroundLoop_.empty() ) {
 				if ( emptyRestarts > 0 ) {

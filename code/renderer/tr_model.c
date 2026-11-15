@@ -405,7 +405,11 @@ static qboolean R_LoadMD3( model_t *mod, int lod, void *buffer, int fileSize, co
 
 	size = LittleLong( pinmodel->ofsEnd );
 
-	if ( size > fileSize ) {
+	// ofsEnd sizes the copy below and every later offset is tested against
+	// it, so it has to cover at least the header that is about to be read
+	// out of that copy (a negative value would also run the allocator
+	// backwards)
+	if ( size < (int)sizeof( md3Header_t ) || size > fileSize ) {
 		ri.Printf( PRINT_WARNING, "%s: %s has corrupted header\n", __func__, mod_name );
 		return qfalse;
 	}
@@ -439,6 +443,19 @@ static qboolean R_LoadMD3( model_t *mod, int lod, void *buffer, int fileSize, co
 		return qfalse;
 	}
 	if ( (unsigned)( hdr->numFrames | hdr->numTags | hdr->numSkins ) > (1 << 20) ) {
+		ri.Printf( PRINT_WARNING, "%s: %s has corrupted header\n", __func__, mod_name );
+		return qfalse;
+	}
+
+	// The frame and tag blocks are byte-swapped in place inside the copy of
+	// "size" bytes made above, so they are held to that copy, not to the
+	// file.  Offsets are tested for sign and the extents are formed in 64
+	// bits: the mixed int/size_t sums below wrap, and a negative ofsTags
+	// chosen to cancel the tag extent used to pass them and send the tag
+	// loop writing in front of the model.
+	if ( hdr->ofsFrames < 0 || hdr->ofsTags < 0 || hdr->ofsSurfaces < 0 || hdr->numSurfaces < 0
+		|| (int64_t)hdr->ofsFrames + (int64_t)hdr->numFrames * (int64_t)sizeof( md3Frame_t ) > size
+		|| (int64_t)hdr->ofsTags + (int64_t)hdr->numTags * hdr->numFrames * (int64_t)sizeof( md3Tag_t ) > size ) {
 		ri.Printf( PRINT_WARNING, "%s: %s has corrupted header\n", __func__, mod_name );
 		return qfalse;
 	}
@@ -623,6 +640,12 @@ static qboolean R_LoadMDR( model_t *mod, void *buffer, int filesize, const char 
 	int					size;
 	shader_t			*sh;
 
+	// the registration path only promises four bytes of file
+	if ( filesize < (int)sizeof( mdrHeader_t ) ) {
+		ri.Printf( PRINT_WARNING, "%s: %s has a truncated header\n", __func__, mod_name );
+		return qfalse;
+	}
+
 	pinmodel = (mdrHeader_t *)buffer;
 
 	pinmodel->version = LittleLong(pinmodel->version);
@@ -634,7 +657,7 @@ static qboolean R_LoadMDR( model_t *mod, void *buffer, int filesize, const char 
 
 	size = LittleLong(pinmodel->ofsEnd);
 	
-	if ( size > filesize )
+	if ( size < (int)sizeof( mdrHeader_t ) || size > filesize )
 	{
 		ri.Printf( PRINT_WARNING, "%s: Header of %s is broken. Wrong filesize declared!\n", __func__, mod_name );
 		return qfalse;

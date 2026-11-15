@@ -172,6 +172,9 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: List GLx RC gates
+        # explicit bash runs with pipefail, so a promotion policy violation is
+        # not hidden by the exit status of tee
+        shell: bash
         run: |
           mkdir -p .tmp
           python scripts/glx_runtime_sweep.py --list-gates
