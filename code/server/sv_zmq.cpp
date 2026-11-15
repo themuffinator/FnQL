@@ -113,6 +113,7 @@ struct Runtime {
 	int rconPasswordRevision = -1;
 	int statsPasswordRevision = -1;
 	std::string rconPassword;
+	bool journalFailureReported = false;
 	std::string statsPassword;
 	std::string rconEndpoint;
 	std::string statsEndpoint;
@@ -139,6 +140,7 @@ cvar_t *zmqStatsEndpointStatus = nullptr;
 
 void ScrubString( std::string &value ) {
 	if ( !value.empty() ) {
+cvar_t *svStatsJournal = nullptr;
 		volatile char *bytes = &value[0];
 		for ( std::size_t i = 0; i < value.size(); ++i ) {
 			bytes[i] = '\0';
@@ -680,6 +682,45 @@ std::string EscapeJsonString( const char *text ) {
 void Publish( const char *type, const char *json ) {
 	if ( !type || !*type ) {
 		return;
+/*
+The stats journal: sv_statsJournal names a file in the home game directory
+that receives every stats publication, one envelope per line, exactly as the
+publisher socket would send it.  It needs no libzmq, so a server without the
+library can still keep match statistics, and it is how the FnQL-game stats
+gate compares a module's events with the retail module's.  Default off.
+
+Only a bare "*.jsonl" file name is accepted: the cvar must not become a way
+to write elsewhere or to clobber another kind of file.
+*/
+bool StatsJournalEnabled() {
+	if ( !svStatsJournal || !svStatsJournal->string[0] ) {
+		return false;
+	}
+	const std::string_view name( svStatsJournal->string );
+	constexpr std::string_view suffix = ".jsonl";
+	if ( name.size() <= suffix.size() || name.size() > 64 ||
+		name.substr( name.size() - suffix.size() ) != suffix || name.front() == '.' ) {
+		return false;
+	}
+	return std::all_of( name.begin(), name.end(), []( unsigned char c ) {
+		return std::isalnum( c ) || c == '_' || c == '-' || c == '.';
+	} );
+}
+
+void AppendStatsJournal( const std::string &message ) {
+	const fileHandle_t file = FS_FOpenFileAppend( svStatsJournal->string );
+	if ( file == FS_INVALID_HANDLE ) {
+		if ( !runtime.journalFailureReported ) {
+			runtime.journalFailureReported = true;
+			Com_Printf( S_COLOR_YELLOW "Stats journal: cannot append to %s\n", svStatsJournal->string );
+		}
+		return;
+	}
+	FS_Write( message.data(), static_cast<int>( message.size() ), file );
+	FS_Write( "\n", 1, file );
+	FS_FCloseFile( file );
+}
+
 	}
 	std::string_view jsonDocument;
 	if ( json && *json ) {
@@ -698,7 +739,9 @@ void Publish( const char *type, const char *json ) {
 			return;
 		}
 	}
-	if ( !EnsureStatsSocket() ) {
+	const bool journal = StatsJournalEnabled();
+	const bool socket = EnsureStatsSocket();
+	if ( !journal && !socket ) {
 		return;
 	}
 	std::string message = "{\"TYPE\":\"" + EscapeJsonString( type ) + "\",\"DATA\":";
@@ -712,7 +755,12 @@ void Publish( const char *type, const char *json ) {
 		Com_Printf( "ZMQ: dropped oversized %s publication (%zu bytes)\n", type, message.size() );
 		return;
 	}
-	runtime.api.send( runtime.statsSocket, message.data(), message.size(), ZMQ_DONTWAIT );
+	if ( journal ) {
+		AppendStatsJournal( message );
+	}
+	if ( socket ) {
+		runtime.api.send( runtime.statsSocket, message.data(), message.size(), ZMQ_DONTWAIT );
+	}
 }
 
 void Zmq_SelfTest_f() {
@@ -757,6 +805,9 @@ void Zmq_RegisterCvarsAndInitRcon( void ) {
 	Cvar_SetDescription( Cvar_Get( "zmq_stats_payload_policy", "validated-provider-json", CVAR_ROM ),
 		"Retail Json::Value payloads are accepted only through the bounded provider serializer ABI, then strictly validated before publication." );
 
+	svStatsJournal = Cvar_Get( "sv_statsJournal", "", CVAR_INIT );
+	Cvar_SetDescription( svStatsJournal,
+		"Append every stats publication (match report, player and round events) to this *.jsonl file in the home game directory, one JSON envelope per line. Works without libzmq. Default off." );
 	Cvar_CheckRange( zmqRconEnable, "0", "1", CV_INTEGER );
 	Cvar_CheckRange( zmqStatsEnable, "0", "1", CV_INTEGER );
 	Cvar_CheckRange( zmqAllowInsecureRemote, "0", "1", CV_INTEGER );

@@ -1368,28 +1368,88 @@ qboolean SV_SteamStats_HasAchievement( int clientNum, int achievementId ) {
 SV_SteamStats_ProcessMatchReport
 ==================
 */
+/*
+==================
+SV_CopyModuleStatsJson
+
+A source-built game module hands its documents over as text.  Accept only a
+terminated, bounded, well-formed document; anything else is refused whole.
+==================
+*/
+static bool SV_CopyModuleStatsJson( const char *json,
+		std::array<char, fnql::server::json::MaximumDocumentBytes + 1> &document,
+		std::uint32_t &documentBytes ) {
+	document.fill( '\0' );
+	documentBytes = 0;
+	if ( !json ) {
+		return false;
+	}
+	std::size_t length = 0;
+	while ( length <= fnql::server::json::MaximumDocumentBytes && json[length] != '\0' ) {
+		++length;
+	}
+	if ( length == 0 || length > fnql::server::json::MaximumDocumentBytes ||
+		!fnql::server::json::DocumentIsValid( std::string_view( json, length ) ) ) {
+		return false;
+	}
+	memcpy( document.data(), json, length );
+	documentBytes = static_cast<std::uint32_t>( length );
+	return true;
+}
+
+/*
+==================
+SV_PublishMatchReportDocument
+
+The validated MATCH_REPORT, whichever way the game module delivered it.
+==================
+*/
+static void SV_PublishMatchReportDocument(
+		const std::array<char, fnql::server::json::MaximumDocumentBytes + 1> &document,
+		std::uint32_t documentBytes, char *buffer, int bufferSize ) {
+	std::array<char, fnql::server::json::MaximumDocumentBytes + 1> summary{};
+	const std::string_view reportDocument( document.data(), documentBytes );
+	const bool summaryAllowed =
+		fnql::server::stats::ReportAccumulator::MatchSummaryAllowed( reportDocument );
+	const bool merged = summaryAllowed && statsReports.Build(
+		reportDocument, summary.data(), summary.size() );
+	if ( buffer && bufferSize > 0 ) {
+		Q_strncpyz( buffer, merged ? summary.data() : document.data(), bufferSize );
+	}
+	Zmq_SubmitMatchReportJson( document.data() );
+	if ( merged ) {
+		Zmq_SubmitMatchSummaryJson( summary.data() );
+	}
+	SV_LogSteamStatsLifecycle( "match-report",
+		merged ? "published report and eligible PLYR_STATS/PLYR_EVENTS summary"
+			: summaryAllowed ? "published report; bounded summary merge failed"
+				: "published report; training or aborted summary suppressed" );
+}
+
+/*
+==================
+SV_SteamStats_ProcessMatchReportJson
+==================
+*/
+void SV_SteamStats_ProcessMatchReportJson( const char *json ) {
+	std::array<char, fnql::server::json::MaximumDocumentBytes + 1> document{};
+	std::uint32_t documentBytes = 0;
+	SV_FlushAllSteamStats();
+	if ( SV_CopyModuleStatsJson( json, document, documentBytes ) ) {
+		SV_PublishMatchReportDocument( document, documentBytes, nullptr, 0 );
+	} else {
+		SV_LogSteamStatsLifecycle( "match-report",
+			"refused a missing, oversized or malformed module JSON document" );
+	}
+	statsReports.Reset();
+}
+
 const void *SV_SteamStats_ProcessMatchReport( const void *report, char *buffer, int bufferSize ) {
 	std::array<char, fnql::server::json::MaximumDocumentBytes + 1> document{};
-	std::array<char, fnql::server::json::MaximumDocumentBytes + 1> summary{};
 	std::uint32_t documentBytes = 0;
 	SV_FlushAllSteamStats();
 	if ( SV_SerializeStatsJson( report, document, documentBytes ) ) {
-		const std::string_view reportDocument( document.data(), documentBytes );
-		const bool summaryAllowed =
-			fnql::server::stats::ReportAccumulator::MatchSummaryAllowed( reportDocument );
-		const bool merged = summaryAllowed && statsReports.Build(
-			reportDocument, summary.data(), summary.size() );
-		if ( buffer && bufferSize > 0 ) {
-			Q_strncpyz( buffer, merged ? summary.data() : document.data(), bufferSize );
-		}
-		Zmq_SubmitMatchReportJson( document.data() );
-		if ( merged ) {
-			Zmq_SubmitMatchSummaryJson( summary.data() );
-		}
-		SV_LogSteamStatsLifecycle( "match-report",
-			merged ? "published report and eligible PLYR_STATS/PLYR_EVENTS summary"
-				: summaryAllowed ? "published report; bounded summary merge failed"
-					: "published report; training or aborted summary suppressed" );
+		SV_PublishMatchReportDocument( document, documentBytes, buffer, bufferSize );
 	} else {
 		if ( buffer && bufferSize > 0 ) {
 			buffer[0] = '\0';
@@ -1408,6 +1468,10 @@ const void *SV_SteamStats_ProcessMatchReport( const void *report, char *buffer, 
 SV_SteamStats_ProcessEvent
 ==================
 */
+static void SV_ProcessEventDocument( std::uint64_t identity, const char *eventName,
+		const std::array<char, fnql::server::json::MaximumDocumentBytes + 1> &document,
+		std::uint32_t documentBytes );
+
 void SV_SteamStats_ProcessEvent( unsigned int steamIdLow, unsigned int steamIdHigh,
 		const void *clientStats, const char *eventName, const void *payload ) {
 	std::array<char, fnql::server::json::MaximumDocumentBytes + 1> document{};
@@ -1423,7 +1487,56 @@ void SV_SteamStats_ProcessEvent( unsigned int steamIdLow, unsigned int steamIdHi
 			"retail JSON adapter unavailable; event side effects safely deferred" );
 		return;
 	}
+	SV_ProcessEventDocument( identity, eventName, document, documentBytes );
+}
 
+
+/*
+==================
+SV_SteamStats_ProcessEventJson
+
+The same event, from a source-built game module that delivers JSON text.  A
+refused document publishes nothing: there is no opaque payload to fall back
+to, and an empty envelope would misreport the event.
+==================
+*/
+void SV_SteamStats_ProcessEventJson( unsigned int steamIdLow, unsigned int steamIdHigh,
+		const char *eventName, const char *json ) {
+	std::array<char, fnql::server::json::MaximumDocumentBytes + 1> document{};
+	std::uint32_t documentBytes = 0;
+	if ( !eventName || !eventName[0] ) {
+		return;
+	}
+	// The name becomes the published TYPE; hold it to the shape of retail's.
+	std::size_t nameLength = 0;
+	for ( ; eventName[nameLength] != '\0'; ++nameLength ) {
+		const char c = eventName[nameLength];
+		if ( nameLength >= 64 || !( ( c >= 'A' && c <= 'Z' ) || ( c >= '0' && c <= '9' ) || c == '_' ) ) {
+			SV_LogSteamStatsLifecycle( "event-process", "refused a malformed module event name" );
+			return;
+		}
+	}
+	if ( !SV_CopyModuleStatsJson( json, document, documentBytes ) ) {
+		SV_LogSteamStatsLifecycle( "event-process",
+			"refused a missing, oversized or malformed module JSON document" );
+		return;
+	}
+	SV_ProcessEventDocument(
+		( static_cast<std::uint64_t>( steamIdHigh ) << 32u ) | steamIdLow,
+		eventName, document, documentBytes );
+}
+
+
+/*
+==================
+SV_ProcessEventDocument
+
+Publication and the Steam stat side effects of one validated event document.
+==================
+*/
+static void SV_ProcessEventDocument( std::uint64_t identity, const char *eventName,
+		const std::array<char, fnql::server::json::MaximumDocumentBytes + 1> &document,
+		std::uint32_t documentBytes ) {
 	Zmq_ReportPlayerEventJson( eventName, document.data() );
 	const fnql::server::stats::ParsedPlayerEvent event =
 		fnql::server::stats::ParsePlayerEvent( eventName,
@@ -1491,8 +1604,6 @@ void SV_SteamStats_ProcessEvent( unsigned int steamIdLow, unsigned int steamIdHi
 		}
 	}
 	SV_FlushClientStats( clientNum );
-
-	(void)clientStats;
 }
 
 

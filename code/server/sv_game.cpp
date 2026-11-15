@@ -471,6 +471,18 @@ static bool SV_GetValue( char* value, int valueSize, const char* key )
 		return true;
 	}
 
+	if ( !Q_stricmp( key, "trap_StatsReportJson_FnQL" ) )
+	{
+		Com_sprintf( value, valueSize, "%i", G_FNQL_STATS_REPORT_JSON );
+		return true;
+	}
+
+	if ( !Q_stricmp( key, "trap_StatsEventJson_FnQL" ) )
+	{
+		Com_sprintf( value, valueSize, "%i", G_FNQL_STATS_EVENT_JSON );
+		return true;
+	}
+
 	return false;
 }
 
@@ -1206,6 +1218,16 @@ static intptr_t SV_GameSystemCalls( intptr_t *args ) {
 		VM_CHECKBOUNDS( gvm, args[1], args[2] );
 		return SV_GetValue( VMA(1), args[2], VMA(3) );
 
+	case G_FNQL_STATS_REPORT_JSON:
+		SV_SteamStats_ProcessMatchReportJson( static_cast<const char *>( VMA(1) ) );
+		return 0;
+
+	case G_FNQL_STATS_EVENT_JSON:
+		SV_SteamStats_ProcessEventJson( static_cast<unsigned int>( args[1] ),
+			static_cast<unsigned int>( args[2] ), static_cast<const char *>( VMA(3) ),
+			static_cast<const char *>( VMA(4) ) );
+		return 0;
+
 	default:
 		Com_Error( ERR_DROP, "Bad game system trap: %ld", (long int) args[0] );
 	}
@@ -1857,6 +1879,17 @@ static void QDECL QL_G_trap_ReportPlayerEvent( unsigned int steamIdLow, unsigned
 	SV_ReportPlayerEvent( steamIdLow, steamIdHigh, clientStats, eventName, payload );
 }
 
+// FnQL extensions for source-built game modules: the documents retail builds
+// as JsonCpp objects for slots 185/186, handed over as JSON text.
+static void QDECL QL_G_trap_StatsReportJson( const char *json ) {
+	SV_SteamStats_ProcessMatchReportJson( json );
+}
+
+static void QDECL QL_G_trap_StatsEventJson( unsigned int steamIdLow, unsigned int steamIdHigh,
+		const char *eventName, const char *json ) {
+	SV_SteamStats_ProcessEventJson( steamIdLow, steamIdHigh, eventName, json );
+}
+
 static void QDECL QL_G_trap_AddSteamStat( int clientNum, int statIndex, int delta ) {
 	SV_SteamStats_AddFieldValue( clientNum, statIndex, delta );
 }
@@ -2457,6 +2490,8 @@ static void SV_InitGameImports( void ) {
 	QL_BIND_COMPAT( BOTLIB_PC_SOURCE_FILE_AND_LINE, QL_G_trap_PC_SourceFileAndLine );
 	QL_BIND_COMPAT( G_CVAR_SETDESCRIPTION, QL_G_trap_Cvar_SetDescription );
 	QL_BIND_COMPAT( G_TRAP_GETVALUE, QL_G_trap_GetValue );
+	QL_BIND_COMPAT( G_FNQL_STATS_REPORT_JSON, QL_G_trap_StatsReportJson );
+	QL_BIND_COMPAT( G_FNQL_STATS_EVENT_JSON, QL_G_trap_StatsEventJson );
 	QL_BIND_COMPAT( TRAP_MEMSET, QL_G_trap_Memset );
 	QL_BIND_COMPAT( TRAP_MEMCPY, QL_G_trap_Memcpy );
 	QL_BIND_COMPAT( TRAP_STRNCPY, QL_G_trap_Strncpy );

@@ -55,6 +55,79 @@ class QAGameNativeBridgeSourceTests(unittest.TestCase):
 
         self.assertSetEqual(declared, bound)
 
+    def test_json_text_stats_imports_extend_the_compat_slab(self) -> None:
+        g_public = read_repo_file("code/game/g_public.h")
+        sv_game = read_repo_file("code/server/sv_game.cpp")
+        sv_client = read_repo_file("code/server/sv_client.cpp")
+        legacy_body = enum_body(g_public, "gameImport_t")
+
+        # The extensions follow trap_GetValue, so no retail or Quake3e number moves.
+        self.assertRegex(
+            legacy_body,
+            r"G_TRAP_GETVALUE = COM_TRAP_GETVALUE,\s*(?://[^\n]*\n\s*)*"
+            r"G_FNQL_STATS_REPORT_JSON,\s*G_FNQL_STATS_EVENT_JSON\s*$",
+        )
+        self.assertIn("#define GAME_LEGACY_IMPORT_COUNT\t(G_FNQL_STATS_EVENT_JSON + 1)", g_public)
+        self.assertIn("G_QL_IMPORT_SUBMIT_MATCH_REPORT = 185", g_public)
+        self.assertIn("G_QL_IMPORT_REPORT_PLAYER_EVENT", g_public)
+
+        # A module finds them by key and calls them through the slab.
+        for key, number, wrapper in (
+            ("trap_StatsReportJson_FnQL", "G_FNQL_STATS_REPORT_JSON", "QL_G_trap_StatsReportJson"),
+            ("trap_StatsEventJson_FnQL", "G_FNQL_STATS_EVENT_JSON", "QL_G_trap_StatsEventJson"),
+        ):
+            self.assertRegex(
+                sv_game,
+                rf'Q_stricmp\( key, "{key}" \) \)\s*\{{\s*Com_sprintf\( value, valueSize, "%i", {number} \);',
+            )
+            self.assertIn(f"QL_BIND_COMPAT( {number}, {wrapper} );", sv_game)
+            self.assertIn(f"case {number}:", sv_game)
+
+        # Module text is validated whole before anything is published for it,
+        # and then takes the path a serialized retail document takes.
+        copy = sv_client[
+            sv_client.index("static bool SV_CopyModuleStatsJson") : sv_client.index(
+                "static void SV_PublishMatchReportDocument"
+            )
+        ]
+        self.assertIn("length <= fnql::server::json::MaximumDocumentBytes && json[length] != '\\0'", copy)
+        self.assertIn("fnql::server::json::DocumentIsValid( std::string_view( json, length ) )", copy)
+        self.assertLess(copy.index("DocumentIsValid"), copy.index("memcpy"))
+
+        event = sv_client[
+            sv_client.index("void SV_SteamStats_ProcessEventJson") : sv_client.index(
+                "static void SV_ProcessEventDocument( std::uint64_t identity, const char *eventName,\n"
+                "\t\tconst std::array<char, fnql::server::json::MaximumDocumentBytes + 1> &document,\n"
+                "\t\tstd::uint32_t documentBytes ) {"
+            )
+        ]
+        self.assertIn("nameLength >= 64", event)
+        self.assertIn("SV_CopyModuleStatsJson( json, document, documentBytes )", event)
+        self.assertLess(event.index("SV_CopyModuleStatsJson"), event.index("SV_ProcessEventDocument("))
+        self.assertNotIn("Zmq_ReportPlayerEvent(", event)
+
+        report = sv_client[
+            sv_client.index("void SV_SteamStats_ProcessMatchReportJson") : sv_client.index(
+                "const void *SV_SteamStats_ProcessMatchReport("
+            )
+        ]
+        self.assertIn("SV_PublishMatchReportDocument( document, documentBytes, nullptr, 0 );", report)
+        self.assertIn("statsReports.Reset();", report)
+
+    def test_stats_journal_is_default_off_and_takes_only_a_bare_jsonl_name(self) -> None:
+        sv_zmq = read_repo_file("code/server/sv_zmq.cpp")
+
+        self.assertIn('svStatsJournal = Cvar_Get( "sv_statsJournal", "", CVAR_INIT );', sv_zmq)
+        enabled = sv_zmq[sv_zmq.index("bool StatsJournalEnabled()") : sv_zmq.index("void AppendStatsJournal")]
+        self.assertIn('constexpr std::string_view suffix = ".jsonl";', enabled)
+        self.assertIn("name.front() == '.'", enabled)
+        self.assertIn("std::isalnum( c ) || c == '_' || c == '-' || c == '.'", enabled)
+        publish = sv_zmq[sv_zmq.index("void Publish( const char *type, const char *json )") :]
+        publish = publish[: publish.index("void Zmq_SelfTest_f")]
+        # Only validated envelopes reach the journal, and the journal does not need the socket.
+        self.assertLess(publish.index("DocumentIsValid"), publish.index("AppendStatsJournal( message )"))
+        self.assertIn("if ( !journal && !socket ) {", publish)
+
     def test_direct_float_cvar_query_does_not_use_legacy_integer_syscall(self) -> None:
         sv_game = read_repo_file("code/server/sv_game.cpp")
         wrapper = sv_game[

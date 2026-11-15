@@ -542,6 +542,9 @@ qboolean	SV_SteamStats_HasAchievement( int clientNum, int achievementId );
 const void	*SV_SteamStats_ProcessMatchReport( const void *report, char *buffer, int bufferSize );
 void		SV_SteamStats_ProcessEvent( unsigned int steamIdLow, unsigned int steamIdHigh,
 				const void *clientStats, const char *eventName, const void *payload );
+void		SV_SteamStats_ProcessMatchReportJson( const char *json );
+void		SV_SteamStats_ProcessEventJson( unsigned int steamIdLow, unsigned int steamIdHigh,
+				const char *eventName, const char *json );
 void		SV_FlushAllSteamStats( void );
 void		SV_HandleSteamProviderEvent( unsigned int type, int result,
 				uint64_t subjectId );

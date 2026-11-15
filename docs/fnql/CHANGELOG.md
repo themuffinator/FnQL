@@ -20,7 +20,10 @@ successful release, CI resets `Unreleased` for the next cycle.
 - _None yet._
 
 ### Compatibility
-- _None yet._
+- Server operators can set `sv_statsJournal <name>.jsonl` to have every match
+  statistics publication (kills, deaths, medals, player stats, the match
+  report) appended to a file in the home game directory, one JSON document
+  per line, without installing libzmq.
 
 ### Rendering and Display
 - _None yet._

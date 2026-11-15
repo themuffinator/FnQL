@@ -101,6 +101,46 @@ a product path.
   bot by the `characterfile` userinfo key (`0x4e2710`); the anonymous SteamID
   the engine gives a bot for the Steam player list is never handed to qagame.
 
+## Match statistics
+
+Retail qagame describes a match to the engine as events and one closing
+report, through imports 185 (`MATCH_REPORT`) and 186 (player and round
+events). Their payload is a JsonCpp `Json::Value` built by the retail module's
+own VC10 runtime, which only that module can produce; the Steam provider's
+retail JSON adapter reads it (Win32 only, see `STEAM_PROVIDER.md`).
+
+A source-built module hands over the same documents as JSON text instead,
+through two compatibility-slab imports found with `trap_GetValue`:
+
+| `trap_GetValue` key | Import | Signature |
+|---|---|---|
+| `trap_StatsReportJson_FnQL` | `G_FNQL_STATS_REPORT_JSON` | `void ( const char *json )` |
+| `trap_StatsEventJson_FnQL` | `G_FNQL_STATS_EVENT_JSON` | `void ( unsigned steamIdLow, unsigned steamIdHigh, const char *eventName, const char *json )` |
+
+Both answer a number above `COM_TRAP_GETVALUE`; the function is at that number
+in the slab. Rules:
+
+- The text is untrusted. It must be terminated, at most 32768 bytes and
+  well-formed JSON (`fnql::server::json::DocumentIsValid`), and an event name
+  is `[A-Z0-9_]{1,64}`. Anything else is refused whole and logged; nothing is
+  published for it.
+- An accepted document takes exactly the path a serialized retail one takes:
+  publication, the bounded match summary, and the Steam statistics and
+  achievements the engine derives from player events
+  (`SV_SteamStats_ProcessEvent`).
+- Retail's third event argument (the player's stats key) is not passed: the
+  engine never read it.
+- Slots 185/186 are unchanged and remain the retail module's path. A module
+  must not pass text to them.
+
+`sv_statsJournal <name>.jsonl` (default empty, `CVAR_INIT`) appends every
+stats publication to that file in the home game directory, one
+`{"TYPE":...,"DATA":...}` envelope per line, exactly as the ZMQ publisher
+sends it. It needs no libzmq, so a server without the library can keep its
+match statistics, and FnQL-game's `stats-events` gate reads it to check a
+module's documents against the retail module's. Only a bare `*.jsonl` file
+name of letters, digits, `_`, `-` and `.` is accepted.
+
 ## Interoperability rules
 
 The engine owns the wire (protocol 91 field tables in `msg.c`). A game module

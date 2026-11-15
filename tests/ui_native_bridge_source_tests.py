@@ -1000,7 +1000,10 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
         handled_names = set(re.findall(r"case\s+([A-Z][A-Z0-9_]+)\s*:", sv_game))
         bound_names = set(re.findall(r"QL_BIND_COMPAT\(\s*([A-Z][A-Z0-9_]+)", sv_game))
 
-        self.assertEqual(202, len(import_names))
+        # 202 Quake III/Quake3e imports plus FnQL's two JSON-text stats imports.
+        self.assertEqual(204, len(import_names))
+        self.assertIn("G_FNQL_STATS_REPORT_JSON", import_names)
+        self.assertIn("G_FNQL_STATS_EVENT_JSON", import_names)
         self.assertFalse(import_names - handled_names)
         self.assertFalse(import_names - bound_names)
 

@@ -412,11 +412,19 @@ typedef enum {
 
 	// engine extensions
 	G_CVAR_SETDESCRIPTION,
-	G_TRAP_GETVALUE = COM_TRAP_GETVALUE
+	G_TRAP_GETVALUE = COM_TRAP_GETVALUE,
+
+	// FnQL stats extensions, discovered through trap_GetValue
+	// ("trap_StatsReportJson_FnQL", "trap_StatsEventJson_FnQL"). Retail's
+	// slots 185/186 take a VC10 JsonCpp object only the retail qagame can
+	// build; a source-built game module hands over the same documents as
+	// JSON text instead. See docs/fnql/GAME_MODULES.md.
+	G_FNQL_STATS_REPORT_JSON,
+	G_FNQL_STATS_EVENT_JSON
 
 } gameImport_t;
 
-#define GAME_LEGACY_IMPORT_COUNT	(G_TRAP_GETVALUE + 1)
+#define GAME_LEGACY_IMPORT_COUNT	(G_FNQL_STATS_EVENT_JSON + 1)
 
 // Retail Quake Live native DLL import slab recovered by QLSRP from
 // qagamex86.dll. Gaps stay deliberately unbound until they are proven.
