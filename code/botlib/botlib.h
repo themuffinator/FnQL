@@ -182,8 +182,23 @@ struct bot_entitystate_s
 	int		weapon;			// determines weapon and flash model, etc
 	int		legsAnim;		// mask off ANIM_TOGGLEBIT
 	int		torsoAnim;		// mask off ANIM_TOGGLEBIT
+	// Quake Live extension (retail qagamex86 0x10023773 fills it; the retail
+	// engine copies it into aas_entityinfo_t, which has the same fields).
+	float	nextthink;		// the entity's nextthink in whole seconds
+	int		itemQuantity;	// its item's quantity, giType and giTag (0 for non-items)
+	int		itemType;
+	int		itemTag;
+	int		health;			// the entity's health
+	int		maxHealth;		// a client's stats[7] (STAT_MAX_HEALTH), else 0
+	int		ammoFull[16];	// a client's ammo per weapon is at its maximum or unlimited
+	int		trainingClear;	// the module's training flag is clear
+	int		carriesFlag;	// a client holds the red or blue flag
 };
 using bot_entitystate_t = bot_entitystate_s;
+
+// Sizes of the Quake III prefix and of the Quake Live structure.
+#define BOT_Q3_ENTITYSTATE_SIZE	0x70
+#define BOT_QL_ENTITYSTATE_SIZE	0xd0
 
 //bot AI library exported functions
 struct botlib_import_s

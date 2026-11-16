@@ -20,6 +20,9 @@ successful release, CI resets `Unreleased` for the next cycle.
 - _None yet._
 
 ### Compatibility
+- Bots run by the retail game module now see what Quake Live's engine gives
+  them about items, health and ammunition, so they hunt, pick goals and
+  dodge as they do in Quake Live.
 - Server operators can set `sv_statsJournal <name>.jsonl` to have every match
   statistics publication (kills, deaths, medals, player stats, the match
   report) appended to a file in the home game directory, one JSON document

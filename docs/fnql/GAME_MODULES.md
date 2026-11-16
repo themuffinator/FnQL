@@ -58,6 +58,9 @@ capability bits, and the native API version the module publishes.
   is bit-for-bit retail on the wire. A qagame without it loads with a warning
   that retail clients may see inconsistent game state. Automatic provider
   selection (a future `auto` value) will require this bit.
+- `FNQL_MODULE_CAP_QL_BOT_ENTITIES` says the module exchanges Quake Live's
+  botlib entity structures (below). The engine uses the Quake III sizes for
+  an FnQL-game module without it, so older FnQL-game builds keep working.
 
 The retail engine never looks the symbol up, so the same FnQL-game binary is a
 drop-in module for retail Quake Live as well. That is a verification tool, not
@@ -97,6 +100,18 @@ a product path.
   `0x4e26e0` -> `0x4df830`, read at `0x4df726`). Retail qagame calls it from
   its `ragequit` client command. FnQL had bound it to the pure-check `cp`
   flag until the 2026-11-11 audit.
+- The botlib entity structures have Quake Live's layout for native modules:
+  `bot_entitystate_t` is 0xd0 bytes and `aas_entityinfo_t` 0xec, each the
+  Quake III structure followed by the same extension (the entity's nextthink
+  in whole seconds, its item's quantity, type and tag, its health, a
+  client's max health, sixteen full-ammo flags, a training flag and whether
+  a client holds the red or blue flag). `AAS_UpdateEntity` copies the
+  extension into the entity info, as the retail engine does. The retail
+  qagame always uses this layout, an FnQL-game module when it declares
+  `FNQL_MODULE_CAP_QL_BOT_ENTITIES`; QVMs, legacy `vmMain` modules and older
+  FnQL-game builds exchange the Quake III prefix (0x70 and 0x8c bytes) and
+  read the extension as zero. `code/botlib/be_aas_entity.cpp` asserts both
+  sizes; FnQL-game asserts its copies.
 - qagame import 200 (SteamID query) answers 0 for a bot. Retail recognises a
   bot by the `characterfile` userinfo key (`0x4e2710`); the anonymous SteamID
   the engine gives a bot for the Steam player list is never handed to qagame.
@@ -256,6 +271,15 @@ source commit, all under `docs/fnql-game/` except the notice.
   drives it to diff the retail qagame against FnQL-game's frame by frame.
 
 ## Retail evidence recorded here
+
+- The retail engine's `AAS_EntityInfo` (`quakelive_steam.exe` `0x004851b0`)
+  copies 0xec bytes and its `AAS_UpdateEntity` (`0x00484e20`) copies state
+  fields 0x1c-0x33 into entity info fields 0x23-0x3a. The retail qagame
+  clears a 0xd0-byte state before filling it (`qagamex86.dll` `0x10023773`)
+  and reads the extension back, for example the goal item's type and
+  quantity at `0x10020c10`. FnQL copied 0x8c bytes, so the retail qagame
+  read stack contents there and FnQL-game, built with the Quake III sizes,
+  had the retail engine write past its entity info.
 
 - Retail qagame calls import slot 173 (`BotPredictVisiblePosition`) with five
   arguments: origin, areanum, goal, travelflags and target (QLSRP HLIL
