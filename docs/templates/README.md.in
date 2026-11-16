@@ -154,9 +154,9 @@ FnQL loads the retail ones. To use a retail module, set its provider to
 `retail`, for example `+set vm_gameProvider retail` on a server, or
 `+set vm_cgameProvider retail` and `+set vm_uiProvider retail` for a player.
 `fnql` forces the FnQL-game module, and `vminfo` shows which module is
-active. A configuration written by an earlier FnQL release may still hold
-`vm_gameProvider "retail"`; run `reset vm_gameProvider` to take the new
-default.
+active. A configuration written by an earlier FnQL release holds
+`vm_gameProvider "retail"`, its old default; FnQL moves it to the new default
+once, so set the provider again afterwards to keep the retail module.
 
 Retail clients join FnQL servers running the FnQL-game qagame and see what a
 retail server would send them. Each package also carries the FnQL-game

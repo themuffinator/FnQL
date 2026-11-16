@@ -45,9 +45,15 @@ claim (FnQL-game `docs/PLAN.md`). Consequences:
 - The cvars are `CVAR_ARCHIVE_ND`: a config records a value only when it
   differs from the default, so later defaults reach players who never chose.
   A config written before the flip holds `seta vm_gameProvider "retail"`,
-  because the old flags archived the default too. That value is kept, since
-  an explicit choice of retail looks the same; `reset vm_gameProvider` takes
-  the new default.
+  because the old flags archived the default too. Configs written since carry
+  the archived marker `vm_providerConfig "1"`. `VM_MigrateArchivedProviders`
+  runs after the configs execute and before command-line `+set` values: a
+  config without the marker that archives `retail` moves to the default once,
+  with a console line saying so. A `+set` on the command line, a later
+  `exec` (such as `server.cfg`) and any config that has the marker keep
+  `retail`. `vm_cgameProvider` and `vm_uiProvider` never shipped archived and
+  need no migration. `tests/game_module_provider_runtime_tests.py` gates the
+  three cases.
 
 The values are:
 

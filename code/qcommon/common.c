@@ -4067,6 +4067,9 @@ void Com_Init( char *commandLine ) {
 
 	Com_ExecuteCfg();
 
+	// before the command line applies, so an explicit +set still wins
+	VM_MigrateArchivedProviders();
+
 	// override anything from the config files with command line args
 	Com_StartupVariable( NULL );
 

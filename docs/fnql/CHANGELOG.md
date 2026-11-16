@@ -17,27 +17,31 @@ successful release, CI resets `Unreleased` for the next cycle.
 ## [Unreleased]
 
 ### Highlights
-- FnQL now runs the bundled clean-room FnQL-game modules by default: servers
-  host its game module, and players get its cgame and UI. They interoperate
-  with retail Quake Live, and FnQL falls back to the retail modules wherever
-  they are missing. To keep a retail module, set its provider to `retail`, for
-  example `+set vm_gameProvider retail`. A configuration from an earlier
-  release may still hold `vm_gameProvider "retail"`; run
-  `reset vm_gameProvider` to take the new default.
-- Every package now carries the FnQL-game client package,
-  `baseq3/fnql_game_client.pk3`, so players keep FnQL-game's cgame and UI on
-  pure FnQL servers. Retail clients never need it, and on retail servers FnQL
-  still uses the retail cgame and UI.
+- FnQL-game is now on by default. FnQL runs the bundled clean-room
+  [FnQL-game](https://github.com/themuffinator/FnQL-game) modules instead of
+  the retail ones: servers host its game module, and players get its cgame
+  and UI. Retail Quake Live clients can still join FnQL servers, and FnQL
+  players can still join retail servers, where FnQL uses the retail cgame and
+  UI. If the FnQL-game modules are missing, FnQL loads the retail ones. To
+  keep a retail module, set its provider to `retail`, for example
+  `+set vm_gameProvider retail`.
+- Upgrading switches you to FnQL-game too: the `vm_gameProvider "retail"`
+  that earlier releases saved as their default is moved to the new default
+  once, and the console says so. Settings on the command line or in
+  `server.cfg` are left alone. To stay on the retail game module, set
+  `vm_gameProvider retail` again; it is kept from then on.
+- New 64-bit builds for Windows and Linux (x86_64) run FnQL-game. They have no
+  Steam, WebUI or retail modules, which exist only for 32-bit; use the x86
+  build to play with those.
 
 ### Compatibility
-- Players can run the FnQL-game cgame and UI with `vm_cgameProvider fnql` and
-  `vm_uiProvider fnql` (`auto` takes them only if they declare retail wire
-  parity, and the same value works for `vm_gameProvider`). On a pure server
-  they run only from an FnQL-game client package (`fnql_game_client.pk3`) the
-  server has loaded and lists in `sv_fnqlClientPaks`; on any other pure
-  server, retail ones included, FnQL loads the retail modules and reports
-  them. Retail clients never need the package, and `sv_fnqlClientModules 0`
-  turns it off on a server.
+- Every package now carries `baseq3/fnql_game_client.pk3`, so FnQL players
+  keep FnQL-game's cgame and UI on pure FnQL servers that list it in
+  `sv_fnqlClientPaks`. On any other pure server, retail ones included, FnQL
+  loads the retail cgame and UI and says so. Retail clients never need the
+  package, and `sv_fnqlClientModules 0` turns it off on a server. Each module
+  slot has its own provider cvar (`vm_gameProvider`, `vm_cgameProvider`,
+  `vm_uiProvider`) taking `auto` (the default), `fnql` or `retail`.
 - Bots run by the retail game module now see what Quake Live's engine gives
   them about items, health and ammunition, so they hunt, pick goals and
   dodge as they do in Quake Live.
@@ -58,15 +62,14 @@ successful release, CI resets `Unreleased` for the next cycle.
   FnQL-game's modules built for the same target. Players move exactly as
   on a retail x86 server, so retail clients predict them without error.
   There are no release packages for these targets yet.
-- FnQL now also builds for x86_64 on Windows and Linux, with the FnQL-game
-  modules for that target. The x86_64 build has no retail game modules, Steam
-  or WebUI (all 32-bit only), so it runs FnQL-game; play with the retail
-  modules on the x86 build.
 - Windows release builds are no longer assertion-enabled debug builds: the
   `version` string loses its `-debug` suffix, as on Linux, and an internal
   consistency check can no longer stop the game with an assertion dialog.
 
 ### Fixes
+- On Linux servers, FnQL-game's moving platforms, angle conversions and
+  weapon spread now match retail Quake Live exactly instead of drifting
+  slightly from it.
 - A game server can no longer run script in the menu browser through the
   match statistics it sends; that text is now handled strictly as data.
 - Damaged or hostile maps, models, TGA images, RoQ videos and Ogg or WAV

@@ -24,6 +24,23 @@ only planned.
 
 ## Ready For Changelog
 
+- [x] Move upgraded configs onto FnQL-game. 0.1.0.134 registered
+  `vm_gameProvider` with `CVAR_ARCHIVE` and default `retail`, so its configs
+  hold `seta vm_gameProvider "retail"`. `VM_MigrateArchivedProviders` (after
+  the configs execute, before command-line `+set`) resets that value to the
+  default once when the config lacks the new archived `vm_providerConfig`
+  marker. Local gates (2026-11-16, x86 dedicated, retail install): the
+  provider runtime suite 12/12, with new rows for a legacy config moving to
+  FnQL-game, a marked config keeping `retail`, and a command-line `retail`
+  winning over the migration.
+- [x] Move the FnQL-game pin to `7a6af1d` (milestone 11 merged with 12). Its
+  only module-code change makes `M_PI` always FnQL-game's float literal: on
+  Linux, glibc's double `M_PI` had moved sine movers, angle conversions and
+  spread away from retail (FnQL-game gate G3c, observed 2026-11-16 on Linux
+  x86_64 and aarch64). CI now strips the Linux FnQL-game modules at link time
+  instead of with `meson install --strip`, which had stripped only the loose
+  modules and failed the client package's byte-identity check in every main
+  run since the M12 pin.
 - [x] Run the bundled FnQL-game modules by default (FnQL-game milestone 12).
   `vm_gameProvider` defaults to `auto` on every target, and `vm_cgameProvider`
   and `vm_uiProvider` default to `auto` on Win32 x86. `auto` takes a module

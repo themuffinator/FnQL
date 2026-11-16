@@ -467,6 +467,7 @@ typedef void (QDECL *dllEntry_t)( dllSyscall_t syscallptr );
 typedef void (QDECL *dllEntryNative_t)( void **exports, void *imports, int *apiVersion );
 
 void	VM_Init( void );
+void	VM_MigrateArchivedProviders( void );	// after the configs execute, before command-line +set
 vm_t	*VM_Create( vmIndex_t index, syscall_t systemCalls, dllSyscall_t dllSyscalls, vmInterpret_t interpret );
 vm_t	*VM_CreateNative( vmIndex_t index, syscall_t systemCalls, dllSyscall_t dllSyscalls, vmInterpret_t interpret, void *dllImports, int dllApiVersion );
 qboolean VM_HasPinnedNativeModule( vmIndex_t index );

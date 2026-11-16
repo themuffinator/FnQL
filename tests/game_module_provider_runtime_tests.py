@@ -228,6 +228,44 @@ class GameModuleProviderRuntimeTests(unittest.TestCase):
             # an expected fallback under the default is not a warning
             self.assertNotIn("^3vm_gameProvider auto", log)
 
+    # Releases before milestone 12 archived their default, so every config they
+    # wrote holds `seta vm_gameProvider "retail"`. Without the vm_providerConfig
+    # marker that value moves to the default once; with it, it is a choice.
+    def write_profile_config(self, homepath: Path, lines: list[str]) -> None:
+        (homepath / "qzconfig.cfg").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def test_legacy_archived_retail_provider_moves_to_the_default(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fnql-game-provider-") as temporary:
+            homepath = self.make_home(Path(temporary), "retail-wire")
+            self.write_profile_config(homepath, ['seta vm_gameProvider "retail"'])
+            log = self.run_server(homepath, None, [
+                "vm_gameProvider: replacing the \"retail\" an earlier FnQL release archived",
+                "qagame : native fnql_qagamex86.dll (FnQL-game 0.0.0-probe, capabilities 0x1)",
+            ])
+            self.assertIn("FnQL game provider probe: init ok", log)
+
+    def test_marked_config_keeps_an_explicit_retail_provider(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fnql-game-provider-") as temporary:
+            homepath = self.make_home(Path(temporary), "retail-wire")
+            self.write_profile_config(homepath, [
+                'seta vm_gameProvider "retail"',
+                'seta vm_providerConfig "1"',
+            ])
+            log = self.run_server(homepath, None, [
+                "qagame : native qagamex86.dll (unidentified)",
+            ])
+            self.assertNotIn("replacing the \"retail\"", log)
+            self.assertNotIn("FnQL game provider probe", log)
+
+    def test_command_line_retail_provider_wins_over_the_migration(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fnql-game-provider-") as temporary:
+            homepath = self.make_home(Path(temporary), "retail-wire")
+            self.write_profile_config(homepath, ['seta vm_gameProvider "retail"'])
+            log = self.run_server(homepath, "retail", [
+                "qagame : native qagamex86.dll (unidentified)",
+            ])
+            self.assertNotIn("FnQL game provider probe", log)
+
     def test_retail_provider_keeps_the_retail_module(self) -> None:
         with tempfile.TemporaryDirectory(prefix="fnql-game-provider-") as temporary:
             homepath = self.make_home(Path(temporary), "retail-wire")

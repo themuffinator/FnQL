@@ -410,6 +410,43 @@ void VM_CheckBounds2( const vm_t *vm, unsigned int addr1, unsigned int addr2, un
 
 /*
 ==============
+VM_MigrateArchivedProviders
+
+FnQL releases before FnQL-game milestone 12 registered vm_gameProvider with
+CVAR_ARCHIVE and the default "retail", so every config they wrote holds
+`seta vm_gameProvider "retail"`, which looks the same as an explicit choice.
+Configs written since carry VM_PROVIDER_CONFIG_CVAR. A config without that
+marker which still archives "retail" is taken to be the old default and moves
+to the current one, once; the marker is then archived, so a later explicit
+"retail" is kept. Called after the configs execute and before command-line
++set values apply, so the command line and any later exec (server.cfg) win.
+vm_cgameProvider and vm_uiProvider never shipped archived, so they need no
+migration.
+==============
+*/
+#define VM_PROVIDER_CONFIG_CVAR "vm_providerConfig"
+
+void VM_MigrateArchivedProviders( void ) {
+	const qboolean legacyConfig = Cvar_Flags( VM_PROVIDER_CONFIG_CVAR ) == CVAR_NONEXISTENT;
+	const unsigned gameFlags = Cvar_Flags( "vm_gameProvider" );
+	cvar_t *marker;
+
+	if ( legacyConfig && gameFlags != CVAR_NONEXISTENT && ( gameFlags & CVAR_ARCHIVE )
+		&& !Q_stricmp( Cvar_VariableString( "vm_gameProvider" ), "retail" ) ) {
+		Cvar_Set( "vm_gameProvider", VM_GAME_PROVIDER_DEFAULT );
+		Com_Printf( "vm_gameProvider: replacing the \"retail\" an earlier FnQL release "
+			"archived as its default with \"%s\"; set vm_gameProvider retail to keep "
+			"the retail game module.\n", VM_GAME_PROVIDER_DEFAULT );
+	}
+
+	marker = Cvar_Get( VM_PROVIDER_CONFIG_CVAR, "1", CVAR_ARCHIVE | CVAR_PROTECTED );
+	Cvar_SetDescription( marker, "Marks a config written since FnQL-game became the "
+		"default module provider. Internal; do not change." );
+}
+
+
+/*
+==============
 VM_Init
 ==============
 */
