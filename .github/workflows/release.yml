@@ -697,10 +697,12 @@ jobs:
           FNQL_HEADLESS: "2"
         run: |
           git config --global --add safe.directory "$PWD/FnQL-game"
-          meson setup game-build FnQL-game --cross-file FnQL-game/meson/linux-i686.ini --buildtype=release --prefix "$PWD/game-install" "-Dfnql-root=$PWD/FnQL"
+          # Strip at link time: the client pk3 is built from the build-tree modules,
+          # so install --strip would leave it holding unstripped copies.
+          meson setup game-build FnQL-game --cross-file FnQL-game/meson/linux-i686.ini --buildtype=release --prefix "$PWD/game-install" "-Dfnql-root=$PWD/FnQL" -Dc_link_args=-s
           meson compile -C game-build
           meson test -C game-build --print-errorlogs
-          meson install -C game-build --no-rebuild --strip
+          meson install -C game-build --no-rebuild
 
       - name: Stage FnQL-game modules
         run: python3 FnQL/scripts/fnql_game.py stage --platform linux --install-root game-install --source FnQL-game --output game-stage
@@ -832,10 +834,12 @@ jobs:
           FNQL_HEADLESS: "2"
         run: |
           git config --global --add safe.directory "$PWD/FnQL-game"
-          meson setup game-build FnQL-game --buildtype=release --prefix "$PWD/game-install" "-Dfnql-root=$PWD/FnQL"
+          # Strip at link time: the client pk3 is built from the build-tree modules,
+          # so install --strip would leave it holding unstripped copies.
+          meson setup game-build FnQL-game --buildtype=release --prefix "$PWD/game-install" "-Dfnql-root=$PWD/FnQL" -Dc_link_args=-s
           meson compile -C game-build
           meson test -C game-build --print-errorlogs
-          meson install -C game-build --no-rebuild --strip
+          meson install -C game-build --no-rebuild
 
       - name: Stage FnQL-game modules
         run: python3 FnQL/scripts/fnql_game.py stage --platform linux --arch x86_64 --install-root game-install --source FnQL-game --output game-stage

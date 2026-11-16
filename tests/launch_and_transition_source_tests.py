@@ -30,19 +30,37 @@ class LaunchAndTransitionSourceTests(unittest.TestCase):
     def test_vscode_launches_force_steam_and_target_matching_binary(self) -> None:
         launch = json.loads(read_source(".vscode/launch.json"))
 
+        tasks = {
+            task.get("label"): task
+            for task in json.loads(read_source(".vscode/tasks.json"))["tasks"]
+        }
+        fnql_game_task = "FnQL-game: build and stage"
+
         self.assertTrue(launch["configurations"])
         for configuration in launch["configurations"]:
             args = configuration["args"]
             steam_index = args.index("com_steamIntegration")
             self.assertEqual(args[steam_index + 1], "1", configuration["name"])
+            self.assertNotIn("disabled", configuration["name"].lower())
             # Launching must not implicitly rebuild the engine. These profiles
             # intentionally target the selected, already-built x86 binary;
             # the separate build tasks below provide explicit Steam staging.
-            self.assertNotIn("preLaunchTask", configuration, configuration["name"])
-            self.assertNotIn("disabled", configuration["name"].lower())
-            self.assertIn("Retail QL / Win32", configuration["name"])
+            # FnQL-game profiles may only pre-build the FnQL-game modules,
+            # through a task that does not depend on an engine build.
+            if "FnQL-game / Win32" in configuration["name"]:
+                self.assertEqual(
+                    configuration.get("preLaunchTask"), fnql_game_task, configuration["name"]
+                )
+                self.assertIn(fnql_game_task, tasks)
+                self.assertNotIn("dependsOn", tasks[fnql_game_task])
+                for slot in ("vm_gameProvider", "vm_cgameProvider", "vm_uiProvider"):
+                    if slot in args:
+                        self.assertEqual(args[args.index(slot) + 1], "fnql", configuration["name"])
+            else:
+                self.assertNotIn("preLaunchTask", configuration, configuration["name"])
+                self.assertIn("Retail QL / Win32", configuration["name"])
 
-            if "Retail QL / Win32" in configuration["name"]:
+            if "Win32" in configuration["name"]:
                 expected_build_dir = (
                     "meson\\build\\win32-rtx\\"
                     if configuration["name"].startswith("RTX ")

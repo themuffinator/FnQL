@@ -1262,6 +1262,14 @@ class ReleasePackagingTests(unittest.TestCase):
                 '--require-import "fnql.x64.exe=winmm.dll!joyGetPosEx" bin',
                 jobs[job],
             )
+        # Linux FnQL-game modules are stripped at link time, so the client
+        # package built in the build tree holds the same bytes as the loose
+        # modules; `meson install --strip` would strip only the loose copies
+        # and fail the package's byte-identity check.
+        for job in ("fnql-game-linux", "fnql-game-linux-x86_64"):
+            self.assertIn("-Dc_link_args=-s", jobs[job])
+            self.assertIn("meson install -C game-build --no-rebuild\n", jobs[job])
+            self.assertNotIn("--no-rebuild --strip", jobs[job])
         self.assertIn("-Dc_link_args=-static", jobs["windows-msys32"])
         self.assertIn("-Dcpp_link_args=-static", jobs["windows-msys32"])
         self.assertIn("-Dc_link_args=-static", jobs["windows-msys64"])
