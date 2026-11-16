@@ -260,9 +260,45 @@ class ModuleBridgeParityTests(unittest.TestCase):
     def test_steamid_query_answers_zero_for_bots(self) -> None:
         game = read("code/server/sv_game.cpp")
         body = function_body(game, "static std::uint64_t QDECL QL_G_trap_GetSteamId64( int clientNum )")
-        self.assertIn("NA_BOT", body)
-        self.assertIn('"characterfile"', body)
-        self.assertLess(body.index("return 0;"), body.index("SV_ClientSteamId"))
+        self.assertIn("SV_ClientGameSteamId( clientNum )", body)
+        client = read("code/server/sv_client.cpp")
+        query = function_body(client, "uint64_t SV_ClientGameSteamId( int clientNum )")
+        # The server decides what a bot is; client userinfo never does.
+        self.assertIn("NA_BOT", query)
+        self.assertNotIn("characterfile", query)
+        self.assertNotIn("userinfo", query)
+        identity = read("code/server/game_identity.hpp")
+        rule = function_body(identity, "constexpr std::uint64_t GameSteamId(")
+        self.assertLess(rule.index("serverBot"), rule.index("return 0;"))
+
+    def test_steamid_query_never_aliases_steamless_players(self) -> None:
+        # The game keys admin, mod and ban entries by slot 200's answer. A
+        # human without a connection identity gets its own anonymous id, so
+        # one entry cannot reach every Steam-less client.
+        client = read("code/server/sv_client.cpp")
+        query = function_body(client, "uint64_t SV_ClientGameSteamId( int clientNum )")
+        self.assertIn("platformSteamIdFromConnection", query)
+        self.assertIn("gameAnonymousSteamId", query)
+        assign = function_body(client, "void SV_AssignClientGameIdentity( client_t *client )")
+        self.assertIn("NeedsAnonymousId", assign)
+        self.assertIn("SV_NextAnonymousSteamId()", assign)
+        seed = function_body(client, "static std::uint64_t SV_NextAnonymousSteamId( void )")
+        self.assertIn("Com_RandomBytes", seed)
+        self.assertIn("SV_LockstepActive()", seed)
+        connect = function_body(client, "void SV_DirectConnect( const netadr_t *from )")
+        self.assertIn("newcl->platformSteamIdFromConnection = qtrue;", connect)
+        self.assertLess(
+            connect.index("SV_AssignClientGameIdentity( newcl );"),
+            connect.index("GAME_CLIENT_CONNECT"),
+        )
+        drop = function_body(client, "void SV_DropClient( client_t *drop, const char *reason )")
+        self.assertLess(drop.index("GAME_CLIENT_DISCONNECT"), drop.index("drop->gameAnonymousSteamId = 0;"))
+        lockstep = read("code/server/sv_lockstep.cpp")
+        scripted = function_body(lockstep, "void ConnectScriptedClient( std::size_t scriptIndex )")
+        self.assertLess(
+            scripted.index("SV_AssignClientGameIdentity( cl );"),
+            scripted.index("GAME_CLIENT_CONNECT"),
+        )
 
 
 class ServerParityTests(unittest.TestCase):

@@ -31,6 +31,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "stats_event.hpp"
 #include "stats_report.hpp"
 #include "stats_session.hpp"
+#include "game_identity.hpp"
 #include "json_document.hpp"
 
 #include <array>
@@ -1000,6 +1001,73 @@ static void SV_CaptureClientSteamId( client_t *client, const char *userinfo ) {
 		Q_strncpyz( client->platformSteamId, steamId, SV_ArraySize( client->platformSteamId ) );
 		client->platformSteamIdValue = value;
 	}
+}
+
+
+/*
+==================
+SV_NextAnonymousSteamId
+
+Seeded once per process: from random bytes, so an anonymous id saved into the
+game's access list by one server run is not handed to someone else by the
+next; or, under sv_lockstep (one scripted session per process), from a
+constant, so repeated runs record identical ids.
+==================
+*/
+static std::uint64_t SV_NextAnonymousSteamId( void ) {
+	static fnql::server::identity::AnonymousIdAllocator allocator;
+
+	if ( !allocator.Seeded() ) {
+		std::uint64_t base = 0;
+		if ( !SV_LockstepActive() ) {
+			Com_RandomBytes( reinterpret_cast<byte *>( &base ), sizeof( base ) );
+		}
+		allocator.Seed( base );
+	}
+	return allocator.Next();
+}
+
+
+/*
+==================
+SV_AssignClientGameIdentity
+
+Decides, once per connection, the SteamID the game module will see for this
+slot.  A bot (NA_BOT, assigned only by the server) gets none.  A connection
+that established its own SteamID keeps it.  Every other human gets an
+anonymous id that no other connection shares, so the game cannot store an
+access entry for one Steam-less player that also matches the rest.
+==================
+*/
+void SV_AssignClientGameIdentity( client_t *client ) {
+	namespace identity = fnql::server::identity;
+
+	client->gameAnonymousSteamId = 0;
+	const bool serverBot = client->netchan.remoteAddress.type == NA_BOT;
+	const std::uint64_t connectionId = identity::UsableConnectionId(
+		client->platformSteamIdFromConnection != qfalse, client->platformSteamIdValue );
+	if ( identity::NeedsAnonymousId( serverBot, connectionId ) ) {
+		client->gameAnonymousSteamId = SV_NextAnonymousSteamId();
+	}
+}
+
+
+/*
+==================
+SV_ClientGameSteamId
+==================
+*/
+uint64_t SV_ClientGameSteamId( int clientNum ) {
+	namespace identity = fnql::server::identity;
+
+	if ( !SV_IsClientIndex( clientNum ) ) {
+		return 0;
+	}
+	const client_t &client = SV_ClientForIndex( clientNum );
+	return identity::GameSteamId( client.netchan.remoteAddress.type == NA_BOT,
+		identity::UsableConnectionId( client.platformSteamIdFromConnection != qfalse,
+			client.platformSteamIdValue ),
+		client.gameAnonymousSteamId );
 }
 
 
@@ -2034,6 +2102,7 @@ gotnewcl:
 	SV_CaptureClientSteamId( newcl, userinfo.data() );
 	if ( retailSteamId != 0 ) {
 		newcl->platformSteamIdValue = retailSteamId;
+		newcl->platformSteamIdFromConnection = qtrue;
 		newcl->platformAuthSession = platformAuthSession ? qtrue : qfalse;
 		newcl->platformAuthTicketSession = platformAuthTicketSession ? qtrue : qfalse;
 		newcl->platformAuthValidated = platformAuthValidated ? qtrue : qfalse;
@@ -2041,6 +2110,7 @@ gotnewcl:
 		Com_sprintf( newcl->platformSteamId, SV_ArraySize( newcl->platformSteamId ),
 			"%llu", static_cast<unsigned long long>( retailSteamId ) );
 	}
+	SV_AssignClientGameIdentity( newcl );
 	SV_MirrorClientSteamIdToUserinfo( newcl, userinfo.data(), SV_ArraySize( userinfo ) );
 
 	// save the userinfo
@@ -2201,6 +2271,8 @@ void SV_DropClient( client_t *drop, const char *reason ) {
 	if ( !isBot ) {
 		drop->platformSteamIdValue = 0;
 	}
+	drop->platformSteamIdFromConnection = qfalse;
+	drop->gameAnonymousSteamId = 0;
 
 	drop->justConnected = qfalse;
 

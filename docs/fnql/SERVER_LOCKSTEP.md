@@ -94,7 +94,11 @@ the session starts and each declared client, in declaration order:
    engine adds `ip` (the script's `address`, default the never-routed
    RFC 5737 address `192.0.2.<n>` for the n-th client) and `tld` as it does
    for every client;
-4. passes the ordinary `GAME_CLIENT_CONNECT( clientNum, qtrue, qfalse )`. The
+4. holds no Steam ticket, so, like any Steam-less player, it gets its own
+   anonymous SteamID for the game's import 200 (`GAME_MODULES.md`). Under
+   `sv_lockstep` those ids come from a constant seed, so the n-th scripted
+   client of a run is always answered with the same id;
+5. passes the ordinary `GAME_CLIENT_CONNECT( clientNum, qtrue, qfalse )`. The
    game sets no `SVF_BOT`. A rejection is a fatal error.
 
 At its first frame the client receives its gamestate instantly

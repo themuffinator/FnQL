@@ -5,7 +5,8 @@
 This document is the execution plan for reconstructing Quake Live engine
 behavior in FnQL. It covers the engine-facing portions of the native game API,
 WebUI/browser host, network protocol, demos, BSP version 47 and advertisements,
-ZMQ, Steamworks, and related Quake Live-only host features.
+ZMQ, Steamworks, and related Quake Live-only host features, and the plan for
+FnQL's dedicated server to replace QLDS, minqlx and their tooling (section 8).
 
 Retail Quake Live under a legitimate Steam installation is the compatibility
 target. QLSRP is a high-value evidence corpus, but it is not the implementation
@@ -365,6 +366,85 @@ related engine-owned features as independent slices:
 Game rules, weapons, movement, gametypes, HUD implementation, and other game
 module behavior remain out of scope even when QLSRP contains reconstructed
 implementations for them.
+
+### 8. Dedicated-server replacement: QLDS, minqlx and their tools
+
+The aim is that an operator has no reason to run the retail dedicated server
+(`qzeroded`), minqlx, or the tools built around them. The full plan, with the
+ecosystem inventory, capability tiers, milestone gates, open decisions and
+exit criteria, is
+[`DEDICATED_SERVER_REPLACEMENT.md`](DEDICATED_SERVER_REPLACEMENT.md).
+
+minqlx has to patch a closed binary. FnQL owns the engine, and FnQL-game owns
+the game module, so each feature is built where its knowledge lives:
+
+- What the engine sees (connections, commands, chat, userinfo,
+  configstrings, RCON, identity, bans, logging, persistence) is implemented
+  in the engine and works with retail qagame too.
+- What only the game knows (spawns, kills, inventory, items, votes, rounds)
+  is implemented in FnQL-game.
+- Both reach extensions through one versioned, capability-negotiated ABI.
+  Nothing is preloaded, detoured or poked.
+
+Every milestone ships behind defaults that change nothing. With nothing
+enabled, every existing gate, including the lockstep differential, passes
+unchanged. Retail clients only ever receive retail wire grammar, and retail
+qagame is never modified.
+
+- **D0, evidence.** Read-only inventory of `qzeroded` (SteamCMD app 349090),
+  its ZMQ, A2S and Steam transcripts, the Linux retail qagames' JsonCpp
+  layout, and a census of minqlx plugin use and hosting-tool interfaces. It
+  runs alongside D1 and D2.
+- **D1, extension host.** A native, versioned C ABI:
+  - events and actions from the engine boundary
+  - host services: scheduler, async jobs, store, logging, identity
+  - frame budgets and fault isolation
+  - lockstep support
+- **D2, first-party operator extensions.** Bans, permissions, silence, MOTD,
+  name rules, logs and chat commands, so most servers need no scripting.
+- **D3, Steam and stats on Linux.**
+  - A Linux i686 and x86_64 provider.
+  - A retail match-document reader for the Linux qagames, which currently
+    publish no stats.
+  - Steam heartbeats that honour `sv_master`.
+  - Retail's Steam auth failure reasons.
+- **D4, QLDS drop-in.**
+  - A QLDS install works as a basepath.
+  - `workshop.txt` downloads run unattended.
+  - ZMQ output is wire-identical to `qzeroded`.
+  - Launch compatibility, and engine settings in place of `LD_PRELOAD`
+    hooks.
+- **D5, FnQL-game full tier.** A game-side extension interface with typed
+  game events and state control, landing in both repositories.
+- **D6, minqlx bridge.** An optional CPython runtime with a clean-room
+  `minqlx`-compatible API on top of D1, so existing plugins run unmodified,
+  with Redis or the built-in store.
+- **D7, beyond parity.**
+  - A2S without Steam.
+  - Metrics and live reload.
+  - ZMQ CURVE.
+  - Packaging for Docker, systemd and Windows services.
+  - A performance comparison against `qzeroded`.
+- **D8, migration.** An operator guide and a configuration validator.
+
+The V track adds what no Quake Live tool has, modeled on q2repro (the Q2PRO
+lineage). Everything played back still reaches the unmodified retail cgame
+as ordinary protocol-91 streams, and existing demos and the retail demo HUD
+are untouched.
+
+- **V0.** The retail cgame's playback contract, and an MVD format
+  specification.
+- **V1.** Seek forward and back, step, speed, an event index, bookmarks and
+  cutting, for `.dm_91` and every legacy format FnQL plays.
+- **V2.** Server-side MVD recording that works with either game module.
+- **V3.** MVD playback with exact player POVs, a free camera, and extraction
+  to retail-playable `.dm_91`.
+- **V4.** A live relay that lets retail clients spectate delayed matches.
+- **V5.** An auto-director, highlights and an FnQL-game cgame multiview.
+
+Section 3's open seek and timedemo stress gates move to V1.
+
+Promotion gate: the plan's exit criteria and its compatibility guards.
 
 ## Non-regression matrix
 

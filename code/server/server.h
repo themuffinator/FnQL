@@ -185,6 +185,8 @@ typedef struct client_s {
 	char			name[MAX_NAME_LENGTH];			// extracted from userinfo, high bits masked
 	char			platformSteamId[SV_PLATFORM_STEAM_ID_SIZE];	// server-owned QL SteamID
 	uint64_t		platformSteamIdValue;				// parsed provider identity
+	qboolean		platformSteamIdFromConnection;		// platformSteamIdValue came from the connect ticket or the local provider, not userinfo
+	uint64_t		gameAnonymousSteamId;				// this connection's own anonymous id for the game (game_identity.hpp), 0 if it has a connection identity
 	qboolean		platformAuthSession;				// connection identity has passed the server auth gate
 	qboolean		platformAuthTicketSession;			// provider BeginAuthSession succeeded; EndAuthSession is required
 	qboolean		platformAuthValidated;			// provider delivered a successful auth result
@@ -543,6 +545,8 @@ void		SV_GameRefreshRankingsPolicyCvars( void );
 void		SV_ShutdownGameProgs ( void );
 void		SV_RestartGameProgs( void );
 qboolean	SV_ClientSteamId( int clientNum, unsigned int *steamIdLow, unsigned int *steamIdHigh );
+void		SV_AssignClientGameIdentity( client_t *client );	// once per connection, before GAME_CLIENT_CONNECT
+uint64_t	SV_ClientGameSteamId( int clientNum );				// the SteamID the game module sees (import slot 200)
 qboolean	SV_VerifyClientSteamAuth( int clientNum );
 void		SV_SteamStats_AddFieldValue( int clientNum, int statIndex, int delta );
 void		SV_SteamStats_UnlockAchievement( int clientNum, int achievementId );

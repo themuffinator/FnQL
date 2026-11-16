@@ -189,8 +189,26 @@ a product path.
   read the extension as zero. `code/botlib/be_aas_entity.cpp` asserts both
   sizes; FnQL-game asserts its copies.
 - qagame import 200 (SteamID query) answers 0 for a bot. Retail recognises a
-  bot by the `characterfile` userinfo key (`0x4e2710`); the anonymous SteamID
-  the engine gives a bot for the Steam player list is never handed to qagame.
+  bot by the `characterfile` userinfo key (`0x4e2710`); FnQL uses the
+  `NA_BOT` address that only the server assigns, since userinfo belongs to
+  the client. The anonymous SteamID the engine gives a bot for the Steam
+  player list is never handed to qagame.
+- Import 200 is the key of qagame's access list (admin, mod, ban and
+  complaint tempbans), and retail qagame stores an entry for 0 like any
+  other. A player with a Steam identity of its own (its connect ticket's, or
+  the local provider's on loopback) is answered with it, as before. Any
+  other human used to be 0, and so shared every entry stored for 0. Each now
+  gets an anonymous id (SteamID64 account type 10, never an individual
+  account) that belongs to that connection alone. `SV_AssignClientGameIdentity`
+  draws it when the client connects, from a 52-bit serial seeded randomly per
+  process (by a constant under `sv_lockstep`), and it ends with the
+  connection. It is not an authentication result: import 205 and
+  `SV_VerifyClientSteamAuth` answer as before. A `steamid` or `steam`
+  userinfo key is never an identity for import 200, and a ticket cannot
+  claim an anonymous id. `code/server/game_identity.hpp` holds the rules and
+  `tests/game_identity_tests.cpp` gates them. Consequence: a privilege or ban
+  given to a Steam-less player lasts only for that connection. A server
+  without Steam has no durable player identity, so use IP bans there.
 
 ## Match statistics
 

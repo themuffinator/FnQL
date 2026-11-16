@@ -46,7 +46,7 @@ that were only reported by the survey, not re-read, are marked *reported*.
 | `sv_serverType` was registered but not enforced | Packets from anything but the in-process loopback client are ignored at 0 (`0x4e4518`); a non-LAN `getchallenge` is refused at 1 (`0x4df440`) | Both gates, the first ahead of every other packet consumer. A dedicated server warns at map start when it is 0 |
 | qagame import 192 set the pure-check `cp` flag | It sets a ragequit flag read only by `SV_DropClient` (`0x4e26e0`, `0x4df830`, `0x4df726`) | New `rageQuit` flag; the drop is announced as `<name> ^1rage^7quits`. A client can no longer mark itself as having sent `cp` by sending `ragequit` |
 | No reply to stray sequenced packets | Out-of-band `disconnect` to an address and qport that match no client (`0x4e463f`) | Sent, under a per-address rate limit |
-| qagame import 200 returned a bot's anonymous SteamID | 0 for a slot with a `characterfile` userinfo key (`0x4e2710`) | 0 for bots |
+| qagame import 200 returned a bot's anonymous SteamID | 0 for a slot with a `characterfile` userinfo key (`0x4e2710`) | 0 for bots, decided by the server's `NA_BOT` address rather than client userinfo; a Steam-less human gets its own anonymous id instead of a shared 0 (`GAME_MODULES.md`) |
 | Steam server identity | Version `1069`, product `Quake Live`, description is the long gametype name, password flag from `g_needpass`, factory tags after `sv_tags` (`0x466fc1`, `0x467090`, `0x46650b`, `0x4662a7`, `0x466744`) | All five follow retail |
 | Console `say` | `chat "%i Server: %s\n"` with sender 63 (`0x4def24`) | Retail form for native modules; classic modules keep `console:` |
 | `kick` took no reason | `was kicked: <reason>` for a reason under 128 characters (`0x4dea7a`) | Optional reason |
@@ -252,7 +252,9 @@ not re-read unless an address is given as verified above.
 
 - On a server with no Steam provider, the SteamID query trusts the
   `steamid`/`steam` userinfo keys. Retail never reads them. With in-band
-  admin `rcon` this is a spoofable identity on a Steam-less server. *Reported.*
+  admin `rcon` this is a spoofable identity on a Steam-less server. qagame's
+  import 200 no longer reads them (2026-11-16); `status` and the legacy
+  `G_STEAMID_QUERY` syscall still do. *Reported.*
 - Whether to send a retail server only retail's userinfo keys (see "Client
   extras" above). It would hide the fingerprint, at the cost of dropping keys
   FnQL's own servers use unless the two can be told apart before `connect`.

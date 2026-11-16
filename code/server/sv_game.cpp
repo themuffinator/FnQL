@@ -1840,23 +1840,24 @@ static qboolean QDECL QL_G_trap_GetSteamId( int clientNum, unsigned int *steamId
 // compatibility syscall uses the three-argument output-pointer shape above;
 // sharing one function between those ABIs corrupts the caller stack.
 //
-// Retail answers 0 for a slot whose userinfo carries a "characterfile" key,
-// which is how it recognises a bot (quakelive_steam.exe 0x4e2710), even though
-// the engine holds an anonymous SteamID for the bot so Steam can list it.
+// Observed: retail answers 0 for a bot, which it recognises by a
+// "characterfile" key in the slot's userinfo (quakelive_steam.exe 0x4e2710),
+// even though the engine holds an anonymous SteamID for the bot so Steam can
+// list it.  Retail qagame keys its access list (admin, mod, ban and complaint
+// tempbans) by this answer and keeps an entry for 0 like any other.
+//
+// FnQL decides bot-ness by the NA_BOT address the server alone assigns:
+// userinfo is client-controlled, and a player who set characterfile would
+// otherwise share id 0, escaping a ban on their own id and inheriting any
+// entry stored for 0.  Server bots always have NA_BOT, and retail clients do
+// not send characterfile (inference: only the game's bot code writes it), so
+// bots and Steam players get the same answer as before.  A player with no
+// Steam identity of its own -- no ticket, no local provider identity; a
+// userinfo "steamid" claim does not count -- gets its connection's own
+// anonymous id instead of 0, so one `ban` or `addadmin` no longer reaches
+// every Steam-less client (SV_AssignClientGameIdentity, game_identity.hpp).
 static std::uint64_t QDECL QL_G_trap_GetSteamId64( int clientNum ) {
-	unsigned int low = 0;
-	unsigned int high = 0;
-	if ( SV_IsClientIndex( clientNum ) ) {
-		const client_t &client = SV_ClientForIndex( clientNum );
-		if ( client.netchan.remoteAddress.type == NA_BOT ||
-			Info_ValueForKey( client.userinfo, "characterfile" )[0] != '\0' ) {
-			return 0;
-		}
-	}
-	if ( !SV_ClientSteamId( clientNum, &low, &high ) ) {
-		return 0;
-	}
-	return ( static_cast<std::uint64_t>( high ) << 32 ) | low;
+	return SV_ClientGameSteamId( clientNum );
 }
 
 static qboolean QDECL QL_G_trap_VerifySteamAuth( int clientNum ) {

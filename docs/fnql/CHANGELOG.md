@@ -80,6 +80,10 @@ successful release, CI resets `Unreleased` for the next cycle.
   server restarts inside the same process, such as after `sv_idleRestart`.
 - A bot no longer appears in the Steam player list under the SteamID of the
   player who held its slot before it.
+- Banning or promoting a player who has no Steam identity no longer bans or
+  promotes every Steam-less player at once: each such connection now has its
+  own anonymous id for the access list. A player can no longer change the
+  SteamID the game sees by setting `steamid` or `characterfile` in userinfo.
 - Changing `sv_maxclients` on a running server no longer makes the Steam
   integration read past the player list.
 - Monitoring tools that poll ZMQ rcon over short-lived connections no longer

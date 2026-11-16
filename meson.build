@@ -1334,6 +1334,13 @@ retail_auth_challenge_tests = executable('fnql_retail_auth_challenge_tests',
 )
 test('fnql_retail_auth_challenge', retail_auth_challenge_tests)
 
+game_identity_tests = executable('fnql_game_identity_tests',
+  'tests/game_identity_tests.cpp',
+  include_directories: include_directories('code/server'),
+  cpp_args: common_cpp_args,
+)
+test('fnql_game_identity', game_identity_tests)
+
 factory_rotation_tests = executable('fnql_factory_rotation_tests',
   'tests/factory_rotation_tests.cpp',
   'code/server/factory_rotation.cpp',

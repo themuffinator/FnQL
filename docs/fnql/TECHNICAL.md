@@ -149,6 +149,9 @@ The subsystem inventory, execution order, and non-regression gates for the
 native API, WebUI/Awesomium, protocol/demos, BSP/advertisements, ZMQ, and
 Steamworks work are maintained in
 [`QL_COMPATIBILITY_ROADMAP.md`](./QL_COMPATIBILITY_ROADMAP.md).
+The plan for the dedicated server to replace QLDS, minqlx and their hosting
+tools is in
+[`DEDICATED_SERVER_REPLACEMENT.md`](./DEDICATED_SERVER_REPLACEMENT.md).
 The browser-neutral runtime boundary, external-runtime policy, Windows-x86
 default, and deterministic fallback on unsupported targets are detailed in
 [`WEBUI_BACKEND.md`](./WEBUI_BACKEND.md).
