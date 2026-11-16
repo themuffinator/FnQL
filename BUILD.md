@@ -27,8 +27,8 @@ CMake and the direct Visual Studio projects remain Win32-only.
 On Windows, use the **Win32/x86 client for retail Quake Live runtime tests**.
 Retail `bin.pk3` ships `qagamex86.dll`, `cgamex86.dll`, and `uix86.dll`; an x64
 process cannot load those x86 modules, and Awesomium and FnQL's Steam provider
-are 32-bit too. An x86_64 build therefore runs FnQL-game's modules
-(`+set vm_gameProvider fnql`), reports Steam as unavailable, and leaves the
+are 32-bit too. An x86_64 build therefore runs FnQL-game's modules (its
+default `auto` providers find them), reports Steam as unavailable, and leaves the
 WebUI off. Its binaries carry FnQ3's suffixes (`fnql.x64.exe`,
 `fnql.ded.x64.exe`, `fnql_glx_x86_64.dll`; Linux Meson `fnql.x86_64`, Linux
 Make `fnql.x64`, `fnql_glx_x86_64.so`), so they can share a folder with the x86
@@ -175,8 +175,9 @@ Build with `make ARCH=x86`, then either copy the resulting binaries from the `bu
 Linux has two distinct compatibility surfaces:
 
 - Native i686 dedicated servers load the retail `qagamei386.so` from
-  `baseq3/bin.pk3`. An x86_64 server loads `fnql_qagamex86_64.so` with
-  `vm_gameProvider fnql`, and otherwise falls back to retail's
+  `baseq3/bin.pk3` with `vm_gameProvider retail`; by default (`auto`) they
+  load the bundled `fnql_qagamei386.so`. An x86_64 server loads
+  `fnql_qagamex86_64.so` the same way, and otherwise falls back to retail's
   `qagamex64.so` from the same archive.
 - The same retail archive also contains `qagamex64.so` and the Win32
   `qagamex86.dll`, `cgamex86.dll`, and `uix86.dll`. Native Linux i686 uses

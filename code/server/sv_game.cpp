@@ -25,6 +25,8 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "server_cvar_compat.hpp"
 
 #include "../botlib/botlib.h"
+#include "../botlib/be_aas.h"
+#include "../qcommon/fnql_module.h"
 #define JSON_IMPLEMENTATION
 #include "../qcommon/json.h"
 #undef JSON_IMPLEMENTATION
@@ -560,6 +562,52 @@ static void SV_GameRankReportStr( int index1, int index2, int key, const char *v
 
 /*
 ====================
+SV_GameUsesQLBotEntities
+
+Whether the loaded qagame exchanges Quake Live's bot_entitystate_t and
+aas_entityinfo_t.  The retail qagame always does (it fills a 0xd0-byte state,
+qagamex86 0x10023773, and reads past the Quake III end of the entity info,
+0x10020c10).  An FnQL-game module does when it declares
+FNQL_MODULE_CAP_QL_BOT_ENTITIES; older FnQL-game builds, QVMs and legacy
+vmMain modules use the Quake III sizes.
+====================
+*/
+static bool SV_GameUsesQLBotEntities() {
+	if ( !gvm || !gvm->dllExports ) {
+		return false;
+	}
+	if ( !Q_stricmp( gvm->providerName, FNQL_MODULE_PRODUCT ) ) {
+		return ( gvm->providerCapabilities & FNQL_MODULE_CAP_QL_BOT_ENTITIES ) != 0;
+	}
+	return true;
+}
+
+static int SV_GameBotLibUpdateEntity( int entnum, intptr_t stateArg, const void *state ) {
+	if ( !state ) {
+		return botlib_export->BotLibUpdateEntity( entnum, nullptr );
+	}
+	// a Quake III-layout state leaves the Quake Live extension zeroed
+	bot_entitystate_t full{};
+	const int size = SV_GameUsesQLBotEntities() ? BOT_QL_ENTITYSTATE_SIZE : BOT_Q3_ENTITYSTATE_SIZE;
+	VM_CHECKBOUNDS( gvm, stateArg, size );
+	std::memcpy( &full, state, static_cast<std::size_t>( size ) );
+	return botlib_export->BotLibUpdateEntity( entnum, &full );
+}
+
+static void SV_GameAASEntityInfo( int entnum, intptr_t infoArg, void *info ) {
+	if ( !info ) {
+		return;
+	}
+	std::array<byte, BOT_QL_ENTITYINFO_SIZE> full{};
+	botlib_export->aas.AAS_EntityInfo( entnum, reinterpret_cast<aas_entityinfo_t *>( full.data() ) );
+	const int size = SV_GameUsesQLBotEntities() ? BOT_QL_ENTITYINFO_SIZE : BOT_Q3_ENTITYINFO_SIZE;
+	VM_CHECKBOUNDS( gvm, infoArg, size );
+	std::memcpy( info, full.data(), static_cast<std::size_t>( size ) );
+}
+
+
+/*
+====================
 SV_GameSystemCalls
 
 The module is making a system call
@@ -807,7 +855,7 @@ static intptr_t SV_GameSystemCalls( intptr_t *args ) {
 	case BOTLIB_LOAD_MAP:
 		return botlib_export->BotLibLoadMap( VMA(1) );
 	case BOTLIB_UPDATENTITY:
-		return botlib_export->BotLibUpdateEntity( args[1], VMA(2) );
+		return SV_GameBotLibUpdateEntity( args[1], args[2], static_cast<const void *>( VMA(2) ) );
 	case BOTLIB_TEST:
 		return botlib_export->Test( args[1], VMA(2), VMA(3), VMA(4) );
 
@@ -833,7 +881,7 @@ static intptr_t SV_GameSystemCalls( intptr_t *args ) {
 	case BOTLIB_AAS_ALTERNATIVE_ROUTE_GOAL:
 		return botlib_export->aas.AAS_AlternativeRouteGoals( VMA(1), args[2], VMA(3), args[4], args[5], VMA(6), args[7], args[8] );
 	case BOTLIB_AAS_ENTITY_INFO:
-		botlib_export->aas.AAS_EntityInfo( args[1], VMA(2) );
+		SV_GameAASEntityInfo( args[1], args[2], static_cast<void *>( VMA(2) ) );
 		return 0;
 
 	case BOTLIB_AAS_INITIALIZED:

@@ -30,16 +30,22 @@ def function_body(source: str, signature_pattern: str) -> str:
 class GameModuleProviderSourceTests(unittest.TestCase):
     """FnQL-game companion module hosting (docs/fnql/GAME_MODULES.md)."""
 
-    def test_game_provider_cvar_defaults_to_retail_and_is_protected(self) -> None:
+    def test_game_provider_cvar_defaults_to_auto_and_is_protected(self) -> None:
         vm = read_repo_file("code/qcommon/vm.c")
+        qcommon = read_repo_file("code/qcommon/qcommon.h")
 
+        # FnQL-game milestone 12 flipped the default to auto on every target;
+        # an install without the FnQL-game modules still loads retail's.
+        self.assertIn('#define\tVM_GAME_PROVIDER_DEFAULT\t"auto"', qcommon)
+        # _ND: a config records only an explicit choice, so a later default
+        # reaches players who never made one
         self.assertRegex(
             vm,
-            r'vm_provider\[ VM_GAME \] = Cvar_Get\( "vm_gameProvider", "retail", '
-            r"CVAR_ARCHIVE \| CVAR_PROTECTED \);",
+            r'vm_provider\[ VM_GAME \] = Cvar_Get\( "vm_gameProvider", VM_GAME_PROVIDER_DEFAULT,\s*'
+            r"CVAR_ARCHIVE_ND \| CVAR_PROTECTED \);",
         )
 
-    def test_client_provider_cvars_are_protected_and_retail_on_win32_x86(self) -> None:
+    def test_client_provider_cvars_are_protected_and_auto_on_win32_x86(self) -> None:
         vm = read_repo_file("code/qcommon/vm.c")
         qcommon = read_repo_file("code/qcommon/qcommon.h")
 
@@ -47,16 +53,23 @@ class GameModuleProviderSourceTests(unittest.TestCase):
             self.assertRegex(
                 vm,
                 rf'vm_provider\[ {slot} \] = Cvar_Get\( "{name}", VM_CLIENT_PROVIDER_DEFAULT,\s*'
-                r"CVAR_ARCHIVE \| CVAR_PROTECTED \);",
+                r"CVAR_ARCHIVE_ND \| CVAR_PROTECTED \);",
             )
-        # retail client modules exist only for Win32 x86, so only there is the
-        # default the retail module
+        # Win32 x86 has retail client modules to fall back on, so auto; every
+        # other target has only the FnQL-game ones
         default = re.search(
-            r"#if id386 && defined\( _WIN32 \)\s*#define\tVM_CLIENT_PROVIDER_DEFAULT\t\"retail\"\s*"
+            r"#if id386 && defined\( _WIN32 \)\s*#define\tVM_CLIENT_PROVIDER_DEFAULT\t\"auto\"\s*"
             r"#else\s*#define\tVM_CLIENT_PROVIDER_DEFAULT\t\"fnql\"\s*#endif",
             qcommon,
         )
         self.assertIsNotNone(default)
+
+    def test_auto_fallback_without_fnql_game_is_not_a_warning(self) -> None:
+        vm = read_repo_file("code/qcommon/vm.c")
+        body = function_body(vm, r"static qboolean VM_LoadProviderModule\(")
+
+        self.assertIn("choice == VM_PROVIDER_CHOICE_FNQL ? S_COLOR_YELLOW : \"\"", body)
+        self.assertNotIn('Com_Printf( S_COLOR_YELLOW "%s %s: no usable', body)
         # dedicated servers have no client provider cvars
         init = function_body(vm, r"void VM_Init\( void \)")
         self.assertLess(init.index("#ifndef DEDICATED\n\tvm_provider[ VM_CGAME ]"), init.index("vm_provider[ VM_UI ]"))

@@ -11,11 +11,13 @@ release.py repeats on every packaged archive.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import re
 import shutil
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -60,6 +62,12 @@ LICENSE_DOCS = (
 # record (docs/fnql/GAME_MODULES.md).  Both names must be in the binary.
 REQUIRED_EXPORTS = ("dllEntry", "FnQL_GetModuleInfo")
 MAX_MODULE_BYTES = 64 * 1024 * 1024
+# FnQL-game's meson build installs this package beside the loose modules
+# (FnQL-game scripts/make_package.py): the cgame and ui at the archive root,
+# every entry stamped 1980-01-01 so the same modules give the same checksum.
+CLIENT_PACKAGE_NAME = "fnql_game_client.pk3"
+CLIENT_PACKAGE_SLOTS = ("cgame", "ui")
+PACKAGE_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 
 ELF_CLASS_32 = 1
 ELF_CLASS_64 = 2
@@ -125,6 +133,68 @@ def module_names(platform: str, arch: str = DEFAULT_ARCH) -> tuple[str, ...]:
     return tuple(f"{GAME_DIR}/fnql_{slot}{suffix}" for slot in MODULE_SLOTS)
 
 
+def client_package_name() -> str:
+    """The FnQL-game client package's path in a release (FnQL-game milestone 12).
+
+    A pure FnQL server that has it loaded lists it in sv_fnqlClientPaks, and an
+    FnQL client with the same package then runs its cgame and ui
+    (docs/fnql/GAME_MODULES.md); without it a pure server always gets the
+    retail client modules.  It is never referenced, so retail clients never
+    need it.
+    """
+    return f"{GAME_DIR}/{CLIENT_PACKAGE_NAME}"
+
+
+def client_package_members(platform: str, arch: str = DEFAULT_ARCH) -> tuple[str, ...]:
+    """The archive-root entries the client package holds: the cgame and ui."""
+    suffix = MODULE_SUFFIX[check_target(platform, arch)]
+    return tuple(f"fnql_{slot}{suffix}" for slot in CLIENT_PACKAGE_SLOTS)
+
+
+def validate_client_package(
+    name: str,
+    data: bytes,
+    platform: str,
+    arch: str = DEFAULT_ARCH,
+    modules: dict[str, bytes] | None = None,
+) -> None:
+    """Check a client package: exactly this target's cgame and ui at the root,
+    stamped as FnQL-game's make_package.py stamps them, and (when the loose
+    modules are given by release path) byte-identical to them."""
+    check_target(platform, arch)
+    if not data or len(data) > MAX_MODULE_BYTES * len(CLIENT_PACKAGE_SLOTS):
+        raise ValueError(f"FnQL-game client package {name} has an invalid size")
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile as exc:
+        raise ValueError(f"FnQL-game client package {name} is not a zip archive: {exc}") from exc
+    with archive:
+        entries = archive.infolist()
+        expected = client_package_members(platform, arch)
+        found = [entry.filename for entry in entries]
+        if sorted(found) != sorted(expected):
+            raise ValueError(
+                f"FnQL-game client package {name} must hold exactly {', '.join(expected)}; "
+                f"found {', '.join(found) or 'nothing'}"
+            )
+        for entry in entries:
+            if entry.date_time != PACKAGE_TIMESTAMP:
+                raise ValueError(
+                    f"FnQL-game client package {name} entry {entry.filename} is not stamped "
+                    f"{PACKAGE_TIMESTAMP}; it was not built by make_package.py"
+                )
+            if entry.file_size > MAX_MODULE_BYTES:
+                raise ValueError(f"FnQL-game client package {name} entry {entry.filename} is too large")
+            member = archive.read(entry)
+            module_path = f"{GAME_DIR}/{entry.filename}"
+            validate_module(f"{name}:{entry.filename}", member, platform, arch)
+            if modules is not None and modules.get(module_path) != member:
+                raise ValueError(
+                    f"FnQL-game client package {name} entry {entry.filename} differs from "
+                    f"{module_path}"
+                )
+
+
 def doc_names() -> tuple[str, ...]:
     return (
         *(f"{DOCS_DIR}/{destination}" for _source, destination in LICENSE_DOCS),
@@ -133,7 +203,7 @@ def doc_names() -> tuple[str, ...]:
 
 
 def member_names(platform: str, arch: str = DEFAULT_ARCH) -> tuple[str, ...]:
-    return (*module_names(platform, arch), *doc_names())
+    return (*module_names(platform, arch), client_package_name(), *doc_names())
 
 
 def validate_module(name: str, data: bytes, platform: str, arch: str = DEFAULT_ARCH) -> None:
@@ -178,19 +248,28 @@ def build_info_arch(text: str) -> str | None:
 def build_info_text(pin: dict[str, str], platform: str, arch: str = DEFAULT_ARCH) -> str:
     url = f"https://github.com/{pin['repository']}"
     modules = ", ".join(Path(name).name for name in module_names(platform, arch))
+    package = (
+        f"{CLIENT_PACKAGE_NAME} holds the same cgame and UI. A pure FnQL server\n"
+        "that has it loaded lists it to its clients, and an FnQL client with the\n"
+        "same package runs them there; retail clients never need it. On any\n"
+        "other pure server, retail ones included, FnQL loads the retail client\n"
+        "modules.\n"
+    )
     if arch == "x86":
         selection = (
-            "The modules sit in baseq3/. FnQL loads the qagame only when asked:\n"
-            "+set vm_gameProvider fnql. The cgame and UI modules are included for\n"
-            "completeness; FnQL cannot select them yet and keeps using the retail\n"
-            "client modules.\n"
+            "The modules sit in baseq3/. FnQL loads them by default\n"
+            "(vm_gameProvider, vm_cgameProvider and vm_uiProvider auto), and falls\n"
+            "back to the retail modules wherever these are missing or refused.\n"
+            "Set a provider to retail to use the retail module instead.\n"
+            f"{package}"
         )
     else:
         selection = (
-            "The modules sit in baseq3/. FnQL loads the qagame only when asked:\n"
-            "+set vm_gameProvider fnql. Retail Quake Live ships its game modules\n"
-            f"only for 32-bit x86, so on {arch} these are the only native game,\n"
-            "cgame and UI modules available.\n"
+            "The modules sit in baseq3/. FnQL loads them by default. Retail Quake\n"
+            "Live ships its game modules only for 32-bit x86, so on "
+            f"{arch} these\n"
+            "are the only native game, cgame and UI modules available.\n"
+            f"{package}"
         )
     return (
         "FnQL-game modules bundled with this FnQL release\n"
@@ -251,6 +330,20 @@ def stage(
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(module, destination)
         staged.append(name)
+
+    package_name = client_package_name()
+    package = install_root / package_name
+    if not package.is_file() or package.is_symlink():
+        raise FileNotFoundError(f"FnQL-game install is missing {package_name}: {package}")
+    validate_client_package(
+        package_name,
+        package.read_bytes(),
+        platform,
+        arch,
+        modules={name: (output / name).read_bytes() for name in module_names(platform, arch)},
+    )
+    shutil.copyfile(package, output / package_name)
+    staged.append(package_name)
 
     docs = output / DOCS_DIR
     docs.mkdir(parents=True, exist_ok=True)

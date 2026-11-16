@@ -152,8 +152,26 @@ struct aas_entityinfo_s
 	int		weapon;			// determines weapon and flash model, etc
 	int		legsAnim;		// mask off ANIM_TOGGLEBIT
 	int		torsoAnim;		// mask off ANIM_TOGGLEBIT
+	// Quake Live appends the bot_entitystate_t extension below, in the same
+	// order: the retail engine's AAS_EntityInfo copies 0xec bytes and its
+	// AAS_UpdateEntity (quakelive_steam.exe 0x00484e20) fills these from
+	// state fields 0x1c-0x33.  Modules that only know the Quake III layout
+	// get the first BOT_Q3_ENTITYINFO_SIZE bytes (sv_game.cpp).
+	float	nextthink;		// the entity's nextthink in whole seconds
+	int		itemQuantity;	// its item's quantity, giType and giTag (0 for non-items)
+	int		itemType;
+	int		itemTag;
+	int		health;			// the entity's health
+	int		maxHealth;		// a client's stats[7] (STAT_MAX_HEALTH), else 0
+	int		ammoFull[16];	// a client's ammo per weapon is at its maximum or unlimited
+	int		trainingClear;	// the module's training flag is clear
+	int		carriesFlag;	// a client holds the red or blue flag
 };
 using aas_entityinfo_t = aas_entityinfo_s;
+
+// Sizes of the Quake III prefix that QVMs and pre-extension modules exchange.
+#define BOT_Q3_ENTITYINFO_SIZE	0x8c
+#define BOT_QL_ENTITYINFO_SIZE	0xec
 
 // area info
 struct aas_areainfo_s

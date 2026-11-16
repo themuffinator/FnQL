@@ -43,6 +43,17 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #include "be_interface.h"
 #include "be_aas_def.h"
 
+#include <cstddef>
+
+// The game modules share these structures by pointer (FnQL-game
+// scripts/check_engine_abi.py compares its copies).
+static_assert( offsetof( bot_entitystate_t, nextthink ) == BOT_Q3_ENTITYSTATE_SIZE,
+	"bot_entitystate_t Quake III prefix" );
+static_assert( sizeof( bot_entitystate_t ) == BOT_QL_ENTITYSTATE_SIZE, "bot_entitystate_t Quake Live size" );
+static_assert( offsetof( aas_entityinfo_t, nextthink ) == BOT_Q3_ENTITYINFO_SIZE,
+	"aas_entityinfo_t Quake III prefix" );
+static_assert( sizeof( aas_entityinfo_t ) == BOT_QL_ENTITYINFO_SIZE, "aas_entityinfo_t Quake Live size" );
+
 //FIXME: these might change
 enum {
 	ET_GENERAL,
@@ -101,6 +112,21 @@ int AAS_UpdateEntity(int entnum, bot_entitystate_t *state)
 	ent->i.weapon = state->weapon;
 	ent->i.legsAnim = state->legsAnim;
 	ent->i.torsoAnim = state->torsoAnim;
+	// the Quake Live extension is copied through unchanged (retail engine
+	// 0x00484f28-0x00484fa0); a Quake III-layout caller's state arrives with
+	// it zeroed (sv_game.cpp)
+	ent->i.nextthink = state->nextthink;
+	ent->i.itemQuantity = state->itemQuantity;
+	ent->i.itemType = state->itemType;
+	ent->i.itemTag = state->itemTag;
+	ent->i.health = state->health;
+	ent->i.maxHealth = state->maxHealth;
+	for (int w = 0; w < 16; ++w)
+	{
+		ent->i.ammoFull[w] = state->ammoFull[w];
+	}
+	ent->i.trainingClear = state->trainingClear;
+	ent->i.carriesFlag = state->carriesFlag;
 	//number of the entity
 	ent->i.number = entnum;
 	//updated so set valid flag

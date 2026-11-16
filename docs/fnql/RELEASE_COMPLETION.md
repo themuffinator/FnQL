@@ -24,6 +24,19 @@ only planned.
 
 ## Ready For Changelog
 
+- [x] Run the bundled FnQL-game modules by default (FnQL-game milestone 12).
+  `vm_gameProvider` defaults to `auto` on every target, and `vm_cgameProvider`
+  and `vm_uiProvider` default to `auto` on Win32 x86. `auto` takes a module
+  only if it declares retail wire parity, and falls back to the retail
+  modules when there is none. Every package also carries
+  `baseq3/fnql_game_client.pk3`, staged and checked by `scripts/fnql_game.py`
+  and `release.py`. The pin moves to FnQL-game `6d815bc`. Local gates
+  (2026-11-16, x86): FnQL's suite 86/86 and the provider runtime tests 9/9 on
+  the M12 dedicated server. FnQL-game's G0/G2, runtime and interop suites pass
+  91/91 against this engine, including three new `interop-fnql` rows with no
+  provider cvars and a release's `baseq3` layout. The G3, bots and
+  interop-play suites pass 170/171, the 171st being the designed negative
+  control.
 - [x] Bundle the FnQL-game modules (qagame, cgame, ui) in every Windows and
   Linux package under `baseq3/`. The release workflow builds the commit pinned
   in `version/fnql_game.json` with MSVC Win32 and in an Ubuntu 20.04 i686

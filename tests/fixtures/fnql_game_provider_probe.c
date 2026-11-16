@@ -11,6 +11,8 @@ Build variants:
   default               identifies as an FnQL-game qagame (FnQL_GetModuleInfo)
   PROBE_NO_IDENTITY     exports no identity record
   PROBE_WRONG_MODULE    identifies as an FnQL-game cgame (must be rejected)
+  PROBE_RETAIL_WIRE     also declares FNQL_MODULE_CAP_RETAIL_WIRE, which the
+                        auto provider (the default) requires
 
 ===========================================================================
 */
@@ -174,7 +176,11 @@ static const probeModuleInfo_t probeModuleInfo = {
 #endif
 	"0.0.0-probe",
 	"provider-probe",
+#ifdef PROBE_RETAIL_WIRE
+	0x1u,
+#else
 	0u,
+#endif
 	GAME_NATIVE_API_VERSION
 };
 
