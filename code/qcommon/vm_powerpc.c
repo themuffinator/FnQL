@@ -46,7 +46,7 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #define PPC64_ELFv2 1
 #elif defined(_CALL_ELF) && _CALL_ELF == 1
 #define PPC64_ELFv1 1
-#elif defined(__LITTLE_ENDIAN__) || defined(__LITTLE_ENDIAN)
+#elif defined(__LITTLE_ENDIAN__) || ( defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__ )
 #define PPC64_ELFv2 1
 #else
 #define PPC64_ELFv1 1
@@ -1247,7 +1247,11 @@ static void emitFuncEntry( const void *func )
 {
 	// ELFv1: function pointer is a descriptor; resolve entry+TOC at JIT compile time
 #ifdef PPC64_ELFv1
-	const intptr_t* desc = (intptr_t*)(intptr_t)func;
+	// Read the descriptor through a volatile pointer. Once this is inlined,
+	// gcc 13 otherwise folds the reads and discards the static handlers whose
+	// address only reaches it here, leaving undefined references at link time
+	// (FnQL, cross-built for big-endian ppc64 on 2026-11-16).
+	const intptr_t *volatile desc = (const intptr_t *)(intptr_t)func;
 	emit_MOVi64( R0, desc[0] );
 	emit_MOVi64( R2, desc[1] );
 	emit( PPC_MTCTR( R0 ) );

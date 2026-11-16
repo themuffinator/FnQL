@@ -169,10 +169,29 @@ extern "C" {
 short ShortSwap( short l );
 int LongSwap( int l );
 float FloatSwap( const float *f );
-void CopyShortSwap( void *dest, void *src );
-void CopyLongSwap( void *dest, void *src );
 
 #include "q_platform.h"
+
+// Byte-reversing copies for CopyLittleShort/CopyLittleLong on big-endian
+// targets. Inline, so the message codec links without q_shared.c (its unit
+// tests do) on every byte order.
+static ID_INLINE void CopyShortSwap( void *dest, const void *src ) {
+	unsigned char *to = (unsigned char *)dest;
+	const unsigned char *from = (const unsigned char *)src;
+
+	to[0] = from[1];
+	to[1] = from[0];
+}
+
+static ID_INLINE void CopyLongSwap( void *dest, const void *src ) {
+	unsigned char *to = (unsigned char *)dest;
+	const unsigned char *from = (const unsigned char *)src;
+
+	to[0] = from[3];
+	to[1] = from[2];
+	to[2] = from[1];
+	to[3] = from[0];
+}
 
 //=============================================================
 

@@ -16,33 +16,61 @@ def read(relative: str) -> str:
 
 
 class X86BuildConstraintTests(unittest.TestCase):
-    def test_meson_enables_only_x86_and_windows_linux_x86_64_before_naming_outputs(self) -> None:
+    def test_meson_enables_only_the_enabled_targets_before_naming_outputs(self) -> None:
         meson = read("meson.build")
 
         guard = meson.index("if not fnql_target_supported")
         output_names = meson.index("client_binary_name =")
         self.assertLess(guard, output_names)
         prelude = meson[:guard]
-        self.assertIn("cc.compiles(fnql_x86_target_probe", prelude)
-        self.assertIn("cc.compiles(fnql_x86_64_target_probe", prelude)
-        self.assertIn("sizeof(void *) == 4", prelude)
-        self.assertIn("sizeof(void *) == 8", prelude)
-        self.assertIn("fnql_x86_64_systems = ['windows', 'linux']", prelude)
-        self.assertIn(
-            "elif cpu_family == 'x86_64' and fnql_x86_64_systems.contains(host_machine.system())",
-            prelude,
-        )
+        self.assertIn("cc.compiles(\n      fnql_target_probe_template.format(", prelude)
+        self.assertIn("typedef char fnql_pointer_width_must_match[(sizeof(void *) == @2@) ? 1 : -1];", prelude)
         self.assertIn("fnql_target_supported = false", prelude)
+        # every enabled target, its systems, its compiler predicate and pointer width
+        table = prelude[prelude.index("fnql_enabled_targets = {"):prelude.index("fnql_target_supported = false")]
+        expected = {
+            "'x86': [[],": "defined(_M_IX86) || defined(__i386__)', '4'",
+            "'x86_64': [['windows', 'linux'],": "!defined(_M_ARM64EC)', '8'",
+            "'aarch64': [['linux'],": "defined(__aarch64__) && !defined(__AARCH64EB__)', '8'",
+            "'arm': [['linux'],": "defined(__ARM_PCS_VFP) && !defined(__ARMEB__)', '4'",
+            "'ppc64le': [['linux'],": "defined(__PPC64__) && defined(__LITTLE_ENDIAN__)', '8'",
+            "'ppc64': [['linux'],": "defined(__PPC64__) && defined(__BIG_ENDIAN__)', '8'",
+        }
+        for key, predicate in expected.items():
+            with self.subTest(target=key):
+                self.assertIn(key, table)
+                start = table.index(key)
+                self.assertIn(predicate, table[start:table.index("],", start + len(key)) + 80])
+        self.assertEqual(table.count("': ["), len(expected), table)
         naming = meson[guard:output_names]
         self.assertIn(
             "FnQL supports only 32-bit x86 targets and x86_64 on Windows and Linux", naming
         )
-        # x86 keeps the retail-shaped unsuffixed names; x86_64 takes FnQ3's.
+        self.assertIn("aarch64, armv7l (hard-float), ppc64le and ppc64 on Linux", naming)
+        # x86 keeps the retail-shaped unsuffixed names; the others take FnQ3's.
         self.assertIn("renderer_arch = 'x86'\n  binary_suffix = ''", naming)
         self.assertIn("renderer_arch = 'x86_64'", naming)
         self.assertIn("binary_suffix = win32 ? '.x64' : '.x86_64'", naming)
-        for other in ("aarch64", "arm", "ppc64"):
-            self.assertNotIn(f"cpu_family == '{other}'", prelude)
+        self.assertIn("renderer_arch = cpu_family\n  binary_suffix = '.' + cpu_family", naming)
+        # the new Linux targets gate the dedicated server only
+        self.assertIn("if build_client and not ['x86', 'x86_64'].contains(cpu_family)", meson)
+        self.assertIn("The FnQL client is not enabled on ", meson)
+
+    def test_linux_cross_files_name_each_target_and_its_qemu_wrapper(self) -> None:
+        for name, family, triple, wrapper, endian in (
+            ("aarch64", "aarch64", "aarch64-linux-gnu", "qemu-aarch64", "little"),
+            ("armv7l", "arm", "arm-linux-gnueabihf", "qemu-arm", "little"),
+            ("ppc64le", "ppc64le", "powerpc64le-linux-gnu", "qemu-ppc64le", "little"),
+            ("ppc64", "ppc64", "powerpc64-linux-gnu", "qemu-ppc64", "big"),
+        ):
+            with self.subTest(target=name):
+                cross = read(f"misc/meson/linux-{name}.ini")
+                self.assertIn(f"c = '{triple}-gcc'", cross)
+                self.assertIn(f"cpp = '{triple}-g++'", cross)
+                self.assertIn(f"exe_wrapper = ['{wrapper}', '-L', '/usr/{triple}']", cross)
+                self.assertIn(f"cpu_family = '{family}'", cross)
+                self.assertIn(f"endian = '{endian}'", cross)
+                self.assertIn("system = 'linux'", cross)
 
     def test_cmake_compiler_probe_rejects_non_x86_or_non_32_bit_targets(self) -> None:
         cmake = read("CMakeLists.txt")
@@ -306,6 +334,9 @@ class X86BuildConstraintTests(unittest.TestCase):
         self.assertIn("#define FNQL_RETAIL_NATIVE_TARGET 0", platform)
         guard_error = "FnQL supports only 32-bit x86 engine targets and x86_64 on Windows and Linux"
         self.assertIn(guard_error, platform)
+        self.assertIn("defined( __linux__ ) && defined( __aarch64__ ) && !defined( __AARCH64EB__ )", platform)
+        self.assertIn("( __ARM_ARCH >= 7 ) \\\n\t&& defined( __ARM_PCS_VFP ) && !defined( __ARMEB__ )", platform)
+        self.assertIn("#elif defined( __linux__ ) && defined( __PPC64__ )", platform)
 
         clang = shutil.which("clang")
         if clang is None and (candidate := Path(r"C:\Program Files\LLVM\bin\clang.exe")).is_file():
@@ -325,9 +356,19 @@ class X86BuildConstraintTests(unittest.TestCase):
             ("x86_64-linux-gnux32", pointer_error),
             ("x86_64-apple-darwin", guard_error),
             ("x86_64-unknown-freebsd", guard_error),
-            ("aarch64-linux-gnu", guard_error),
+            ("aarch64-linux-gnu", None),
+            ("armv7-linux-gnueabihf", None),
+            ("powerpc64le-linux-gnu", None),
+            ("powerpc64-linux-gnu", None),
+            ("aarch64_be-linux-gnu", guard_error),
+            ("armv7-linux-gnueabi", guard_error),
+            ("armv6-linux-gnueabihf", guard_error),
+            ("armebv7-linux-gnueabihf", guard_error),
+            ("powerpc-linux-gnu", guard_error),
             ("aarch64-pc-windows-msvc", guard_error),
-            ("powerpc64le-linux-gnu", guard_error),
+            ("aarch64-apple-darwin", guard_error),
+            ("aarch64-unknown-freebsd", guard_error),
+            ("powerpc64le-unknown-freebsd", guard_error),
         )
         with tempfile.TemporaryDirectory(prefix="fnql-target-guard-") as temp:
             source = Path(temp) / "guard_probe.c"

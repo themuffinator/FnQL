@@ -240,10 +240,26 @@ class GateLaunchTests(unittest.TestCase):
         self.assertEqual(gate.module_arch("fnql_qagamex86_64.dll", "windows"), "x86_64")
         self.assertEqual(gate.module_arch("fnql_qagamei386.so", "linux"), "x86")
         self.assertEqual(gate.module_arch("fnql_qagamex86_64.so", "linux"), "x86_64")
+        for arch in ("aarch64", "arm", "ppc64le", "ppc64"):
+            self.assertEqual(gate.module_arch(f"fnql_qagame{arch}.so", "linux"), arch)
         for name, platform in (("qagamex86.dll", "windows"), ("fnql_cgamex86.dll", "windows"),
-                               ("fnql_qagamex86.dll", "linux"), ("fnql_qagamei386.so", "windows")):
+                               ("fnql_qagamex86.dll", "linux"), ("fnql_qagamei386.so", "windows"),
+                               ("fnql_qagameaarch64.dll", "windows"), ("fnql_qagamearm64.so", "linux"),
+                               ("fnql_qagameppc.so", "linux")):
             with self.subTest(name=name, platform=platform), self.assertRaises(SystemExit):
                 gate.module_arch(name, platform)
+
+    def test_server_command_runs_a_cross_built_engine_through_its_wrapper(self) -> None:
+        plain = gate.server_command(Path("fnql.ded"), Path("base"), Path("home"), 27996, 200)
+        self.assertEqual(plain[0], "fnql.ded")
+        wrapped = gate.server_command(Path("fnql.ded.aarch64"), Path("base"), Path("home"), 27996, 200,
+                                      ["qemu-aarch64", "-L", "/usr/aarch64-linux-gnu"])
+        self.assertEqual(wrapped[:4], ["qemu-aarch64", "-L", "/usr/aarch64-linux-gnu", "fnql.ded.aarch64"])
+        self.assertEqual(wrapped[4:], plain[1:])
+        args = gate.parse_args(["run", "--engine", "e", "--module", "m",
+                                "--exe-wrapper", "qemu-ppc64 -L /usr/powerpc64-linux-gnu"])
+        self.assertEqual(args.exe_wrapper, "qemu-ppc64 -L /usr/powerpc64-linux-gnu")
+        self.assertEqual(gate.parse_args(["run", "--engine", "e", "--module", "m"]).exe_wrapper, "")
 
     def test_server_command_is_headless_and_keeps_steam_defaults(self) -> None:
         command = gate.server_command(Path("fnql.ded"), Path("base"), Path("home"), 27996, 200)

@@ -16,7 +16,7 @@ A *provider* is whoever supplies a native module for a VM slot.
 | Provider | Files (Win32) | Selected by |
 |---|---|---|
 | retail | `qagamex86.dll`, `cgamex86.dll`, `uix86.dll` from the filesystem (retail `bin.pk3` or loose `baseq3`) | default on Win32 x86 |
-| fnql | `fnql_qagamex86.dll`, `fnql_cgamex86.dll`, `fnql_uix86.dll` (Linux: `fnql_*i386.so`; x86_64: `fnql_*x86_64.dll` / `.so`) | `vm_gameProvider`, `vm_cgameProvider`, `vm_uiProvider` set to `fnql` or `auto` |
+| fnql | `fnql_qagamex86.dll`, `fnql_cgamex86.dll`, `fnql_uix86.dll` (Linux: `fnql_*i386.so`; x86_64: `fnql_*x86_64.dll` / `.so`; Linux aarch64, armv7l, ppc64le, ppc64: `fnql_*aarch64.so`, `fnql_*arm.so`, `fnql_*ppc64le.so`, `fnql_*ppc64.so`) | `vm_gameProvider`, `vm_cgameProvider`, `vm_uiProvider` set to `fnql` or `auto` |
 
 FnQL-game modules carry the `fnql_` prefix (`FNQL_GAME_MODULE_PREFIX`) so a
 search path holding both sets can never shadow a retail module by accident.

@@ -414,7 +414,13 @@ Expected behavior:
   `DISCORD_RELEASE_WEBHOOK` is configured
 - FnQL builds, tests and packages the enabled targets only: 32-bit x86 on
   Windows (MSYS2 and MSVC) and Linux, and x86_64 on Windows (MSYS2 MINGW64 and
-  MSVC x64) and Linux. The x86 jobs are unchanged; Windows x86 matches the
+  MSVC x64) and Linux. `linux-cross-regression` also cross-builds the
+  dedicated server for Linux aarch64, armv7l, ppc64le and ppc64 with
+  `misc/meson/linux-<arch>.ini` and runs its Meson suite under qemu-user
+  (except the host-side Python source suite, which the native jobs run).
+  Nothing is packaged for those targets yet, and the FnQL-game jobs for them
+  wait for the pin in `version/fnql_game.json` to reach a commit that builds
+  them. The x86 jobs are unchanged; Windows x86 matches the
   retail cgame/UI/Awesomium ABI, while Linux i686 dedicated servers match
   retail `qagamei386.so`. The x86_64 jobs build and test the engine and the
   pinned FnQL-game modules for that target and package them without a Steam

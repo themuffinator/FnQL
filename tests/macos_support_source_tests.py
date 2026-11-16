@@ -139,7 +139,7 @@ class MacOSSupportSourceTests(unittest.TestCase):
         self.assertIn(
             "needs: [prepare, windows-msys32, windows-msvc, windows-msys64, windows-msvc-x64, "
             "source-validation, linux-x86-regression, ubuntu-x86, linux-x86_64-regression, "
-            "ubuntu-x86_64, fnql-game-windows, fnql-game-linux, fnql-game-windows-x86_64, "
+            "linux-cross-regression, ubuntu-x86_64, fnql-game-windows, fnql-game-linux, fnql-game-windows-x86_64, "
             "fnql-game-linux-x86_64]",
             workflow,
         )

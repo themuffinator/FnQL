@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 import struct
 import subprocess
 import sys
@@ -139,6 +140,13 @@ def resolve_tool() -> Path:
     )
 
 
+def exe_wrapper() -> list[str]:
+    # Meson exports the cross file's exe_wrapper (qemu-user for the Linux
+    # aarch64, armv7l, ppc64le and ppc64 cross builds) to every test.
+    value = os.environ.get("MESON_EXE_WRAPPER", "").strip()
+    return shlex.split(value) if value else []
+
+
 class AudioZoneMaterialMapTests(unittest.TestCase):
     def generate_and_dump(self, bsp_bytes: bytes, material_map: str | None = None) -> str:
         tool = resolve_tool()
@@ -147,7 +155,7 @@ class AudioZoneMaterialMapTests(unittest.TestCase):
             bsp = root / "generated.bsp"
             bsp.write_bytes(bsp_bytes)
             output = root / "generated.azb"
-            command = [str(tool), "--from-bsp", "-o", str(output)]
+            command = [*exe_wrapper(), str(tool), "--from-bsp", "-o", str(output)]
             if material_map is not None:
                 material_map_path = root / "audio-materials.txt"
                 material_map_path.write_text(material_map, encoding="utf-8")
@@ -164,7 +172,7 @@ class AudioZoneMaterialMapTests(unittest.TestCase):
             self.assertEqual(generated.returncode, 0, generated.stderr)
 
             dumped = subprocess.run(
-                [str(tool), "--dump", str(output)],
+                [*exe_wrapper(), str(tool), "--dump", str(output)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -189,6 +197,7 @@ class AudioZoneMaterialMapTests(unittest.TestCase):
 
             generated = subprocess.run(
                 [
+                    *exe_wrapper(),
                     str(tool),
                     "--from-bsp",
                     "--material-map",
@@ -206,7 +215,7 @@ class AudioZoneMaterialMapTests(unittest.TestCase):
             self.assertIn("using 1 material rule", generated.stdout)
 
             dumped = subprocess.run(
-                [str(tool), "--dump", str(output)],
+                [*exe_wrapper(), str(tool), "--dump", str(output)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,

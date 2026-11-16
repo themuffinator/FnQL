@@ -27,9 +27,10 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  * FnQL engine targets are enabled one at a time (AGENTS.md Project Plan step
  * 7). Retail Quake Live's native module and WebUI ABIs require a 32-bit x86
  * engine, so x86 remains the retail-compatible target. x86_64 is enabled on
- * Windows and Linux, where FnQL-game supplies source-built modules; it has no
- * retail Windows modules, Awesomium WebUI or Steam provider, and those paths
- * fail explicitly there. Keep this assertion in the central platform header
+ * Windows and Linux, and aarch64, armv7l (ARMv7 or later, little endian,
+ * hard-float), ppc64le and big-endian ppc64 on Linux, where FnQL-game supplies
+ * source-built modules; none of them has retail Windows modules, Awesomium
+ * WebUI or a Steam provider, and those paths fail explicitly there. Keep this assertion in the central platform header
  * so every engine translation unit independently rejects a mismatched or
  * flag-dropping compiler wrapper (an x32 ABI, for example). QVM bytecode and
  * preprocessed assembly are not host engine objects and cannot evaluate the C
@@ -43,8 +44,20 @@ Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 	&& ( defined( _WIN32 ) || defined( __linux__ ) )
 #define FNQL_TARGET_POINTER_BYTES 8
 #define FNQL_RETAIL_NATIVE_TARGET 0
+#elif defined( __linux__ ) && defined( __aarch64__ ) && !defined( __AARCH64EB__ )
+#define FNQL_TARGET_POINTER_BYTES 8
+#define FNQL_RETAIL_NATIVE_TARGET 0
+#elif defined( __linux__ ) && defined( __arm__ ) && defined( __ARM_ARCH ) && ( __ARM_ARCH >= 7 ) \
+	&& defined( __ARM_PCS_VFP ) && !defined( __ARMEB__ )
+/* armv7l: ARMv7 or later, little endian, hard-float (VFP) procedure call standard */
+#define FNQL_TARGET_POINTER_BYTES 4
+#define FNQL_RETAIL_NATIVE_TARGET 0
+#elif defined( __linux__ ) && defined( __PPC64__ )
+/* ppc64le (ELFv2) and big-endian ppc64; ARCH_STRING below names which */
+#define FNQL_TARGET_POINTER_BYTES 8
+#define FNQL_RETAIL_NATIVE_TARGET 0
 #else
-#error "FnQL supports only 32-bit x86 engine targets and x86_64 on Windows and Linux"
+#error "FnQL supports only 32-bit x86 engine targets and x86_64 on Windows and Linux, plus aarch64, armv7l (hard-float), ppc64le and ppc64 on Linux"
 #endif
 typedef char fnql_pointer_width_must_match_target[( sizeof( void * ) == FNQL_TARGET_POINTER_BYTES ) ? 1 : -1];
 #endif
@@ -164,7 +177,10 @@ typedef char fnql_pointer_width_must_match_target[( sizeof( void * ) == FNQL_TAR
 #endif // __arm64__
 
 #if defined (__PPC64__)
-#if defined (__LITTLE_ENDIAN__) || defined (__LITTLE_ENDIAN)
+/* The compiler's own byte-order macros: glibc's <endian.h> defines
+   __LITTLE_ENDIAN (as 1234) on every host, so testing whether it is defined
+   named big-endian ppc64 "ppc64le" and turned off its byte swapping. */
+#if defined (__LITTLE_ENDIAN__) || ( defined (__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__ )
 #define ARCH_STRING "ppc64le"
 #define Q3_LITTLE_ENDIAN
 #else
@@ -269,6 +285,14 @@ typedef char fnql_pointer_width_must_match_target[( sizeof( void * ) == FNQL_TAR
 #if defined( Q3_BIG_ENDIAN ) && defined( Q3_LITTLE_ENDIAN )
 
 #error "Endianness defined as both big and little"
+
+#elif defined( __BYTE_ORDER__ ) && defined( Q3_BIG_ENDIAN ) && ( __BYTE_ORDER__ != __ORDER_BIG_ENDIAN__ )
+
+#error "Q3_BIG_ENDIAN on a compiler target that is not big endian"
+
+#elif defined( __BYTE_ORDER__ ) && defined( Q3_LITTLE_ENDIAN ) && ( __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__ ) && !defined( Q3_VM )
+
+#error "Q3_LITTLE_ENDIAN on a compiler target that is not little endian"
 
 #elif defined( Q3_BIG_ENDIAN )
 

@@ -16,9 +16,12 @@ stage only the resulting provider beside FnQL. See
 [`docs/fnql/STEAM_PROVIDER.md`](docs/fnql/STEAM_PROVIDER.md).
 
 FnQL enables targets one at a time (`AGENTS.md`, Project Plan step 7). The
-supported targets are **32-bit x86** (Win32 on Windows, i686 on Linux) and
-**x86_64 on Windows and Linux**. ARM, PowerPC, macOS, the BSDs and x86_64 on
-other platforms are rejected by Meson, Make and the central platform header.
+supported targets are **32-bit x86** (Win32 on Windows, i686 on Linux),
+**x86_64 on Windows and Linux**, and the **dedicated server on Linux aarch64,
+armv7l, ppc64le and ppc64** (Meson only; see
+[Linux aarch64, armv7l, ppc64le and ppc64](#linux-aarch64-armv7l-ppc64le-and-ppc64)).
+macOS, the BSDs, Windows on ARM, x86_64 on other platforms and every other
+architecture are rejected by Meson, Make and the central platform header.
 CMake and the direct Visual Studio projects remain Win32-only.
 
 On Windows, use the **Win32/x86 client for retail Quake Live runtime tests**.
@@ -300,13 +303,39 @@ canonical executable modes after CI artifact transfer, writes a deterministic
 `.tar.gz`, and reopens it to verify the client, dedicated server, all three
 renderer modules, package sidecars, ELF i386 identity, and safe archive paths.
 
+#### Linux aarch64, armv7l, ppc64le and ppc64
+
+These targets build the dedicated server with Meson. The client is not
+enabled on them yet, so configure with `-Dbuild-client=false`. armv7l means
+ARMv7 or later, little endian and hard-float; ppc64 is big endian. On a
+native host of the target, use a native compiler and no cross file. From an
+x86_64 Debian or Ubuntu host, install the target's crossbuild compiler and
+qemu-user, then use the committed cross file. Its `exe_wrapper` runs the
+tests under qemu-user:
+
+```sh
+sudo apt-get install gcc-aarch64-linux-gnu g++-aarch64-linux-gnu qemu-user
+meson setup .tmp/meson-linux-aarch64 --cross-file misc/meson/linux-aarch64.ini \
+  -Dbuild-client=false -Dcurl=disabled -Dsdl=disabled -Dogg-vorbis=false
+meson compile -C .tmp/meson-linux-aarch64
+meson test -C .tmp/meson-linux-aarch64
+```
+
+The cross files are `misc/meson/linux-aarch64.ini` (`aarch64-linux-gnu`),
+`linux-armv7l.ini` (`arm-linux-gnueabihf`), `linux-ppc64le.ini`
+(`powerpc64le-linux-gnu`) and `linux-ppc64.ini` (`powerpc64-linux-gnu`). The
+servers are `fnql.ded.aarch64`, `fnql.ded.arm`, `fnql.ded.ppc64le` and
+`fnql.ded.ppc64`. They load FnQL-game's `fnql_qagame<arch>.so`
+(`+set vm_gameProvider fnql`), which FnQL-game builds with its own
+`meson/linux-<arch>.ini`. Make rejects these targets.
+
 ---
 
 ### Other platforms
 
-FnQL does not build, test, package, or launch macOS, ARM, PowerPC, BSD, or
-other non-x86 targets. Windows Win32/x86 and Linux i686 are the supported
-platform/ABI combinations.
+FnQL does not build, test, package, or launch macOS, BSD, Windows on ARM, or
+any architecture not listed above. Windows Win32/x86 and Linux i686 are the
+retail-compatible platform/ABI combinations.
 
 ---
 Several Makefile options are available for Linux i686 and MinGW32 builds:

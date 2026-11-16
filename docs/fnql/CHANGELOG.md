@@ -40,6 +40,11 @@ successful release, CI resets `Unreleased` for the next cycle.
 - _None yet._
 
 ### Builds and Packaging
+- Server operators can build the FnQL dedicated server for Linux on aarch64,
+  armv7l (hard-float), ppc64le and big-endian ppc64 with Meson, and host
+  FnQL-game's modules built for the same target. Players move exactly as
+  on a retail x86 server, so retail clients predict them without error.
+  There are no release packages for these targets yet.
 - FnQL now also builds for x86_64 on Windows and Linux, with the FnQL-game
   modules for that target. The x86_64 build has no retail game modules, Steam
   or WebUI (all 32-bit only), so it runs FnQL-game; play with the retail

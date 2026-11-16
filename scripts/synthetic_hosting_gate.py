@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shlex
 import shutil
 import struct
 import subprocess
@@ -55,7 +56,8 @@ DONE_MARKER = "FnQL hosting gate: commands done"
 # fnql_qagame<ARCH_STRING><ext> (docs/fnql/GAME_MODULES.md).
 MODULE_ARCH_BY_PLATFORM = {
     "windows": (("x86", "x86.dll"), ("x86_64", "x86_64.dll")),
-    "linux": (("x86", "i386.so"), ("x86_64", "x86_64.so")),
+    "linux": (("x86", "i386.so"), ("x86_64", "x86_64.so"), ("aarch64", "aarch64.so"),
+              ("arm", "arm.so"), ("ppc64le", "ppc64le.so"), ("ppc64", "ppc64.so")),
 }
 
 # IBSP layout (code/qcommon/qfiles.h).  QL's v47 keeps the 17 v46 lumps and
@@ -281,8 +283,10 @@ def required_lines(module_name: str) -> List[str]:
     return list(REQUIRED) + ["qagame : native " + module_name + " (FnQL-game "]
 
 
-def server_command(engine: Path, base: Path, home: Path, port: int, frames: int) -> List[str]:
+def server_command(engine: Path, base: Path, home: Path, port: int, frames: int,
+                   exe_wrapper: Sequence[str] = ()) -> List[str]:
     return [
+        *exe_wrapper,
         str(engine),
         "+set", "com_headless", "1",
         "+set", "fs_basepath", str(base),
@@ -321,7 +325,7 @@ def check_log(log: str, module_name: str) -> List[str]:
 
 
 def run_gate(engine: Path, module: Path, *, seconds: float, hold: float, port: int,
-             frames: int, scratch_root: Path, keep: bool) -> int:
+             frames: int, scratch_root: Path, keep: bool, exe_wrapper: Sequence[str] = ()) -> int:
     module_name = module.name
     arch = module_arch(module_name)
     scratch_root.mkdir(parents=True, exist_ok=True)
@@ -341,7 +345,7 @@ def run_gate(engine: Path, module: Path, *, seconds: float, hold: float, port: i
             startup.wShowWindow = 0  # SW_HIDE
             popen_options = {"startupinfo": startup, "creationflags": subprocess.CREATE_NO_WINDOW}
         env = dict(os.environ, FNQL_HEADLESS="1")
-        process = subprocess.Popen(server_command(engine, base, home, port, frames),
+        process = subprocess.Popen(server_command(engine, base, home, port, frames, exe_wrapper),
                                    cwd=str(engine.parent), stdin=subprocess.DEVNULL,
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                    env=env, **popen_options)
@@ -413,6 +417,9 @@ def parse_args(argv: Optional[Sequence[str]]) -> argparse.Namespace:
     run.add_argument("--scratch", type=Path, default=ROOT / ".tmp",
                      help="parent of the scratch directory (default: <repo>/.tmp)")
     run.add_argument("--keep", action="store_true", help="keep the scratch directory")
+    run.add_argument("--exe-wrapper", default="",
+                     help="command that runs a cross-built engine on this host, e.g. "
+                          "'qemu-aarch64 -L /usr/aarch64-linux-gnu' (split like a shell word list)")
     return parser.parse_args(argv)
 
 
@@ -432,7 +439,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         raise SystemExit("--seconds must be positive and --hold non-negative")
     return run_gate(args.engine.resolve(), args.module.resolve(), seconds=args.seconds,
                     hold=args.hold, port=args.port, frames=args.frames,
-                    scratch_root=args.scratch.resolve(), keep=args.keep)
+                    scratch_root=args.scratch.resolve(), keep=args.keep,
+                    exe_wrapper=shlex.split(args.exe_wrapper))
 
 
 if __name__ == "__main__":

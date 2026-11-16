@@ -59,38 +59,56 @@ endif
 cpu_family = host_machine.cpu_family()
 # Targets are enabled one at a time (AGENTS.md Project Plan step 7). 32-bit
 # x86 is the retail-compatible target on every platform; x86_64 is enabled on
-# Windows and Linux only, where FnQL-game supplies the game modules. The
-# compiler probe catches a wrapper whose real target disagrees with the
-# configured CPU family (a dropped -m32, or an x32 ABI).
-fnql_x86_target_probe = '''
-#if !defined(_M_IX86) && !defined(__i386__)
-#error FnQL requires an x86 target
+# Windows and Linux, and aarch64, armv7l (hard-float), ppc64le and ppc64 on
+# Linux, where FnQL-game supplies the game modules. The compiler probe catches
+# a wrapper whose real target disagrees with the configured CPU family (a
+# dropped -m32, an x32 ABI, a soft-float or big-endian ARM toolchain, or a
+# ppc64 compiler whose byte order differs from the configured family).
+fnql_target_probe_template = '''
+#if !(@0@)
+#error FnQL requires a @1@ target
 #endif
-typedef char fnql_pointer_width_must_be_32_bits[(sizeof(void *) == 4) ? 1 : -1];
+typedef char fnql_pointer_width_must_match[(sizeof(void *) == @2@) ? 1 : -1];
 int main(void) { return 0; }
 '''
-fnql_x86_64_target_probe = '''
-#if !defined(_M_AMD64) && !defined(__x86_64__)
-#error FnQL requires an x86_64 target
-#endif
-typedef char fnql_pointer_width_must_be_64_bits[(sizeof(void *) == 8) ? 1 : -1];
-int main(void) { return 0; }
-'''
-fnql_x86_64_systems = ['windows', 'linux']
-if cpu_family == 'x86'
-  fnql_target_supported = cc.compiles(fnql_x86_target_probe, name: '32-bit x86 target')
-elif cpu_family == 'x86_64' and fnql_x86_64_systems.contains(host_machine.system())
-  fnql_target_supported = cc.compiles(fnql_x86_64_target_probe, name: 'x86_64 target')
-else
-  fnql_target_supported = false
+# cpu_family: [systems (empty: any), predicate, pointer bytes]
+fnql_enabled_targets = {
+  'x86': [[],
+    'defined(_M_IX86) || defined(__i386__)', '4'],
+  'x86_64': [['windows', 'linux'],
+    '(defined(_M_AMD64) || defined(__x86_64__)) && !defined(_M_ARM64EC)', '8'],
+  'aarch64': [['linux'],
+    'defined(__aarch64__) && !defined(__AARCH64EB__)', '8'],
+  'arm': [['linux'],
+    'defined(__arm__) && defined(__ARM_ARCH) && __ARM_ARCH >= 7 && defined(__ARM_PCS_VFP) && !defined(__ARMEB__)', '4'],
+  'ppc64le': [['linux'],
+    'defined(__PPC64__) && defined(__LITTLE_ENDIAN__)', '8'],
+  'ppc64': [['linux'],
+    'defined(__PPC64__) && defined(__BIG_ENDIAN__)', '8'],
+}
+fnql_target_supported = false
+if fnql_enabled_targets.has_key(cpu_family)
+  fnql_target = fnql_enabled_targets[cpu_family]
+  if fnql_target[0].length() == 0 or fnql_target[0].contains(host_machine.system())
+    fnql_target_supported = cc.compiles(
+      fnql_target_probe_template.format(fnql_target[1], cpu_family, fnql_target[2]),
+      name: cpu_family + ' target')
+  endif
 endif
 if not fnql_target_supported
-  error('FnQL supports only 32-bit x86 targets and x86_64 on Windows and Linux; Meson configured host CPU family "' + cpu_family + '" on "' + host_machine.system() + '" or the compiler target probe failed. Select Win32 or x64 on Windows, or use an i686 cross file or a native x86_64 compiler on Linux.')
+  error('FnQL supports only 32-bit x86 targets and x86_64 on Windows and Linux, plus aarch64, armv7l (hard-float), ppc64le and ppc64 on Linux; Meson configured host CPU family "' + cpu_family + '" on "' + host_machine.system() + '" or the compiler target probe failed. Select Win32 or x64 on Windows, or use a native compiler or a matching cross file (misc/meson/linux-<arch>.ini) on Linux.')
 endif
 
 renderer_prefix = 'fnql'
 build_client = get_option('build-client')
 build_server = get_option('build-server')
+# The client is enabled on x86 and x86_64 only. On the Linux aarch64, armv7l,
+# ppc64le and ppc64 targets the gated artifacts are the dedicated server and
+# FnQL-game's modules (FnQL-game milestone M11); a client there has no gate
+# yet, so it is not built (AGENTS.md constraint 9).
+if build_client and not ['x86', 'x86_64'].contains(cpu_family)
+  error('The FnQL client is not enabled on ' + cpu_family + ': only the dedicated server and FnQL-game modules are gated on this target. Configure with -Dbuild-client=false.')
+endif
 renderer_default = get_option('renderer-default')
 renderer_dlopen = get_option('renderer-dlopen')
 enabled_renderers = get_option('renderers')
@@ -108,13 +126,19 @@ elif not renderer_dlopen
 endif
 
 # Output names follow the FnQ3 baseline: x86 keeps the retail-shaped unsuffixed
-# names, and x86_64 binaries carry FnQ3's suffix so both can share a directory.
+# names, and every other target carries FnQ3's suffix so builds can share a
+# directory.
 if cpu_family == 'x86'
   renderer_arch = 'x86'
   binary_suffix = ''
-else
+elif cpu_family == 'x86_64'
   renderer_arch = 'x86_64'
   binary_suffix = win32 ? '.x64' : '.x86_64'
+else
+  # aarch64, arm, ppc64le and ppc64 (Linux only): FnQ3's names, which match
+  # the engine's ARCH_STRING.
+  renderer_arch = cpu_family
+  binary_suffix = '.' + cpu_family
 endif
 
 client_binary_name = 'fnql' + binary_suffix

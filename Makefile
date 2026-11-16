@@ -143,7 +143,9 @@ endif
 override FNQL_REQUIRE_BUILD_INPUTS := $(FNQL_ENFORCE_X86)
 
 # Targets are enabled one at a time (AGENTS.md Project Plan step 7): 32-bit
-# x86 everywhere, and x86_64 on Linux and MinGW Windows only.
+# x86 everywhere, and x86_64 on Linux and MinGW Windows only. The Linux
+# aarch64, armv7l, ppc64le and ppc64 targets build with Meson (cross files in
+# misc/meson/), which carries their target probes and gates; Make rejects them.
 override FNQL_X86_64_PLATFORMS := linux mingw32 mingw64
 ifeq ($(FNQL_ENFORCE_X86),1)
   ifeq ($(strip $(ARCH)),x86)
@@ -152,7 +154,7 @@ ifeq ($(FNQL_ENFORCE_X86),1)
       $(error FnQL supports only 32-bit x86 targets and x86_64 on Windows and Linux; ARCH=x86_64 is not enabled for PLATFORM=$(PLATFORM))
     endif
   else
-    $(error FnQL supports only 32-bit x86 targets and x86_64 on Windows and Linux; set ARCH=x86 or ARCH=x86_64 and select a matching toolchain (got ARCH=$(ARCH)))
+    $(error FnQL supports only 32-bit x86 targets and x86_64 on Windows and Linux in Make builds; set ARCH=x86 or ARCH=x86_64 and select a matching toolchain, or build the Linux aarch64, armv7l, ppc64le and ppc64 targets with Meson (got ARCH=$(ARCH)))
   endif
 endif
 

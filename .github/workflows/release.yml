@@ -488,6 +488,69 @@ jobs:
       - name: Run complete Linux x86_64 regression suite
         run: meson test -C .tmp/meson-linux-x86_64-release-tests --print-errorlogs
 
+  linux-cross-regression:
+    needs: [prepare]
+    name: Run Linux ${{ matrix.arch }} Meson regressions (qemu)
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            triple: aarch64-linux-gnu
+            server: fnql.ded.aarch64
+          - arch: armv7l
+            triple: arm-linux-gnueabihf
+            server: fnql.ded.arm
+          - arch: ppc64le
+            triple: powerpc64le-linux-gnu
+            server: fnql.ded.ppc64le
+          - arch: ppc64
+            triple: powerpc64-linux-gnu
+            server: fnql.ded.ppc64
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Ensure apt mirrors resolve
+        run: printf '%s\n' "$FNQL_APT_DNS_FALLBACK" | sh -e
+
+      - name: Install the ${{ matrix.arch }} cross toolchain and qemu-user
+        run: |
+          sudo apt-get -qq -o Acquire::Retries=3 update
+          sudo apt-get install -y \
+            file \
+            gcc-${{ matrix.triple }} \
+            g++-${{ matrix.triple }} \
+            meson \
+            ninja-build \
+            python3 \
+            qemu-user
+
+      # The Linux aarch64, armv7l, ppc64le and ppc64 targets gate the dedicated
+      # server (Project Plan step 7); the client is not enabled there.
+      - name: Cross-build the ${{ matrix.arch }} dedicated server
+        run: |
+          meson setup .tmp/meson-linux-${{ matrix.arch }} \
+            --cross-file misc/meson/linux-${{ matrix.arch }}.ini \
+            --buildtype=release \
+            -Dbuild-client=false \
+            -Daudio-tests=false \
+            -Dglx-tests=false \
+            -Dcurl=disabled \
+            -Dogg-vorbis=false \
+            -Dsdl=disabled
+          meson compile -C .tmp/meson-linux-${{ matrix.arch }}
+          file .tmp/meson-linux-${{ matrix.arch }}/${{ matrix.server }}
+
+      # The cross file's exe_wrapper runs each test binary under qemu-user. The
+      # host-side Python source suite is the same on every target and runs in
+      # the native jobs, so it is left out here.
+      - name: Run the ${{ matrix.arch }} Meson suite under qemu-user
+        run: |
+          build=.tmp/meson-linux-${{ matrix.arch }}
+          tests=$(meson test -C "$build" --list | sed -e 's/^FnQL://' | grep -vx 'fnql_python_source_regressions')
+          meson test -C "$build" --print-errorlogs $tests
+
   ubuntu-x86_64:
     needs: [prepare]
     name: Build Ubuntu x86_64
@@ -802,7 +865,7 @@ jobs:
 
   push-build-validation:
     if: always()
-    needs: [prepare, windows-msys32, windows-msvc, windows-msys64, windows-msvc-x64, source-validation, linux-x86-regression, ubuntu-x86, linux-x86_64-regression, ubuntu-x86_64, fnql-game-windows, fnql-game-linux, fnql-game-windows-x86_64, fnql-game-linux-x86_64]
+    needs: [prepare, windows-msys32, windows-msvc, windows-msys64, windows-msvc-x64, source-validation, linux-x86-regression, ubuntu-x86, linux-x86_64-regression, linux-cross-regression, ubuntu-x86_64, fnql-game-windows, fnql-game-linux, fnql-game-windows-x86_64, fnql-game-linux-x86_64]
     runs-on: ubuntu-latest
     steps:
       - name: Check platform build results

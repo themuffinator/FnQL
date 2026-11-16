@@ -38,15 +38,18 @@ Every change should protect these project constraints:
    document the evidence, scope the change narrowly, and add a regression gate
    for both the corrected behavior and unaffected paths.
 9. FnQL supports the targets Project Plan step 7 has enabled, and no others:
-   32-bit x86 (Win32 on Windows, i686 on Linux) and x86_64 on Windows and
-   Linux (enabled 2026-11-11). Build, test, package, and launch only those
+   32-bit x86 (Win32 on Windows, i686 on Linux), x86_64 on Windows and
+   Linux (enabled 2026-11-11), and the dedicated server on Linux aarch64,
+   armv7l (hard-float), ppc64le and ppc64 (enabled 2026-11-16; cross-built
+   with `misc/meson/linux-<arch>.ini` and tested under qemu-user; the client
+   is not enabled there). Build, test, package, and launch only those
    artifacts, and validate each target with its own artifacts; do not use one
    target's artifacts as evidence for another, or any other architecture or
    platform as validation. Each further target is enabled only once that
    step's gates pass for it. Retail-module compatibility remains x86-only
-   regardless: on x86_64 there are no retail Windows modules, no Awesomium
-   WebUI and no Steam provider, and FnQL-game is the game (Linux x86_64 can
-   also host retail's `qagamex64.so`).
+   regardless: on x86_64 and the other non-x86 targets there are no retail
+   Windows modules, no Awesomium WebUI and no Steam provider, and FnQL-game
+   is the game (Linux x86_64 can also host retail's `qagamex64.so`).
 
 ## Reference Repositories
 
