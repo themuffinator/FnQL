@@ -138,6 +138,22 @@
         "meson: build (Steam)"
       ],
       "problemMatcher": []
+    },
+    {
+      "label": "FnQL-game: build and stage",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\.vscode\\build-fnql-game.ps1"
+      ],
+      "problemMatcher": [
+        "$gcc",
+        "$msCompile"
+      ]
     }
   ]
 }

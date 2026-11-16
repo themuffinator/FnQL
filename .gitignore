@@ -3,6 +3,7 @@ meson/build/
 output/
 .vs/
 .vscode/*
+!.vscode/build-fnql-game.ps1
 !.vscode/build-release.ps1
 !.vscode/launch-release.ps1
 !.vscode/launch.json

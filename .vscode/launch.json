@@ -42,6 +42,39 @@
       "cwd": "${workspaceFolder}\\meson\\build\\win32",
       "stopAtEntry": false,
       "console": "internalConsole"
+    },
+    {
+      "name": "GLx (Steam / FnQL-game / Win32)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\meson\\build\\win32\\fnql.exe",
+      "args": ["+set", "fs_homepath", "${workspaceFolder}\\.tmp\\fnql-game-home", "+set", "r_fullscreen", "0", "+set", "cl_renderer", "glx", "+set", "vm_cgameProvider", "fnql", "+set", "vm_uiProvider", "fnql", "+set", "vm_gameProvider", "fnql", "+set", "com_steamIntegration", "1", "+set", "cl_webuiEnable", "1"],
+      "cwd": "${workspaceFolder}\\meson\\build\\win32",
+      "preLaunchTask": "FnQL-game: build and stage",
+      "stopAtEntry": false,
+      "console": "internalConsole"
+    },
+    {
+      "name": "Vulkan (Steam / FnQL-game / Win32)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\meson\\build\\win32\\fnql.exe",
+      "args": ["+set", "fs_homepath", "${workspaceFolder}\\.tmp\\fnql-game-home", "+set", "r_fullscreen", "0", "+set", "cl_renderer", "vk", "+set", "vm_cgameProvider", "fnql", "+set", "vm_uiProvider", "fnql", "+set", "vm_gameProvider", "fnql", "+set", "com_steamIntegration", "1", "+set", "cl_webuiEnable", "1"],
+      "cwd": "${workspaceFolder}\\meson\\build\\win32",
+      "preLaunchTask": "FnQL-game: build and stage",
+      "stopAtEntry": false,
+      "console": "internalConsole"
+    },
+    {
+      "name": "Dedicated (Steam / FnQL-game / Win32)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}\\meson\\build\\win32\\fnql.ded.exe",
+      "args": ["+set", "fs_homepath", "${workspaceFolder}\\.tmp\\fnql-game-home", "+set", "vm_gameProvider", "fnql", "+set", "com_steamIntegration", "1"],
+      "cwd": "${workspaceFolder}\\meson\\build\\win32",
+      "preLaunchTask": "FnQL-game: build and stage",
+      "stopAtEntry": false,
+      "console": "internalConsole"
     }
   ]
 }
