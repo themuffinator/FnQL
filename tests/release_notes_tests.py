@@ -145,11 +145,13 @@ class ReleaseNotesBodyTests(unittest.TestCase):
 
 class ReleaseNotesRenderTests(unittest.TestCase):
     def render(self, changelog_path: Path, **kwargs: object) -> str:
+        # CI checks out a single commit, so the range must not need a parent:
+        # from == to renders the one-commit range (target^!).
         target = manual_release.git("rev-parse", "HEAD")
         return manual_release.render_release_notes(
             build_number=1,
             build_date="2026-06-21",
-            from_commit=manual_release.git("rev-parse", f"{target}~1"),
+            from_commit=target,
             to_commit=target,
             changelog=changelog_path,
             no_ai=True,
