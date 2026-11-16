@@ -619,13 +619,15 @@ class FnqlGamePackagingTests(unittest.TestCase):
                 release.overlay_fnql_game(root / "s2", game_root, "linux", "arm64")
 
     def test_required_game_packaging_covers_every_published_target(self) -> None:
-        """End to end: six engine artifacts, four game sets, --require-game."""
+        """End to end: the published engine artifacts, every game set, --require-game."""
         scratch_parent = ROOT / ".tmp"
         scratch_parent.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=scratch_parent, prefix="release-x86_64-test-") as tmp:
             root = Path(tmp)
             artifacts = root / "artifacts"
             for name, (platform, arch) in release.RELEASE_ARTIFACT_TARGETS.items():
+                if name not in release.PUBLISHED_RELEASE_ARTIFACTS:
+                    continue
                 artifact = artifacts / name
                 artifact.mkdir(parents=True)
                 if platform == "windows" and arch == "x86":
@@ -687,7 +689,8 @@ class FnqlGamePackagingTests(unittest.TestCase):
                 sorted(release.PUBLISHED_RELEASE_ARTIFACTS),
             )
             self.assertEqual(manifest["fnql_game"], {"included": True, **PIN})
-            for name, (platform, arch) in release.RELEASE_ARTIFACT_TARGETS.items():
+            for name in release.PUBLISHED_RELEASE_ARTIFACTS:
+                platform, arch = release.RELEASE_ARTIFACT_TARGETS[name]
                 with self.subTest(artifact=name):
                     entry = entries[name]
                     self.assertEqual((entry["platform"], entry["arch"]), (platform, arch))
@@ -701,16 +704,20 @@ class FnqlGamePackagingTests(unittest.TestCase):
                     self.assertEqual(
                         "fnql_steam.dll" in names, platform == "windows" and arch == "x86"
                     )
-            self.assertEqual(len({entry["archive"] for entry in manifest["archives"]}), 6)
+            self.assertEqual(
+                len({entry["archive"] for entry in manifest["archives"]}),
+                len(release.PUBLISHED_RELEASE_ARTIFACTS),
+            )
             checksums = (root / "out" / "SHA256SUMS.txt").read_text(encoding="utf-8")
-            self.assertEqual(len(checksums.splitlines()), 6)
+            self.assertEqual(len(checksums.splitlines()), len(release.PUBLISHED_RELEASE_ARTIFACTS))
 
-            # --require-game: a missing x86_64 game set fails the whole release.
-            shutil.rmtree(game_root / "windows-x86_64")
+            # --require-game: a missing game set for a published target fails
+            # the whole release.
+            shutil.rmtree(game_root / "windows-x86")
             with unittest.mock.patch.object(release.subprocess, "run"), unittest.mock.patch.object(
                 release.fnql_game, "load_pin", return_value=PIN
             ), unittest.mock.patch("builtins.print"):
-                with self.assertRaisesRegex(FileNotFoundError, "windows x86_64"):
+                with self.assertRaisesRegex(FileNotFoundError, "windows x86"):
                     release.build_archives(args)
 
     def test_public_and_tagged_releases_require_the_game(self) -> None:
@@ -785,10 +792,19 @@ class FnqlGameWorkflowTests(unittest.TestCase):
         for job in game_jobs:
             self.assertIn(job, validation_needs)
         publish = jobs["publish"]
-        for _platform, _arch, upload in game_jobs.values():
-            self.assertIn(f"name: {upload}\n", publish)
-        for directory in ("windows-x86", "linux-x86", "windows-x86_64", "linux-x86_64"):
+        # x86_64 game sets are built and gated, but its packages are withheld
+        # from releases until that target is fully supported.
+        for _platform, arch, upload in game_jobs.values():
+            if arch == "x86_64":
+                self.assertNotIn(f"name: {upload}\n", publish)
+            else:
+                self.assertIn(f"name: {upload}\n", publish)
+        for directory in ("windows-x86", "linux-x86"):
             self.assertIn(f"path: game-artifacts/{directory}\n", publish)
+        for directory in ("windows-x86_64", "linux-x86_64"):
+            self.assertNotIn(f"path: game-artifacts/{directory}", publish)
+        for artifact in release.WITHHELD_RELEASE_ARTIFACTS:
+            self.assertNotIn(f"path: artifacts/{artifact}", publish)
         self.assertIn("--game-root game-artifacts --require-game", publish)
 
     def test_licensing_notice_states_both_licenses_and_the_open_question(self) -> None:

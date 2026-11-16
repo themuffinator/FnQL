@@ -956,35 +956,9 @@ jobs:
           name: fnql-game-linux-x86
           path: game-artifacts/linux-x86
 
-      - name: Download MinGW x86_64 artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: windows-mingw-x86_64
-          path: artifacts/windows-mingw-x86_64
-
-      - name: Download MSVC x86_64 artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: windows-msvc-x86_64
-          path: artifacts/windows-msvc-x86_64
-
-      - name: Download Linux x86_64 artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: linux-x86_64
-          path: artifacts/linux-x86_64
-
-      - name: Download FnQL-game Windows x86_64 artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: fnql-game-windows-x86_64
-          path: game-artifacts/windows-x86_64
-
-      - name: Download FnQL-game Linux x86_64 artifact
-        uses: actions/download-artifact@v8
-        with:
-          name: fnql-game-linux-x86_64
-          path: game-artifacts/linux-x86_64
+      # x86_64 builds and tests above, but its packages are withheld from
+      # releases (scripts/release.py WITHHELD_RELEASE_ARTIFACTS) until it has
+      # the Steam provider, the WebUI and retail modules.
 
       - name: Resolve release version metadata
         run: |

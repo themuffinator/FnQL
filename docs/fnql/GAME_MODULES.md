@@ -327,8 +327,10 @@ out-of-band `print` packets.
 FnQL releases bundle the FnQL-game modules built from the commit pinned in
 `version/fnql_game.json`: `baseq3/fnql_qagamex86.dll`, `fnql_cgamex86.dll`
 and `fnql_uix86.dll` in the Windows x86 packages, the `i386.so` set in the
-Linux i686 package, and the `x86_64.dll` / `x86_64.so` sets in the x86_64
-packages. On x86_64 there are no retail Windows modules, so FnQL-game is the
+Linux i686 package. CI also stages the `x86_64.dll` / `x86_64.so` sets and
+validates x86_64 packages, but releases withhold them until that target has
+the Steam provider and the WebUI (AGENTS.md constraint 10). On x86_64 there
+are no retail Windows modules, so FnQL-game is the
 game there (a Linux x86_64 server can also fall back to retail's
 `qagamex64.so`). Extracting a package into the Quake Live folder puts them in
 `<Quake Live>/baseq3`, which is on the search path, so the default `auto`

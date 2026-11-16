@@ -29,7 +29,10 @@ successful release, CI resets `Unreleased` for the next cycle.
 - _None yet._
 
 ### Builds and Packaging
-- _None yet._
+- Releases no longer include x86_64 packages. They had no Steam integration,
+  WebUI or retail game modules, so they return once that support exists;
+  x86_64 still builds from source. The x86_64 packages briefly published
+  with 0.1.0.158 have been withdrawn.
 
 ### Fixes
 - _None yet._

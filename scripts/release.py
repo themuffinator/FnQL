@@ -131,7 +131,18 @@ MACOS_REQUIRED_UNSIGNED_APP_ENTRIES = (
 MACOS_SIGNATURE_ENTRY = f"{MACOS_APP_ROOT}/_CodeSignature/CodeResources"
 MACOS_REQUIRED_APP_ENTRIES = (*MACOS_REQUIRED_UNSIGNED_APP_ENTRIES, MACOS_SIGNATURE_ENTRY)
 MACOS_PREBUILT_PAYLOAD_NAME = "macos-payload.zip"
-PUBLISHED_RELEASE_ARTIFACTS = frozenset(RELEASE_ARTIFACT_TARGETS)
+# Releases publish only targets with full retail support: the Steam provider,
+# the Awesomium WebUI and the retail modules (AGENTS.md constraint 9).  x86_64
+# has none of the three, so its packages stay buildable and validated here
+# (RELEASE_ARTIFACT_TARGETS) but are withheld from releases until it does.
+# Linux x86 still lacks the Steam provider and the WebUI; it keeps its package
+# while that gap is closed (decided 2026-11-16).
+WITHHELD_RELEASE_ARTIFACTS = frozenset({
+    "linux-x86_64",
+    "windows-mingw-x86_64",
+    "windows-msvc-x86_64",
+})
+PUBLISHED_RELEASE_ARTIFACTS = frozenset(RELEASE_ARTIFACT_TARGETS) - WITHHELD_RELEASE_ARTIFACTS
 # FnQL-game modules are built in CI from the commit pinned in
 # version/fnql_game.json and staged per platform and architecture by
 # scripts/fnql_game.py; the packager lays each (platform, arch) set over every
@@ -1450,10 +1461,18 @@ def release_artifact_dirs(artifact_root: Path) -> list[Path]:
     artifact_names = {path.name for path in artifact_dirs}
     if artifact_names != PUBLISHED_RELEASE_ARTIFACTS:
         missing = sorted(PUBLISHED_RELEASE_ARTIFACTS - artifact_names)
-        unsupported = sorted(artifact_names - PUBLISHED_RELEASE_ARTIFACTS)
+        withheld = sorted(artifact_names & WITHHELD_RELEASE_ARTIFACTS)
+        unsupported = sorted(
+            artifact_names - PUBLISHED_RELEASE_ARTIFACTS - WITHHELD_RELEASE_ARTIFACTS
+        )
         details = []
         if missing:
             details.append("missing: " + ", ".join(missing))
+        if withheld:
+            details.append(
+                "withheld until fully supported (Steam provider, WebUI, retail modules): "
+                + ", ".join(withheld)
+            )
         if unsupported:
             details.append("unsupported: " + ", ".join(unsupported))
         raise ValueError(

@@ -50,6 +50,15 @@ Every change should protect these project constraints:
    regardless: on x86_64 and the other non-x86 targets there are no retail
    Windows modules, no Awesomium WebUI and no Steam provider, and FnQL-game
    is the game (Linux x86_64 can also host retail's `qagamex64.so`).
+10. Releases ship a target only when it is fully supported: the Steam
+   provider, the WebUI and the retail-equivalent game path all work there,
+   as they do on Windows x86. A target that is enabled but not fully
+   supported keeps building and testing in CI so it does not rot, but its
+   packages are withheld (`WITHHELD_RELEASE_ARTIFACTS` in
+   `scripts/release.py`); x86_64 is withheld for this reason (decided
+   2026-11-16). Close a target's support gap rather than ship around it.
+   Linux x86 predates this rule and still ships while its Steam and WebUI
+   gap is closed.
 
 ## Reference Repositories
 

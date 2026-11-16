@@ -1438,10 +1438,17 @@ class X86_64ReleasePackagingTests(unittest.TestCase):
                 "linux-x86",
                 "windows-mingw-x86",
                 "windows-msvc-x86",
-                "linux-x86_64",
-                "windows-mingw-x86_64",
-                "windows-msvc-x86_64",
             },
+        )
+        # x86_64 lacks the Steam provider, the WebUI and retail modules, so its
+        # packages are still validated but withheld from releases.
+        self.assertEqual(
+            release.WITHHELD_RELEASE_ARTIFACTS,
+            {"linux-x86_64", "windows-mingw-x86_64", "windows-msvc-x86_64"},
+        )
+        self.assertEqual(
+            release.PUBLISHED_RELEASE_ARTIFACTS | release.WITHHELD_RELEASE_ARTIFACTS,
+            set(release.RELEASE_ARTIFACT_TARGETS),
         )
         meta = {"archive_prefix": "fnql-0.1.0.7-20261111-aaaaaaaa"}
         archive_names = set()
@@ -1471,19 +1478,25 @@ class X86_64ReleasePackagingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported release architecture"):
             release.validate_release_binary_stream("fnql", io.BytesIO(make_elf_i386()), arch="arm64")
 
-    def test_artifact_root_requires_the_x86_64_set_too(self) -> None:
+    def test_artifact_root_withholds_the_x86_64_set(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             for name in ("linux-x86", "windows-mingw-x86", "windows-msvc-x86"):
                 (root / name).mkdir()
-            with self.assertRaisesRegex(
-                ValueError,
-                "missing: linux-x86_64, windows-mingw-x86_64, windows-msvc-x86_64",
-            ):
-                release.release_artifact_dirs(root)
+            self.assertEqual(
+                [path.name for path in release.release_artifact_dirs(root)],
+                ["linux-x86", "windows-mingw-x86", "windows-msvc-x86"],
+            )
 
             for name in ("linux-x86_64", "windows-mingw-x86_64", "windows-msvc-x86_64"):
                 (root / name).mkdir()
+            with self.assertRaisesRegex(
+                ValueError,
+                "withheld until fully supported .*: "
+                "linux-x86_64, windows-mingw-x86_64, windows-msvc-x86_64",
+            ):
+                release.release_artifact_dirs(root)
+
             (root / "linux-arm64").mkdir()
             with self.assertRaisesRegex(ValueError, "unsupported: linux-arm64"):
                 release.release_artifact_dirs(root)
@@ -1773,7 +1786,7 @@ class X86_64ReleasePackagingTests(unittest.TestCase):
                 self.assertEqual(proof_platform, f"{platform}-x86")
                 self.assertIn(variant, release.RELEASE_PROOF_RUNTIME_MEMBERS)
         self.assertEqual(
-            set(release.RELEASE_PROOF_RUNTIME_MEMBERS), set(release.PUBLISHED_RELEASE_ARTIFACTS)
+            set(release.RELEASE_PROOF_RUNTIME_MEMBERS), set(release.RELEASE_ARTIFACT_TARGETS)
         )
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
