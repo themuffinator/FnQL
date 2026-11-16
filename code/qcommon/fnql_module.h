@@ -37,6 +37,11 @@ or (at your option) any later version.
 // The module negotiates FnQL extensions with capable peers and keeps them
 // away from retail peers.
 #define FNQL_MODULE_CAP_EXTENSIONS		0x00000002u
+// The module exchanges Quake Live's bot_entitystate_t (0xd0 bytes) and
+// aas_entityinfo_t (0xec bytes) through the botlib imports, as the retail
+// qagame does.  Without it the engine keeps the Quake III sizes for that
+// module, so FnQL-game builds from before the extension keep working.
+#define FNQL_MODULE_CAP_QL_BOT_ENTITIES	0x00000004u
 
 typedef struct fnqlModuleInfo_s {
 	int				size;			// sizeof( fnqlModuleInfo_t ) as built by the module
