@@ -35,38 +35,120 @@ class GameModuleProviderSourceTests(unittest.TestCase):
 
         self.assertRegex(
             vm,
-            r'vm_gameProvider = Cvar_Get\( "vm_gameProvider", "retail", '
+            r'vm_provider\[ VM_GAME \] = Cvar_Get\( "vm_gameProvider", "retail", '
             r"CVAR_ARCHIVE \| CVAR_PROTECTED \);",
         )
 
-    def test_only_qagame_has_a_provider_choice(self) -> None:
+    def test_client_provider_cvars_are_protected_and_retail_on_win32_x86(self) -> None:
         vm = read_repo_file("code/qcommon/vm.c")
-        body = function_body(vm, r"static vmProvider_t VM_RequestedProvider\( vmIndex_t index \)")
+        qcommon = read_repo_file("code/qcommon/qcommon.h")
 
-        self.assertIn("if ( index != VM_GAME || !vm_gameProvider ) {", body)
-        self.assertIn('if ( !Q_stricmp( value, "fnql" ) ) {', body)
-        self.assertIn("return VM_PROVIDER_FNQL;", body)
-        # Anything else, including typos, keeps the historical retail path.
-        self.assertTrue(body.rstrip().endswith("return VM_PROVIDER_RETAIL;"))
+        for slot, name in (("VM_CGAME", "vm_cgameProvider"), ("VM_UI", "vm_uiProvider")):
+            self.assertRegex(
+                vm,
+                rf'vm_provider\[ {slot} \] = Cvar_Get\( "{name}", VM_CLIENT_PROVIDER_DEFAULT,\s*'
+                r"CVAR_ARCHIVE \| CVAR_PROTECTED \);",
+            )
+        # retail client modules exist only for Win32 x86, so only there is the
+        # default the retail module
+        default = re.search(
+            r"#if id386 && defined\( _WIN32 \)\s*#define\tVM_CLIENT_PROVIDER_DEFAULT\t\"retail\"\s*"
+            r"#else\s*#define\tVM_CLIENT_PROVIDER_DEFAULT\t\"fnql\"\s*#endif",
+            qcommon,
+        )
+        self.assertIsNotNone(default)
+        # dedicated servers have no client provider cvars
+        init = function_body(vm, r"void VM_Init\( void \)")
+        self.assertLess(init.index("#ifndef DEDICATED\n\tvm_provider[ VM_CGAME ]"), init.index("vm_provider[ VM_UI ]"))
+
+    def test_provider_choice_parses_every_slot_and_warns_on_typos(self) -> None:
+        vm = read_repo_file("code/qcommon/vm.c")
+        policy = read_repo_file("code/qcommon/module_provider_policy.h")
+        body = function_body(vm, r"static vmProviderChoice_t VM_RequestedProvider\( vmIndex_t index \)")
+
+        self.assertIn("if ( (unsigned)index >= VM_COUNT || !vm_provider[ index ] ) {", body)
+        self.assertIn("VM_ParseProviderChoice( vm_provider[ index ]->string, &recognized )", body)
+        self.assertIn("if ( !recognized ) {", body)
+        # unknown values keep the historical retail path; auto needs the claim
+        self.assertIn("return VM_PROVIDER_CHOICE_RETAIL;\n}", policy)
+        self.assertIn("return ( capabilities & FNQL_MODULE_CAP_RETAIL_WIRE ) ? 1 : 0;", policy)
 
     def test_fnql_provider_tries_prefixed_module_then_falls_back_to_retail(self) -> None:
         vm = read_repo_file("code/qcommon/vm.c")
         body = function_body(vm, r"vm_t \*VM_CreateNative\(")
+        provider = function_body(vm, r"static qboolean VM_LoadProviderModule\(")
 
-        fnql_attempt = body.index("VM_RequestedProvider( index ) == VM_PROVIDER_FNQL")
-        prefixed = body.index('FNQL_GAME_MODULE_PREFIX "%s", name')
-        fnql_load = body.index("VM_LoadNativeModule( vm, fnqlModuleName, qfalse, qtrue )")
-        retail_load = body.index(
-            "VM_LoadNativeModule( vm, name, interpret == VMI_PINNED_NATIVE ? qtrue : qfalse, qfalse )"
-        )
+        fnql_attempt = body.index("if ( VM_LoadProviderModule( vm, choice, interpret ) ) {")
+        retail_load = body.index("VM_LoadNativeModule( vm, name,")
         qvm_fallback = body.index('Com_Printf( "Failed to load dll, looking for qvm.\\n" );')
 
-        self.assertLess(fnql_attempt, prefixed)
-        self.assertLess(prefixed, fnql_load)
-        self.assertLess(fnql_load, retail_load)
+        self.assertLess(fnql_attempt, retail_load)
         self.assertLess(retail_load, qvm_fallback)
-        # Pinned (pure-restart) loads never consult the provider.
-        self.assertIn("interpret == VMI_NATIVE && VM_RequestedProvider( index )", body)
+        self.assertIn('FNQL_GAME_MODULE_PREFIX "%s", vm->name', provider)
+        self.assertIn(
+            "VM_LoadNativeModule( vm, fnqlModuleName, VM_NATIVE_SOURCE_SEARCH, 0, choice )", provider
+        )
+        # Pinned (pure-restart) loads of qagame never consult the provider.
+        self.assertIn(
+            "( interpret == VMI_NATIVE || index == VM_CGAME || index == VM_UI )", body
+        )
+
+    def test_pure_server_client_module_comes_only_from_an_accepted_pak(self) -> None:
+        vm = read_repo_file("code/qcommon/vm.c")
+        provider = function_body(vm, r"static qboolean VM_LoadProviderModule\(")
+        open_native = function_body(vm, r"static void \*VM_OpenNativeModule\(")
+
+        pak = provider.index("if ( !FS_PurePakForFile( fnqlFile, &pakChecksum ) ) {")
+        accepted = provider.index("if ( !VM_ChecksumListContains( vmPureClientModulePaks, pakChecksum ) ) {")
+        load = provider.index(
+            "VM_LoadNativeModule( vm, fnqlModuleName, VM_NATIVE_SOURCE_PURE_PAK, pakChecksum, choice )"
+        )
+        self.assertLess(pak, accepted)
+        self.assertLess(accepted, load)
+        # the accepted pak's own bytes, never the OS loader's search
+        pure_branch = open_native[open_native.index("if ( source == VM_NATIVE_SOURCE_PURE_PAK ) {"):]
+        pure_branch = pure_branch[: pure_branch.index("}")]
+        self.assertIn("return VM_LoadDllFromPakCache( index, filename, qtrue, pakChecksum );", pure_branch)
+        self.assertNotIn("FS_LoadLibrary", pure_branch)
+        # only retail-named modules are pinned
+        cache = function_body(vm, r"static void \*VM_LoadDllFromPakCache\(")
+        self.assertIn("Q_stricmpn( filename, FNQL_GAME_MODULE_PREFIX", cache)
+
+    def test_client_reports_the_pak_it_ran_and_never_the_retail_one_for_fnql(self) -> None:
+        cl_main = read_repo_file("code/client/cl_main.cpp")
+        cl_parse = read_repo_file("code/client/cl_parse.cpp")
+        send = function_body(cl_main, r"static void CL_SendPureChecksums\( void \)")
+        systeminfo = function_body(cl_parse, r"void CL_SystemInfoChanged\( qboolean onlyGame \)")
+
+        fnql = send.index("if ( VM_NativeModulePureChecksum( cgvm, &fnqlCgame, &binChecksum ) ) {")
+        refuse = send.index("} else if ( fnqlCgame ) {")
+        retail = send.index("} else if ( !FS_FileIsInPAK( QL_NATIVE_CGAME_DLL, &binChecksum, nullptr ) ) {")
+        self.assertLess(fnql, refuse)
+        self.assertLess(refuse, retail)
+        # the accept list comes from this gamestate's systeminfo only
+        self.assertIn('Info_ValueForKey( systemInfo, "sv_fnqlClientPaks" )', systeminfo)
+        self.assertIn('if ( !Q_stricmp( key.data(), "sv_fnqlClientPaks" ) ) {', systeminfo)
+        self.assertIn('VM_SetPureClientModulePaks( "" );', read_repo_file("code/client/cl_main.cpp"))
+
+    def test_server_accepts_only_published_client_packages(self) -> None:
+        sv_init = read_repo_file("code/server/sv_init.cpp")
+        sv_client = read_repo_file("code/server/sv_client.cpp")
+        publish = function_body(sv_init, r"void SV_PublishFnQLClientPaks\( void \)")
+        verify = function_body(sv_client, r"static void SV_VerifyPaks_f\( client_t \*cl \)")
+
+        self.assertIn("if ( sv.pure != 0 && sv_fnqlClientModules && sv_fnqlClientModules->integer ) {", publish)
+        self.assertIn("FS_PureChecksumsForFile( FNQL_GAME_CGAME_MODULE_FILE,", publish)
+        self.assertIn('Cvar_Set( "sv_fnqlClientPaks", list.data() );', publish)
+        self.assertIn('Cvar_Get( "sv_fnqlClientPaks", "", CVAR_SYSTEMINFO | CVAR_ROM );', sv_init)
+        self.assertIn("!( retailBinKnown && clientBin == nBinChkSum )", verify)
+        self.assertIn("!SV_AcceptsFnQLClientPak( clientBin )", verify)
+
+    def test_fnql_game_client_modules_are_never_references(self) -> None:
+        files = read_repo_file("code/qcommon/files.c")
+        general_ref = function_body(files, r"static qboolean FS_GeneralRef\( const char \*filename \)")
+
+        self.assertIn("!Q_stricmp( filename, FNQL_GAME_CGAME_MODULE_FILE )", general_ref)
+        self.assertIn("!Q_stricmp( filename, FNQL_GAME_UI_MODULE_FILE )", general_ref)
 
     def test_provider_selected_module_must_identify_itself(self) -> None:
         vm = read_repo_file("code/qcommon/vm.c")

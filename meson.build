@@ -1209,6 +1209,13 @@ cvar_ui_policy_tests = executable('fnql_cvar_ui_policy_tests',
 )
 test('fnql_cvar_ui_policy', cvar_ui_policy_tests)
 
+module_provider_policy_tests = executable('fnql_module_provider_policy_tests',
+  'tests/module_provider_policy_tests.c',
+  include_directories: include_directories('code/qcommon'),
+  c_args: common_c_args,
+)
+test('fnql_module_provider_policy', module_provider_policy_tests)
+
 png_loader_tests = executable('fnql_png_loader_tests',
   [
     'tests/png_loader_tests.c',

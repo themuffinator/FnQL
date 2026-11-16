@@ -75,6 +75,10 @@ typedef struct {
 	int				serverId;			// changes each server start
 	int				restartedServerId;	// changes each map restart
 	int				checksumFeed;		// the feed key that we use to compute the pure checksum strings
+	// pure checksums of the loaded FnQL-game client packages this pure
+	// server accepts as a client's cgame (published as sv_fnqlClientPaks)
+	int				fnqlClientPakChecksums[8];
+	int				numFnqlClientPaks;
 	int				snapshotCounter;	// incremented for each snapshot built
 	int				timeResidual;		// <= 1000 / sv_frame->value
 	char			*configstrings[MAX_CONFIGSTRINGS];
@@ -215,6 +219,7 @@ typedef struct client_s {
 	int				rate;				// bytes / second, 0 - unlimited
 	int				snapshotMsec;		// requests a snapshot every snapshotMsec unless rate choked
 	qboolean		pureAuthentic;
+	qboolean		fnqlClientPackage;	// its pure cgame checksum named an accepted FnQL-game client package
 	qboolean		gotCP;				// TTimo - additional flag to distinguish between a bad pure checksum, and no cp command at all
 	qboolean		rageQuit;			// retail qagame import 192: announce the coming drop as a ragequit
 	netchan_t		netchan;
@@ -323,6 +328,7 @@ extern	cvar_t	*sv_killserver;
 extern	cvar_t	*sv_mapname;
 extern	cvar_t	*sv_mapChecksum;
 extern	cvar_t	*sv_referencedPakNames;
+extern	cvar_t	*sv_fnqlClientModules;
 extern	cvar_t	*sv_serverid;
 extern	cvar_t	*sv_minRate;
 extern	cvar_t	*sv_maxRate;
@@ -523,6 +529,8 @@ const char	*SV_GetServerStatsPolicyLabel( void );
 void		SV_RefreshPlatformServiceCvars( void );
 void		SV_RegisterSteamEventSink( void );
 void		SV_PublishWorkshopReferences( void );
+void		SV_PublishFnQLClientPaks( void );
+qboolean	SV_AcceptsFnQLClientPak( int pureChecksum );
 void		SV_SteamGameServerStart( const char *mapName );
 int			SV_ClientMessageLimit( const client_t *client );
 qboolean	SV_SinglePlayerIgnoresRemote( void );

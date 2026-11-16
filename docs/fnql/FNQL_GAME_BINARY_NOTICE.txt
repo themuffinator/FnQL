@@ -27,5 +27,6 @@ docs/fnql-game/LICENSING.md explains the details. This notice is not legal
 advice.
 
 The modules contain no Quake Live or Quake III assets, binaries or data.
-FnQL loads the FnQL-game qagame only when vm_gameProvider is set to fnql and
-otherwise uses the retail modules from the user's legitimate Steam install.
+FnQL loads an FnQL-game module only when vm_gameProvider, vm_cgameProvider or
+vm_uiProvider asks for it (fnql or auto) and otherwise uses the retail modules
+from the user's legitimate Steam install.

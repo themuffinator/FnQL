@@ -42,6 +42,7 @@ and one exported function: Perform
 #endif
 #include "vm_header_bounds.h"
 #include "fnql_module.h"
+#include "module_provider_policy.h"
 #include "../game/g_public.h"
 #include "../ui/ui_public.h"
 #include "../renderercommon/tr_types.h"
@@ -248,14 +249,17 @@ static const char *vmName[ VM_COUNT ] = {
 	"ui"
 };
 
-// Who supplies a native module: the retail-named module the filesystem offers
-// (historical behavior), or the FnQL-game companion module.
-typedef enum {
-	VM_PROVIDER_RETAIL,
-	VM_PROVIDER_FNQL
-} vmProvider_t;
+// Who supplies each native module (vm_gameProvider, vm_cgameProvider,
+// vm_uiProvider): the retail-named module the filesystem offers (historical
+// behavior), or the FnQL-game companion module.  module_provider_policy.h
+// holds the choice rules.
+static cvar_t *vm_provider[ VM_COUNT ];
 
-static cvar_t *vm_gameProvider;
+// The pure checksums of the paks from which the current pure server accepts
+// FnQL-game client modules (its sv_fnqlClientPaks systeminfo value).  The
+// client sets it for each gamestate and clears it on disconnect.  Empty: the
+// server accepts none, so a pure server gets the retail cgame and ui.
+static char vmPureClientModulePaks[ MAX_STRING_CHARS ];
 
 static void VM_VmInfo_f( void );
 static void VM_VmProfile_f( void );
@@ -415,13 +419,36 @@ void VM_Init( void ) {
 	Cvar_Get( "vm_cgame", "0", CVAR_ARCHIVE | CVAR_PROTECTED );	// Quake Live ships native cgame by default.
 #endif
 	Cvar_Get( "vm_game", "0", CVAR_ARCHIVE | CVAR_PROTECTED );
-	vm_gameProvider = Cvar_Get( "vm_gameProvider", "retail", CVAR_ARCHIVE | CVAR_PROTECTED );
-	Cvar_SetDescription( vm_gameProvider,
+	vm_provider[ VM_GAME ] = Cvar_Get( "vm_gameProvider", "retail", CVAR_ARCHIVE | CVAR_PROTECTED );
+	Cvar_SetDescription( vm_provider[ VM_GAME ],
 		"Who supplies the native server game module:\n"
 		" retail - qagame as the filesystem offers it (default)\n"
 		" fnql   - the FnQL-game companion module (" FNQL_GAME_SERVER_MODULE_FILE "), "
 		"falling back to retail when it is missing or invalid\n"
+		" auto   - the FnQL-game module only if it declares retail wire parity, "
+		"otherwise retail\n"
 		"Takes effect on the next map load." );
+#ifndef DEDICATED
+	vm_provider[ VM_CGAME ] = Cvar_Get( "vm_cgameProvider", VM_CLIENT_PROVIDER_DEFAULT,
+		CVAR_ARCHIVE | CVAR_PROTECTED );
+	Cvar_SetDescription( vm_provider[ VM_CGAME ],
+		"Who supplies the native client game module:\n"
+		" retail - cgame as the filesystem offers it\n"
+		" fnql   - the FnQL-game module (" FNQL_GAME_CGAME_MODULE_FILE ")\n"
+		" auto   - the FnQL-game module only if it declares retail wire parity\n"
+		"A missing or invalid module falls back to retail. On a pure server the "
+		"FnQL-game module is used only when the server accepts its package "
+		"(sv_fnqlClientPaks). Takes effect when the cgame next loads." );
+	vm_provider[ VM_UI ] = Cvar_Get( "vm_uiProvider", VM_CLIENT_PROVIDER_DEFAULT,
+		CVAR_ARCHIVE | CVAR_PROTECTED );
+	Cvar_SetDescription( vm_provider[ VM_UI ],
+		"Who supplies the native user interface module:\n"
+		" retail - ui as the filesystem offers it\n"
+		" fnql   - the FnQL-game module (" FNQL_GAME_UI_MODULE_FILE ")\n"
+		" auto   - the FnQL-game module only if it declares retail wire parity\n"
+		"Same fallback and pure-server rules as vm_cgameProvider. "
+		"Takes effect when the ui next loads." );
+#endif
 
 	Cmd_AddCommand( "vmprofile", VM_VmProfile_f );
 	Cmd_AddCommand( "vminfo", VM_VmInfo_f );
@@ -2074,14 +2101,25 @@ static vmDllEntryAbi_t VM_SelectDllEntryAbi( dllEntry_t dllEntry, vmMainFunc_t e
 	return VM_DLL_ENTRY_INVALID;
 }
 
-static void *VM_LoadDllFromPakCache( vmIndex_t index, const char *filename ) {
+// Where a native module's bytes come from.
+typedef enum {
+	VM_NATIVE_SOURCE_SEARCH,	// the filesystem search path, then the OS loader
+	VM_NATIVE_SOURCE_PINNED,	// the image pinned before a pure server's policy applied
+	VM_NATIVE_SOURCE_PURE_PAK	// one pak a pure server accepted, by pure checksum
+} vmNativeSource_t;
+
+static void *VM_LoadDllFromPakCache( vmIndex_t index, const char *filename,
+	qboolean purePak, int pakChecksum ) {
 	void	*buffer;
 	int		length;
 	char	cachePath[MAX_OSPATH * 3 + 1];
 	void	*libHandle;
 
 	buffer = NULL;
-	length = FS_ReadFile( filename, &buffer );
+	// under a pure server an FnQL-game client module is read from the exact
+	// pak the server accepted, never from a loose file earlier in the path
+	length = purePak ? FS_ReadFileInPurePak( filename, pakChecksum, &buffer )
+		: FS_ReadFile( filename, &buffer );
 	if ( length <= 0 || !buffer ) {
 		if ( buffer ) {
 			FS_FreeFile( buffer );
@@ -2100,7 +2138,11 @@ static void *VM_LoadDllFromPakCache( vmIndex_t index, const char *filename ) {
 
 	libHandle = Sys_LoadLibrary( cachePath );
 	if ( libHandle ) {
-		VM_PinNativeModule( index, filename, buffer, length );
+		// only retail-named modules are pinned: a pure server reloads the
+		// retail image pinned here, and decides FnQL-game modules afresh
+		if ( Q_stricmpn( filename, FNQL_GAME_MODULE_PREFIX, (int)strlen( FNQL_GAME_MODULE_PREFIX ) ) ) {
+			VM_PinNativeModule( index, filename, buffer, length );
+		}
 		Q_strncpyz( vmNativeCacheFiles[index], cachePath, sizeof( vmNativeCacheFiles[index] ) );
 		Com_Printf( "VM_LoadDll: loaded native module cache '%s'\n", cachePath );
 	} else {
@@ -2140,16 +2182,20 @@ static void *VM_LoadPinnedDll( vmIndex_t index, const char *filename ) {
 }
 
 static void *VM_OpenNativeModule( vmIndex_t index, const char *filename,
-	qboolean pinnedOnly ) {
+	vmNativeSource_t source, int pakChecksum ) {
 	void *libHandle;
 
-	if ( pinnedOnly ) {
+	if ( source == VM_NATIVE_SOURCE_PINNED ) {
 		return VM_LoadPinnedDll( index, filename );
+	}
+	if ( source == VM_NATIVE_SOURCE_PURE_PAK ) {
+		// no OS-loader fallback: the bytes must be the accepted pak's
+		return VM_LoadDllFromPakCache( index, filename, qtrue, pakChecksum );
 	}
 
 	// Materialize the virtual-filesystem selection first so the bytes executed
 	// now are exactly the bytes a later pure restart can pin.
-	libHandle = VM_LoadDllFromPakCache( index, filename );
+	libHandle = VM_LoadDllFromPakCache( index, filename, qfalse, 0 );
 	if ( !libHandle ) {
 		// Preserve development/system layouts whose library is visible to the OS
 		// loader but intentionally not readable as a virtual file.
@@ -2174,7 +2220,7 @@ static qboolean VM_AssignDllFunction( void *destination, size_t destinationSize,
 
 static void * QDECL VM_LoadDll( vmIndex_t index, const char *name,
 		vmMainFunc_t *entryPoint, dllSyscall_t systemcalls, void **dllExports,
-		void *dllImports, int *dllApiVersion, qboolean pinnedOnly ) {
+		void *dllImports, int *dllApiVersion, vmNativeSource_t source, int pakChecksum ) {
 
 	char		filename[ MAX_QPATH ];
 	void		*libHandle;
@@ -2185,7 +2231,7 @@ static void * QDECL VM_LoadDll( vmIndex_t index, const char *name,
 	void		*vmMainSymbol;
 
 	Com_sprintf( filename, sizeof( filename ), "%s" ARCH_STRING DLL_EXT, name );
-	libHandle = VM_OpenNativeModule( index, filename, pinnedOnly );
+	libHandle = VM_OpenNativeModule( index, filename, source, pakChecksum );
 
 #if defined( __linux__ ) && idx64
 	/* Retail bin.pk3 names its 64-bit Linux dedicated module qagamex64.so,
@@ -2196,7 +2242,7 @@ static void * QDECL VM_LoadDll( vmIndex_t index, const char *name,
 	 * that does not exist. */
 	if ( !libHandle && index == VM_GAME && !Q_stricmp( name, "qagame" ) ) {
 		Com_sprintf( filename, sizeof( filename ), "%sx64%s", name, DLL_EXT );
-		libHandle = VM_OpenNativeModule( index, filename, pinnedOnly );
+		libHandle = VM_OpenNativeModule( index, filename, source, pakChecksum );
 		if ( libHandle ) {
 			Com_Printf( "VM_LoadDll: using retail Linux x64 module name '%s'\n",
 				filename );
@@ -2208,7 +2254,7 @@ static void * QDECL VM_LoadDll( vmIndex_t index, const char *name,
 #endif
 
 	if ( !libHandle ) {
-		if ( pinnedOnly ) {
+		if ( source == VM_NATIVE_SOURCE_PINNED ) {
 			Com_Printf( "VM_LoadDLL '%s' has no pinned native image\n", filename );
 		} else {
 			Com_Printf( "VM_LoadDLL '%s' failed\n", filename );
@@ -2266,28 +2312,80 @@ static void * QDECL VM_LoadDll( vmIndex_t index, const char *name,
 =================
 VM_RequestedProvider
 
-Only qagame has a provider choice.  A pure server validates the pak that
-holds cgamex86.dll rather than the bytes a client executes, so FnQL-game
-cgame/ui stay unselectable until the purity rules in
-docs/fnql/GAME_MODULES.md are implemented for them.
+The slot's provider cvar decides; a slot without one (cgame and ui on a
+dedicated server) is retail.
 =================
 */
-static vmProvider_t VM_RequestedProvider( vmIndex_t index ) {
-	const char *value;
+static vmProviderChoice_t VM_RequestedProvider( vmIndex_t index ) {
+	vmProviderChoice_t choice;
+	int recognized;
 
-	if ( index != VM_GAME || !vm_gameProvider ) {
-		return VM_PROVIDER_RETAIL;
+	if ( (unsigned)index >= VM_COUNT || !vm_provider[ index ] ) {
+		return VM_PROVIDER_CHOICE_RETAIL;
 	}
 
-	value = vm_gameProvider->string;
-	if ( !Q_stricmp( value, "fnql" ) ) {
-		return VM_PROVIDER_FNQL;
+	choice = VM_ParseProviderChoice( vm_provider[ index ]->string, &recognized );
+	if ( !recognized ) {
+		Com_Printf( S_COLOR_YELLOW "%s '%s' is not recognized; using the retail module.\n",
+			vm_provider[ index ]->name, vm_provider[ index ]->string );
 	}
-	if ( value[0] && Q_stricmp( value, "retail" ) ) {
-		Com_Printf( S_COLOR_YELLOW "vm_gameProvider '%s' is not recognized; "
-			"using the retail module.\n", value );
+	return choice;
+}
+
+
+/*
+=================
+VM_SetPureClientModulePaks
+
+The client hands over the current pure server's sv_fnqlClientPaks value for
+each gamestate, and an empty string when it disconnects or the server is not
+pure.  It is consulted only when a client module loads under a pure server.
+=================
+*/
+void VM_SetPureClientModulePaks( const char *checksums ) {
+	Q_strncpyz( vmPureClientModulePaks, checksums ? checksums : "",
+		sizeof( vmPureClientModulePaks ) );
+}
+
+
+/*
+=================
+VM_PureNativeCandidate
+
+Whether a client module may be loaded natively while connected to a pure
+server: either the retail image pinned before the server's pure policy took
+effect, or an FnQL-game module the server may accept.
+=================
+*/
+qboolean VM_PureNativeCandidate( vmIndex_t index ) {
+	if ( VM_HasPinnedNativeModule( index ) ) {
+		return qtrue;
 	}
-	return VM_PROVIDER_RETAIL;
+	return ( index == VM_CGAME || index == VM_UI ) &&
+		VM_RequestedProvider( index ) != VM_PROVIDER_CHOICE_RETAIL ? qtrue : qfalse;
+}
+
+
+/*
+=================
+VM_NativeModulePureChecksum
+
+The pure checksum of the pak a provider-selected FnQL-game module was read
+from under a pure server.  Returns qfalse for every other module, so the
+caller keeps the historical (retail) report for those.
+=================
+*/
+qboolean VM_NativeModulePureChecksum( const vm_t *vm, qboolean *fnqlModule, int *checksum ) {
+	if ( fnqlModule ) {
+		*fnqlModule = vm && vm->dllHandle && vm->fnqlProvider ? qtrue : qfalse;
+	}
+	if ( !vm || !vm->dllHandle || !vm->fnqlProvider || !vm->nativeFromPurePak ) {
+		return qfalse;
+	}
+	if ( checksum ) {
+		*checksum = vm->nativePakChecksum;
+	}
+	return qtrue;
 }
 
 
@@ -2342,21 +2440,26 @@ static qboolean VM_IdentifyNativeModule( vm_t *vm ) {
 VM_LoadNativeModule
 
 Loads, validates and identifies one native module candidate.  A candidate
-requested through a provider must identify itself as that provider's module;
+requested through a provider (any choice but retail) must identify itself as
+that provider's module and satisfy the choice (auto: retail wire parity);
 otherwise it is unloaded so the caller can fall back.
 =================
 */
 static qboolean VM_LoadNativeModule( vm_t *vm, const char *moduleName,
-	qboolean pinnedOnly, qboolean requireFnQLModule ) {
+	vmNativeSource_t source, int pakChecksum, vmProviderChoice_t provider ) {
 	const int engineApiVersion = vm->dllApiVersion;
+	const qboolean requireFnQLModule = provider != VM_PROVIDER_CHOICE_RETAIL ? qtrue : qfalse;
 	qboolean identified;
 
 	Com_Printf( "Loading dll file %s.\n", moduleName );
 	Com_sprintf( vm->moduleFile, sizeof( vm->moduleFile ), "%s" ARCH_STRING DLL_EXT, moduleName );
+	vm->fnqlProvider = qfalse;
+	vm->nativeFromPurePak = qfalse;
+	vm->nativePakChecksum = 0;
 
 	vm->dllHandle = VM_LoadDll( vm->index, moduleName, &vm->entryPoint, vm->dllSyscall,
 		&vm->dllExports, vm->dllImports, vm->dllImports ? &vm->dllApiVersion : NULL,
-		pinnedOnly );
+		source, pakChecksum );
 	if ( !vm->dllHandle ) {
 		vm->moduleFile[0] = '\0';
 		return qfalse;
@@ -2374,6 +2477,16 @@ static qboolean VM_LoadNativeModule( vm_t *vm, const char *moduleName,
 				vm->moduleFile, FNQL_MODULE_PRODUCT, vm->name );
 			goto reject;
 		}
+		if ( !VM_ProviderAcceptsModule( provider, vm->providerCapabilities ) ) {
+			Com_Printf( "%s auto: '%s' does not declare retail wire parity "
+				"(capabilities 0x%x); using the retail module.\n",
+				vm_provider[ vm->index ] ? vm_provider[ vm->index ]->name : vm->name,
+				vm->moduleFile, vm->providerCapabilities );
+			goto reject;
+		}
+		vm->fnqlProvider = qtrue;
+		vm->nativeFromPurePak = source == VM_NATIVE_SOURCE_PURE_PAK ? qtrue : qfalse;
+		vm->nativePakChecksum = vm->nativeFromPurePak ? pakChecksum : 0;
 	}
 
 	if ( identified ) {
@@ -2403,6 +2516,95 @@ reject:
 	vm->providerName[0] = '\0';
 	vm->providerVersion[0] = '\0';
 	vm->providerCapabilities = 0;
+	vm->fnqlProvider = qfalse;
+	vm->nativeFromPurePak = qfalse;
+	vm->nativePakChecksum = 0;
+	return qfalse;
+}
+
+
+/*
+=================
+VM_PinRetailClientModule
+
+When an FnQL-game cgame or ui serves the client, the retail-named module is
+never loaded, so nothing pins it.  A pure server that does not accept the
+FnQL-game package must still get the retail module, from bytes read before
+that server could influence the filesystem.  Read (not load) and pin it now.
+=================
+*/
+static void VM_PinRetailClientModule( vmIndex_t index ) {
+	char	filename[ MAX_QPATH ];
+	void	*buffer;
+	int		length;
+
+	if ( ( index != VM_CGAME && index != VM_UI ) || VM_HasPinnedNativeModule( index ) ||
+		FS_PureServerActive() ) {
+		return;
+	}
+	Com_sprintf( filename, sizeof( filename ), "%s" ARCH_STRING DLL_EXT, vmName[ index ] );
+	buffer = NULL;
+	length = FS_ReadFile( filename, &buffer );
+	if ( length > 0 && buffer ) {
+		VM_PinNativeModule( index, filename, buffer, length );
+	}
+	if ( buffer ) {
+		FS_FreeFile( buffer );
+	}
+}
+
+
+/*
+=================
+VM_LoadProviderModule
+
+Tries the FnQL-game module for a provider choice other than retail.  Under a
+pure server (interpret VMI_PINNED_NATIVE) a cgame or ui is taken only from
+the first pure-visible pak holding it, and only when the server lists that
+pak's checksum in sv_fnqlClientPaks; the client then reports that checksum
+(VM_NativeModulePureChecksum).  Every refusal is logged and leaves the
+caller to load the retail module.
+=================
+*/
+static qboolean VM_LoadProviderModule( vm_t *vm, vmProviderChoice_t choice,
+	vmInterpret_t interpret ) {
+	char	fnqlModuleName[ MAX_QPATH ];
+	char	fnqlFile[ MAX_QPATH ];
+	const char *cvarName = vm_provider[ vm->index ] ? vm_provider[ vm->index ]->name : vm->name;
+	int		pakChecksum;
+
+	Com_sprintf( fnqlModuleName, sizeof( fnqlModuleName ), FNQL_GAME_MODULE_PREFIX "%s", vm->name );
+	Com_sprintf( fnqlFile, sizeof( fnqlFile ), "%s" ARCH_STRING DLL_EXT, fnqlModuleName );
+
+	if ( interpret == VMI_NATIVE ) {
+		if ( VM_LoadNativeModule( vm, fnqlModuleName, VM_NATIVE_SOURCE_SEARCH, 0, choice ) ) {
+			VM_PinRetailClientModule( vm->index );
+			return qtrue;
+		}
+		Com_Printf( S_COLOR_YELLOW "%s %s: no usable %s %s module; "
+			"loading the retail module instead.\n", cvarName, vm_provider[ vm->index ]->string,
+			FNQL_MODULE_PRODUCT, vm->name );
+		return qfalse;
+	}
+
+	// VMI_PINNED_NATIVE: a client module under a pure server
+	if ( !FS_PurePakForFile( fnqlFile, &pakChecksum ) ) {
+		Com_Printf( "%s: no pure-server pak holds %s; using the retail %s.\n",
+			cvarName, fnqlFile, vm->name );
+		return qfalse;
+	}
+	if ( !VM_ChecksumListContains( vmPureClientModulePaks, pakChecksum ) ) {
+		Com_Printf( "%s: this pure server does not accept the %s package holding %s "
+			"(pure checksum %d); using the retail %s.\n", cvarName, FNQL_MODULE_PRODUCT,
+			fnqlFile, pakChecksum, vm->name );
+		return qfalse;
+	}
+	if ( VM_LoadNativeModule( vm, fnqlModuleName, VM_NATIVE_SOURCE_PURE_PAK, pakChecksum, choice ) ) {
+		Com_Printf( "%s: pure server accepts %s from pak %d.\n", cvarName, fnqlFile, pakChecksum );
+		return qtrue;
+	}
+	Com_Printf( S_COLOR_YELLOW "%s: %s from the accepted pak did not load; "
+		"using the retail %s.\n", cvarName, fnqlFile, vm->name );
 	return qfalse;
 }
 
@@ -2464,21 +2666,22 @@ vm_t *VM_CreateNative( vmIndex_t index, syscall_t systemCalls, dllSyscall_t dllS
 	}
 
 	if ( interpret == VMI_NATIVE || interpret == VMI_PINNED_NATIVE ) {
-		// an explicitly requested FnQL-game module goes first; any failure
-		// falls back to the retail-named module below
-		if ( interpret == VMI_NATIVE && VM_RequestedProvider( index ) == VM_PROVIDER_FNQL ) {
-			char fnqlModuleName[ MAX_QPATH ];
-
-			Com_sprintf( fnqlModuleName, sizeof( fnqlModuleName ), FNQL_GAME_MODULE_PREFIX "%s", name );
-			if ( VM_LoadNativeModule( vm, fnqlModuleName, qfalse, qtrue ) ) {
+		// a requested FnQL-game module goes first; any failure falls back to
+		// the retail-named module below.  Pinned reloads of qagame never
+		// consult the provider; a pinned (pure-server) cgame or ui does, under
+		// the pure rules in VM_LoadProviderModule.
+		const vmProviderChoice_t choice = VM_RequestedProvider( index );
+		if ( choice != VM_PROVIDER_CHOICE_RETAIL &&
+			( interpret == VMI_NATIVE || index == VM_CGAME || index == VM_UI ) ) {
+			if ( VM_LoadProviderModule( vm, choice, interpret ) ) {
 				return vm;
 			}
-			Com_Printf( S_COLOR_YELLOW "vm_gameProvider fnql: no usable %s %s module; "
-				"loading the retail module instead.\n", FNQL_MODULE_PRODUCT, name );
 		}
 
 		// try to load as a system dll
-		if ( VM_LoadNativeModule( vm, name, interpret == VMI_PINNED_NATIVE ? qtrue : qfalse, qfalse ) ) {
+		if ( VM_LoadNativeModule( vm, name,
+				interpret == VMI_PINNED_NATIVE ? VM_NATIVE_SOURCE_PINNED : VM_NATIVE_SOURCE_SEARCH,
+				0, VM_PROVIDER_CHOICE_RETAIL ) ) {
 			return vm;
 		}
 
@@ -3313,7 +3516,11 @@ static void VM_VmInfo_f( void ) {
 		}
 		Com_Printf( "%s : ", vm->name );
 		if ( vm->dllHandle ) {
-			if ( vm->providerVersion[0] ) {
+			if ( vm->providerVersion[0] && vm->nativeFromPurePak ) {
+				Com_Printf( "native %s (%s %s, capabilities 0x%x, pure pak %d)\n", vm->moduleFile,
+					vm->providerName, vm->providerVersion, vm->providerCapabilities,
+					vm->nativePakChecksum );
+			} else if ( vm->providerVersion[0] ) {
 				Com_Printf( "native %s (%s %s, capabilities 0x%x)\n", vm->moduleFile,
 					vm->providerName, vm->providerVersion, vm->providerCapabilities );
 			} else {

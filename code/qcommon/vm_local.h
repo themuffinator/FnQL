@@ -196,6 +196,9 @@ struct vm_s {
 	char		providerName[32];
 	char		providerVersion[32];
 	unsigned int providerCapabilities;
+	qboolean	fnqlProvider;		// loaded through a provider choice as an FnQL-game module
+	qboolean	nativeFromPurePak;	// read from a pak a pure server accepted (nativePakChecksum)
+	int			nativePakChecksum;
 
 	// for interpreted modules
 	//qboolean	currentlyInterpreting;

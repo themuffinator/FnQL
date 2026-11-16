@@ -2832,9 +2832,10 @@ void CL_InitCGame( void ) {
 	if ( cl_connectedToPureServer )
 	{
 		// Retail QL has no cgame QVM. Permit only the exact native image
-		// pinned before the server's pure filesystem policy took effect.
+		// pinned before the server's pure filesystem policy took effect, or
+		// an FnQL-game cgame from a pak the server accepts (vm_cgameProvider).
 		if ( interpret != VMI_COMPILED && interpret != VMI_BYTECODE ) {
-			interpret = VM_HasPinnedNativeModule( VM_CGAME )
+			interpret = VM_PureNativeCandidate( VM_CGAME )
 				? VMI_PINNED_NATIVE : VMI_COMPILED;
 		}
 	}

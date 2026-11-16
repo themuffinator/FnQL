@@ -2024,6 +2024,7 @@ qboolean CL_Disconnect( qboolean showMainMenu ) {
 	// Remove pure paks
 	FS_PureServerSetLoadedPaks( "", "" );
 	FS_PureServerSetReferencedPaks( "", "" );
+	VM_SetPureClientModulePaks( "" );
 
 	FS_ClearPakReferences( FS_GENERAL_REF | FS_UI_REF | FS_CGAME_REF );
 
@@ -2535,7 +2536,17 @@ static void CL_SendPureChecksums( void ) {
 		return;
 
 	// if we are pure we need to send back a command with our referenced pk3 checksums
-	if ( !FS_FileIsInPAK( QL_NATIVE_CGAME_DLL, &binChecksum, nullptr ) ) {
+	//
+	// Retail reports the pak holding cgamex86.dll.  An FnQL-game cgame
+	// reports the pak it was actually read from, which the server accepted
+	// through sv_fnqlClientPaks; it never claims the retail checksum.
+	qboolean fnqlCgame = qfalse;
+	if ( VM_NativeModulePureChecksum( cgvm, &fnqlCgame, &binChecksum ) ) {
+		// binChecksum is the accepted FnQL-game client package
+	} else if ( fnqlCgame ) {
+		Com_Error( ERR_DROP, "CL_SendPureChecksums: the FnQL-game cgame was not read "
+			"from a pak this pure server accepts" );
+	} else if ( !FS_FileIsInPAK( QL_NATIVE_CGAME_DLL, &binChecksum, nullptr ) ) {
 		Com_Error( ERR_FATAL, "CL_SendPureChecksums: no pak file for %s", QL_NATIVE_CGAME_DLL );
 	}
 

@@ -819,11 +819,18 @@ void CL_SystemInfoChanged( qboolean onlyGame ) {
 
 	// don't set any vars when playing a demo
 	if ( clc.demoplaying ) {
+		VM_SetPureClientModulePaks( "" );
 		return;
 	}
 
 	s = Info_ValueForKey( systemInfo, "sv_pure" );
 	cl_connectedToPureServer = std::atoi( s );
+
+	// FnQL extension: the paks from which this pure server accepts FnQL-game
+	// client modules.  Read from this gamestate only, never from a cvar a
+	// previous server may have left behind; retail servers never send it.
+	VM_SetPureClientModulePaks( cl_connectedToPureServer
+		? Info_ValueForKey( systemInfo, "sv_fnqlClientPaks" ) : "" );
 
 	// parse/update fs_game in first place
 	s = Info_ValueForKey( systemInfo, "fs_game" );
@@ -891,6 +898,9 @@ void CL_SystemInfoChanged( qboolean onlyGame ) {
 		}
 		if ( !Q_stricmp( key.data(), "sv_referencedPaks" ) || !Q_stricmp( key.data(), "sv_referencedPakNames" ) ) {
 			continue;
+		}
+		if ( !Q_stricmp( key.data(), "sv_fnqlClientPaks" ) ) {
+			continue; // consumed above (VM_SetPureClientModulePaks)
 		}
 
 		if ( !Q_stricmp( key.data(), "fs_game" ) ) {

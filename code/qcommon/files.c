@@ -2077,6 +2077,14 @@ static qboolean FS_GeneralRef( const char *filename )
 	if ( !Q_stricmp( filename, FNQL_GAME_SERVER_MODULE_FILE ) )
 		return qfalse;
 
+	// The FnQL-game client package is optional: reading its cgame or ui must
+	// not make the pak referenced, so a server never asks a retail client to
+	// download or hold it.  An FnQL client that runs them on a pure server
+	// reports the package by its cgame checksum instead (CL_SendPureChecksums).
+	if ( !Q_stricmp( filename, FNQL_GAME_CGAME_MODULE_FILE ) ||
+		!Q_stricmp( filename, FNQL_GAME_UI_MODULE_FILE ) )
+		return qfalse;
+
 	if ( strstr( filename, "levelshots" ) )
 		return qfalse;
 
@@ -2816,6 +2824,156 @@ qboolean FS_FileIsInPAK( const char *filename, int *pChecksum, char *pakName ) {
 	}
 	return qfalse;
 }
+
+/*
+================
+FS_FindFileInPack
+
+The entry for filename in one pack, or NULL.
+================
+*/
+static fileInPack_t *FS_FindFileInPack( const pack_t *pak, const char *filename, long fullHash ) {
+	fileInPack_t *pakFile;
+
+	if ( !pak || !pak->hashTable ) {
+		return NULL;
+	}
+	for ( pakFile = pak->hashTable[ fullHash & ( pak->hashSize - 1 ) ]; pakFile; pakFile = pakFile->next ) {
+		if ( !FS_FilenameCompare( pakFile->name, filename ) ) {
+			return pakFile;
+		}
+	}
+	return NULL;
+}
+
+
+/*
+================
+FS_PureServerActive
+
+Whether a remote pure server restricts this client's search path.
+================
+*/
+qboolean FS_PureServerActive( void ) {
+	return fs_numServerPaks ? qtrue : qfalse;
+}
+
+
+/*
+================
+FS_PurePakForFile
+
+The pure checksum of the first pak, in search order, that holds filename
+and that the current pure server allows (every pak when no server restricts
+the search path).  Loose files never count.
+================
+*/
+qboolean FS_PurePakForFile( const char *filename, int *pChecksum ) {
+	const searchpath_t	*search;
+	long			fullHash;
+
+	if ( !fs_searchpaths || !filename || !filename[0] || FS_CheckDirTraversal( filename ) ) {
+		return qfalse;
+	}
+	fullHash = FS_HashFileName( filename, 0U );
+	for ( search = fs_searchpaths ; search ; search = search->next ) {
+		if ( !search->pack || search->pack->exclude || !FS_PakIsPure( search->pack ) ) {
+			continue;
+		}
+		if ( FS_FindFileInPack( search->pack, filename, fullHash ) ) {
+			if ( pChecksum ) {
+				*pChecksum = search->pack->pure_checksum;
+			}
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+
+/*
+================
+FS_ReadFileInPurePak
+
+Reads filename from the one pure-allowed pak whose pure checksum matches,
+like FS_ReadFile (free with FS_FreeFile).  Returns -1 when that pak does not
+hold the file.
+================
+*/
+int FS_ReadFileInPurePak( const char *filename, int pureChecksum, void **buffer ) {
+	const searchpath_t	*search;
+	fileInPack_t	*pakFile;
+	fileHandle_t	h;
+	long			fullHash;
+	byte			*buf;
+	int				len;
+
+	if ( buffer ) {
+		*buffer = NULL;
+	}
+	if ( !fs_searchpaths || !filename || !filename[0] || !buffer || FS_CheckDirTraversal( filename ) ) {
+		return -1;
+	}
+	fullHash = FS_HashFileName( filename, 0U );
+	for ( search = fs_searchpaths ; search ; search = search->next ) {
+		if ( !search->pack || search->pack->exclude || !FS_PakIsPure( search->pack ) ||
+			search->pack->pure_checksum != pureChecksum ) {
+			continue;
+		}
+		pakFile = FS_FindFileInPack( search->pack, filename, fullHash );
+		if ( !pakFile ) {
+			continue;
+		}
+		len = FS_OpenFileInPak( &h, search->pack, pakFile, qfalse );
+		if ( len < 0 || h == FS_INVALID_HANDLE ) {
+			return -1;
+		}
+		buf = Hunk_AllocateTempMemory( len + 1 );
+		if ( FS_Read( buf, len, h ) != len ) {
+			Hunk_FreeTempMemory( buf );
+			FS_FCloseFile( h );
+			return -1;
+		}
+		FS_FCloseFile( h );
+		fs_loadCount++;
+		fs_loadStack++;
+		buf[ len ] = '\0';
+		*buffer = buf;
+		return len;
+	}
+	return -1;
+}
+
+
+/*
+================
+FS_PureChecksumsForFile
+
+Writes the pure checksums of every loaded pak holding filename, in search
+order, and returns how many there are (at most maxChecksums).
+================
+*/
+int FS_PureChecksumsForFile( const char *filename, int *checksums, int maxChecksums ) {
+	const searchpath_t	*search;
+	long			fullHash;
+	int				count = 0;
+
+	if ( !fs_searchpaths || !filename || !filename[0] || !checksums || maxChecksums <= 0 ||
+		FS_CheckDirTraversal( filename ) ) {
+		return 0;
+	}
+	fullHash = FS_HashFileName( filename, 0U );
+	for ( search = fs_searchpaths ; search && count < maxChecksums ; search = search->next ) {
+		if ( !search->pack || search->pack->exclude ) {
+			continue;
+		}
+		if ( FS_FindFileInPack( search->pack, filename, fullHash ) ) {
+			checksums[ count++ ] = search->pack->pure_checksum;
+		}
+	}
+	return count;
+}
+
 
 static const char *FS_GetPackExtension( const char *filename )
 {

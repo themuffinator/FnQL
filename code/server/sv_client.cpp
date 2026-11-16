@@ -2983,7 +2983,12 @@ static void SV_VerifyPaks_f( client_t *cl ) {
 	if ( sv.pure != 0 ) {
 
 		nBinChkSum = nChkSum1 = 0;
-		bGood = FS_FileIsInPAK( QL_NATIVE_CGAME_DLL, &nBinChkSum, nullptr );
+		// Retail: the client's first checksum is the pak holding
+		// cgamex86.dll.  FnQL extension: an FnQL client running the FnQL-game
+		// cgame names the client package it read it from instead, accepted
+		// only if this server published that pak (SV_PublishFnQLClientPaks).
+		const bool retailBinKnown = FS_FileIsInPAK( QL_NATIVE_CGAME_DLL, &nBinChkSum, nullptr ) != qfalse;
+		bGood = retailBinKnown || sv.numFnqlClientPaks > 0;
 
 		nClientPaks = Cmd_Argc();
 
@@ -3017,9 +3022,18 @@ static void SV_VerifyPaks_f( client_t *cl ) {
 			}
 			// verify first to be the binary checksum
 			pArg = Cmd_Argv(nCurArg++);
-			if ( !*pArg || *pArg == '@' || SV_ParseInt(pArg) != nBinChkSum ) {
+			if ( !*pArg || *pArg == '@' ) {
 				bGood = false;
 				break;
+			}
+			{
+				const int clientBin = SV_ParseInt( pArg );
+				if ( !( retailBinKnown && clientBin == nBinChkSum ) &&
+					!SV_AcceptsFnQLClientPak( clientBin ) ) {
+					bGood = false;
+					break;
+				}
+				cl->fnqlClientPackage = clientBin != nBinChkSum || !retailBinKnown ? qtrue : qfalse;
 			}
 			// should be sitting at the delimeter now
 			pArg = Cmd_Argv(nCurArg++);
@@ -3062,7 +3076,11 @@ static void SV_VerifyPaks_f( client_t *cl ) {
 
 		if ( bGood ) {
 			cl->pureAuthentic = qtrue;
+			if ( cl->fnqlClientPackage ) {
+				Com_Printf( "%s" S_COLOR_WHITE " is pure with the FnQL-game client package.\n", cl->name );
+			}
 		} else {
+			cl->fnqlClientPackage = qfalse;
 			cl->pureAuthentic = qfalse;
 			cl->lastSnapshotTime = svs.time - 9999; // generate a snapshot immediately
 			cl->state = CS_ZOMBIE; // skip delta generation
@@ -3082,6 +3100,7 @@ SV_ResetPureClient_f
 */
 static void SV_ResetPureClient_f( client_t *cl ) {
 	cl->pureAuthentic = qfalse;
+	cl->fnqlClientPackage = qfalse;
 	cl->gotCP = qfalse;
 }
 

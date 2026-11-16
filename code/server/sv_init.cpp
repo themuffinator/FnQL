@@ -452,6 +452,53 @@ static void SV_ClearServer( void ) {
 
 /*
 ================
+SV_PublishFnQLClientPaks
+
+FnQL extension, not retail.  On a pure server, lists the loaded paks that
+hold the FnQL-game cgame (the FnQL-game client package) in sv_fnqlClientPaks.
+An FnQL client then runs that cgame only from one of these paks and reports
+its checksum where retail reports the cgamex86.dll pak, and SV_VerifyPaks_f
+accepts it.  With no such pak, an unpure server or sv_fnqlClientModules 0,
+the value is empty, so systeminfo carries exactly what it did before and
+only the retail cgame checksum is accepted.
+================
+*/
+void SV_PublishFnQLClientPaks( void ) {
+	std::array<char, MAX_STRING_CHARS> list{};
+
+	sv.numFnqlClientPaks = 0;
+	if ( sv.pure != 0 && sv_fnqlClientModules && sv_fnqlClientModules->integer ) {
+		sv.numFnqlClientPaks = FS_PureChecksumsForFile( FNQL_GAME_CGAME_MODULE_FILE,
+			sv.fnqlClientPakChecksums, static_cast<int>( std::size( sv.fnqlClientPakChecksums ) ) );
+	}
+	for ( int i = 0; i < sv.numFnqlClientPaks; i++ ) {
+		Q_strcat( list.data(), static_cast<int>( list.size() ),
+			va( i ? " %i" : "%i", sv.fnqlClientPakChecksums[i] ) );
+	}
+	Cvar_Set( "sv_fnqlClientPaks", list.data() );
+	if ( sv.numFnqlClientPaks ) {
+		Com_Printf( "Pure server accepts the FnQL-game client package (%s).\n", list.data() );
+	}
+}
+
+
+/*
+================
+SV_AcceptsFnQLClientPak
+================
+*/
+qboolean SV_AcceptsFnQLClientPak( int pureChecksum ) {
+	for ( int i = 0; i < sv.numFnqlClientPaks; i++ ) {
+		if ( sv.fnqlClientPakChecksums[i] == pureChecksum ) {
+			return qtrue;
+		}
+	}
+	return qfalse;
+}
+
+
+/*
+================
 SV_SpawnServer
 
 Change the server to a new map, taking all connected
@@ -721,6 +768,8 @@ void SV_SpawnServer( const char *mapname, qboolean killBots ) {
 		}
 	}
 
+	SV_PublishFnQLClientPaks();
+
 	// Retail clients consume Workshop dependencies from this dedicated
 	// configstring.  Publish it after all map and module pak references have
 	// settled, independently of whether a Steam GameServer identity exists.
@@ -878,6 +927,15 @@ void SV_Init( void )
 	Cvar_Get( "sv_pakNames", "", CVAR_SYSTEMINFO | CVAR_ROM );
 	Cvar_Get( "sv_referencedPaks", "", CVAR_SYSTEMINFO | CVAR_ROM );
 	sv_referencedPakNames = Cvar_Get( "sv_referencedPakNames", "", CVAR_SYSTEMINFO | CVAR_ROM );
+	// FnQL extension (docs/fnql/GAME_MODULES.md): which loaded paks carry an
+	// FnQL-game client package this pure server accepts.  Empty, and so absent
+	// from systeminfo, unless such a pak is loaded.
+	Cvar_Get( "sv_fnqlClientPaks", "", CVAR_SYSTEMINFO | CVAR_ROM );
+	sv_fnqlClientModules = Cvar_Get( "sv_fnqlClientModules", "1", CVAR_ARCHIVE | CVAR_LATCH );
+	Cvar_SetDescription( sv_fnqlClientModules,
+		"On a pure server, accept FnQL clients that run the FnQL-game cgame from an "
+		"FnQL-game client package this server has loaded (" FNQL_GAME_CGAME_MODULE_FILE
+		" in a pk3). 0 accepts only the retail cgame. Takes effect on the next map." );
 	Cvar_SetDescription( sv_referencedPakNames, "Variable holds a list of all the pack archives the server loaded data from." );
 	cvar_t *svReferencedSteamworks = Cvar_Get( "sv_referencedSteamworks", "", CVAR_ROM );
 	Cvar_SetDescription( svReferencedSteamworks,

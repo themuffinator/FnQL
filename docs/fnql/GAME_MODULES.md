@@ -15,28 +15,79 @@ A *provider* is whoever supplies a native module for a VM slot.
 
 | Provider | Files (Win32) | Selected by |
 |---|---|---|
-| retail | `qagamex86.dll`, `cgamex86.dll`, `uix86.dll` from the filesystem (retail `bin.pk3` or loose `baseq3`) | default |
-| fnql | `fnql_qagamex86.dll` (Linux: `fnql_qagamei386.so`; x86_64: `fnql_qagamex86_64.dll` / `.so`) | `vm_gameProvider fnql` |
+| retail | `qagamex86.dll`, `cgamex86.dll`, `uix86.dll` from the filesystem (retail `bin.pk3` or loose `baseq3`) | default on Win32 x86 |
+| fnql | `fnql_qagamex86.dll`, `fnql_cgamex86.dll`, `fnql_uix86.dll` (Linux: `fnql_*i386.so`; x86_64: `fnql_*x86_64.dll` / `.so`) | `vm_gameProvider`, `vm_cgameProvider`, `vm_uiProvider` set to `fnql` or `auto` |
 
 FnQL-game modules carry the `fnql_` prefix (`FNQL_GAME_MODULE_PREFIX`) so a
 search path holding both sets can never shadow a retail module by accident.
 
-`vm_gameProvider` (archived, protected, default `retail`) applies on the next
-map load:
+Each slot has its own provider cvar, archived and protected:
+`vm_gameProvider` (default `retail`) applies on the next map load;
+`vm_cgameProvider` and `vm_uiProvider` (client builds only) apply when that
+module next loads. The client defaults are `retail` on Win32 x86 and `fnql`
+on every other target, which has no retail client modules at all. The values
+are:
 
-- `retail` takes the historical path unchanged: the engine loads `qagame`
+- `retail` takes the historical path unchanged: the engine loads the module
   exactly as it did before providers existed.
-- `fnql` loads the FnQL-game qagame first. If it is missing, fails ABI
+- `fnql` loads the FnQL-game module first. If it is missing, fails ABI
   validation, or does not identify itself (below), the engine unloads it, logs
-  why, and loads the retail module instead. Unknown values behave like
-  `retail` and log a warning.
-- Pinned native reloads (pure restarts) never consult the provider.
-- `vm_game` still chooses native versus QVM first. Providers only apply to the
-  native path.
+  why, and loads the retail module instead.
+- `auto` is `fnql` restricted to a module that declares
+  `FNQL_MODULE_CAP_RETAIL_WIRE`; one without the claim is unloaded and the
+  retail module loads. This is the value a default can safely use (FnQL-game
+  milestone 12).
+- Unknown values behave like `retail` and log a warning.
+- Pinned native reloads of qagame never consult the provider. A cgame or ui
+  loaded under a pure server does, under the purity rules below.
+- `vm_game`, `vm_cgame` and `vm_ui` still choose native versus QVM first.
+  Providers only apply to the native path.
 
-Only qagame has a provider today. cgame and ui get `vm_cgameProvider` and
-`vm_uiProvider` once the purity rules below are implemented for them; until
-then FnQL always loads the retail client modules.
+`code/qcommon/module_provider_policy.h` holds the value and acceptance rules,
+and `tests/module_provider_policy_tests.c` gates them.
+
+### Client modules under a pure server
+
+A pure server validates the pak a client reports for its cgame, not the
+bytes the client runs: retail clients report the pak holding `cgamex86.dll`.
+FnQL therefore uses an FnQL-game cgame or ui on a pure server only when the
+server says it accepts the package it comes from, and then reports that
+package. Observed retail behavior this keeps: the retail client's first `cp`
+checksum is the `cgamex86.dll` pak (`CL_SendPureChecksums`), and FnQL
+servers drop a mismatch with retail's "Unpure client detected" text.
+
+- **Server.** On a pure server FnQL lists, in the `sv_fnqlClientPaks`
+  systeminfo key, the pure checksums of the loaded paks holding
+  `fnql_cgamex86.dll` (the FnQL-game client package,
+  `fnql_game_client.pk3`). `SV_VerifyPaks_f` accepts such a checksum where
+  retail expects the `cgamex86.dll` pak, and logs "<name> is pure with the
+  FnQL-game client package". With no such pak, an unpure server or
+  `sv_fnqlClientModules 0` (archived, latched, default 1), the key is empty and
+  so absent from systeminfo: the gamestate is byte-for-byte what it was
+  before, and only the retail checksum is accepted. Retail servers never send
+  the key.
+- **Client.** The client reads the key from each gamestate's systeminfo
+  (never from a cvar a previous server left) and clears it on disconnect.
+  Under a pure server a cgame or ui with provider `fnql` or `auto` loads only
+  from the first pure-visible pak that holds it, and only when that pak's
+  checksum is listed. The bytes are read from that pak itself
+  (`FS_ReadFileInPurePak`): not a loose file, not the OS loader. Anything
+  else logs why and loads the retail module, from the image pinned before the
+  server's pure policy applied. When an FnQL-game module serves the client,
+  that retail image is pinned too (read, not loaded), so a pure server that
+  does not accept the package still gets the retail module.
+- **Report.** `CL_SendPureChecksums` reports the accepted package's checksum
+  for an FnQL-game cgame (`VM_NativeModulePureChecksum`) and never the retail
+  one. A pure session whose FnQL-game cgame did not come from an accepted pak
+  drops with an error instead of reporting anything. `vminfo` adds
+  `pure pak <checksum>` for a module loaded that way.
+- **References.** Reading `fnql_cgame*` or `fnql_ui*` never marks a pak
+  referenced (`FS_GeneralRef`), just like the server module, so no server
+  asks a retail client to download or hold the client package.
+
+The UI is reloaded on a pure connect and follows the same rules, but no
+server validates it: the `cp` command carries no ui checksum, in retail as
+in FnQL.
 
 ## Module identity
 
@@ -56,8 +107,10 @@ capability bits, and the native API version the module publishes.
   An unidentified module reads `qagame : native qagamex86.dll (unidentified)`.
 - `FNQL_MODULE_CAP_RETAIL_WIRE` is the module's claim that its default profile
   is bit-for-bit retail on the wire. A qagame without it loads with a warning
-  that retail clients may see inconsistent game state. Automatic provider
-  selection (a future `auto` value) will require this bit.
+  that retail clients may see inconsistent game state, and the `auto`
+  provider refuses a module without it. `FNQL_MODULE_CAP_EXTENSIONS` says the
+  module negotiates FnQL extensions (below). FnQL-game claims both for its
+  qagame and cgame and the first for its ui since its milestone 10.
 
 The retail engine never looks the symbol up, so the same FnQL-game binary is a
 drop-in module for retail Quake Live as well. That is a verification tool, not
@@ -152,23 +205,28 @@ peers:
    indices and payloads, server command grammar, and prediction results.
    Retail HLIL is the authority for these values; QLSRP's configstring layout
    is known to diverge.
-2. **Negotiated extensions only.** FnQL-game announces itself through a
-   `fnql_game` serverinfo key. FnQL-game cgame will answer with a userinfo
-   key. Anything beyond retail behavior flows only between peers that both
-   announced, and only through per-client channels; retail peers never
-   receive an unknown server command or a reinterpreted field.
+2. **Negotiated extensions only.** FnQL-game's qagame announces itself through
+   a `fnql_game` serverinfo key. FnQL-game's cgame answers it, and only it,
+   with a `fnql_cg` userinfo key, which it clears again on shutdown so no
+   other server receives it. Anything beyond retail behavior flows only
+   between peers that both announced, and only through per-client channels
+   (one client's reliable commands); retail peers never receive an unknown
+   server command or a reinterpreted field. The protocol is the game's
+   (FnQL-game `code/game/bg_fnql_ext.h`); the engine carries it like any
+   server command and userinfo key.
 3. **Server modules stay server-side.** Reading `FNQL_GAME_SERVER_MODULE_FILE`
    never marks its pak as referenced (`FS_GeneralRef`), just as
    `vm/qagame.qvm` never did. Retail clients are never asked to download or
    hold the package that carries the FnQL-game qagame. The retail
    `qagamex86.dll` keeps its historical reference behavior.
-4. **Honest purity for client modules (pending, FnQL-game milestone 10).** A
-   pure server validates the pak that holds `cgamex86.dll`, not the bytes a
-   client runs. FnQL will select an FnQL-game cgame/ui on a pure server only
-   when that server lists the FnQL-game client package. In that case the client
-   reports that package's checksum, and an FnQL server accepts it. On every
-   other pure server FnQL clients use the retail modules. The engine must never
-   report a retail checksum for an FnQL-game module.
+4. **Honest purity for client modules.** An FnQL-game cgame or ui runs on a
+   pure server only when that server lists the FnQL-game client package in
+   `sv_fnqlClientPaks`; the client then reports that package's checksum, and
+   the FnQL server accepts it. On every other pure server, retail servers
+   included, FnQL clients use the retail modules. The engine never reports a
+   retail checksum for an FnQL-game module ("Client modules under a pure
+   server" above). Client packages are optional and never required of retail
+   clients.
 5. **No synthesized success.** Steam authorization, purity and capability
    answers always reflect what actually ran.
 
@@ -212,9 +270,13 @@ packages. On x86_64 there are no retail Windows modules, so FnQL-game is the
 game there (a Linux x86_64 server can also fall back to retail's
 `qagamex64.so`). Extracting a package into the Quake Live folder puts them in
 `<Quake Live>/baseq3`, which is on the search path, so `vm_gameProvider fnql`
-finds the qagame without further setup. Nothing else changes: the default
-provider stays `retail`, and the cgame and UI modules are inert until
-`vm_cgameProvider` and `vm_uiProvider` exist (milestone 10).
+finds the qagame without further setup, and `vm_cgameProvider fnql` /
+`vm_uiProvider fnql` find the client modules. Loose modules serve unpure
+servers and local play only: a pure server accepts an FnQL-game cgame only
+from the client package `fnql_game_client.pk3`, which FnQL-game builds
+deterministically from the same modules (with `fnql_game_server.pk3` for the
+qagame) but the release packages do not carry yet. The x86 defaults stay
+`retail`.
 
 The modules contain code under two licenses. FnQL-game's own code is GPLv2 or
 later; its baseline from baseq3a is under id Software's Limited Use agreement,
@@ -228,9 +290,20 @@ source commit, all under `docs/fnql-game/` except the notice.
 
 - `tests/fnql_game_release_tests.py`: the pin, staging, and package checks for
   the bundled modules, and the release workflow jobs that build and gate them.
-- `tests/game_module_provider_source_tests.py`: provider selection order,
-  identity checks, the server-module reference exemption, and the
+- `tests/game_module_provider_source_tests.py`: provider selection order for
+  every slot, identity checks, the pure-server rules for client modules (the
+  accepted-pak load, the `cp` report, the server's publication and
+  acceptance), the server- and client-module reference exemptions, and the
   `BotPredictVisiblePosition` import arity.
+- `tests/module_provider_policy_tests.c`: provider values, `auto`'s
+  capability rule and the `sv_fnqlClientPaks` parser.
+- FnQL-game's `interop-fnql` suite (`scripts/client_package_probe.py`): an
+  FnQL client joins an FnQL dedicated server over UDP, pure and unpure, with
+  the client package, loose modules or none, an accepting or refusing server,
+  and the FnQL-game or retail qagame. Its opt-in `retail-client` suite adds
+  the retail client beside the package, FnQL-game's cgame and ui and qagame
+  as drop-ins in the retail engine, and FnQL clients on a retail-engine
+  server.
 - `tests/game_module_provider_runtime_tests.py` (opt-in): builds
   `tests/fixtures/fnql_game_provider_probe.c` in three variants and drives a
   real x86 `fnql.ded.exe` on a retail map. It checks that:

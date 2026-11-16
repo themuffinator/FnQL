@@ -325,9 +325,19 @@ PROTOCOL
 #define	QL_RETAIL_PROTOCOL_VERSION	NETCHAN_QL_RETAIL_PROTOCOL_VERSION
 #define	QL_NATIVE_CGAME_DLL	"cgamex86.dll"
 // FnQL-game modules carry this prefix so they never shadow the retail
-// modules in a search path; vm_gameProvider selects them explicitly.
+// modules in a search path; vm_gameProvider, vm_cgameProvider and
+// vm_uiProvider select them explicitly (docs/fnql/GAME_MODULES.md).
 #define	FNQL_GAME_MODULE_PREFIX	"fnql_"
 #define	FNQL_GAME_SERVER_MODULE_FILE	FNQL_GAME_MODULE_PREFIX "qagame" ARCH_STRING DLL_EXT
+#define	FNQL_GAME_CGAME_MODULE_FILE	FNQL_GAME_MODULE_PREFIX "cgame" ARCH_STRING DLL_EXT
+#define	FNQL_GAME_UI_MODULE_FILE	FNQL_GAME_MODULE_PREFIX "ui" ARCH_STRING DLL_EXT
+// Retail client modules exist only for 32-bit x86 (Windows); everywhere else
+// the FnQL-game cgame and ui are the only ones there are.
+#if id386 && defined( _WIN32 )
+#define	VM_CLIENT_PROVIDER_DEFAULT	"retail"
+#else
+#define	VM_CLIENT_PROVIDER_DEFAULT	"fnql"
+#endif
 // 1.31 - 67
 
 #define DEFAULT_PROTOCOL_VERSION	QL_RETAIL_PROTOCOL_VERSION
@@ -455,6 +465,9 @@ void	VM_Init( void );
 vm_t	*VM_Create( vmIndex_t index, syscall_t systemCalls, dllSyscall_t dllSyscalls, vmInterpret_t interpret );
 vm_t	*VM_CreateNative( vmIndex_t index, syscall_t systemCalls, dllSyscall_t dllSyscalls, vmInterpret_t interpret, void *dllImports, int dllApiVersion );
 qboolean VM_HasPinnedNativeModule( vmIndex_t index );
+qboolean VM_PureNativeCandidate( vmIndex_t index );
+void	VM_SetPureClientModulePaks( const char *checksums );
+qboolean VM_NativeModulePureChecksum( const vm_t *vm, qboolean *fnqlModule, int *checksum );
 
 void	VM_Free( vm_t *vm );
 void	VM_Clear(void);
@@ -864,6 +877,12 @@ int		FS_FOpenProfileFileRead( const char *qpath, fileHandle_t *file );
 // file IO goes through FS_ReadFile, which Does The Right Thing already.
 
 void FS_TouchFileInPak( const char *filename );
+
+// pure rules for FnQL-game client modules (docs/fnql/GAME_MODULES.md)
+qboolean FS_PureServerActive( void );
+qboolean FS_PurePakForFile( const char *filename, int *pChecksum );
+int		FS_ReadFileInPurePak( const char *filename, int pureChecksum, void **buffer );
+int		FS_PureChecksumsForFile( const char *filename, int *checksums, int maxChecksums );
 
 void FS_BypassPure( void );
 void FS_RestorePure( void );

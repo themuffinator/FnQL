@@ -369,11 +369,11 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
         vm_c = read_repo_file("code/qcommon/vm.c")
 
         self.assertIn("static void *VM_LoadDllFromPakCache( vmIndex_t index", vm_c)
-        self.assertIn("length = FS_ReadFile( filename, &buffer );", vm_c)
+        self.assertIn(": FS_ReadFile( filename, &buffer );", vm_c)
         self.assertIn('"native/%s/%s"', vm_c)
         self.assertIn('FS_BuildOSPath( basePath, ".tmp", cacheName )', vm_c)
         self.assertIn("libHandle = Sys_LoadLibrary( cachePath );", vm_c)
-        self.assertIn("libHandle = VM_LoadDllFromPakCache( index, filename );", vm_c)
+        self.assertIn("libHandle = VM_LoadDllFromPakCache( index, filename, qfalse, 0 );", vm_c)
         self.assertIn("VM_PinNativeModule( index, filename, buffer, length );", vm_c)
 
     def test_pure_restarts_only_reload_previously_pinned_native_bytes(self) -> None:
@@ -386,9 +386,12 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
         self.assertIn("VM_PINNED_NATIVE_MAX_BYTES", vm_c)
         self.assertIn("VM_LoadPinnedDll", vm_c)
         self.assertIn("Com_RandomBytes( nonce", vm_c)
-        self.assertIn("pinnedOnly", vm_c)
-        self.assertIn("VM_HasPinnedNativeModule( VM_UI )", ui)
-        self.assertIn("VM_HasPinnedNativeModule( VM_CGAME )", cgame)
+        self.assertIn("VM_NATIVE_SOURCE_PINNED", vm_c)
+        # a pure server reloads the pinned retail image, or an FnQL-game
+        # module from a pak the server accepts (VM_PureNativeCandidate)
+        self.assertIn("VM_PureNativeCandidate( VM_UI )", ui)
+        self.assertIn("VM_PureNativeCandidate( VM_CGAME )", cgame)
+        self.assertIn("if ( VM_HasPinnedNativeModule( index ) ) {", vm_c)
         self.assertIn("? VMI_PINNED_NATIVE : VMI_COMPILED", ui)
         self.assertIn("? VMI_PINNED_NATIVE : VMI_COMPILED", cgame)
 
@@ -939,7 +942,7 @@ class UiNativeBridgeSourceTests(unittest.TestCase):
             sv_client.index("static void SV_ResetPureClient_f")
         ]
         self.assertIn("FS_FileIsInPAK( QL_NATIVE_CGAME_DLL, &nBinChkSum, nullptr )", verify_paks)
-        self.assertIn("SV_ParseInt(pArg) != nBinChkSum", verify_paks)
+        self.assertIn("retailBinKnown && clientBin == nBinChkSum", verify_paks)
         self.assertNotIn('"vm/cgame.qvm"', verify_paks)
         self.assertNotIn('"vm/ui.qvm"', verify_paks)
 

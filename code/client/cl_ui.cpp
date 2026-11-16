@@ -2036,7 +2036,7 @@ void CL_InitUI( void ) {
 		// Retail QL has no UI QVM. A pure server may reload only the exact
 		// native image pinned before its filesystem policy took effect.
 		if ( interpret != VMI_COMPILED && interpret != VMI_BYTECODE ) {
-			interpret = VM_HasPinnedNativeModule( VM_UI )
+			interpret = VM_PureNativeCandidate( VM_UI )
 				? VMI_PINNED_NATIVE : VMI_COMPILED;
 		}
 	}

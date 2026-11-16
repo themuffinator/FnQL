@@ -20,6 +20,14 @@ successful release, CI resets `Unreleased` for the next cycle.
 - _None yet._
 
 ### Compatibility
+- Players can run the FnQL-game cgame and UI with `vm_cgameProvider fnql` and
+  `vm_uiProvider fnql` (`auto` takes them only if they declare retail wire
+  parity, and the same value works for `vm_gameProvider`). On a pure server
+  they run only from an FnQL-game client package (`fnql_game_client.pk3`) the
+  server has loaded and lists in `sv_fnqlClientPaks`; on any other pure
+  server, retail ones included, FnQL loads the retail modules and reports
+  them. Retail clients never need the package, and `sv_fnqlClientModules 0`
+  turns it off on a server.
 - Server operators can set `sv_statsJournal <name>.jsonl` to have every match
   statistics publication (kills, deaths, medals, player stats, the match
   report) appended to a file in the home game directory, one JSON document

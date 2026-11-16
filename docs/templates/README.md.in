@@ -146,12 +146,19 @@ FnQL-game modules (`+set vm_gameProvider fnql`). See the
 
 Both packages also put the clean-room game modules of the companion
 [FnQL-game](https://github.com/themuffinator/FnQL-game) project in `baseq3/`.
-FnQL keeps using the retail modules unless a server opts in with
-`+set vm_gameProvider fnql`. `vminfo` shows which module is active, and a
-missing or invalid FnQL-game module falls back to retail. FnQL-game is still in
-development and does not yet claim retail wire parity, so retail clients
-joining such a server may see inconsistent game state. Its cgame and UI
-modules are included, but FnQL cannot select them yet.
+FnQL keeps using the retail modules unless you opt in: a server with
+`+set vm_gameProvider fnql`, a player with `+set vm_cgameProvider fnql` and
+`+set vm_uiProvider fnql`. The value `auto` takes an FnQL-game module only if
+it declares retail wire parity, as the bundled ones do. `vminfo` shows which
+module is active, and a missing or invalid FnQL-game module falls back to
+retail.
+
+On a pure server a player keeps the FnQL-game cgame and UI only if the server
+has loaded the same FnQL-game client package (`fnql_game_client.pk3`) and
+lists it in `sv_fnqlClientPaks`. Otherwise, retail servers included, FnQL
+loads the retail cgame and UI, so the client never reports a module it did not
+run. Retail clients never need the package. A server operator can turn the
+package off with `sv_fnqlClientModules 0`.
 
 The modules contain code under two licenses: FnQL-game's own code is GPLv2 or
 later, and its baseline code from baseq3a is under id Software's Quake III
