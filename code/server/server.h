@@ -596,6 +596,11 @@ int			SV_LockstepMilliseconds( void );
 int			SV_LockstepRealTime( qtime_t *qtime );
 void		SV_LockstepMatchGuid( char *buffer, int bufferSize );
 void		SV_LockstepRecordServerCommand( int clientNum, const char *text );
+// sv_lockstepSteam: the game module's Steam statistic and achievement calls
+#define LOCKSTEP_STEAM_ADD_STAT			1	// a = statistic, b = delta
+#define LOCKSTEP_STEAM_HAS_ACHIEVEMENT	2	// a = achievement, result = the answer
+#define LOCKSTEP_STEAM_UNLOCK_ACHIEVEMENT	3	// a = achievement
+void		SV_LockstepRecordSteamCall( int kind, int clientNum, int a, int b, int result );
 qboolean	SV_LockstepIsScriptedClient( const client_t *client );
 const char	*SV_LockstepClientAddress( const client_t *client );
 qboolean	SV_LockstepClientPing( const client_t *client, int *ping );

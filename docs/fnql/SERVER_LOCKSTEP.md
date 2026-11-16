@@ -23,6 +23,7 @@ line; they cannot change at runtime.
 | `sv_lockstepRecord` | empty | Recording path under `fs_homepath` (`FS_SV_FOpenFileWrite` rules). Empty records nothing. |
 | `sv_lockstepFrames` | `0` | Quit after this many recorded frames; `0` runs until the server stops. |
 | `sv_lockstepQueries` | `0` | `1` also records the answers of the qagame query exports (native slots 12-18: client visibility, thaw-tick suppression, objectives, voice suppression, admin, enemies, score) in `G` records, which makes the recording format version 2. A module without the native structured ABI records empty answers. |
+| `sv_lockstepSteam` | `0` | `1` also records the game module's Steam statistic and achievement calls (imports 201 `AddSteamStat`, 203 `UnlockSteamAchievement` and 204 `HasSteamAchievement`) in `T` records, with the engine's answer, which makes the recording format version 3. The calls still reach the engine's Steam statistics code as before; without a Steam provider `HasSteamAchievement` answers 0. |
 | `sv_lockstepTraceRand` | `0` | Windows only: log every `rand()` the game module takes from a shared C runtime (the retail qagame imports it from `MSVCR100.dll`), with the frame and the caller's offset in the module, to find where two modules' random streams part. Every game init re-arms it, so a `map_restart` that loads a fresh image of the module stays traced and the draw count carries on. A module with a static runtime is not seen; FnQL-game has its own trace (`meson -Dtrace-rand=true`). |
 
 Invalid values, script errors, a rejected scripted client and recording
@@ -207,7 +208,7 @@ at 60  alpha right=127 dyaw=1.5
 at 150 alpha buttons=attack
 ```
 
-## Recording format, version 1 (and 2)
+## Recording format, version 1 (2 and 3)
 
 Integers are little-endian. `str` is a `u32` byte length followed by that many
 bytes (no terminator). Structure payloads are the engine's raw in-memory
@@ -220,7 +221,7 @@ Header:
 | Field | Type |
 |---|---|
 | magic `FNQLLSTP` | 8 bytes |
-| format version (1; 2 with `sv_lockstepQueries 1`) | u32 |
+| format version (1; 2 with `sv_lockstepQueries 1`; 3 with `sv_lockstepSteam 1`) | u32 |
 | `sizeof( playerState_t )`, `sizeof( entityState_t )`, `sizeof( usercmd_t )` | 3 x u32 |
 | `MAX_CONFIGSTRINGS`, `MAX_GENTITIES`, `sv_maxclients` | 3 x u32 |
 | `sv_fps` at session start, seed, frame limit | 3 x u32 |
@@ -240,12 +241,13 @@ Then tagged records, one tag byte each:
 | `C` | i32 index, str text | a configstring that changed; frame 0 lists every non-empty one |
 | `S` | i32 target (-1 broadcast, otherwise the client number the game passed), str text | a reliable server command the game issued (`trap_SendServerCommand`) |
 | `O` | u32 count | game server commands dropped (more than 65536 in one frame) |
-| `G` | u32 payload length, then the payload below | version 2 only: the query export answers, written on frame 0 and whenever any answer changes |
+| `G` | u32 payload length, then the payload below | versions 2 and 3, with `sv_lockstepQueries 1`: the query export answers, written on frame 0 and whenever any answer changes |
+| `T` | i32 kind (1 `AddSteamStat`, 2 `HasSteamAchievement`, 3 `UnlockSteamAchievement`; 0 an overflow), i32 client, i32 a (statistic or achievement; for 0, the dropped count), i32 b (the statistic's delta), i32 result (the `HasSteamAchievement` answer) | version 3 only: a Steam call the game made during the frame, in call order |
 | `X` | u32 frame | closes the frame |
 | `Q` | u32 frames recorded, u32 reason (0 frame limit, 1 server shutdown) | end of the recording |
 
 A frame's records appear in the order `F`, `K`, `U`, `P`, `E`/`R`, `G`, `C`,
-`S`, `O`, `X`. Entities and configstrings are deltas against the previous frame, so
+`S`, `O`, `T`, `X`. Entities and configstrings are deltas against the previous frame, so
 a decoder keeps the current set. Server commands issued while the session
 starts (the scripted clients connecting) belong to frame 0. Engine-generated
 commands (`cs`, `disconnect`, engine prints) are not recorded: configstrings
@@ -277,8 +279,9 @@ Each is a no-op while `sv_lockstep` is off:
 - `code/server/sv_main.cpp`: `SV_Frame` (one fixed frame, the three lockstep
   phases) and `SV_CalcPings` (scripted ping).
 - `code/server/sv_game.cpp`: `GAME_INIT` seed, `G_MILLISECONDS`,
-  `G_REAL_TIME`, the match GUID import, and server-command capture in
-  `SV_GameSendServerCommand`.
+  `G_REAL_TIME`, the match GUID import, server-command capture in
+  `SV_GameSendServerCommand`, and Steam-call capture in the three Steam
+  statistic and achievement imports.
 - `code/server/sv_init.cpp`: `SV_Init` (cvar registration), `SV_SpawnServer`
   (`rand()` seed and checksum feed), `SV_Shutdown` (close the recording).
 - `code/server/sv_client.cpp`: `SV_UserinfoChanged` (scripted `ip`).
@@ -299,4 +302,5 @@ helpers that already exist for the engine's own consumers.
 - FnQL-game `scripts/server_lockstep.py`: the retail-versus-FnQL-game
   differential itself (Meson suite `differential`). It sets
   `sv_lockstepQueries 1` unless given `--no-queries`, so every scenario also
-  compares the query export answers.
+  compares the query export answers. `--steam-calls` adds
+  `sv_lockstepSteam 1` and compares the Steam calls as well.

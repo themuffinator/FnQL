@@ -1891,6 +1891,7 @@ static void QDECL QL_G_trap_StatsEventJson( unsigned int steamIdLow, unsigned in
 }
 
 static void QDECL QL_G_trap_AddSteamStat( int clientNum, int statIndex, int delta ) {
+	SV_LockstepRecordSteamCall( LOCKSTEP_STEAM_ADD_STAT, clientNum, statIndex, delta, 0 );
 	SV_SteamStats_AddFieldValue( clientNum, statIndex, delta );
 }
 
@@ -2008,11 +2009,15 @@ static void QDECL QL_G_trap_GenerateMatchGuid( char *buffer, int bufferSize ) {
 }
 
 static void QDECL QL_G_trap_UnlockSteamAchievement( int clientNum, int achievementId ) {
+	SV_LockstepRecordSteamCall( LOCKSTEP_STEAM_UNLOCK_ACHIEVEMENT, clientNum, achievementId, 0, 0 );
 	SV_SteamStats_UnlockAchievement( clientNum, achievementId );
 }
 
 static qboolean QDECL QL_G_trap_HasSteamAchievement( int clientNum, int achievementId ) {
-	return SV_SteamStats_HasAchievement( clientNum, achievementId );
+	const qboolean held = SV_SteamStats_HasAchievement( clientNum, achievementId );
+
+	SV_LockstepRecordSteamCall( LOCKSTEP_STEAM_HAS_ACHIEVEMENT, clientNum, achievementId, 0, held ? 1 : 0 );
+	return held;
 }
 
 static qboolean QDECL QL_G_trap_FactoryExists( const char *factoryName ) {

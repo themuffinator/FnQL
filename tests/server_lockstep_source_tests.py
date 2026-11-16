@@ -47,6 +47,7 @@ class ServerLockstepDefaultsTests(unittest.TestCase):
             "sv_lockstepRecord": "",
             "sv_lockstepFrames": "0",
             "sv_lockstepQueries": "0",
+            "sv_lockstepSteam": "0",
         }
         for name, default in expected.items():
             self.assertRegex(
@@ -192,7 +193,7 @@ class ServerLockstepIntegrationTests(unittest.TestCase):
         self.assertIn("[`SERVER_LOCKSTEP.md`](./SERVER_LOCKSTEP.md)", read("docs/fnql/TECHNICAL.md"))
         # the documented record tags are the ones the writer emits
         source = read(LOCKSTEP)
-        for tag in "FUKPERCSOXQG":
+        for tag in "FUKPERCSOXQGT":
             self.assertIn(f"= '{tag}',", source)
             self.assertIn(f"| `{tag}` |", doc)
         self.assertIn("constexpr std::array<char, 8> RecordMagic = { 'F', 'N', 'Q', 'L', 'L', 'S', 'T', 'P' };", source)
@@ -203,7 +204,8 @@ class ServerLockstepIntegrationTests(unittest.TestCase):
         # version 1 is unchanged unless sv_lockstepQueries asks for 'G' records
         self.assertIn("constexpr std::uint32_t RecordFormatVersion = 1;", source)
         self.assertIn("constexpr std::uint32_t RecordFormatVersionQueries = 2;", source)
-        self.assertIn("out.U32( lockstepQueries ? RecordFormatVersionQueries : RecordFormatVersion );", source)
+        self.assertRegex(source, r"out\.U32\( lockstepSteam \? RecordFormatVersionSteam\s*"
+                                 r": lockstepQueries \? RecordFormatVersionQueries : RecordFormatVersion \);")
         self.assertIn("lockstepQueries = sv_lockstepQueries->integer != 0;", source)
         write = function_body(source, r"void WriteFrame\(\)")
         self.assertIn("if ( lockstepQueries ) {", write)
@@ -217,6 +219,36 @@ class ServerLockstepIntegrationTests(unittest.TestCase):
                       "SV_GameIsObjectiveEntity", "SV_GameSuppressesThawProgressEvent"):
             self.assertIn(query, build)
         for term in ("sv_lockstepQueries", "format version 2", "| `G` |"):
+            self.assertIn(term, doc)
+
+    def test_steam_call_record_is_opt_in(self) -> None:
+        source = read(LOCKSTEP)
+        game = read("code/server/sv_game.cpp")
+        doc = read("docs/fnql/SERVER_LOCKSTEP.md")
+        # versions 1 and 2 are unchanged unless sv_lockstepSteam asks for 'T' records
+        self.assertIn("constexpr std::uint32_t RecordFormatVersionSteam = 3;", source)
+        self.assertIn("lockstepSteam = sv_lockstepSteam->integer != 0;", source)
+        record = function_body(source, r"void SV_LockstepRecordSteamCall\( int kind, int clientNum, int a, int b, int result \)")
+        self.assertIn("if ( !lockstepSteam || !Running() || !session.recording ) {", record)
+        write = function_body(source, r"void WriteFrame\(\)")
+        self.assertLess(write.index("RecordTag::ServerCommandOverflow"), write.index("RecordTag::SteamCall"))
+        self.assertLess(write.index("RecordTag::SteamCall"), write.index("RecordTag::FrameEnd"))
+        # each Steam import records the call and still reaches the statistics code
+        for signature, recorded, forwarded in (
+            (r"static void QDECL QL_G_trap_AddSteamStat\( int clientNum, int statIndex, int delta \)",
+             "SV_LockstepRecordSteamCall( LOCKSTEP_STEAM_ADD_STAT, clientNum, statIndex, delta, 0 );",
+             "SV_SteamStats_AddFieldValue( clientNum, statIndex, delta );"),
+            (r"static void QDECL QL_G_trap_UnlockSteamAchievement\( int clientNum, int achievementId \)",
+             "SV_LockstepRecordSteamCall( LOCKSTEP_STEAM_UNLOCK_ACHIEVEMENT, clientNum, achievementId, 0, 0 );",
+             "SV_SteamStats_UnlockAchievement( clientNum, achievementId );"),
+            (r"static qboolean QDECL QL_G_trap_HasSteamAchievement\( int clientNum, int achievementId \)",
+             "SV_LockstepRecordSteamCall( LOCKSTEP_STEAM_HAS_ACHIEVEMENT, clientNum, achievementId, 0, held ? 1 : 0 );",
+             "SV_SteamStats_HasAchievement( clientNum, achievementId );"),
+        ):
+            body = function_body(game, signature)
+            self.assertIn(recorded, body)
+            self.assertIn(forwarded, body)
+        for term in ("sv_lockstepSteam", "format version 3", "| `T` |"):
             self.assertIn(term, doc)
 
 
