@@ -219,7 +219,10 @@ jobs:
 
   glx-runtime-sweep:
     name: GLx runtime sweep
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_runtime_sweep)
+    # The scheduled sweep needs a self-hosted GLx runner. It runs only once the
+    # repository declares one in FNQL_GLX_RUNTIME_RUNNER_LABELS (or the legacy
+    # FNQ3_ name); otherwise the job would queue until GitHub cancels it.
+    if: (github.event_name == 'schedule' && (vars.FNQL_GLX_RUNTIME_RUNNER_LABELS != '' || vars.FNQ3_GLX_RUNTIME_RUNNER_LABELS != '')) || (github.event_name == 'workflow_dispatch' && inputs.run_runtime_sweep)
     runs-on: ${{ fromJSON(inputs.runtime_runner_labels || vars.FNQL_GLX_RUNTIME_RUNNER_LABELS || vars.FNQ3_GLX_RUNTIME_RUNNER_LABELS || '["self-hosted","glx"]') }}
     steps:
       - uses: actions/checkout@v6

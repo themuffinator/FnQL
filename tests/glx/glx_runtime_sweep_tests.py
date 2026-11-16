@@ -7135,6 +7135,12 @@ class GlxWorkflowTests(unittest.TestCase):
 
         self.assertIn("cron: '35 4 * * 1'", workflow)
         self.assertIn("github.event_name == 'schedule'", workflow)
+        # Scheduled sweeps wait for a declared self-hosted runner instead of
+        # queueing against labels no runner serves.
+        self.assertIn(
+            "github.event_name == 'schedule' && (vars.FNQL_GLX_RUNTIME_RUNNER_LABELS != ''",
+            workflow,
+        )
         self.assertIn("FNQL_GLX_PROOF_PLATFORM", workflow)
         self.assertIn("--proof-platform", workflow)
         self.assertIn("if baseline_dir or proof_dir:", workflow)
