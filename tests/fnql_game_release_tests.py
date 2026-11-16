@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import io
 import json
 import shutil
 import sys
 import tempfile
 import unittest
 import unittest.mock
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -39,12 +41,28 @@ def make_module(platform: str, arch: str = "x86") -> bytes:
     return base + EXPORTS
 
 
+def make_client_package(modules: dict[str, bytes], stamp=fnql_game.PACKAGE_TIMESTAMP) -> bytes:
+    """A client package shaped as FnQL-game's make_package.py writes it."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name in sorted(modules, key=str.lower):
+            info = zipfile.ZipInfo(name, date_time=stamp)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(info, modules[name])
+    return buffer.getvalue()
+
+
 def make_install(root: Path, platform: str, arch: str = "x86", module_arch: str | None = None) -> Path:
     install = root / "install"
     for name in fnql_game.module_names(platform, arch):
         path = install / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(make_module(platform, module_arch or arch))
+    package = {
+        member: (install / fnql_game.GAME_DIR / member).read_bytes()
+        for member in fnql_game.client_package_members(platform, arch)
+    }
+    (install / fnql_game.client_package_name()).write_bytes(make_client_package(package))
     return install
 
 
@@ -169,12 +187,82 @@ class FnqlGameStageTests(unittest.TestCase):
                     encoding="utf-8"
                 )
                 self.assertEqual(fnql_game.build_info_commit(info), PIN["commit"])
-                self.assertIn("vm_gameProvider fnql", info)
                 self.assertIn("two licenses", info)
                 self.assertIn(f"Platform: {platform}\n", info)
                 self.assertIn("Architecture: x86\n", info)
                 self.assertEqual(fnql_game.build_info_arch(info), "x86")
-                self.assertIn("keeps using the retail\nclient modules", info)
+                # FnQL-game milestone 12: the modules are the default, retail
+                # is the fallback and one cvar away
+                self.assertIn("FnQL loads them by default", info)
+                self.assertIn("Set a provider to retail", info)
+                self.assertIn("fnql_game_client.pk3 holds the same cgame and UI", info)
+                self.assertNotIn("cannot select them yet", info)
+
+    def test_stage_copies_a_client_package_matching_the_loose_modules(self) -> None:
+        for platform, arch in fnql_game.TARGETS:
+            with self.subTest(platform=platform, arch=arch), tempfile.TemporaryDirectory() as tmp:
+                game_root = stage_platform(Path(tmp), platform, arch=arch)
+                staged = game_root / release.FNQL_GAME_ARTIFACT_DIRS[(platform, arch)]
+                package = staged / fnql_game.client_package_name()
+                with zipfile.ZipFile(package) as archive:
+                    self.assertEqual(
+                        sorted(archive.namelist()),
+                        sorted(fnql_game.client_package_members(platform, arch)),
+                    )
+                    for member in archive.namelist():
+                        self.assertEqual(
+                            archive.read(member),
+                            (staged / fnql_game.GAME_DIR / member).read_bytes(),
+                        )
+                self.assertNotIn("qagame", " ".join(fnql_game.client_package_members(platform, arch)))
+
+    def test_client_package_validation_rejects_malformed_packages(self) -> None:
+        platform, arch = "windows", "x86"
+        modules = {
+            name: make_module(platform, arch) for name in fnql_game.module_names(platform, arch)
+        }
+        members = {
+            member: modules[f"{fnql_game.GAME_DIR}/{member}"]
+            for member in fnql_game.client_package_members(platform, arch)
+        }
+        name = fnql_game.client_package_name()
+        fnql_game.validate_client_package(
+            name, make_client_package(members), platform, arch, modules=modules
+        )
+        cases = {
+            "not a zip archive": b"PK\x03\x04 not really",
+            "must hold exactly": make_client_package(
+                {**members, "fnql_qagamex86.dll": modules["baseq3/fnql_qagamex86.dll"]}
+            ),
+            "found fnql_cgamex86.dll": make_client_package(
+                {"fnql_cgamex86.dll": members["fnql_cgamex86.dll"]}
+            ),
+            "not stamped": make_client_package(members, stamp=(2026, 11, 16, 0, 0, 0)),
+            "differs from baseq3/fnql_uix86.dll": make_client_package(
+                {**members, "fnql_uix86.dll": make_module(platform, arch) + b"other"}
+            ),
+            "must be a 32-bit i386 PE DLL": make_client_package(
+                {**members, "fnql_uix86.dll": make_module(platform, "x86_64")}
+            ),
+        }
+        for detail, data in cases.items():
+            with self.subTest(detail=detail), self.assertRaisesRegex(ValueError, detail):
+                fnql_game.validate_client_package(name, data, platform, arch, modules=modules)
+
+    def test_stage_requires_the_client_package(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            install = make_install(root, "linux")
+            (install / fnql_game.client_package_name()).unlink()
+            with self.assertRaisesRegex(FileNotFoundError, "fnql_game_client.pk3"):
+                fnql_game.stage(
+                    platform="linux",
+                    install_root=install,
+                    source=make_source(root),
+                    output=root / "out",
+                    pin=PIN,
+                    verify_checkout=False,
+                )
 
     def test_stage_x86_64_copies_modules_and_names_the_architecture(self) -> None:
         for platform in ("windows", "linux"):

@@ -15,18 +15,41 @@ A *provider* is whoever supplies a native module for a VM slot.
 
 | Provider | Files (Win32) | Selected by |
 |---|---|---|
-| retail | `qagamex86.dll`, `cgamex86.dll`, `uix86.dll` from the filesystem (retail `bin.pk3` or loose `baseq3`) | default on Win32 x86 |
-| fnql | `fnql_qagamex86.dll`, `fnql_cgamex86.dll`, `fnql_uix86.dll` (Linux: `fnql_*i386.so`; x86_64: `fnql_*x86_64.dll` / `.so`) | `vm_gameProvider`, `vm_cgameProvider`, `vm_uiProvider` set to `fnql` or `auto` |
+| retail | `qagamex86.dll`, `cgamex86.dll`, `uix86.dll` from the filesystem (retail `bin.pk3` or loose `baseq3`) | `vm_gameProvider`, `vm_cgameProvider`, `vm_uiProvider` set to `retail`, and the fallback of every other value |
+| fnql | `fnql_qagamex86.dll`, `fnql_cgamex86.dll`, `fnql_uix86.dll` (Linux: `fnql_*i386.so`; x86_64: `fnql_*x86_64.dll` / `.so`) | the same cvars set to `fnql` or `auto` (the default since FnQL-game milestone 12) |
 
 FnQL-game modules carry the `fnql_` prefix (`FNQL_GAME_MODULE_PREFIX`) so a
 search path holding both sets can never shadow a retail module by accident.
 
 Each slot has its own provider cvar, archived and protected:
-`vm_gameProvider` (default `retail`) applies on the next map load;
-`vm_cgameProvider` and `vm_uiProvider` (client builds only) apply when that
-module next loads. The client defaults are `retail` on Win32 x86 and `fnql`
-on every other target, which has no retail client modules at all. The values
-are:
+`vm_gameProvider` applies on the next map load; `vm_cgameProvider` and
+`vm_uiProvider` (client builds only) apply when that module next loads. The
+defaults (`VM_GAME_PROVIDER_DEFAULT`, `VM_CLIENT_PROVIDER_DEFAULT`) are:
+
+| Target | `vm_gameProvider` | `vm_cgameProvider`, `vm_uiProvider` |
+|---|---|---|
+| Win32 x86 | `auto` | `auto` |
+| every other target | `auto` | `fnql` (no retail client modules exist there) |
+
+They were `retail` on x86 until FnQL-game milestone 12 flipped them. The
+flip rests on that milestone's gates: G2 (wire manifest), the G3 lockstep
+differentials, G4 and G4v (prediction and cgame visual parity) and the G5
+interop matrix, which together back the modules' `FNQL_MODULE_CAP_RETAIL_WIRE`
+claim (FnQL-game `docs/PLAN.md`). Consequences:
+
+- An install without the FnQL-game modules, or with a module that does not
+  claim retail wire parity, loads the retail modules exactly as before. The
+  `auto` fallback logs one plain line; only an explicit `fnql` warns.
+- A pure server that does not list the FnQL-game client package (every
+  retail server) still gets the retail cgame and ui (below).
+- The cvars are `CVAR_ARCHIVE_ND`: a config records a value only when it
+  differs from the default, so later defaults reach players who never chose.
+  A config written before the flip holds `seta vm_gameProvider "retail"`,
+  because the old flags archived the default too. That value is kept, since
+  an explicit choice of retail looks the same; `reset vm_gameProvider` takes
+  the new default.
+
+The values are:
 
 - `retail` takes the historical path unchanged: the engine loads the module
   exactly as it did before providers existed.
@@ -284,14 +307,17 @@ Linux i686 package, and the `x86_64.dll` / `x86_64.so` sets in the x86_64
 packages. On x86_64 there are no retail Windows modules, so FnQL-game is the
 game there (a Linux x86_64 server can also fall back to retail's
 `qagamex64.so`). Extracting a package into the Quake Live folder puts them in
-`<Quake Live>/baseq3`, which is on the search path, so `vm_gameProvider fnql`
-finds the qagame without further setup, and `vm_cgameProvider fnql` /
-`vm_uiProvider fnql` find the client modules. Loose modules serve unpure
-servers and local play only: a pure server accepts an FnQL-game cgame only
-from the client package `fnql_game_client.pk3`, which FnQL-game builds
-deterministically from the same modules (with `fnql_game_server.pk3` for the
-qagame) but the release packages do not carry yet. The x86 defaults stay
-`retail`.
+`<Quake Live>/baseq3`, which is on the search path, so the default `auto`
+providers find them without further setup. Loose modules serve unpure servers
+and local play. Since FnQL-game milestone 12 every package also carries the
+client package `baseq3/fnql_game_client.pk3`, which FnQL-game builds
+deterministically from the same cgame and ui. A pure FnQL server from a
+release therefore lists it in `sv_fnqlClientPaks`, and a client from the same
+release runs FnQL-game's cgame and ui there. `scripts/fnql_game.py` and
+`release.py` check that the package holds exactly that target's cgame and ui,
+byte for byte the loose modules, with FnQL-game's fixed entry stamps. The
+server package `fnql_game_server.pk3` is not shipped: the loose qagame is
+never referenced, so a package adds nothing for it.
 
 The modules contain code under two licenses. FnQL-game's own code is GPLv2 or
 later; its baseline from baseq3a is under id Software's Limited Use agreement,

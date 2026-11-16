@@ -419,18 +419,19 @@ void VM_Init( void ) {
 	Cvar_Get( "vm_cgame", "0", CVAR_ARCHIVE | CVAR_PROTECTED );	// Quake Live ships native cgame by default.
 #endif
 	Cvar_Get( "vm_game", "0", CVAR_ARCHIVE | CVAR_PROTECTED );
-	vm_provider[ VM_GAME ] = Cvar_Get( "vm_gameProvider", "retail", CVAR_ARCHIVE | CVAR_PROTECTED );
+	vm_provider[ VM_GAME ] = Cvar_Get( "vm_gameProvider", VM_GAME_PROVIDER_DEFAULT,
+		CVAR_ARCHIVE_ND | CVAR_PROTECTED );
 	Cvar_SetDescription( vm_provider[ VM_GAME ],
 		"Who supplies the native server game module:\n"
-		" retail - qagame as the filesystem offers it (default)\n"
+		" retail - qagame as the filesystem offers it\n"
 		" fnql   - the FnQL-game companion module (" FNQL_GAME_SERVER_MODULE_FILE "), "
 		"falling back to retail when it is missing or invalid\n"
 		" auto   - the FnQL-game module only if it declares retail wire parity, "
 		"otherwise retail\n"
-		"Takes effect on the next map load." );
+		"Default: " VM_GAME_PROVIDER_DEFAULT ". Takes effect on the next map load." );
 #ifndef DEDICATED
 	vm_provider[ VM_CGAME ] = Cvar_Get( "vm_cgameProvider", VM_CLIENT_PROVIDER_DEFAULT,
-		CVAR_ARCHIVE | CVAR_PROTECTED );
+		CVAR_ARCHIVE_ND | CVAR_PROTECTED );
 	Cvar_SetDescription( vm_provider[ VM_CGAME ],
 		"Who supplies the native client game module:\n"
 		" retail - cgame as the filesystem offers it\n"
@@ -438,16 +439,17 @@ void VM_Init( void ) {
 		" auto   - the FnQL-game module only if it declares retail wire parity\n"
 		"A missing or invalid module falls back to retail. On a pure server the "
 		"FnQL-game module is used only when the server accepts its package "
-		"(sv_fnqlClientPaks). Takes effect when the cgame next loads." );
+		"(sv_fnqlClientPaks). Default: " VM_CLIENT_PROVIDER_DEFAULT ". "
+		"Takes effect when the cgame next loads." );
 	vm_provider[ VM_UI ] = Cvar_Get( "vm_uiProvider", VM_CLIENT_PROVIDER_DEFAULT,
-		CVAR_ARCHIVE | CVAR_PROTECTED );
+		CVAR_ARCHIVE_ND | CVAR_PROTECTED );
 	Cvar_SetDescription( vm_provider[ VM_UI ],
 		"Who supplies the native user interface module:\n"
 		" retail - ui as the filesystem offers it\n"
 		" fnql   - the FnQL-game module (" FNQL_GAME_UI_MODULE_FILE ")\n"
 		" auto   - the FnQL-game module only if it declares retail wire parity\n"
 		"Same fallback and pure-server rules as vm_cgameProvider. "
-		"Takes effect when the ui next loads." );
+		"Default: " VM_CLIENT_PROVIDER_DEFAULT ". Takes effect when the ui next loads." );
 #endif
 
 	Cmd_AddCommand( "vmprofile", VM_VmProfile_f );
@@ -2581,9 +2583,11 @@ static qboolean VM_LoadProviderModule( vm_t *vm, vmProviderChoice_t choice,
 			VM_PinRetailClientModule( vm->index );
 			return qtrue;
 		}
-		Com_Printf( S_COLOR_YELLOW "%s %s: no usable %s %s module; "
-			"loading the retail module instead.\n", cvarName, vm_provider[ vm->index ]->string,
-			FNQL_MODULE_PRODUCT, vm->name );
+		// Under "auto", the default, falling back is expected wherever the
+		// FnQL-game modules are not installed, so only an explicit "fnql" warns.
+		Com_Printf( "%s%s %s: no usable %s %s module; loading the retail module instead.\n",
+			choice == VM_PROVIDER_CHOICE_FNQL ? S_COLOR_YELLOW : "", cvarName,
+			vm_provider[ vm->index ]->string, FNQL_MODULE_PRODUCT, vm->name );
 		return qfalse;
 	}
 

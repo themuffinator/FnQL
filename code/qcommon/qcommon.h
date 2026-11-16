@@ -331,10 +331,15 @@ PROTOCOL
 #define	FNQL_GAME_SERVER_MODULE_FILE	FNQL_GAME_MODULE_PREFIX "qagame" ARCH_STRING DLL_EXT
 #define	FNQL_GAME_CGAME_MODULE_FILE	FNQL_GAME_MODULE_PREFIX "cgame" ARCH_STRING DLL_EXT
 #define	FNQL_GAME_UI_MODULE_FILE	FNQL_GAME_MODULE_PREFIX "ui" ARCH_STRING DLL_EXT
-// Retail client modules exist only for 32-bit x86 (Windows); everywhere else
-// the FnQL-game cgame and ui are the only ones there are.
+// Default providers (FnQL-game milestone 12).  "auto" takes an FnQL-game
+// module only when it declares FNQL_MODULE_CAP_RETAIL_WIRE and falls back to
+// the retail-named module when none is usable, so an install without the
+// FnQL-game modules keeps the historical retail path.  "retail" stays one
+// cvar away.  Retail client modules exist only for 32-bit x86 (Windows);
+// everywhere else the FnQL-game cgame and ui are the only ones there are.
+#define	VM_GAME_PROVIDER_DEFAULT	"auto"
 #if id386 && defined( _WIN32 )
-#define	VM_CLIENT_PROVIDER_DEFAULT	"retail"
+#define	VM_CLIENT_PROVIDER_DEFAULT	"auto"
 #else
 #define	VM_CLIENT_PROVIDER_DEFAULT	"fnql"
 #endif

@@ -17,7 +17,17 @@ successful release, CI resets `Unreleased` for the next cycle.
 ## [Unreleased]
 
 ### Highlights
-- _None yet._
+- FnQL now runs the bundled clean-room FnQL-game modules by default: servers
+  host its game module, and players get its cgame and UI. They interoperate
+  with retail Quake Live, and FnQL falls back to the retail modules wherever
+  they are missing. To keep a retail module, set its provider to `retail`, for
+  example `+set vm_gameProvider retail`. A configuration from an earlier
+  release may still hold `vm_gameProvider "retail"`; run
+  `reset vm_gameProvider` to take the new default.
+- Every package now carries the FnQL-game client package,
+  `baseq3/fnql_game_client.pk3`, so players keep FnQL-game's cgame and UI on
+  pure FnQL servers. Retail clients never need it, and on retail servers FnQL
+  still uses the retail cgame and UI.
 
 ### Compatibility
 - Players can run the FnQL-game cgame and UI with `vm_cgameProvider fnql` and

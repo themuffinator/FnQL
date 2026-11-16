@@ -1029,6 +1029,14 @@ def validate_fnql_game_members(
         raise ValueError(f"{archive_name} is missing FnQL-game files: " + ", ".join(missing))
     for name in fnql_game.module_names(platform, arch):
         fnql_game.validate_module(name, by_name[name].data, platform, arch)
+    package_name = fnql_game.client_package_name()
+    fnql_game.validate_client_package(
+        package_name,
+        by_name[package_name].data,
+        platform,
+        arch,
+        modules={name: by_name[name].data for name in fnql_game.module_names(platform, arch)},
+    )
     build_info = by_name[f"{fnql_game.DOCS_DIR}/{fnql_game.BUILD_INFO_NAME}"].data
     commit = fnql_game.build_info_commit(build_info.decode("utf-8", errors="replace"))
     if commit is None:

@@ -74,6 +74,7 @@ class GameModuleProviderRuntimeTests(unittest.TestCase):
             "identified": "",
             "unidentified": "/DPROBE_NO_IDENTITY",
             "wrong-module": "/DPROBE_WRONG_MODULE",
+            "retail-wire": "/DPROBE_RETAIL_WIRE",
         }
         steps = []
         outputs: dict[str, Path] = {}
@@ -191,10 +192,46 @@ class GameModuleProviderRuntimeTests(unittest.TestCase):
             ])
             self.assertNotIn("FnQL game provider probe: init ok", log)
 
-    def test_default_provider_keeps_the_retail_module(self) -> None:
+    # The default is "auto" since FnQL-game milestone 12: the FnQL-game
+    # module when it claims retail wire parity, the retail module otherwise.
+    def test_default_provider_hosts_a_retail_wire_module(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fnql-game-provider-") as temporary:
+            homepath = self.make_home(Path(temporary), "retail-wire")
+            log = self.run_server(homepath, None, [
+                "VM_LoadDll(qagame): FnQL-game 0.0.0-probe module (capabilities 0x1)",
+                "FnQL game provider probe: init ok",
+                "qagame : native fnql_qagamex86.dll (FnQL-game 0.0.0-probe, capabilities 0x1)",
+            ])
+            self.assertNotIn("does not declare retail wire parity", log)
+            self.assertNotIn("loading the retail module instead", log)
+
+    def test_default_provider_refuses_a_module_without_retail_wire(self) -> None:
         with tempfile.TemporaryDirectory(prefix="fnql-game-provider-") as temporary:
             homepath = self.make_home(Path(temporary), "identified")
             log = self.run_server(homepath, None, [
+                "vm_gameProvider auto: 'fnql_qagamex86.dll' does not declare retail wire parity "
+                "(capabilities 0x0); using the retail module.",
+                "qagame : native qagamex86.dll (unidentified)",
+            ])
+            self.assertNotIn("FnQL game provider probe: init ok", log)
+
+    def test_default_provider_without_fnql_game_keeps_the_retail_module(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fnql-game-provider-") as temporary:
+            homepath = Path(temporary) / "home"
+            (homepath / "baseq3").mkdir(parents=True)
+            log = self.run_server(homepath, None, [
+                "vm_gameProvider auto: no usable FnQL-game qagame module; "
+                "loading the retail module instead.",
+                "qagame : native qagamex86.dll (unidentified)",
+            ])
+            self.assertNotIn("FnQL game provider probe", log)
+            # an expected fallback under the default is not a warning
+            self.assertNotIn("^3vm_gameProvider auto", log)
+
+    def test_retail_provider_keeps_the_retail_module(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fnql-game-provider-") as temporary:
+            homepath = self.make_home(Path(temporary), "retail-wire")
+            log = self.run_server(homepath, "retail", [
                 "Loading dll file qagame.",
                 "qagame : native qagamex86.dll (unidentified)",
             ])
