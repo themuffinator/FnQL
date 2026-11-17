@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FnQL Press Kit</title>
+<meta name="description" content="Press kit for FnQL, the open-source engine for retail Quake Live on Steam: facts, screenshots, logos and banners.">
+<meta property="og:title" content="FnQL Press Kit">
+<meta property="og:description" content="Open-source engine for the Quake Live you already own on Steam.">
+<meta property="og:image" content="images/banners/fnql-og-1200x630.jpg">
+<style>
+  :root {
+    --bg: #08080a;
+    --panel: #121216;
+    --line: #26262c;
+    --text: #ececf0;
+    --muted: #a3a3ad;
+    --red: #d0141b;
+    --bright: #ff3b30;
+    --head: "Montserrat", "Segoe UI", Arial, sans-serif;
+    --body: "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
+    --mono: "Bahnschrift", "Segoe UI", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 var(--body); }
+  a { color: var(--bright); }
+  a:hover { color: #fff; }
+  img { max-width: 100%; display: block; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px; }
+  header.hero { position: relative; }
+  header.hero img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }
+  nav { position: sticky; top: 0; z-index: 2; background: rgba(8,8,10,.92); backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); }
+  nav .wrap { display: flex; flex-wrap: wrap; gap: 4px 22px; padding-top: 10px; padding-bottom: 10px; font: 600 13px/1.4 var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+  nav a { color: var(--muted); text-decoration: none; }
+  nav a:hover { color: #fff; }
+  section { padding: 56px 0 8px; }
+  h1, h2 { font-family: var(--head); font-style: italic; font-weight: 800; letter-spacing: .01em; margin: 0 0 18px; }
+  h1 { font-size: clamp(30px, 5vw, 48px); line-height: 1.1; }
+  h2 { font-size: clamp(22px, 3.2vw, 30px); text-transform: uppercase; }
+  h2::before { content: "// "; color: var(--red); }
+  h3 { margin: 0 0 6px; font-size: 17px; }
+  .lede { font-size: 19px; color: #d6d6dc; max-width: 760px; }
+  .accent { color: var(--bright); }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; margin: 22px 0 0; }
+  .btn { display: inline-block; padding: 11px 20px; border-radius: 6px; background: var(--red); color: #fff; text-decoration: none; font: 700 14px var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+  .btn.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+  .btn:hover { filter: brightness(1.15); color: #fff; }
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+  th { width: 30%; color: var(--muted); font-weight: 600; }
+  tr:last-child th, tr:last-child td { border-bottom: 0; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; }
+  .card p { margin: 0; color: #cfcfd6; font-size: 15px; }
+  .gallery { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+  .gallery figure { margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .gallery img { aspect-ratio: 16 / 9; object-fit: cover; width: 100%; }
+  .gallery figcaption { padding: 8px 12px; font-size: 13px; color: var(--muted); }
+  .gallery.wide { grid-template-columns: repeat(auto-fill, minmax(min(100%, 520px), 1fr)); }
+  .gallery.wide img { aspect-ratio: auto; object-fit: contain; }
+  .assets a { text-decoration: none; color: var(--text); }
+  .assets a:hover h3 { color: var(--bright); }
+  .assets .card img { background: repeating-conic-gradient(#1b1b20 0% 25%, #141418 0% 50%) 50% / 16px 16px; border-radius: 4px; margin-bottom: 10px; max-height: 150px; width: 100%; object-fit: contain; }
+  .assets .card span { display: block; font-size: 13px; color: var(--muted); }
+  details { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; margin-bottom: 10px; }
+  summary { cursor: pointer; font-weight: 600; }
+  details p { margin: 10px 0 0; color: #cfcfd6; }
+  footer { margin-top: 64px; padding: 26px 0 40px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+  code { font-family: Consolas, "Cascadia Mono", monospace; font-size: .92em; background: #1b1b20; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <img src="images/keyart/fnql-keyart-1920x1080.jpg" alt="FnQL logo over a Quake Live arena rendered by FnQL, with the line: The Quake Live you own. Rebuilt engine.">
+</header>
+
+<nav aria-label="Sections">
+  <div class="wrap">
+    <a href="#about">About</a>
+    <a href="#facts">Facts</a>
+    <a href="#features">Features</a>
+    <a href="#showcase">Showcase</a>
+    <a href="#screens">Screenshots</a>
+    <a href="#assets">Logos &amp; banners</a>
+    <a href="#faq">FAQ</a>
+  </div>
+</nav>
+
+<main class="wrap">
+
+  <section id="about">
+    <h1>An open-source engine for the <span class="accent">Quake Live you already own.</span></h1>
+    <p class="lede">FnQL is a modernized replacement engine for the retail Steam release of Quake Live. FnQL players join retail servers, retail players join FnQL servers, and demos, maps, the WebUI and Workshop content keep working. On top come GLx and Vulkan renderers, HDR, raw input with Quake Live's own mouse math, HRTF audio and a modern console.</p>
+    <div class="cta">
+      <a class="btn" href="https://github.com/themuffinator/FnQL/releases/latest">Download 0.1.0.158</a>
+      <a class="btn ghost" href="https://github.com/themuffinator/FnQL">Source on GitHub</a>
+      <a class="btn ghost" href="https://github.com/themuffinator/FnQL-game">FnQL-game</a>
+    </div>
+  </section>
+
+  <section id="facts">
+    <h2>Fact sheet</h2>
+    <table>
+      <tr><th>Name</th><td>FnQL (Fappin' Quake Live)</td></tr>
+      <tr><th>Latest release</th><td>0.1.0.158, 16 November 2026</td></tr>
+      <tr><th>Official packages</th><td>Windows x86 client · Linux i686 dedicated server</td></tr>
+      <tr><th>Price</th><td>Free</td></tr>
+      <tr><th>Licence</th><td>GPL-2.0 engine. The Windows package also contains a compiled, closed-source Steam provider. Bundled FnQL-game modules: GPLv2-or-later plus id Software's Quake III Arena game-source licence.</td></tr>
+      <tr><th>Requires</th><td>Quake Live on Steam (app 282440). FnQL ships no game content.</td></tr>
+      <tr><th>Lineage</th><td>Quake III Arena GPL source → ioquake3 → Quake3e → FnQ3 → FnQL</td></tr>
+      <tr><th>Developer</th><td>themuffinator</td></tr>
+      <tr><th>Links</th><td><a href="https://github.com/themuffinator/FnQL">github.com/themuffinator/FnQL</a> · <a href="https://github.com/themuffinator/FnQL/releases">release history</a> · <a href="https://github.com/themuffinator/FnQL/issues">issues</a></td></tr>
+    </table>
+  </section>
+
+  <section id="features">
+    <h2>Highlights</h2>
+    <div class="grid">
+      <div class="card"><h3>Retail first</h3><p>Protocol 91, <code>.dm_91</code> demos, BSP v47, factories, profiles, the retail WebUI, Steam integration and Workshop content.</p></div>
+      <div class="card"><h3>Plays both ways</h3><p>FnQL joins retail servers; retail clients join FnQL servers and get exactly what a retail server sends.</p></div>
+      <div class="card"><h3>Modern rendering</h3><p>GLx and Vulkan renderers with HDR, MSAA and supersampling, bloom, tone mapping, soft particles, liquids and fog.</p></div>
+      <div class="card"><h3>See every player</h3><p>Optional rim lighting and outlines in your own enemy and team colours, plus cel shading.</p></div>
+      <div class="card"><h3>Real shadows</h3><p>Shadow-mapped dynamic lights, and optional sun shadows from each map's own sky that players cast too.</p></div>
+      <div class="card"><h3>Input that matches</h3><p>Raw mouse with Quake Live's CPI scaling and acceleration; classic Quake3e and ioquake3 styles kept.</p></div>
+      <div class="card"><h3>Spatial audio</h3><p>OpenAL with HRTF, surround, reverb and occlusion, live device recovery and a software fallback.</p></div>
+      <div class="card"><h3>Open game modules</h3><p>The open-source FnQL-game modules run by default since 0.1.0.158, checked against retail by a zero-divergence lockstep harness.</p></div>
+      <div class="card"><h3>Hardened server</h3><p>Rejects hostile downloaded content, survives rcon edge cases and writes match stats as JSON lines without libzmq.</p></div>
+    </div>
+  </section>
+
+  <section id="showcase">
+    <h2>Feature showcase</h2>
+    <p>Each comparison is one moment of play with only the feature changed. All of these are optional settings.</p>
+    <div class="gallery wide" id="showcasegrid"></div>
+  </section>
+
+  <section id="screens">
+    <h2>Screenshots</h2>
+    <p>1920×1080, rendered by FnQL itself with its windowless capture mode. Click for full size.</p>
+    <div class="gallery" id="gallery"></div>
+  </section>
+
+  <section id="assets" class="assets">
+    <h2>Logos &amp; banners</h2>
+    <div class="grid" id="assetgrid"></div>
+  </section>
+
+  <section id="faq">
+    <h2>FAQ</h2>
+    <details><summary>Is FnQL official?</summary><p>No. It is an independent project, not affiliated with or endorsed by id Software, Bethesda, ZeniMax Media or Valve.</p></details>
+    <details><summary>Do I need to own Quake Live?</summary><p>Yes. FnQL uses the game files from your Steam installation and ships none.</p></details>
+    <details><summary>Is it a cheat? Can I be banned?</summary><p>FnQL is an engine replacement with no cheating features. It authenticates through Steam's normal session tickets and never fakes them. It is unofficial, so server operators decide which clients they accept.</p></details>
+    <details><summary>Which platforms are supported?</summary><p>Official packages are the Windows x86 client and the Linux i686 dedicated server. Retail's client modules and WebUI are 32-bit Windows binaries, so there is no supported native Linux or macOS client for retail play.</p></details>
+    <details><summary>Does it do ray tracing?</summary><p>There is an experimental RTX renderer module whose native path covers a conservative subset of world geometry. GLx and Vulkan are the renderers to use.</p></details>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    FnQL is an independent project and is not affiliated with, endorsed by, or sponsored by id Software, Bethesda, ZeniMax Media, or Valve. Quake, Quake III Arena, and Quake Live are trademarks of their respective owners. In-game content shown in screenshots is from Quake Live, © id Software / ZeniMax Media. FnQL artwork © the FnQL project.
+  </div>
+</footer>
+
+<script>
+  // Image lists live here so the page stays a single file.
+  const shots = [
+    ["fnql-hiddenfortress-rail.jpg", "Hidden Fortress · Vulkan: a railgun shot cuts across the atrium"],
+    ["fnql-thunderstruck-action.jpg", "Thunderstruck · Vulkan: rockets and rails in the courtyard"],
+    ["fnql-highlight.jpg", "Player highlighting: rim light and outline on every enemy"],
+    ["fnql-cure-glx.jpg", "Cure · GLx: HDR bloom through the hall windows"],
+    ["fnql-cure-vk.jpg", "Cure · Vulkan: same camera, Vulkan renderer"],
+    ["fnql-lostworld-vk.jpg", "Lost World · Vulkan: a rocket lights the lava pit"],
+    ["fnql-overkill-glx.jpg", "Overkill · GLx"],
+    ["fnql-japanesecastles-vk.jpg", "Japanese Castles · Vulkan"],
+    ["fnql-furiousheights-vk.jpg", "Furious Heights · Vulkan"],
+    ["fnql-elder-vk.jpg", "Elder · Vulkan"],
+    ["fnql-campgrounds-glx.jpg", "Campgrounds · GLx"],
+    ["fnql-almostlost-glx.jpg", "Almost Lost · GLx"],
+  ];
+  const assets = [
+    ["logo/fnql-logo-1332.png", "Logo, transparent", "PNG · 1332×712"],
+    ["logo/fnql-logo.svg", "Logo, vector", "SVG"],
+    ["logo/fnql-icon-1024.png", "fn emblem", "PNG · 1024×1024 (also 512, 256)"],
+    ["logo/fnql-icon.svg", "fn emblem, vector", "SVG"],
+    ["keyart/fnql-keyart-1920x1080.jpg", "Key art", "JPG · 1920×1080"],
+    ["logo/fnql-social-preview-1280x640.png", "Social preview", "PNG · 1280×640"],
+    ["banners/fnql-og-1200x630.jpg", "Link preview", "JPG · 1200×630"],
+    ["banners/fnql-x-header-1500x500.jpg", "Profile header", "JPG · 1500×500"],
+    ["banners/fnql-moddb-header-1200x300.jpg", "Wide header", "JPG · 1200×300"],
+    ["banners/fnql-youtube-thumb-1280x720.jpg", "Video thumbnail", "JPG · 1280×720"],
+  ];
+  const showcase = [
+    ["fnql-feature-highlight-modes.jpg", "Player highlighting: off, rim light, outline, both, your colour (same frame)"],
+    ["fnql-feature-highlight-split.jpg", "Player highlighting in play (cl_playerHighlight 3)"],
+    ["fnql-feature-celshading.jpg", "Cel shading: banded model light, outlines and world edge lines"],
+    ["fnql-feature-dlight-shadows.jpg", "Shadow-mapped dynamic lights, shown with two r_dlightTest test lights"],
+    ["fnql-feature-sun-shadows-action.jpg", "Sun shadows from the map's own sky; players cast them too"],
+    ["fnql-feature-sun-shadows.jpg", "Sun shadows off and on (r_csmShadows)"],
+    ["fnql-feature-hdr.jpg", "Classic SDR vs HDR with bloom (GLx)"],
+    ["fnql-feature-highlight-team.jpg", "Team-coloured highlighting (TDM)"],
+    ["fnql-feature-celshading-closeup.jpg", "Cel shading close-up"],
+  ];
+  function addFigures(target, dir, list) {
+    for (const [file, caption] of list) {
+      const fig = document.createElement("figure");
+      const a = document.createElement("a");
+      a.href = dir + file;
+      const img = document.createElement("img");
+      img.src = a.href; img.alt = caption; img.loading = "lazy";
+      a.append(img);
+      const cap = document.createElement("figcaption");
+      cap.textContent = caption;
+      fig.append(a, cap);
+      target.append(fig);
+    }
+  }
+  addFigures(document.getElementById("showcasegrid"), "images/features/", showcase);
+  const g = document.getElementById("gallery");
+  for (const [file, caption] of shots) {
+    const fig = document.createElement("figure");
+    const a = document.createElement("a");
+    a.href = "images/screenshots/" + file;
+    const img = document.createElement("img");
+    img.src = a.href; img.alt = caption; img.loading = "lazy";
+    a.append(img);
+    const cap = document.createElement("figcaption");
+    cap.textContent = caption;
+    fig.append(a, cap);
+    g.append(fig);
+  }
+  const ag = document.getElementById("assetgrid");
+  for (const [file, label, size] of assets) {
+    const a = document.createElement("a");
+    a.className = "card"; a.href = "images/" + file; a.download = "";
+    const img = document.createElement("img");
+    img.src = a.href; img.alt = label; img.loading = "lazy";
+    const t = document.createElement("h3"); t.textContent = label;
+    const s = document.createElement("span"); s.textContent = size;
+    a.append(img, t, s);
+    ag.append(a);
+  }
+</script>
+</body>
+</html>
