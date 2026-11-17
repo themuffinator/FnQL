@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import re
 import sys
 from pathlib import Path
 from string import Template
@@ -16,6 +18,45 @@ INSTALL_TEMPLATE = ROOT / "docs" / "templates" / "install-readme.html.in"
 
 README_OUTPUT = ROOT / "README.md"
 INSTALL_OUTPUT = ROOT / ".install" / "README.html"
+
+# The bundled HTML readme must work offline from inside a release package,
+# so it carries the brand artwork inline instead of referencing files.
+LOGO_SVG = ROOT / "misc" / "branding" / "fnql-logo.svg"
+ICON_SVG = ROOT / "misc" / "branding" / "fnql-icon-small.svg"
+
+_SVG_COMMENT = re.compile(r"<!--.*?-->", re.S)
+_SVG_ROOT = re.compile(r"<svg\b([^>]*)>")
+_SVG_SIZE = re.compile(r'\s(?:width|height)="[^"]*"')
+
+
+def inline_svg(path: Path, label: str, css_class: str) -> str:
+    """Return an SVG file as an accessible inline element sized by CSS."""
+    text = _SVG_COMMENT.sub("", path.read_text(encoding="utf-8")).strip()
+    if "$" in text:
+        raise ValueError(f"{path} contains '$', which would break template rendering")
+    match = _SVG_ROOT.search(text)
+    if match is None or "viewBox" not in match.group(1):
+        raise ValueError(f"{path} needs a root <svg> element with a viewBox")
+    attributes = _SVG_SIZE.sub("", match.group(1))
+    root = f'<svg{attributes} class="{css_class}" role="img" aria-label="{label}" focusable="false">'
+    text = text[: match.start()] + root + text[match.end():]
+    # Collapse indentation so the inline element stays compact.
+    return "\n".join(line.strip() for line in text.splitlines() if line.strip())
+
+
+def svg_data_uri(path: Path) -> str:
+    data = _SVG_COMMENT.sub("", path.read_text(encoding="utf-8")).strip().encode("utf-8")
+    return "data:image/svg+xml;base64," + base64.b64encode(data).decode("ascii")
+
+
+def build_context() -> dict[str, object]:
+    meta = base_metadata()
+    return {
+        **meta,
+        "release_tag_example": f"{meta['tag_prefix']}{meta['version']}",
+        "logo_svg": inline_svg(LOGO_SVG, meta["project_name_short"], "logo"),
+        "icon_data_uri": svg_data_uri(ICON_SVG),
+    }
 
 
 def render(template_path: Path, context: dict[str, object]) -> str:
@@ -41,11 +82,7 @@ def write_if_changed(path: Path, content: str) -> bool:
 
 
 def main() -> int:
-    meta = base_metadata()
-    context = {
-        **meta,
-        "release_tag_example": f"{meta['tag_prefix']}{meta['version']}",
-    }
+    context = build_context()
     changed = [
         path
         for path, content in (

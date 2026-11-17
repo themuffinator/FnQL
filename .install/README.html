@@ -3,442 +3,652 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FnQL Distribution Notes</title>
+  <meta name="color-scheme" content="dark">
+  <title>FnQL Readme</title>
+  <meta name="description" content="FnQL (Fappin' Quake Live): an open-source engine for the Quake Live you already own. Installation, features and documentation.">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0OCIgaGVpZ2h0PSI0OCIgdmlld0JveD0iMCAwIDMyMCAzMjAiPgogIAogIDxkZWZzPgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJzdGVlbCIgeDE9IjAiIHkxPSItMTUwIiB4Mj0iMCIgeTI9IjE1MCIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgogICAgICA8c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiNmZmZmZmYiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIuNSIgc3RvcC1jb2xvcj0iI2QzZDZkYiIvPgogICAgICA8c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiNlY2VlZjEiLz4KICAgIDwvbGluZWFyR3JhZGllbnQ+CiAgICA8cmFkaWFsR3JhZGllbnQgaWQ9ImRpc2MiIGN4PSIwIiBjeT0iLTQwIiByPSIxNzAiIGdyYWRpZW50VW5pdHM9InVzZXJTcGFjZU9uVXNlIj4KICAgICAgPHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjYzIxODFlIi8+CiAgICAgIDxzdG9wIG9mZnNldD0iLjYiIHN0b3AtY29sb3I9IiM4YTBjMTIiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjM2EwMzA2Ii8+CiAgICA8L3JhZGlhbEdyYWRpZW50PgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJnbG9zcyIgeDE9IjAiIHkxPSItMTI0IiB4Mj0iMCIgeTI9Ii0xMCIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgogICAgICA8c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiNmZmYiIHN0b3Atb3BhY2l0eT0iLjQ1Ii8+CiAgICAgIDxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iI2ZmZiIgc3RvcC1vcGFjaXR5PSIwIi8+CiAgICA8L2xpbmVhckdyYWRpZW50PgogICAgPGNsaXBQYXRoIGlkPSJkaXNjQ2xpcCI+PGNpcmNsZSByPSIxMjIiLz48L2NsaXBQYXRoPgogIDwvZGVmcz4KCiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTYwIDE2MCkiPgogICAgPGNpcmNsZSByPSIxNTkiIGZpbGw9IiMwODA4MGEiLz4KICAgIDxjaXJjbGUgcj0iMTQxIiBmaWxsPSJub25lIiBzdHJva2U9InVybCgjc3RlZWwpIiBzdHJva2Utd2lkdGg9IjIwIi8+CiAgICA8Y2lyY2xlIHI9IjEyMiIgZmlsbD0idXJsKCNkaXNjKSIvPgogICAgPGcgY2xpcC1wYXRoPSJ1cmwoI2Rpc2NDbGlwKSI+CiAgICAgIDxlbGxpcHNlIGN4PSIwIiBjeT0iLTgyIiByeD0iMTIyIiByeT0iNzIiIGZpbGw9InVybCgjZ2xvc3MpIiBvcGFjaXR5PSIuNDUiLz4KICAgIDwvZz4KICAgIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDggMCkgc2NhbGUoMS4zKSBza2V3WCgtMTIpIHRyYW5zbGF0ZSgtNzMuNSAtNTIpIiBmaWxsPSJub25lIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj4KICAgICAgPGcgc3Ryb2tlPSIjMWMwMTAyIiBzdHJva2Utd2lkdGg9IjM2Ij4KICAgICAgICA8cGF0aCBkPSJNMjQgMTAwIFYzNiBRMjQgMTQgNDYgMTQgSDYyIi8+CiAgICAgICAgPHBhdGggZD0iTTIgNDggSDU2Ii8+CiAgICAgICAgPHBhdGggZD0iTTkxIDEwMCBWMjUiLz4KICAgICAgICA8cGF0aCBkPSJNOTEgNjAgUTkxIDM2IDExNSAzNiBIMTIxIFExNDUgMzYgMTQ1IDYwIFYxMDAiLz4KICAgICAgPC9nPgogICAgICA8ZyBzdHJva2U9IiNmZmZmZmYiIHN0cm9rZS13aWR0aD0iMjciPgogICAgICAgIDxwYXRoIGQ9Ik0yNCAxMDAgVjM2IFEyNCAxNCA0NiAxNCBINjIiLz4KICAgICAgICA8cGF0aCBkPSJNMiA0OCBINTYiLz4KICAgICAgICA8cGF0aCBkPSJNOTEgMTAwIFYyNSIvPgogICAgICAgIDxwYXRoIGQ9Ik05MSA2MCBROTEgMzYgMTE1IDM2IEgxMjEgUTE0NSAzNiAxNDUgNjAgVjEwMCIvPgogICAgICA8L2c+CiAgICA8L2c+CiAgPC9nPgo8L3N2Zz4=">
   <style>
     :root {
-      --bg: #0b1020;
-      --panel: rgba(10, 16, 32, 0.88);
-      --panel-alt: rgba(15, 23, 42, 0.78);
-      --line: rgba(148, 163, 184, 0.22);
-      --text: #e5edf7;
-      --muted: #9db0ca;
-      --accent: #4ade80;
-      --accent-2: #38bdf8;
-      --accent-3: #a78bfa;
-      --accent-4: #f59e0b;
-      --shadow: 0 24px 60px rgba(2, 6, 23, 0.45);
+      --bg: #08080a;
+      --bg-2: #0e0e11;
+      --panel: #131317;
+      --panel-2: #1a1a1f;
+      --line: #2a2a31;
+      --line-strong: #3a3a43;
+      --text: #ececf0;
+      --muted: #a6a6b0;
+      --steel: #c9cdd3;
+      --red: #d0141b;
+      --red-bright: #ff3b30;
+      --red-deep: #8a0a10;
+      --font-head: "Montserrat", "Segoe UI Black", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      --font-body: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+      --font-label: "Bahnschrift", "DIN Alternate", "Segoe UI", Arial, sans-serif;
+      --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, "DejaVu Sans Mono", monospace;
+      --carbon:
+        repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.018) 0 2px, transparent 2px 6px),
+        repeating-linear-gradient(-45deg, rgba(0, 0, 0, 0.35) 0 2px, transparent 2px 6px);
     }
 
-    * {
-      box-sizing: border-box;
-    }
+    * { box-sizing: border-box; }
 
-    html {
-      scroll-behavior: smooth;
-    }
+    html { scroll-behavior: smooth; }
 
     body {
       margin: 0;
-      min-height: 100vh;
-      font-family: "Segoe UI Variable Display", "Aptos", "Trebuchet MS", sans-serif;
+      background: var(--carbon), radial-gradient(ellipse at 50% -10%, #2a0b0d 0%, var(--bg) 55%) fixed, var(--bg);
       color: var(--text);
-      background:
-        radial-gradient(circle at top left, rgba(56, 189, 248, 0.18), transparent 28%),
-        radial-gradient(circle at top right, rgba(74, 222, 128, 0.12), transparent 24%),
-        linear-gradient(160deg, #060913 0%, #0b1020 48%, #121a30 100%);
+      font: 16px/1.65 var(--font-body);
+      -webkit-font-smoothing: antialiased;
     }
 
-    main {
-      width: min(1040px, calc(100% - 32px));
-      margin: 0 auto;
-      padding: 40px 0 56px;
-    }
+    a { color: var(--red-bright); text-underline-offset: 3px; }
+    a:hover { color: #fff; }
+    a:focus-visible, .button:focus-visible { outline: 2px solid var(--red-bright); outline-offset: 3px; }
 
-    .hero,
-    .section {
-      background: var(--panel);
+    code {
+      font-family: var(--font-mono);
+      font-size: 0.9em;
+      padding: 0.12em 0.42em;
+      border-radius: 5px;
+      background: #1d1d23;
       border: 1px solid var(--line);
-      border-radius: 24px;
-      box-shadow: var(--shadow);
-      backdrop-filter: blur(14px);
+      color: #f1f1f4;
+      overflow-wrap: anywhere;
     }
 
+    .wrap { width: min(1080px, calc(100% - 32px)); margin: 0 auto; }
+
+    /* ---------- hero ---------- */
     .hero {
-      padding: 36px;
       position: relative;
       overflow: hidden;
+      border-bottom: 1px solid var(--line);
+      background: var(--carbon), linear-gradient(180deg, #111114 0%, #08080a 100%);
     }
 
+    .hero::before,
     .hero::after {
       content: "";
       position: absolute;
-      inset: auto -120px -120px auto;
-      width: 280px;
-      height: 280px;
-      border-radius: 999px;
-      background: radial-gradient(circle, rgba(245, 158, 11, 0.24), rgba(245, 158, 11, 0));
+      top: -10%;
+      bottom: -10%;
+      width: 34px;
+      background: var(--red);
+      transform: skewX(-18deg);
       pointer-events: none;
     }
 
+    .hero::before { right: 9%; box-shadow: 70px 0 0 -6px rgba(208, 20, 27, 0.55), 132px 0 0 -12px rgba(208, 20, 27, 0.3); }
+    .hero::after { left: -30px; width: 14px; opacity: 0.8; }
+
+    .hero-inner {
+      position: relative;
+      z-index: 1;
+      padding: 48px 0 40px;
+    }
+
     .eyebrow {
-      display: inline-flex;
-      align-items: center;
-      gap: 10px;
-      padding: 8px 14px;
-      border-radius: 999px;
-      background: rgba(56, 189, 248, 0.12);
-      border: 1px solid rgba(56, 189, 248, 0.2);
-      color: var(--accent-2);
-      font-size: 0.82rem;
-      letter-spacing: 0.12em;
+      margin: 0 0 18px;
+      font: 600 0.78rem/1 var(--font-label);
+      letter-spacing: 0.32em;
       text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .eyebrow::before { content: "// "; color: var(--red-bright); letter-spacing: 0; }
+
+    .logo {
+      display: block;
+      width: min(520px, 100%);
+      height: auto;
+      filter: drop-shadow(0 18px 30px rgba(0, 0, 0, 0.55));
     }
 
     h1 {
-      margin: 18px 0 8px;
-      font-size: clamp(2.4rem, 5vw, 4.2rem);
-      line-height: 0.95;
-    }
-
-    .tagline {
-      margin: 0 0 14px;
-      color: #f8fafc;
-      font-size: 1.05rem;
-      font-weight: 700;
-      letter-spacing: 0.08em;
+      margin: 26px 0 0;
+      font: italic 900 clamp(1.9rem, 4.6vw, 3.2rem)/1.05 var(--font-head);
+      letter-spacing: 0.005em;
       text-transform: uppercase;
     }
 
-    .subtitle,
-    .lead,
-    li,
-    .card p,
-    .footer {
-      color: var(--muted);
-      line-height: 1.72;
-    }
+    h1 span { display: block; color: var(--red-bright); }
 
     .subtitle {
-      max-width: 780px;
-      margin: 0;
-      font-size: 1.06rem;
+      max-width: 720px;
+      margin: 18px 0 0;
+      color: #d4d4da;
+      font-size: 1.08rem;
     }
 
-    .buttons {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 12px;
-      margin-top: 28px;
-    }
+    .buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
 
     .button {
       display: inline-flex;
       align-items: center;
-      justify-content: center;
-      min-width: 170px;
-      padding: 12px 18px;
-      border-radius: 999px;
+      padding: 11px 20px;
+      border-radius: 6px;
+      border: 1px solid var(--line-strong);
+      background: rgba(20, 20, 24, 0.85);
+      color: var(--text);
       text-decoration: none;
-      font-weight: 700;
-      letter-spacing: 0.02em;
-      transition: transform 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+      font: 600 0.82rem/1 var(--font-label);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
     }
 
-    .button:hover {
-      transform: translateY(-1px);
-    }
+    .button:hover { border-color: var(--red-bright); color: #fff; transform: translateY(-1px); }
 
     .button-primary {
-      color: #07111f;
-      background: linear-gradient(135deg, var(--accent), #86efac);
-      box-shadow: 0 12px 28px rgba(74, 222, 128, 0.18);
+      background: linear-gradient(180deg, var(--red-bright) 0%, var(--red) 55%, var(--red-deep) 100%);
+      border-color: var(--red);
+      color: #fff;
+      box-shadow: 0 10px 26px rgba(208, 20, 27, 0.32);
     }
 
-    .button-secondary {
-      color: var(--text);
-      background: rgba(15, 23, 42, 0.72);
-      border: 1px solid rgba(148, 163, 184, 0.24);
-    }
-
-    .stats,
-    .feature-grid,
-    .doc-grid {
+    .facts {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-      gap: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 1px;
+      margin-top: 34px;
+      background: var(--line);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
     }
 
-    .stats {
-      margin-top: 22px;
+    .fact { padding: 14px 18px; background: rgba(14, 14, 17, 0.92); }
+
+    .fact strong {
+      display: block;
+      margin-bottom: 4px;
+      font: 600 0.72rem/1.2 var(--font-label);
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--muted);
     }
 
-    .section {
-      margin-top: 22px;
-      padding: 28px 30px;
+    .fact span { color: var(--text); font-weight: 600; }
+
+    /* ---------- navigation ---------- */
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: rgba(8, 8, 10, 0.92);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(8px);
     }
 
-    .section-header {
-      margin-bottom: 16px;
+    nav .wrap { display: flex; flex-wrap: wrap; gap: 4px 24px; padding: 11px 0; }
+
+    nav a {
+      color: var(--muted);
+      text-decoration: none;
+      font: 600 0.74rem/1.4 var(--font-label);
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
     }
+
+    nav a:hover { color: #fff; }
+
+    /* ---------- sections ---------- */
+    main { padding: 8px 0 24px; }
+
+    section { padding: 46px 0 6px; scroll-margin-top: 48px; }
 
     h2 {
-      margin: 0;
-      font-size: 1.2rem;
-      letter-spacing: 0.04em;
+      margin: 0 0 6px;
+      font: italic 900 clamp(1.35rem, 2.6vw, 1.75rem)/1.15 var(--font-head);
       text-transform: uppercase;
-      color: var(--accent-4);
+      letter-spacing: 0.01em;
+    }
+
+    h2 .num { color: var(--red-bright); margin-right: 0.35em; }
+
+    .rule {
+      height: 4px;
+      width: 76px;
+      margin: 10px 0 20px;
+      background: linear-gradient(90deg, var(--red) 0 60%, transparent 60% 70%, var(--red-deep) 70% 100%);
+      transform: skewX(-18deg);
     }
 
     h3 {
-      margin: 0 0 10px;
-      color: #f8fafc;
-      font-size: 1.02rem;
+      margin: 0 0 8px;
+      font: 700 1.02rem/1.3 var(--font-body);
+      color: #fff;
     }
 
-    .lead {
-      margin: 10px 0 0;
-      max-width: 820px;
+    .lead { max-width: 820px; margin: 0 0 14px; color: #d4d4da; }
+
+    p { margin: 0 0 12px; }
+
+    .note { color: var(--muted); font-size: 0.95rem; }
+
+    .points { margin: 0 0 16px; padding: 0; list-style: none; }
+
+    .points li { position: relative; padding-left: 22px; margin: 8px 0; }
+
+    .points li::before {
+      content: "";
+      position: absolute;
+      left: 2px;
+      top: 0.62em;
+      width: 9px;
+      height: 9px;
+      background: var(--red);
+      transform: skewX(-18deg);
     }
 
-    .card,
-    .feature-group,
-    .doc-column {
-      padding: 18px;
-      border-radius: 18px;
-      background: var(--panel-alt);
-      border: 1px solid rgba(148, 163, 184, 0.16);
+    .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
+
+    .card {
+      position: relative;
+      padding: 18px 20px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      transition: border-color 120ms ease;
     }
 
-    .card strong,
-    .feature-group strong,
-    .doc-column strong {
-      display: block;
-      margin-bottom: 8px;
-      color: #f8fafc;
-      font-size: 1rem;
+    .card::before {
+      content: "";
+      position: absolute;
+      left: 20px;
+      top: -1px;
+      width: 38px;
+      height: 3px;
+      background: var(--red);
     }
 
-    ol,
-    ul {
-      margin: 14px 0 0;
-      padding-left: 22px;
+    .card:hover { border-color: var(--line-strong); }
+
+    .card p, .card li { color: #c9c9d1; font-size: 0.96rem; }
+
+    .card ol { margin: 6px 0 0; padding-left: 20px; }
+
+    .card ol li { margin: 6px 0; }
+
+    .steps { counter-reset: step; list-style: none; margin: 4px 0 0; padding: 0; }
+
+    .steps li { counter-increment: step; position: relative; padding-left: 40px; margin: 12px 0; }
+
+    .steps li::before {
+      content: counter(step);
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 26px;
+      height: 26px;
+      display: grid;
+      place-items: center;
+      background: var(--red);
+      color: #fff;
+      font: italic 800 0.86rem/1 var(--font-head);
+      transform: skewX(-12deg);
+      border-radius: 3px;
     }
 
-    .feature-grid,
-    .doc-grid {
-      margin-top: 18px;
+    table { width: 100%; border-collapse: collapse; margin: 6px 0 16px; font-size: 0.95rem; }
+
+    th, td { padding: 9px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+
+    th {
+      font: 600 0.72rem/1.3 var(--font-label);
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--muted);
     }
 
-    .doc-column ul,
-    .feature-group ul {
-      margin-top: 10px;
+    .table-scroll { overflow-x: auto; }
+
+    .docs a { font-weight: 600; }
+
+    .tag {
+      display: inline-block;
+      margin-left: 6px;
+      padding: 1px 7px;
+      border-radius: 4px;
+      background: rgba(208, 20, 27, 0.16);
+      color: #ff8a84;
+      font: 600 0.66rem/1.6 var(--font-label);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      vertical-align: 2px;
     }
 
-    a {
-      color: var(--accent-2);
+    footer {
+      margin-top: 40px;
+      padding: 26px 0 40px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.88rem;
     }
 
-    code {
-      padding: 0.15rem 0.45rem;
-      border-radius: 8px;
-      background: rgba(15, 23, 42, 0.82);
-      color: #dbeafe;
-      font-family: "Cascadia Code", "Consolas", monospace;
-    }
-
-    .footer {
-      margin-top: 18px;
-      font-size: 0.95rem;
-    }
+    footer p { max-width: 860px; }
 
     @media (max-width: 640px) {
-      main {
-        width: min(100% - 20px, 1040px);
-        padding-top: 18px;
-      }
+      .hero::before { right: -40px; opacity: 0.6; }
+      .hero-inner { padding: 32px 0 28px; }
+      .button { flex: 1 1 100%; justify-content: center; }
+      section { padding-top: 34px; }
+    }
 
-      .hero,
-      .section {
-        border-radius: 18px;
-        padding: 24px 20px;
-      }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      .button, .card { transition: none; }
+      .button:hover { transform: none; }
+    }
 
-      .button {
-        width: 100%;
-      }
+    @media print {
+      body { background: #fff; color: #111; }
+      .hero, .fact, .card { background: #fff; }
+      .hero::before, .hero::after, nav, .buttons { display: none; }
+      h1, h2, h3, .fact span, .lead, .card p, .card li { color: #111; }
+      a { color: #8a0a10; }
+      code { background: #f3f3f3; color: #111; border-color: #ddd; }
     }
   </style>
 </head>
 <body>
-  <main>
-    <section class="hero">
-      <div class="eyebrow">FnQL distribution notes</div>
-      <h1>FnQL</h1>
-      <p class="tagline">Fappin' Quake Live</p>
-      <p class="subtitle">
-        <strong>FnQL</strong> brings FnQ3's modern rendering, audio, input, platform, and quality-of-life improvements to the retail Steam release of <em>Quake Live</em>.
-      </p>
+  <header class="hero">
+    <div class="wrap hero-inner">
+      <p class="eyebrow">Fappin' Quake Live · Readme</p>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="24 32 666 356" class="logo" role="img" aria-label="FnQL" focusable="false">
+<defs>
+<linearGradient id="steel" x1="0" y1="-150" x2="0" y2="150" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#ffffff"/>
+<stop offset=".45" stop-color="#c9cdd3"/>
+<stop offset=".55" stop-color="#8d9299"/>
+<stop offset="1" stop-color="#e9ebee"/>
+</linearGradient>
+<linearGradient id="gunmetal" x1="-150" y1="-150" x2="150" y2="150" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#4a4e55"/>
+<stop offset=".5" stop-color="#17181b"/>
+<stop offset="1" stop-color="#3a3d43"/>
+</linearGradient>
+<radialGradient id="casing" cx="0" cy="-40" r="190" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#26282c"/>
+<stop offset="1" stop-color="#050506"/>
+</radialGradient>
+<radialGradient id="disc" cx="0" cy="-34" r="150" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#b3161b"/>
+<stop offset=".55" stop-color="#7a0b10"/>
+<stop offset="1" stop-color="#2c0204"/>
+</radialGradient>
+<linearGradient id="gloss" x1="0" y1="-104" x2="0" y2="-4" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#fff" stop-opacity=".5"/>
+<stop offset="1" stop-color="#fff" stop-opacity="0"/>
+</linearGradient>
+<clipPath id="discClip"><circle r="104"/></clipPath>
+<linearGradient id="panel" x1="0" y1="-75" x2="0" y2="75" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#ffffff"/>
+<stop offset=".5" stop-color="#f1f2f4"/>
+<stop offset="1" stop-color="#b9bdc4"/>
+</linearGradient>
+<linearGradient id="ink" x1="0" y1="0" x2="0" y2="100" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#ff4136"/>
+<stop offset=".45" stop-color="#d0141b"/>
+<stop offset="1" stop-color="#6d050a"/>
+</linearGradient>
+<linearGradient id="fnInk" x1="0" y1="0" x2="0" y2="100" gradientUnits="userSpaceOnUse">
+<stop offset="0" stop-color="#ffffff"/>
+<stop offset=".6" stop-color="#eef0f3"/>
+<stop offset="1" stop-color="#aab0b8"/>
+</linearGradient>
+<rect id="glyphQ" fill="none" x="14" y="14" width="78" height="72" rx="19"/>
+<path id="glyphQtail" fill="none" d="M57 55 L101 99"/>
+<path id="glyphL" fill="none" d="M14 0 V86 H86" stroke-linejoin="miter"/>
+<g id="glyphFn" fill="none" stroke-linejoin="round">
+<path d="M24 100 V36 Q24 14 46 14 H62"/>
+<path d="M2 48 H56"/>
+<path d="M91 100 V25"/>
+<path d="M91 60 Q91 36 115 36 H121 Q145 36 145 60 V100"/>
+</g>
+<filter id="lockupShadow" x="-10%" y="-15%" width="120%" height="140%">
+<feGaussianBlur in="SourceAlpha" stdDeviation="9"/>
+<feOffset dy="9"/>
+<feComponentTransfer><feFuncA type="linear" slope=".5"/></feComponentTransfer>
+<feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+</filter>
+<filter id="soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="5"/></filter>
+<clipPath id="plateClip" clipPathUnits="userSpaceOnUse"><rect x="-10" y="-90" width="470" height="180" rx="38"/></clipPath>
+</defs>
+<g filter="url(#lockupShadow)">
+<g transform="translate(200 212) skewX(-12)">
+<rect x="0" y="-75" width="442" height="150" rx="30" fill="none" stroke="#08080a" stroke-width="28"/>
+<rect x="0" y="-75" width="442" height="150" rx="30" fill="none" stroke="#f6f7f9" stroke-width="17"/>
+<rect x="0" y="-75" width="442" height="150" rx="30" fill="url(#panel)" stroke="#08080a" stroke-width="9"/>
+<g transform="translate(192 -50)">
+<g stroke="#0a0606" stroke-width="40">
+<use href="#glyphQ"/>
+<use href="#glyphQtail" stroke-width="32"/>
+<use href="#glyphL" x="120"/>
+</g>
+<g stroke="url(#ink)" stroke-width="29">
+<use href="#glyphQ"/>
+<use href="#glyphQtail" stroke-width="21"/>
+<use href="#glyphL" x="120"/>
+</g>
+</g>
+</g>
+<g transform="translate(200 212) skewX(-12)" clip-path="url(#plateClip)">
+<g transform="skewX(12) translate(0 -12)">
+<circle r="156" cx="7" cy="8" fill="#000" opacity=".55" filter="url(#soft)"/>
+</g>
+</g>
+<g transform="translate(200 200)">
+<circle r="153" fill="#08080a"/>
+<circle r="147" fill="url(#casing)" stroke="url(#steel)" stroke-width="4"/>
+<circle r="132" fill="none" stroke="url(#gunmetal)" stroke-width="20"/>
+<circle r="132" fill="none" stroke="url(#steel)" stroke-width="20"
+stroke-dasharray="207.3 207.4" transform="rotate(180)"/>
+<circle r="132" fill="none" stroke="#08080a" stroke-width="22"
+stroke-dasharray="5 98.67" transform="rotate(-1.1)"/>
+<circle r="119" fill="#060607"/>
+<circle r="113" fill="none" stroke="#3d4046" stroke-width="5" stroke-dasharray="3 16.72"/>
+<circle r="108" fill="#050506" stroke="url(#steel)" stroke-width="3"/>
+<circle r="104" fill="url(#disc)"/>
+<g clip-path="url(#discClip)">
+<ellipse cx="0" cy="-70" rx="104" ry="62" fill="url(#gloss)" opacity=".5"/>
+</g>
+<circle r="104" fill="none" stroke="#000" stroke-opacity=".45" stroke-width="5"/>
+<g transform="translate(6 0) skewX(-12) translate(-73.5 -52)">
+<g stroke="#1c0102" stroke-width="32"><use href="#glyphFn"/></g>
+<g stroke="url(#fnInk)" stroke-width="24"><use href="#glyphFn"/></g>
+</g>
+</g>
+</g>
+</svg>
+      <h1>The Quake Live you own. <span>Rebuilt engine.</span></h1>
+      <p class="subtitle"><strong>FnQL</strong> is an open-source engine for the retail Steam release of Quake Live. It keeps the game you know, then adds faster rendering, modern audio and input, stronger platform support and a long list of quality-of-life improvements.</p>
       <div class="buttons">
-        <a class="button button-primary" href="https://github.com/themuffinator/FnQL/releases/latest">Download latest release</a>
-        <a class="button button-secondary" href="#getting-started">Getting started</a>
-        <a class="button button-secondary" href="#documentation">Documentation</a>
-        <a class="button button-secondary" href="https://github.com/themuffinator/FnQL/blob/main/BUILD.md">Build guide</a>
-        <a class="button button-secondary" href="LICENSE">License</a>
+        <a class="button button-primary" href="https://github.com/themuffinator/FnQL/releases/latest">Latest release</a>
+        <a class="button" href="#getting-started">Getting started</a>
+        <a class="button" href="#documentation">Documentation</a>
+        <a class="button" href="https://github.com/themuffinator/FnQL/blob/main/BUILD.md">Build guide</a>
+        <a class="button" href="LICENSE">License</a>
       </div>
-      <div class="stats">
-        <article class="card">
-          <strong>Compatibility target</strong>
-          <p>Retail Quake Live (Steam)</p>
-        </article>
-        <article class="card">
-          <strong>Base version</strong>
-          <p>0.1.0</p>
-        </article>
-        <article class="card">
-          <strong>Current build</strong>
-          <p>0.1.0</p>
-        </article>
-        <article class="card">
-          <strong>Tagged release format</strong>
-          <p><code>v0.1.0</code></p>
-        </article>
+      <div class="facts">
+        <div class="fact"><strong>Compatibility target</strong><span>Retail Quake Live (Steam)</span></div>
+        <div class="fact"><strong>Version line</strong><span>0.1.0</span></div>
+        <div class="fact"><strong>Official packages</strong><span>Windows x86 client · Linux i686 server</span></div>
+        <div class="fact"><strong>Requires</strong><span>Quake Live on Steam (app 282440)</span></div>
       </div>
+    </div>
+  </header>
+
+  <nav aria-label="Sections">
+    <div class="wrap">
+      <a href="#introduction">Introduction</a>
+      <a href="#features">Features</a>
+      <a href="#getting-started">Getting started</a>
+      <a href="#documentation">Documentation</a>
+      <a href="#credits">Credits</a>
+    </div>
+  </nav>
+
+  <main class="wrap">
+    <section id="introduction">
+      <h2><span class="num">1.</span>Introduction</h2>
+      <div class="rule"></div>
+      <p class="lead">Retail Quake Live compatibility comes first:</p>
+      <ul class="points">
+        <li><strong>FnQL players join retail servers</strong>, and <strong>retail players join FnQL servers</strong> and receive exactly what a retail server would send them.</li>
+        <li>Your install, profile, configs, <code>.dm_91</code> demos, maps and Workshop content keep working.</li>
+        <li>Steam authentication goes through Steam's own session tickets and is never faked.</li>
+      </ul>
+      <p>FnQL is engine-only. It does not reconstruct or distribute Quake Live game code or assets, so a legitimate <a href="https://store.steampowered.com/app/282440/Quake_Live/">Quake Live installation on Steam</a> is required. Its lineage runs from id Software's GPL Quake III Arena source through ioquake3, Quake3e and FnQ3.</p>
     </section>
 
-    <section class="section" id="introduction">
-      <div class="section-header">
-        <h2>1. Introduction</h2>
-        <p class="lead"><strong>FnQL</strong> is a modernized Quake Live engine for players who want the retail Steam game to retain its familiar behavior while gaining faster rendering, modern audio and input, stronger platform support, and useful quality-of-life improvements.</p>
-      </div>
-      <p class="lead">Retail Quake Live compatibility comes first. FnQL is engine-only and does not reconstruct or distribute Quake Live game code or assets, so a legitimate <a href="https://store.steampowered.com/app/282440/Quake_Live/">Quake Live installation on Steam</a> is required.</p>
-      <p class="footer">The official Windows package includes FnQL's open-source engine, its WebUI overlay, and the compiled closed-source Steam provider. Linux packages contain only redistributable FnQL components. No package includes Valve's <code>steam_api.dll</code> or any retail game content.</p>
-    </section>
-
-    <section class="section" id="features">
-      <div class="section-header">
-        <h2>2. Features</h2>
-        <p class="lead">Extensive retail compatibility with the modern engine features players expect on current hardware.</p>
-      </div>
-      <div class="feature-grid">
-        <article class="feature-group">
+    <section id="features">
+      <h2><span class="num">2.</span>Features</h2>
+      <div class="rule"></div>
+      <div class="grid">
+        <article class="card">
           <h3>Extensive Quake Live compatibility</h3>
           <p>Built around the retail Steam release, with support for official assets and game modules, protocol 91 networking, <code>.dm_91</code> demos, BSP v47 maps, advertisements, factories, player profiles, the retail WebUI, Steam integration and Workshop content.</p>
         </article>
-        <article class="feature-group">
+        <article class="card">
           <h3>Fast, modern hardware rendering</h3>
-          <p>Choose between optimized <strong>GLx</strong>, <strong>Vulkan raster</strong> and <strong>Vulkan RTX</strong> renderers, with GPU-cached world geometry, optimized lightmaps, reduced rendering overhead, improved depth precision and better performance on large or demanding maps.</p>
+          <p>Choose between optimized <strong>GLx</strong> and <strong>Vulkan</strong> renderers, plus an experimental <strong>Vulkan RTX</strong> module, with GPU-cached world geometry, optimized lightmaps, reduced rendering overhead, improved depth precision and better performance on large or demanding maps.</p>
         </article>
-        <article class="feature-group">
+        <article class="card">
           <h3>Modern visual upgrades</h3>
-          <p>Optional HDR rendering and output, MSAA, supersampling, render scaling, anisotropic filtering, bloom, tone mapping, colour grading, high-quality dynamic lighting and shadows, motion blur, lens flares, soft particles, enhanced liquids and per-map fog.</p>
+          <p>Optional HDR rendering and output, MSAA, supersampling, render scaling, anisotropic filtering, bloom, tone mapping, colour grading, shadow-mapped dynamic lights, sun shadows from each map's own sky, motion blur, lens flares, soft particles, enhanced liquids and per-map fog.</p>
         </article>
-        <article class="feature-group">
+        <article class="card">
           <h3>Improved player visibility</h3>
           <p>Optional player rim lighting, stencil outlines or both, with configurable enemy, teammate, team and free-for-all colours, intensity and outline thickness. Cel shading, model outlines and world-edge outlines are also available.</p>
         </article>
-        <article class="feature-group">
+        <article class="card">
           <h3>Better modern hardware and OS support</h3>
-          <p>SDL3-based video and input, OpenAL audio, modern graphics APIs, high-resolution and high-refresh displays, borderless/windowed/fullscreen modes, fast Alt+Enter switching, controller hotplugging and improved compatibility with current desktop systems.</p>
+          <p>Native Win32 and X11 video and input in release builds (SDL3 for source builds), OpenAL audio, modern graphics APIs, high-resolution and high-refresh displays, borderless/windowed/fullscreen modes, fast Alt+Enter switching and improved compatibility with current desktop systems.</p>
         </article>
-        <article class="feature-group">
+        <article class="card">
           <h3>Low-latency, configurable controls</h3>
-          <p>Raw mouse input, Quake Live-accurate CPI scaling, signed acceleration, sensitivity caps and angle-history filtering, while retaining classic Quake3e/ioquake3 mouse styles. Controllers, including Quake Live's analog gamepad mapping on Windows, and Unicode text input are also supported (enable controllers with <code>in_joystick 1</code>).</p>
+          <p>Raw mouse input, Quake Live-accurate CPI scaling, signed acceleration, sensitivity caps and angle-history filtering, while retaining classic Quake3e/ioquake3 mouse styles. Controllers, including Quake Live's analog gamepad mapping on Windows, and Unicode text input are also supported (enable controllers with <code>in_joystick 1</code>; SDL builds add controller hotplugging).</p>
         </article>
-        <article class="feature-group">
+        <article class="card">
           <h3>Modern spatial audio</h3>
           <p>OpenAL and HRTF headphone positioning, surround output, reverb, geometry-based occlusion, output-device selection, live device recovery and automatic fallback to the classic software mixer.</p>
         </article>
-        <article class="feature-group">
+        <article class="card">
           <h3>Major quality-of-life improvements</h3>
           <p>Scalable TTF console text, smooth scrolling, mouse selection, clipboard support, drag-and-drop editing, live command/CVar/map completion, minimize hotkeys, focus muting, lower background CPU usage and more flexible player configuration.</p>
         </article>
-        <article class="feature-group">
+        <article class="card">
           <h3>Better screenshots, video and streaming tools</h3>
-          <p>PNG, TGA, JPEG and BMP capture, clipboard screenshots, custom filenames, camera metadata, configurable levelshots, watermarks, cubemap capture, arbitrary-resolution output and FFmpeg video piping.</p>
+          <p>PNG, TGA, JPEG and BMP capture, clipboard screenshots, custom filenames, camera metadata, configurable levelshots, watermarks, cubemap capture, arbitrary-resolution output, FFmpeg video piping and a windowless capture client.</p>
         </article>
-        <article class="feature-group">
+        <article class="card">
           <h3>Faster content handling</h3>
           <p>Quicker startup and map restarts with large PK3 libraries, raised filesystem and map limits, fast redirected downloads and automatic handling of server-required Workshop content.</p>
         </article>
-        <article class="feature-group">
+        <article class="card">
           <h3>Greater stability and security</h3>
-          <p>Extensive Quake3e and FnQ3 bug fixes, improved memory management, lower memory usage, stronger network protection and graceful fallbacks when optional rendering, audio, WebUI or Steam functionality is unavailable.</p>
+          <p>Extensive Quake3e and FnQ3 bug fixes, improved memory management, lower memory usage, stronger network protection, hostile-content checks on downloaded packages and graceful fallbacks when optional rendering, audio, WebUI or Steam functionality is unavailable.</p>
         </article>
       </div>
     </section>
 
-    <section class="section" id="getting-started">
-      <div class="section-header">
-        <h2>3. Getting Started</h2>
-        <p class="lead">Keep your legitimate retail installation and add the platform-appropriate FnQL package beside it.</p>
-      </div>
-      <ol>
-        <li>Install <a href="https://store.steampowered.com/app/282440/Quake_Live/">Quake Live through Steam</a> and launch the retail game once so Steam creates its normal files and player profile.</li>
-        <li>Download the supported Windows <code>.zip</code> or Linux <code>.tar.gz</code> from the <a href="https://github.com/themuffinator/FnQL/releases/latest">latest FnQL release</a>.</li>
-      </ol>
-      <div class="feature-grid">
-        <article class="feature-group">
-          <h3>Windows retail client</h3>
-          <ol>
-            <li>Extract the <code>.zip</code> into the Quake Live installation folder.</li>
-            <li>Keep <code>FnQL-pkg.fnz</code>, <code>fnql-web.pak</code>, the renderer modules, and packaged runtime libraries beside <code>fnql.exe</code>.</li>
-            <li>Leave Steam running and launch <code>fnql.exe</code>. The official build is Win32/x86 so it can load the retail game modules and WebUI.</li>
+    <section id="getting-started">
+      <h2><span class="num">3.</span>Getting Started</h2>
+      <div class="rule"></div>
+      <p class="lead">Install <a href="https://store.steampowered.com/app/282440/Quake_Live/">Quake Live through Steam</a> and launch the retail game once, so Steam creates its normal files and your player profile. Then add the FnQL package for your platform.</p>
+      <div class="grid">
+        <article class="card">
+          <h3>Windows client</h3>
+          <ol class="steps">
+            <li>In Steam, right-click Quake Live → <strong>Manage</strong> → <strong>Browse local files</strong>, and extract the Windows <code>.zip</code> into that folder.</li>
+            <li>Keep <code>FnQL-pkg.fnz</code>, <code>fnql-web.pak</code>, the renderer modules and the packaged runtime libraries beside <code>fnql.exe</code>.</li>
+            <li>Leave Steam running and launch <code>fnql.exe</code>.</li>
           </ol>
+          <p class="note">FnQL's files sit beside the retail ones; <code>quakelive_steam.exe</code> keeps working as before. The official build is Win32/x86 so it can load the retail game modules and WebUI.</p>
         </article>
-        <article class="feature-group">
-          <h3>Native Linux dedicated server</h3>
-          <ol>
-            <li>Install the 32-bit runtime libraries reported by <code>ldd ./fnql.ded</code>. The release is i686 so it can load retail <code>qagamei386.so</code>.</li>
-            <li>Preserve executable modes by extracting with <code>tar -xzf fnql-*-linux-x86.tar.gz -C "&lt;Quake Live folder&gt;"</code>.</li>
+        <article class="card">
+          <h3>Linux dedicated server</h3>
+          <ol class="steps">
+            <li>Install the 32-bit runtime libraries reported by <code>ldd ./fnql.ded</code>. The release is i686 so it can load retail <code>qagamei386.so</code> from <code>baseq3/bin.pk3</code>.</li>
+            <li>Extract with <code>tar -xzf fnql-*-linux-x86.tar.gz -C "&lt;Quake Live folder&gt;"</code> to keep the executable bits.</li>
             <li>From that folder run <code>./fnql.ded +set fs_steampath "$PWD" +set dedicated 2 +map campgrounds ffa</code>.</li>
           </ol>
-        </article>
-        <article class="feature-group">
-          <h3>x86_64 builds (Windows and Linux, from source)</h3>
-          <ol>
-            <li>Releases do not ship x86_64 packages until that target has Steam, the WebUI and retail modules. Source builds run <code>fnql.x64.exe</code> / <code>fnql.ded.x64.exe</code> (Linux: <code>fnql.x64</code> / <code>fnql.ded.x64</code>) beside the x86 files without replacing them.</li>
-            <li>Retail game modules, Awesomium and the Steam provider are 32-bit only, so these builds have no Steam session or WebUI and run the bundled FnQL-game modules, which they load by default. Use the x86 build for retail play.</li>
-          </ol>
+          <p class="note">Keep the two FnQL package sidecars and renderer modules beside the binaries.</p>
         </article>
       </div>
-      <p class="footer">Official releases support the Windows Win32/x86 retail client and the Linux i686 dedicated server; x86_64 builds from source host FnQL-game but are not packaged. Retail <code>bin.pk3</code> includes native <code>qagamei386.so</code> and <code>qagamex64.so</code> server modules, so the Linux server loads the i386 ELF directly rather than attempting to load the Win32 PE DLL. Retail ships no native Linux client/UI modules and no macOS game, client, UI, or QVM modules, so FnQL publishes no macOS package and makes no native macOS retail-play claim.</p>
-      <p class="footer">Every package also puts the clean-room <a href="https://github.com/themuffinator/FnQL-game">FnQL-game</a> modules in <code>baseq3/</code>, and FnQL uses them by default: <code>vm_gameProvider</code>, <code>vm_cgameProvider</code> and <code>vm_uiProvider</code> default to <code>auto</code>, which takes a module that declares retail wire parity, as the bundled ones do. Set a provider to <code>retail</code> to use the retail module (for example <code>+set vm_gameProvider retail</code>); <code>vminfo</code> shows the active module, and a missing or invalid one falls back to retail. A configuration from an earlier FnQL release holds <code>vm_gameProvider "retail"</code>, its old default; FnQL moves it to the new default once, so set the provider again afterwards to keep the retail module. On a pure server the FnQL-game cgame and UI run only from the FnQL-game client package (<code>baseq3/fnql_game_client.pk3</code>, in every package) that the server lists in <code>sv_fnqlClientPaks</code>; elsewhere, retail servers included, FnQL loads the retail ones. The modules contain code under two licenses (FnQL-game's own code under GPLv2 or later, its baseq3a baseline under id Software's Quake III Arena game-source license): see <code>docs/fnql/FNQL_GAME_BINARY_NOTICE.txt</code> and <code>docs/fnql-game/</code>.</p>
-      <p class="footer">FnQL locates conventional Steam libraries automatically. For a custom library, start it with <code>+set fs_steampath "&lt;Quake Live folder&gt;"</code>. Steam and WebUI features fail safely when optional runtime components are unavailable.</p>
-      <p class="footer">To compile FnQL yourself, use the <a href="https://github.com/themuffinator/FnQL/blob/main/BUILD.md">Build Guide</a>.</p>
+      <p class="note">FnQL discovers conventional Steam libraries on each supported OS; for a custom library use <code>+set fs_steampath "&lt;Quake Live folder&gt;"</code>. Optional Steam and WebUI services fail safely when unavailable.</p>
+
+      <h3 style="margin-top: 26px;">Game modules</h3>
+      <p>Every package puts the clean-room <a href="https://github.com/themuffinator/FnQL-game">FnQL-game</a> modules in <code>baseq3/</code>, and FnQL uses them by default. Retail clients join FnQL servers running the FnQL-game game module and see what a retail server would send them.</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Cvar</th><th>Values</th><th>What it picks</th></tr></thead>
+          <tbody>
+            <tr><td><code>vm_gameProvider</code></td><td><code>auto</code> (default), <code>fnql</code>, <code>retail</code></td><td>Server game module</td></tr>
+            <tr><td><code>vm_cgameProvider</code></td><td><code>auto</code> (default), <code>fnql</code>, <code>retail</code></td><td>Client game module</td></tr>
+            <tr><td><code>vm_uiProvider</code></td><td><code>auto</code> (default), <code>fnql</code>, <code>retail</code></td><td>Menu module</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="note"><code>auto</code> takes an FnQL-game module that declares retail wire parity, as the bundled ones do, and falls back to the retail module when it is missing; <code>vminfo</code> shows which module is active. A configuration written by an earlier FnQL release holds <code>vm_gameProvider "retail"</code>, its old default; FnQL moves it to the new default once, so set the provider again afterwards to keep the retail module. On pure servers, FnQL-game's cgame and UI run only from <code>baseq3/fnql_game_client.pk3</code> when the server lists it in <code>sv_fnqlClientPaks</code>; elsewhere, retail servers included, FnQL loads the retail cgame and UI.</p>
+
+      <h3 style="margin-top: 26px;">What's in this package</h3>
+      <ul class="points">
+        <li>The Windows package contains FnQL's open-source engine, its WebUI overlay, the FnQL-game modules and the compiled, closed-source Steam provider (<code>fnql_steam.dll</code>), which talks to the <code>steam_api.dll</code> from your own install. The Linux package contains only redistributable FnQL components and the FnQL-game modules.</li>
+        <li>No package includes Valve's <code>steam_api.dll</code> or any retail game content.</li>
+        <li>The FnQL-game modules combine FnQL-game's own code (GPLv2 or later) with baseq3a baseline code under id Software's Quake III Arena game-source license: see <code>docs/fnql/FNQL_GAME_BINARY_NOTICE.txt</code> and <code>docs/fnql-game/</code>.</li>
+        <li>Releases ship only the x86 packages. FnQL also builds from source for x86_64 on Windows and Linux, and its dedicated server for Linux aarch64, armv7l, ppc64le and ppc64; those builds have no Steam integration, WebUI or retail modules yet and run the FnQL-game modules. There is no macOS build, because retail ships no macOS game, client, UI or QVM modules.</li>
+      </ul>
     </section>
 
-    <section class="section" id="documentation">
-      <div class="section-header">
-        <h2>4. Documentation</h2>
-        <p class="lead">Start with the player guides for setup and tuning. Build, compatibility, and implementation details live in the technical references.</p>
-      </div>
-      <div class="doc-grid">
-        <article class="doc-column">
+    <section id="documentation" class="docs">
+      <h2><span class="num">4.</span>Documentation</h2>
+      <div class="rule"></div>
+      <p class="lead">Guides marked <span class="tag">included</span> ship in this package; the rest open on GitHub.</p>
+      <div class="grid">
+        <article class="card">
           <h3>Player guides</h3>
-          <ul>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/DISPLAY.md">Display Guide</a> for renderers, display modes, HDR, scaling, anti-aliasing, bloom, lighting, shadows, fog, liquids, lens flares, and motion blur.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/RTX.md">RTX Renderer Guide</a> for requirements, renderer selection, fallback behavior, safe settings, and troubleshooting.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/VISUALS.md">Visuals Guide</a> for player highlighting, colours, cel shading, and outlines.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/ASPECT_CORRECTION.md">Aspect Handling Guide</a> for the retail WebUI, menus, and cinematics.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/AUDIO.md">Audio Guide</a> for devices, HRTF, spatial effects, fallback behavior, and troubleshooting.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/CONSOLE.md">Console Guide</a> for layout, scaling, completion, clipboard use, and mouse interaction.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/SCREENSHOTS.md">Screenshot Guide</a> for formats, filenames, metadata, levelshots, watermarks, and cubemaps.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/releases">Release History</a> for published changelogs and downloads.</li>
+          <ul class="points">
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/DISPLAY.md">Display Guide</a>: renderers, display modes, HDR, scaling, anti-aliasing, bloom, lighting, shadows, fog, liquids, lens flares and motion blur.</li>
+            <li><a href="docs/RTX.md">RTX Renderer Guide</a><span class="tag">included</span>: requirements, selection, fallback, safe settings and troubleshooting.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/VISUALS.md">Visuals Guide</a>: player highlighting, colours, cel shading and outlines.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/ASPECT_CORRECTION.md">Aspect Handling Guide</a>: the retail WebUI, menus and cinematics.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/AUDIO.md">Audio Guide</a>: devices, HRTF, spatial effects, fallback and troubleshooting.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/CONSOLE.md">Console Guide</a>: layout, scaling, completion, clipboard and mouse use.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/SCREENSHOTS.md">Screenshot Guide</a>: formats, filenames, metadata, levelshots, watermarks and cubemaps.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/releases">Release History</a>: changelogs and downloads.</li>
           </ul>
         </article>
-        <article class="doc-column">
+        <article class="card">
           <h3>Technical and build docs</h3>
-          <ul>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/BUILD.md">Build Guide</a> for compiling FnQL locally.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/GLX.md">GLx Renderer Guide</a> for the default OpenGL-lineage renderer, diagnostics, and troubleshooting.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/fnql/INPUT_COMPATIBILITY.md">Input Compatibility Notes</a> for retail mouse math, text input, controllers, and legacy profiles.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/fnql/WEBUI_BACKEND.md">WebUI Backend Notes</a> for retail resources, platform boundaries, overlay order, and fallbacks.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/fnql/STEAM_PROVIDER.md">Steam Provider Notes</a> for the open loader ABI, provider distribution, and runtime policy.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/fnql/RTX_RENDERER.md">RTX Renderer Contract</a> for the Quake Live ABI boundary, conservative defaults, and runtime validation.</li>
-            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/fnql/TECHNICAL.md">Technical Notes</a> for repository structure, release flow, compatibility workflow, and maintainer conventions.</li>
+          <ul class="points">
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/BUILD.md">Build Guide</a>: compiling FnQL locally.</li>
+            <li><a href="docs/GLX.md">GLx Renderer Guide</a><span class="tag">included</span>: the default OpenGL-lineage renderer, diagnostics and troubleshooting.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/fnql/INPUT_COMPATIBILITY.md">Input Compatibility Notes</a>: retail mouse math, text input, controllers and legacy profiles.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/fnql/WEBUI_BACKEND.md">WebUI Backend Notes</a>: retail resources, platform boundaries, overlay order and fallbacks.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/fnql/STEAM_PROVIDER.md">Steam Provider Notes</a>: the open loader ABI, provider distribution and runtime policy.</li>
+            <li><a href="docs/fnql/RTX_RENDERER.md">RTX Renderer Contract</a><span class="tag">included</span>: the Quake Live ABI boundary, conservative defaults and runtime validation.</li>
+            <li><a href="https://github.com/themuffinator/FnQL/blob/main/docs/fnql/GAME_MODULES.md">Game Modules</a>: module providers and how FnQL hosts FnQL-game without breaking retail interoperability.</li>
+            <li><a href="docs/fnql/TECHNICAL.md">Technical Notes</a><span class="tag">included</span>: repository structure, release flow, compatibility workflow and maintainer conventions.</li>
           </ul>
         </article>
       </div>
     </section>
 
-    <section class="section" id="credits">
-      <div class="section-header">
-        <h2>5. Credits</h2>
-        <p class="lead">FnQL follows a clear upstream lineage from the Quake III Arena SDK, through ioquake3, Quake3e, FnQ3, and QLSRP.</p>
-      </div>
-      <p class="lead">Additional compatibility and feature work draws from projects and references such as <a href="https://bitbucket.org/CPMADevs/cnq3">CNQ3</a>, <a href="https://github.com/zturtleman/spearmint">Spearmint</a>, <a href="https://github.com/brugal/wolfcamql">WolfcamQL</a>, Luigi Auriemma's <a href="https://aluigi.altervista.org/papers.htm#qldec">qldec</a>, and <a href="https://github.com/Paril/DarkMatter-Q2">DarkMatter-Q2</a>.</p>
-      <p class="footer">See the full upstream chain and acknowledgements in <a href="https://github.com/themuffinator/FnQL/blob/main/CREDITS.md">CREDITS.md</a>.</p>
+    <section id="credits">
+      <h2><span class="num">5.</span>Credits</h2>
+      <div class="rule"></div>
+      <p class="lead">FnQL follows a clear upstream lineage from the <a href="https://github.com/id-Software/Quake-III-Arena">Quake III Arena SDK</a>, through <a href="https://github.com/ioquake3/ioq3">ioquake3</a>, <a href="https://github.com/ec-/Quake3e">Quake3e</a>, <a href="https://github.com/themuffinator/FnQ3">FnQ3</a> and <a href="https://github.com/themuffinator/QL-SRP">QL-SRP</a>.</p>
+      <p>Additional compatibility and feature work draws from projects and references such as <a href="https://bitbucket.org/CPMADevs/cnq3">CNQ3</a>, <a href="https://github.com/zturtleman/spearmint">Spearmint</a>, <a href="https://github.com/brugal/wolfcamql">WolfcamQL</a>, Luigi Auriemma's <a href="https://aluigi.altervista.org/papers.htm#qldec">qldec</a> and <a href="https://github.com/Paril/DarkMatter-Q2">DarkMatter-Q2</a>. See the full chain and acknowledgements in <a href="https://github.com/themuffinator/FnQL/blob/main/CREDITS.md">CREDITS.md</a>.</p>
     </section>
   </main>
+
+  <footer>
+    <div class="wrap">
+      <p>FnQL is an independent project and is not affiliated with, endorsed by, or sponsored by id Software, Bethesda, ZeniMax Media, or Valve. Quake, Quake III Arena, and Quake Live are trademarks of their respective owners. The engine is licensed under the <a href="LICENSE">GNU GPL version 2</a>.</p>
+    </div>
+  </footer>
 </body>
 </html>
