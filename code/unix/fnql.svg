@@ -1,67 +1,72 @@
-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<!-- Created with Inkscape (http://www.inkscape.org/) -->
-<svg
-   xmlns:svg="http://www.w3.org/2000/svg"
-   xmlns="http://www.w3.org/2000/svg"
-   xmlns:xlink="http://www.w3.org/1999/xlink"
-   version="1.0"
-   width="64"
-   height="64"
-   id="svg1306">
-  <defs
-     id="defs1308">
-    <linearGradient
-       id="linearGradient2180">
-      <stop
-         style="stop-color:#ff0000;stop-opacity:1"
-         offset="0"
-         id="stop2182" />
-      <stop
-         style="stop-color:#590000;stop-opacity:1"
-         offset="1"
-         id="stop2184" />
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 320 320">
+  <!-- FnQL application icon on a transparent background: the "fn" emblem.
+       Master for icon sizes of 64px and up; fnql-icon-small.svg covers the rest.
+       Kept to plain shapes and gradients (no filters, no <use>) so desktop
+       SVG renderers draw it the same way a browser does. -->
+  <defs>
+    <linearGradient id="steel" x1="0" y1="-150" x2="0" y2="150" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset=".45" stop-color="#c9cdd3"/>
+      <stop offset=".55" stop-color="#8d9299"/>
+      <stop offset="1" stop-color="#e9ebee"/>
     </linearGradient>
-    <linearGradient
-       x1="14.860399"
-       y1="19.054131"
-       x2="15.042735"
-       y2="59"
-       id="linearGradient2190"
-       xlink:href="#linearGradient2180"
-       gradientUnits="userSpaceOnUse" />
-    <linearGradient
-       x1="14.860399"
-       y1="19.054131"
-       x2="15.042735"
-       y2="59"
-       id="linearGradient2194"
-       xlink:href="#linearGradient2180"
-       gradientUnits="userSpaceOnUse" />
-    <linearGradient
-       x1="32"
-       y1="64.091171"
-       x2="32"
-       y2="0"
-       id="linearGradient3077"
-       xlink:href="#linearGradient2180"
-       gradientUnits="userSpaceOnUse" />
+    <linearGradient id="gunmetal" x1="-150" y1="-150" x2="150" y2="150" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4a4e55"/>
+      <stop offset=".5" stop-color="#17181b"/>
+      <stop offset="1" stop-color="#3a3d43"/>
+    </linearGradient>
+    <radialGradient id="casing" cx="0" cy="-40" r="190" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#26282c"/>
+      <stop offset="1" stop-color="#050506"/>
+    </radialGradient>
+    <radialGradient id="disc" cx="0" cy="-34" r="150" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#b3161b"/>
+      <stop offset=".55" stop-color="#7a0b10"/>
+      <stop offset="1" stop-color="#2c0204"/>
+    </radialGradient>
+    <linearGradient id="gloss" x1="0" y1="-104" x2="0" y2="-4" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fff" stop-opacity=".5"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="discClip"><circle r="104"/></clipPath>
+    <linearGradient id="fnInk" x1="0" y1="0" x2="0" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset=".6" stop-color="#eef0f3"/>
+      <stop offset="1" stop-color="#aab0b8"/>
+    </linearGradient>
   </defs>
-  <g
-     id="layer1">
-    <g
-       id="g1327">
-      <path
-         d="M 34.538626,32.090265 L 32.538627,64 L 30.538626,32 L 32.538627,0 L 34.538626,32.090265 z "
-         style="opacity:1;fill:url(#linearGradient3077);fill-opacity:1;fill-rule:nonzero;stroke:none;stroke-width:0.5261631;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-         id="path1329" />
-      <path
-         d="M 28.059562,59 L 25.612281,34.036677 C 25.612281,34.036677 2.1281775,31.218199 2.0010765,25.064561 C 1.9155925,21.016997 6.9421265,19.095215 9.6946005,19.095215 C 12.000721,19.095215 4.2082195,19.143464 4.1713675,24.287073 C 4.1405475,28.679913 29.3599,30.346963 29.3599,30.346963 L 28.059562,59 z "
-         style="fill:url(#linearGradient2190);fill-opacity:1;fill-rule:nonzero;stroke:none;stroke-width:0.5;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-         id="path1307" />
-      <path
-         d="M 36.940438,59 L 39.387719,34.036677 C 39.387719,34.036677 62.871823,31.218199 62.998924,25.064561 C 63.084408,21.016997 58.057873,19.095215 55.305399,19.095215 C 52.999279,19.095215 60.79178,19.143464 60.828632,24.287073 C 60.859452,28.679913 35.6401,30.346963 35.6401,30.346963 L 36.940438,59 z "
-         style="fill:url(#linearGradient2194);fill-opacity:1;fill-rule:nonzero;stroke:none;stroke-width:0.5;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
-         id="path2192" />
+
+  <g transform="translate(160 160) scale(1.039)">
+    <circle r="153" fill="#08080a"/>
+    <circle r="147" fill="url(#casing)" stroke="url(#steel)" stroke-width="4"/>
+    <!-- armour plates: bright upper-left and lower-right, gunmetal between -->
+    <circle r="132" fill="none" stroke="url(#gunmetal)" stroke-width="20"/>
+    <circle r="132" fill="none" stroke="url(#steel)" stroke-width="20"
+            stroke-dasharray="207.3 207.4" transform="rotate(180)"/>
+    <circle r="132" fill="none" stroke="#08080a" stroke-width="22"
+            stroke-dasharray="5 98.67" transform="rotate(-1.1)"/>
+    <circle r="119" fill="#060607"/>
+    <circle r="113" fill="none" stroke="#3d4046" stroke-width="5" stroke-dasharray="3 16.72"/>
+    <circle r="108" fill="#050506" stroke="url(#steel)" stroke-width="3"/>
+    <circle r="104" fill="url(#disc)"/>
+    <g clip-path="url(#discClip)">
+      <ellipse cx="0" cy="-70" rx="104" ry="62" fill="url(#gloss)" opacity=".5"/>
+    </g>
+    <circle r="104" fill="none" stroke="#000" stroke-opacity=".45" stroke-width="5"/>
+    <!-- fn: one centre-line shape stroked twice, outline then fill -->
+    <g transform="translate(6 0) skewX(-12) translate(-73.5 -52)" fill="none" stroke-linejoin="round">
+      <g stroke="#1c0102" stroke-width="32">
+        <path d="M24 100 V36 Q24 14 46 14 H62"/>
+        <path d="M2 48 H56"/>
+        <path d="M91 100 V25"/>
+        <path d="M91 60 Q91 36 115 36 H121 Q145 36 145 60 V100"/>
+      </g>
+      <g stroke="url(#fnInk)" stroke-width="24">
+        <path d="M24 100 V36 Q24 14 46 14 H62"/>
+        <path d="M2 48 H56"/>
+        <path d="M91 100 V25"/>
+        <path d="M91 60 Q91 36 115 36 H121 Q145 36 145 60 V100"/>
+      </g>
     </g>
   </g>
 </svg>

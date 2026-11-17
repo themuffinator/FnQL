@@ -1,6 +1,7 @@
 <div align="center">
 
-# FnQL
+<img src="misc/branding/fnql-logo.png" alt="FnQL" width="444">
+
 ### Fappin' Quake Live
 
 <p>
